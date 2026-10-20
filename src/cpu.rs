@@ -919,9 +919,12 @@ impl Cpu {
                         self.byte(1)
                     } & if w { 15 } else { 7 };
                     let v = self.get(b, o, w);
-                    self.flag(ZF, v & (1 << bit) == 0);
                     let out = match (ext >> 1) & 3 {
-                        0 => v,
+                        0 => {
+                            self.flag(ZF, v & (1 << bit) == 0);
+                            self.flags &= !(CF | OF);
+                            v
+                        }
                         1 => v & !(1 << bit),
                         2 => v | (1 << bit),
                         _ => v ^ (1 << bit),

@@ -140,6 +140,66 @@ fn v30_adjust_bit_and_shift_behavior() {
     assert_eq!(c.flags & (CF | OF), CF | OF);
 }
 #[test]
+fn v30_bit_instructions_flags_and_operands() {
+    // NEC V20/V30 User's Manual, Section 12: TEST1 defines ZF and clears
+    // CF/OF (SF/AF/PF are undefined); CLR1/SET1/NOT1 preserve all flags.
+    for ext in 0x10..=0x1f {
+        let word = ext & 1 != 0;
+        for memory in [false, true] {
+            for index in [3, 0xff] {
+                let mask = 1u16 << (index & if word { 15 } else { 7 });
+                for bit_set in [false, true] {
+                    let value = if bit_set { 0xffff } else { 0xffff ^ mask };
+                    for flags in [0xf002, 0xf002 | CF | PF | AF | ZF | SF | TF | IF | DF | OF] {
+                        let mut c = Cpu {
+                            s: [0; 4],
+                            ip: 0x100,
+                            flags,
+                            ..Cpu::default()
+                        };
+                        c.r[AX] = value;
+                        c.set_byte(CX, index);
+                        let mut b = Bus::default();
+                        b.write_seg(0, 0x2000, value, true);
+                        let mut code = vec![0x0f, ext, if memory { 0x06 } else { 0xc0 }];
+                        if memory {
+                            code.extend_from_slice(&[0x00, 0x20]); // DS:[2000h]
+                        }
+                        if ext & 8 != 0 {
+                            code.push(index);
+                        }
+                        b.mem[0x100..0x100 + code.len()].copy_from_slice(&code);
+                        c.step(&mut b).unwrap();
+                        let operation = (ext >> 1) & 3;
+                        let expected = match operation {
+                            0 => value,
+                            1 => value & !mask,
+                            2 => value | mask,
+                            _ => value ^ mask,
+                        };
+                        let actual = if memory { b.read16(0x2000) } else { c.r[AX] };
+                        let context = format!(
+                            "ext={ext:02x}, memory={memory}, index={index}, value={value:04x}, flags={flags:04x}"
+                        );
+                        assert_eq!(actual, expected, "operand: {context}");
+                        if operation == 0 {
+                            // Do not constrain the undefined arithmetic flags.
+                            let defined = !(SF | AF | PF);
+                            let expected_flags =
+                                (flags & !(CF | OF | ZF)) | if bit_set { 0 } else { ZF };
+                            assert_eq!(c.flags & defined, expected_flags & defined, "{context}");
+                        } else {
+                            assert_eq!(c.flags, flags, "{context}");
+                        }
+                        assert_eq!(c.ip, 0x100 + code.len() as u16, "{context}");
+                        assert_eq!(c.byte(CX), index, "CL: {context}");
+                    }
+                }
+            }
+        }
+    }
+}
+#[test]
 fn multiply_divide_and_rep_compare() {
     let (c, _) = execute(&[0xb8, 0x00, 1, 0xbb, 3, 0, 0xf7, 0xe3, 0xf7, 0xf3], 4);
     assert_eq!(c.r[AX], 256);
