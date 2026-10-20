@@ -214,7 +214,7 @@ fn pit_keyboard_and_beeper() {
     assert_eq!(b.keyboard.service(), Some(0x1c0d));
 }
 #[test]
-fn bios_keyboard_returns_caret_and_keypad_characters() {
+fn bios_keyboard_returns_punctuation_and_keypad_characters() {
     let mut m = boot(include_bytes!("../web/media/hello98.tfd"));
     // Guest reads INT 18h keys and stores the returned scan/ASCII words in RAM.
     let code = [
@@ -231,8 +231,13 @@ fn bios_keyboard_returns_caret_and_keypad_characters() {
             m.bus.key(0x70, true);
             run(&mut m, 1000);
         }
-        let keys = std::iter::once((0x0c, if shifted { b'~' } else { b'^' }))
-            .chain((0x40..=0x50).zip(b"-/789*456+123=0,.".iter().copied()));
+        let keys = [
+            (0x0c, if shifted { b'~' } else { b'^' }),
+            (0x0d, if shifted { b'|' } else { b'\\' }),
+            (0x33, if shifted { b'_' } else { b'\\' }),
+        ]
+        .into_iter()
+        .chain((0x40..=0x50).zip(b"-/789*456+123=0,.".iter().copied()));
         for (scan, ch) in keys {
             press(&mut m, scan);
             assert_eq!(
@@ -290,8 +295,9 @@ fn gdc_planes_pages_palette_grcg_and_text() {
     b.write(0xa2000, 0xe1);
     b.frame(&mut frame);
     assert!(frame[..16 * 640 * 4]
-        .chunks_exact(4)
-        .any(|p| p == [255, 255, 255, 255]));
+        .as_chunks::<4>()
+        .0
+        .contains(&[255, 255, 255, 255]));
     b.output(0x62, 0x49);
     for v in [2, 1, 0] {
         b.output(0x60, v)
@@ -378,8 +384,9 @@ fn independent_hello_boot_executes_and_draws() {
     assert_eq!(m.bus.beep_edges, 1);
     assert!(m
         .render()
-        .chunks_exact(4)
-        .any(|p| p == [255, 255, 255, 255]));
+        .as_chunks::<4>()
+        .0
+        .contains(&[255, 255, 255, 255]));
     assert_eq!(m.bus.read(0xa0000), b'H');
 }
 #[test]

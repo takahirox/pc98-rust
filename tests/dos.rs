@@ -71,4 +71,50 @@ fn freedos_boot_and_execute_guest_com() {
         "keypad ECHO output missing: {}",
         m.bus.text()
     );
+    // ECHO under_score|ECHO pipe_ok exercises both shifted punctuation keys
+    // through the guest BIOS and FreeCOM's actual pipeline processing.
+    let writes = m.bus.fdc.writes;
+    for (scans, shifted) in [
+        (
+            &[0x12, 0x2b, 0x22, 0x18, 0x34, 0x16, 0x2e, 0x1f, 0x12, 0x13][..],
+            false,
+        ),
+        (&[0x33][..], true),
+        (&[0x1e, 0x2b, 0x18, 0x13, 0x12][..], false),
+        (&[0x0d][..], true),
+        (
+            &[0x12, 0x2b, 0x22, 0x18, 0x34, 0x19, 0x17, 0x19, 0x12][..],
+            false,
+        ),
+        (&[0x33][..], true),
+        (&[0x18, 0x24, 0x1c][..], false),
+    ] {
+        m.bus.key(0x70, shifted);
+        m.step(1000);
+        for &scan in scans {
+            m.bus.key(scan, true);
+            m.step(50_000);
+            m.bus.key(scan, false);
+            m.step(10_000);
+            assert!(m.error.is_none(), "{:?}", m.error);
+        }
+    }
+    for _ in 0..80 {
+        m.step(100_000);
+        assert!(m.error.is_none(), "{:?}", m.error);
+        if m.bus.text().lines().any(|line| line.trim() == "pipe_ok") {
+            break;
+        }
+    }
+    let text = m.bus.text();
+    assert!(text.contains("echo under_score|echo pipe_ok"), "{text}");
+    assert!(text.lines().any(|line| line.trim() == "pipe_ok"), "{text}");
+    assert!(
+        !text.lines().any(|line| line.trim() == "under_score"),
+        "{text}"
+    );
+    assert!(
+        m.bus.fdc.writes > writes,
+        "pipeline must write its temporary file"
+    );
 }
