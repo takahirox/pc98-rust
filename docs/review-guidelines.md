@@ -29,8 +29,10 @@ or necessary validation.
 
 Verify correctness, consistency with the repository, relevant documentation, and
 evidence for mandatory pre-merge acceptance. Select checks appropriate to the
-changed files and actual tooling. The repository currently has no build/test
-commands; a templates/documentation-only change needs Markdown/template structure,
+changed files and actual tooling. Emulator changes require the
+[native, Wasm and browser checks](../README.md#reproduce-the-checks), including
+preparing the legal guest fixtures. A templates/documentation-only change needs Markdown/template
+structure,
 links, whitespace, and consistency checks, not unrelated runtime suites or new
 tooling. See [current validation guidance](development-flow.md#validation-for-the-current-repository).
 
