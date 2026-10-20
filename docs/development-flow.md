@@ -47,9 +47,15 @@ does not excuse omitted requirements or necessary validation.
 
 ### Validation for the current repository
 
-There are currently no application files, build/test commands, CI workflows, or
-configured Markdown lint commands. Do not invent commands or add application code,
-dependencies, CI, or tooling merely to document or validate a process.
+The emulator application has native Rust tests, reproducible guest fixtures, a
+Wasm build, and automated browser tests. For emulator or guest changes, follow the
+commands in [README](../README.md#reproduce-the-checks), including legal FreeDOS
+fixture preparation and the actual browser artifact tests. Report the exact
+checks performed and their outcomes. No deployed website or manual playtest is
+needed for this application.
+
+For documentation-only work, do not add application dependencies, CI or tooling
+merely to validate a process. There is no configured Markdown lint command.
 
 Choose checks appropriate to the changed files and actual repository tooling.
 For templates and documentation, inspect Markdown structure and Issue template

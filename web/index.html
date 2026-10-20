@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>pc98-rust · Star Trail</title>
+<link rel="stylesheet" href="style.css">
+<script type="module" src="app.js"></script>
+<body>
+<main>
+  <header><div><span class="eyebrow">AN ORIGINAL RUST / WASM EMULATOR</span><h1>pc98<span>-rust</span></h1></div><span class="badge">PC-9801VM · experimental</span></header>
+  <section class="intro"><div><h2>A little machine. A new adventure.</h2><p>Boot Star Trail, collect three stars, and find your way through the maze. The game runs entirely inside the emulated PC-98.</p></div><div class="demo-actions"><button id="game" disabled>▶ Play Star Trail</button><button id="hello" disabled>Hello world + BEEP</button></div></section>
+  <section class="machine" aria-label="Emulator">
+    <div class="toolbar"><div><span id="lamp" class="lamp"></span><span id="status" role="status">Loading WebAssembly…</span></div><div><button id="pause" disabled>Pause</button><button id="reset" disabled>Reset</button><button id="sound" disabled aria-pressed="false">Enable sound</button></div></div>
+    <div class="display" id="drop"><canvas id="screen" width="640" height="400" tabindex="0" aria-label="PC-98 screen. Click here to send keyboard input to the guest."></canvas></div>
+    <div class="screen-caption"><span>640 × 400 · 8 colors · replacement Latin font</span><span>Click screen to type · arrows to move · R to restart</span></div>
+    <div class="media"><label>Drive <select id="drive"><option value="0">1 · boot</option><option value="1">2</option></select></label><span id="media-name">No disk</span><label class="file-button">Insert floppy<input id="file" type="file" accept=".tfd,.hdm,.xdf,.2hd,.d88,.d98,.img"></label><button id="eject" disabled>Eject</button><button id="export" disabled>Export disk</button></div>
+    <p id="error" role="alert" hidden></p>
+  </section>
+  <details><summary>PC-98 keyboard</summary><p>Mouse or touch keys below, or focus the screen and use your physical keyboard. Shift, Ctrl, GRPH (Alt), XFER (right Alt), and NFER (left Meta) are supported.</p><div id="keyboard" aria-label="PC-98 keyboard"></div></details>
+  <footer><p>Drop a supported floppy onto the screen to insert and boot it. Bootable PC-98 media required; compatibility is limited to the documented real-mode subset. Optional FM, Kanji, protected mode and hard disks are unavailable.</p><p><a href="licenses.html">Licenses &amp; media credits</a> · No proprietary ROMs or network service required.</p></footer>
+</main>
+</body>
+</html>
