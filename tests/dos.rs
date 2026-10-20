@@ -50,4 +50,25 @@ fn freedos_boot_and_execute_guest_com() {
         "shell must regain control: {}",
         m.bus.text()
     );
+    // ECHO through the guest shell must receive keypad characters via the BIOS.
+    // Check the output line separately from the echoed command at the prompt.
+    for scan in [0x12, 0x2b, 0x22, 0x18, 0x34]
+        .into_iter()
+        .chain(0x40..=0x50)
+        .chain([0x1c])
+    {
+        m.bus.key(scan, true);
+        m.step(50_000);
+        m.bus.key(scan, false);
+        m.step(10_000);
+        assert!(m.error.is_none(), "{:?}", m.error);
+    }
+    assert!(
+        m.bus
+            .text()
+            .lines()
+            .any(|line| line.trim() == "-/789*456+123=0,."),
+        "keypad ECHO output missing: {}",
+        m.bus.text()
+    );
 }

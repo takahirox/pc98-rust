@@ -214,6 +214,38 @@ fn pit_keyboard_and_beeper() {
     assert_eq!(b.keyboard.service(), Some(0x1c0d));
 }
 #[test]
+fn bios_keyboard_returns_caret_and_keypad_characters() {
+    let mut m = boot(include_bytes!("../web/media/hello98.tfd"));
+    // Guest reads INT 18h keys and stores the returned scan/ASCII words in RAM.
+    let code = [
+        0x31, 0xc0, 0x8e, 0xc0, 0xbf, 0x00, 0x06, 0xb4, 0, 0xcd, 0x18, 0xab, 0xeb, 0xf9,
+    ];
+    m.bus.mem[0x1000..0x1000 + code.len()].copy_from_slice(&code);
+    m.cpu.s[CS] = 0;
+    m.cpu.ip = 0x1000;
+    m.cpu.halted = false;
+    run(&mut m, 1000);
+    let mut address = 0x600;
+    for shifted in [false, true] {
+        if shifted {
+            m.bus.key(0x70, true);
+            run(&mut m, 1000);
+        }
+        let keys = std::iter::once((0x0c, if shifted { b'~' } else { b'^' }))
+            .chain((0x40..=0x50).zip(b"-/789*456+123=0,.".iter().copied()));
+        for (scan, ch) in keys {
+            press(&mut m, scan);
+            assert_eq!(
+                m.bus.read16(address),
+                ((scan as u16) << 8) | ch as u16,
+                "scan={scan:02x}, shifted={shifted}"
+            );
+            address += 2;
+            assert_eq!(m.cpu.r[DI] as usize, address);
+        }
+    }
+}
+#[test]
 fn gdc_planes_pages_palette_grcg_and_text() {
     let mut b = Bus::default();
     b.output(0xa2, 0x0d);
@@ -451,6 +483,71 @@ fn d88_chrn_roundtrip_and_write_protection() {
     assert!(Disk::parse(image.clone(), "a.d88").unwrap().protected);
     image[p + 14] = 1;
     assert!(Disk::parse(image, "a.d88").is_err());
+}
+
+#[test]
+fn d88_sector_255_bios_read_completes_or_reports_missing_next_sector() {
+    for (bytes, expected_carry) in [(1024u16, 0), (2048, CF)] {
+        let mut image = vec![0; 0x2b0 + 2 * (16 + 1024)];
+        let len = image.len() as u32;
+        image[0x1b] = 0x20;
+        image[0x1c..0x20].copy_from_slice(&len.to_le_bytes());
+        image[0x20..0x24].copy_from_slice(&0x2b0u32.to_le_bytes());
+        for (i, r) in [1, 255].into_iter().enumerate() {
+            let p = 0x2b0 + i * (16 + 1024);
+            image[p + 2] = r;
+            image[p + 3] = 3;
+            image[p + 4] = 2;
+            image[p + 14..p + 16].copy_from_slice(&1024u16.to_le_bytes());
+        }
+        // Boot code reads R=255 through INT 1Bh, then saves FLAGS and a marker.
+        let code = [
+            0xfa,
+            0x31,
+            0xc0,
+            0x8e,
+            0xc0,
+            0xbd,
+            0,
+            0x20,
+            0xbb,
+            bytes as u8,
+            (bytes >> 8) as u8,
+            0xb9,
+            0,
+            3,
+            0xba,
+            255,
+            0,
+            0xb8,
+            0x90,
+            0x56,
+            0xcd,
+            0x1b,
+            0x9c,
+            0x58,
+            0xa3,
+            0,
+            6,
+            0xc6,
+            0x06,
+            2,
+            6,
+            0xa5,
+            0xf4,
+        ];
+        image[0x2c0..0x2c0 + code.len()].copy_from_slice(&code);
+        image[0x2b0 + 16 + 1024 + 16..].fill(0x5a);
+        let mut m = Machine::default();
+        m.insert(0, image, "sector255.d88").unwrap();
+        m.reset();
+        run(&mut m, 100_000);
+        assert!(m.cpu.halted);
+        assert_eq!(m.bus.read(0x602), 0xa5, "guest must return from BIOS");
+        assert_eq!(m.bus.read16(0x600) & CF, expected_carry);
+        assert!(m.bus.mem[0x2000..0x2400].iter().all(|&b| b == 0x5a));
+        assert_eq!(m.bus.fdc.reads, 2);
+    }
 }
 
 #[test]

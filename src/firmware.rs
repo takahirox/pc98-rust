@@ -246,14 +246,19 @@ pub fn service(c: &mut Cpu, b: &mut Bus) -> Result<(), String> {
                             break;
                         }
                         left -= sector_size;
+                        if left == 0 {
+                            break;
+                        }
                         addr = (addr + sector_size) & 0xfffff;
-                        r += 1;
-                        if b.disks[drive as usize]
-                            .as_ref()
-                            .unwrap()
-                            .sector(cylinder, h, r, n)
-                            .is_none()
-                        {
+                        if let Some(next) = r.checked_add(1).filter(|&next| {
+                            b.disks[drive as usize]
+                                .as_ref()
+                                .unwrap()
+                                .sector(cylinder, h, next, n)
+                                .is_some()
+                        }) {
+                            r = next;
+                        } else {
                             r = 1;
                             h ^= 1;
                             if h == 0 {

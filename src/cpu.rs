@@ -694,14 +694,9 @@ impl Cpu {
                 let _encoded_radix = self.fetch(b);
                 let radix = 10;
                 if op == 0xd4 {
-                    if radix == 0 {
-                        self.ip = start;
-                        self.interrupt(b, 0)
-                    } else {
-                        let a = self.byte(0);
-                        self.set_byte(4, a / radix);
-                        self.set_byte(0, a % radix)
-                    }
+                    let a = self.byte(0);
+                    self.set_byte(4, a / radix);
+                    self.set_byte(0, a % radix)
                 } else {
                     self.set_byte(
                         0,

@@ -391,7 +391,7 @@ impl Keyboard {
         if s & 128 != 0 {
             return None;
         }
-        let normal = b"\x1b1234567890-=\\\x08\tqwertyuiop@[\r";
+        let normal = b"\x1b1234567890-^\\\x08\tqwertyuiop@[\r";
         let ch = match scan {
             0x00..=0x1c => normal.get(scan as usize).copied().unwrap_or(0),
             0x1d..=0x25 => b"asdfghjkl"[(scan - 0x1d) as usize],
@@ -403,6 +403,7 @@ impl Keyboard {
             0x31 => b'.',
             0x32 => b'/',
             0x34 => b' ',
+            0x40..=0x50 => b"-/789*456+123=0,."[(scan - 0x40) as usize],
             _ => 0,
         };
         let ch = if ch.is_ascii_alphabetic() {
@@ -411,11 +412,11 @@ impl Keyboard {
             } else {
                 ch
             }
-        } else if self.modifiers & 1 != 0 {
+        } else if self.modifiers & 1 != 0 && !(0x40..=0x50).contains(&scan) {
             match ch {
                 b'1'..=b'9' => b"!\"#$%&'()"[(ch - b'1') as usize],
                 b'-' => b'=',
-                b'=' => b'~',
+                b'^' => b'~',
                 b'@' => b'`',
                 b'[' => b'{',
                 b']' => b'}',
