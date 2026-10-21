@@ -201,6 +201,11 @@ ahead of the BIOS when several events are queued. Repeated makes keep the bit
 set and enqueue characters up to the existing 16-word ring limit; breaks clear
 the bit without adding characters, even when the ring is full. Reading or
 flushing the ring does not release held keys. An empty IRQ adds no character.
+Command replies share the byte FIFO and remain readable at `41h`, but firmware
+does not interpret them as scan input (including `FAh`/`A0h`, which overlap real
+break codes). The existing `FFh` keyboard command clears queued bytes and replies
+`FAh`, `A0h`; it preserves physical holds, the BIOS bitmap, modifiers and ring.
+It is distinct from the full machine reset described below.
 
 Guest DOS/TSR vectors still run first: chaining to the original INT 09 handler
 updates the table; consuming bytes without chaining leaves BIOS state to the

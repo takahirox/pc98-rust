@@ -324,9 +324,14 @@ impl Dma {
         }
     }
 }
+#[derive(Clone)]
+pub enum KeyboardByte {
+    Scan(u8),
+    Reply(u8),
+}
 #[derive(Clone, Default)]
 pub struct Keyboard {
-    pub fifo: VecDeque<u8>,
+    pub fifo: VecDeque<KeyboardByte>,
     pub bios: VecDeque<u16>,
     pub modifiers: u8,
     pub pressed: [u8; 16],
@@ -345,11 +350,18 @@ impl Keyboard {
             self.pressed[group] &= !mask
         }
         if self.fifo.len() < 64 {
-            self.fifo.push_back(scan | if down { 0 } else { 0x80 });
+            self.fifo
+                .push_back(KeyboardByte::Scan(scan | if down { 0 } else { 0x80 }));
         }
     }
+    pub(crate) fn scan_pending(&self) -> bool {
+        matches!(self.fifo.front(), Some(KeyboardByte::Scan(_)))
+    }
     pub fn receive(&mut self) -> u8 {
-        self.fifo.pop_front().unwrap_or(0)
+        match self.fifo.pop_front() {
+            Some(KeyboardByte::Scan(byte) | KeyboardByte::Reply(byte)) => byte,
+            None => 0,
+        }
     }
     pub fn write(&mut self, v: u8) {
         if self.fifo.len() > 61 {
@@ -357,18 +369,22 @@ impl Keyboard {
         }
         if self.command != 0 {
             self.command = 0;
-            self.fifo.push_back(0xfa)
+            self.fifo.push_back(KeyboardByte::Reply(0xfa))
         } else if v == 0xff {
+            // Reset the wire FIFO; physical holds and BIOS state are preserved.
             self.fifo.clear();
-            self.fifo.extend([0xfa, 0xa0]);
+            self.fifo
+                .extend([KeyboardByte::Reply(0xfa), KeyboardByte::Reply(0xa0)]);
         } else {
             self.command = v;
-            self.fifo.push_back(0xfa)
+            self.fifo.push_back(KeyboardByte::Reply(0xfa))
         }
     }
     pub fn service(&mut self) -> Option<u16> {
-        let s = self.receive();
-        self.service_scan(s)
+        match self.fifo.pop_front() {
+            Some(KeyboardByte::Scan(s)) => self.service_scan(s),
+            _ => None,
+        }
     }
     /// Translate a scan byte already consumed by the firmware's port read.
     pub(crate) fn service_scan(&mut self, s: u8) -> Option<u16> {

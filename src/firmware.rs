@@ -154,18 +154,22 @@ pub fn service(c: &mut Cpu, b: &mut Bus) -> Result<(), String> {
         }
         9 => {
             if b.input(0x43) & 2 != 0 {
+                let scan_pending = b.keyboard.scan_pending();
                 let code = b.input(0x41);
-                let scan = code & 0x7f;
-                // Follow serviced FIFO order, not the host's newer held state.
-                let state = &mut b.mem[0x52a + scan as usize / 8];
-                let mask = 1 << (scan % 8);
-                if code & 0x80 == 0 {
-                    *state |= mask;
-                } else {
-                    *state &= !mask;
+                // Command replies share the port/FIFO but are not break codes.
+                if scan_pending {
+                    let scan = code & 0x7f;
+                    // Follow serviced FIFO order, not the host's newer held state.
+                    let state = &mut b.mem[0x52a + scan as usize / 8];
+                    let mask = 1 << (scan % 8);
+                    if code & 0x80 == 0 {
+                        *state |= mask;
+                    } else {
+                        *state &= !mask;
+                    }
+                    b.keyboard.service_scan(code);
+                    sync_keys(b);
                 }
-                b.keyboard.service_scan(code);
-                sync_keys(b);
             }
             b.output(0, 0x20);
         }

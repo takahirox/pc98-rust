@@ -219,6 +219,75 @@ fn guest_irq_hooks_can_chain_or_consume_input_without_host_bitmap_writes() {
 }
 
 #[test]
+fn command_replies_preserve_holds_while_identical_break_bytes_release_keys() {
+    for profile in PROFILES {
+        let mut m = machine(profile);
+        let mut held = [0; 16];
+        for scan in [0x1c, 0x20, 0x7a, 0x70] {
+            m.bus.key(scan, true);
+            held[scan as usize / 8] |= 1 << (scan % 8);
+        }
+        run(&mut m, 40);
+        let ring = [0x1c0d, 0x2066, 0x7a00];
+        assert_groups(&mut m, &held);
+        assert_ring(&m, &ring);
+        // Execute real guest OUTs: reset replies FA/A0, command ACK, parameter ACK.
+        for command in [0xff, 0x9d, 0x00] {
+            m.cpu.ip = 0x1200;
+            m.cpu.halted = false;
+            m.bus.mem[0x1200..0x1207]
+                .copy_from_slice(&[0xb0, command, 0xe6, 0x41, 0xf4, 0xeb, 0xfd]);
+            run(&mut m, 40);
+            assert!(m.bus.keyboard.fifo.is_empty());
+            assert_eq!(m.bus.keyboard.pressed, held);
+            assert_groups(&mut m, &held);
+            assert_ring(&m, &ring);
+            assert_eq!(bios(&mut m, 0x0200) & 0xff, 1);
+            assert_eq!(m.bus.read(0x53a), 1);
+        }
+        // Interleave a reply with real A0/FA breaks. Byte-value filtering would
+        // preserve these keys incorrectly; IRQ service must retain FIFO order.
+        m.bus.output(0x41, 0x9d);
+        for scan in [0x20, 0x7a] {
+            m.bus.key(scan, false);
+            held[scan as usize / 8] &= !(1 << (scan % 8));
+        }
+        run(&mut m, 40);
+        assert_eq!(m.bus.keyboard.pressed, held);
+        assert_groups(&mut m, &held);
+        assert_ring(&m, &ring);
+        for scan in [0x1c, 0x70] {
+            m.bus.key(scan, false);
+        }
+        run(&mut m, 40);
+        assert_groups(&mut m, &[0; 16]);
+        assert_eq!(m.bus.keyboard.pressed, [0; 16]);
+        assert_eq!(bios(&mut m, 0x0200) & 0xff, 0);
+        assert_ring(&m, &ring);
+    }
+}
+
+#[test]
+fn command_replies_and_scan_bytes_remain_readable_in_port_order() {
+    for profile in PROFILES {
+        let mut m = machine(profile);
+        m.bus.key(0x1c, true);
+        m.bus.output(0x41, 0xff); // Reset discards the queued make, not the hold.
+        m.bus.key(0x20, false);
+        m.bus.key(0x7a, false);
+        for byte in [0xfa, 0xa0, 0xa0, 0xfa] {
+            assert_ne!(m.bus.input(0x43) & 2, 0);
+            assert_eq!(m.bus.input(0x41), byte);
+        }
+        assert_eq!(m.bus.input(0x43) & 2, 0);
+        run(&mut m, 20); // A latched IRQ after guest reads must find an empty FIFO.
+        assert_eq!(m.bus.keyboard.pressed[3], 0x10);
+        assert_ring(&m, &[]);
+        assert_groups(&mut m, &[0; 16]); // Guest consumed all bytes itself.
+    }
+}
+
+#[test]
 fn machine_reset_discards_serviced_and_pending_keys_and_clears_the_bitmap() {
     for profile in PROFILES {
         let mut m = machine(profile);
