@@ -3,7 +3,8 @@ const screen = $('screen'), context = screen.getContext('2d', { alpha: false });
 const decoder = new TextDecoder();
 let core, running = false, audio, outputGain, nextAudio = 0, muted = true, loading = false;
 let audioEnergy = 0, scheduledSamples = 0;
-const mounted = [null, null], held = new Set();
+const mounted = [null, null, null], held = new Set();
+let pointerPosition;
 const controls = ['game', 'hello', 'pause', 'reset', 'sound', 'eject', 'export', 'profile'];
 function message(kind = 0) {
   const ptr = core.message(kind), len = core.message_len();
@@ -19,6 +20,9 @@ function render() {
   // frame() can grow Wasm memory: obtain views only after each exported call.
   const pixels = new Uint8ClampedArray(core.memory.buffer, ptr, 640 * 400 * 4);
   context.putImageData(new ImageData(pixels, 640, 400), 0, 0);
+  if ($('profile').value === '1') $('display-mode').textContent = core.metric(13)
+    ? '640 × 400 · 256 colors · PEGC'
+    : '640 × 400 · 16 colors · Shinonome Japanese CG · approximate OPN';
 }
 async function enableAudio() {
   if (!audio) { audio = new AudioContext({ sampleRate: 48000 }); outputGain = audio.createGain(); outputGain.connect(audio.destination); }
@@ -43,6 +47,7 @@ function playAudio() {
 function releaseKeys() {
   for (const scan of held) core?.key(scan, 0);
   held.clear(); document.querySelectorAll('.held').forEach((el) => el.classList.remove('held'));
+  core?.mouse(0, 0, 0); pointerPosition = undefined;
 }
 function setRunning(value) {
   running = value; if (outputGain) outputGain.gain.value = running && !muted ? 1 : 0; $('pause').textContent = value ? 'Pause' : 'Resume';
@@ -55,10 +60,12 @@ function showMedia() {
   $('eject').disabled = !mounted[drive]; $('export').disabled = !mounted[drive];
 }
 function insert(bytes, name, drive) {
-  if (bytes.length > 4 * 1024 * 1024) throw Error('Floppy image exceeds 4 MiB.');
-  if (!/\.(tfd|hdm|xdf|2hd|d88|d98|img)$/i.test(name)) throw Error('Unsupported floppy extension.');
+  const hdd = drive === 2;
+  if (bytes.length > (hdd ? 32 : 4) * 1024 * 1024) throw Error(hdd ? 'HDI exceeds 32 MiB.' : 'Floppy image exceeds 4 MiB.');
+  if (hdd && $('profile').value !== '1') throw Error('Select PC-9821Ap DOS for IDE.');
+  if (hdd ? !/\.hdi$/i.test(name) : !/\.(tfd|hdm|xdf|2hd|d88|d98|img)$/i.test(name)) throw Error(hdd ? 'IDE requires an HDI image.' : 'Unsupported floppy extension.');
   const ptr = core.input_buffer(bytes.length);
-  if (!ptr) throw Error('Unable to allocate floppy buffer.');
+  if (!ptr) throw Error('Unable to allocate media buffer.');
   new Uint8Array(core.memory.buffer, ptr, bytes.length).set(bytes);
   if (!core.insert(drive, /\.(d88|d98)$/i.test(name) ? 1 : 0)) throw Error(message(2));
   mounted[drive] = { name, format: /\.(d88|d98)$/i.test(name) ? 'd88' : 'hdm' };
@@ -66,7 +73,7 @@ function insert(bytes, name, drive) {
 }
 async function loadBytes(bytes, name, drive = Number($('drive').value)) {
   clearError(); insert(bytes, name, drive);
-  if (drive === 0) { releaseKeys(); core.reset(); core.audio_clear(); render(); setRunning(true); screen.focus(); }
+  if (drive === 0 || drive === 2) { releaseKeys(); core.reset(); core.audio_clear(); render(); setRunning(true); screen.focus(); }
 }
 async function bundled(name) {
   if (!core || loading) return;
@@ -113,7 +120,11 @@ $('export').onclick = () => {
 };
 async function loadFile(file) {
   if (!file || !core) return;
-  try { if (file.size > 4 * 1024 * 1024) throw Error('Floppy image exceeds 4 MiB.'); await loadBytes(new Uint8Array(await file.arrayBuffer()), file.name); }
+  try {
+    const hdd = Number($('drive').value) === 2;
+    if (file.size > (hdd ? 32 : 4) * 1024 * 1024) throw Error(hdd ? 'HDI exceeds 32 MiB.' : 'Floppy image exceeds 4 MiB.');
+    await loadBytes(new Uint8Array(await file.arrayBuffer()), file.name);
+  }
   catch (error) { fail(error); }
 }
 $('file').onchange = (e) => { loadFile(e.target.files[0]); e.target.value = ''; };
@@ -152,6 +163,19 @@ Array.from('1234567890').forEach((ch,i)=>codes[`Digit${ch}`]=i+1);
 for(let i=1;i<=10;i++) codes[`F${i}`]=0x61+i;
 for(const [code,scan] of Object.entries({Numpad7:0x42,Numpad8:0x43,Numpad9:0x44,Numpad4:0x46,Numpad5:0x47,Numpad6:0x48,Numpad1:0x4a,Numpad2:0x4b,Numpad3:0x4c,Numpad0:0x4e,NumpadDecimal:0x50,NumpadEnter:0x1c,NumpadAdd:0x49,NumpadSubtract:0x40,NumpadMultiply:0x45,NumpadDivide:0x41})) codes[code]=scan;
 for (const [name,down] of [['keydown',true],['keyup',false]]) screen.addEventListener(name,(e)=>{const scan=codes[e.code];if(scan!==undefined){e.preventDefault();key(scan,down);}});
+for (const name of ['pointermove', 'pointerdown', 'pointerup', 'pointercancel']) screen.addEventListener(name, (event) => {
+  if (!core || !running || !$('mouse').checked || $('profile').value !== '1') return;
+  const bounds = screen.getBoundingClientRect();
+  const point = [event.clientX * 640 / bounds.width, event.clientY * 400 / bounds.height];
+  const delta = pointerPosition ? point.map((n, i) => Math.max(-127, Math.min(127, Math.round(n - pointerPosition[i])))) : [0, 0];
+  pointerPosition = point;
+  if (name === 'pointerdown') { screen.focus(); screen.setPointerCapture(event.pointerId); }
+  core.mouse(delta[0], delta[1], name === 'pointercancel' ? 0 : event.buttons);
+  event.preventDefault();
+});
+screen.addEventListener('pointerleave', () => { pointerPosition = undefined; });
+screen.addEventListener('contextmenu', event => { if ($('mouse').checked) event.preventDefault(); });
+$('mouse').onchange = () => { core?.mouse(0, 0, 0); pointerPosition = undefined; };
 screen.addEventListener('blur',releaseKeys); window.addEventListener('blur',releaseKeys);
 document.addEventListener('visibilitychange',()=>{if(document.hidden && core && running)setRunning(false);});
 let previous = 0;
@@ -172,7 +196,7 @@ try {
   core = result.instance.exports;
   // Machine-readable inspection of the actual Wasm core for deterministic tests.
   window.pc98 = { core, text: () => message(1), read: (addr) => core.peek(addr),
-    stats: () => ({instructions:core.metric(0),reads:core.metric(1),writes:core.metric(2),beepEdges:core.metric(3),fmWrites:core.metric(6),fmKeyEdges:core.metric(7),error:message(),beep:core.beep(),running,audioState:audio?.state,audioGain:outputGain?.gain.value,audioEnergy,scheduledSamples}),
+    stats: () => ({instructions:core.metric(0),reads:core.metric(1),writes:core.metric(2),hddReads:core.metric(9),hddWrites:core.metric(10),mouseEvents:core.metric(11),mouseLatches:core.metric(12),pegc:core.metric(13),pcmWrites:core.metric(14),pcmSamples:core.metric(15),beepEdges:core.metric(3),fmWrites:core.metric(6),fmKeyEdges:core.metric(7),error:message(),beep:core.beep(),running,audioState:audio?.state,audioGain:outputGain?.gain.value,audioEnergy,scheduledSamples}),
     exportDisk: (drive=0) => Array.from(exportBytes(drive)),
   };
   controls.forEach((id)=>$(id).disabled=false); showMedia(); status('Ready · choose a demo or insert a floppy'); render(); requestAnimationFrame(animate);

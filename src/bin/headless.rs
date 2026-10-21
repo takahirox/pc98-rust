@@ -9,8 +9,16 @@ fn main() {
     } else {
         pc98_rust::Profile::Pc9801Vm
     });
-    m.insert(0, std::fs::read(path).expect("read image"), path)
-        .expect("parse image");
+    m.insert(
+        if path.to_ascii_lowercase().ends_with(".hdi") {
+            2
+        } else {
+            0
+        },
+        std::fs::read(path).expect("read image"),
+        path,
+    )
+    .expect("parse image");
     m.reset();
     let steps = args
         .get(2)

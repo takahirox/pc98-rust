@@ -13,12 +13,13 @@ struct Operator {
 }
 
 pub struct Opn {
-    pub registers: [u8; 256],
+    pub registers: [u8; 512],
     pub address: u8,
+    pub bank_address: u8,
     pub writes: u64,
     pub key_edges: u64,
-    operators: [[Operator; 4]; 3],
-    feedback: [f64; 3],
+    operators: [[Operator; 4]; 6],
+    feedback: [f64; 6],
     timer: [u64; 2],
     fraction: u64,
     busy: u64,
@@ -32,15 +33,16 @@ pub struct Opn {
 
 impl Default for Opn {
     fn default() -> Self {
-        let mut registers = [0; 256];
+        let mut registers = [0; 512];
         registers[7] = 0xff;
         Self {
             registers,
             address: 0,
+            bank_address: 0,
             writes: 0,
             key_edges: 0,
-            operators: [[Operator::default(); 4]; 3],
-            feedback: [0.0; 3],
+            operators: [[Operator::default(); 4]; 6],
+            feedback: [0.0; 6],
             timer: [0; 2],
             fraction: 0,
             busy: 0,
@@ -62,7 +64,12 @@ impl Opn {
         self.status & 3 != 0
     }
     pub fn write(&mut self, value: u8) {
-        let a = self.address as usize;
+        self.write_at(self.address as usize, value);
+    }
+    pub fn write_bank(&mut self, value: u8) {
+        self.write_at(256 + self.bank_address as usize, value);
+    }
+    fn write_at(&mut self, a: usize, value: u8) {
         self.writes += 1;
         self.busy = 32;
         let old = self.registers[a];
@@ -82,9 +89,10 @@ impl Opn {
             }
             0x28 => {
                 let channel = (value & 3) as usize;
-                if value & 4 != 0 || channel == 3 {
+                if channel == 3 || (value & 4 != 0 && self.registers[0x29] & 128 == 0) {
                     return;
                 }
+                let channel = channel + if value & 4 != 0 { 3 } else { 0 };
                 for slot in 0..4 {
                     let op = &mut self.operators[channel][slot];
                     let key = value & (0x10 << slot) != 0;
@@ -129,7 +137,7 @@ impl Opn {
             return 0.0;
         }
         // Yamaha's physical slot register order is 1,3,2,4.
-        let offset = ch + [0, 8, 4, 12][slot];
+        let offset = ch % 3 + (ch / 3) * 256 + [0, 8, 4, 12][slot];
         let dtmul = self.registers[0x30 + offset];
         let tl = self.registers[0x40 + offset] & 127;
         let ar = self.registers[0x50 + offset] & 31;
@@ -186,13 +194,17 @@ impl Opn {
     }
     pub fn sample(&mut self) -> f32 {
         let mut sum = 0.0;
-        for ch in 0..3 {
-            let high = self.registers[0xa4 + ch];
-            let fnum = u16::from(self.registers[0xa0 + ch]) | (u16::from(high & 7) << 8);
+        for ch in 0..6 {
+            if ch >= 3 && self.registers[0x29] & 128 == 0 {
+                continue;
+            }
+            let register_ch = ch % 3 + ch / 3 * 256;
+            let high = self.registers[0xa4 + register_ch];
+            let fnum = u16::from(self.registers[0xa0 + register_ch]) | (u16::from(high & 7) << 8);
             let hz = f64::from(fnum) * f64::from(1u16 << ((high >> 3) & 7)) * CLOCK as f64
                 / (144.0 * 1_048_576.0);
-            let alg = self.registers[0xb0 + ch] & 7;
-            let fb = (self.registers[0xb0 + ch] >> 3) & 7;
+            let alg = self.registers[0xb0 + register_ch] & 7;
+            let fb = (self.registers[0xb0 + register_ch] >> 3) & 7;
             let first = self.operator(
                 ch,
                 0,

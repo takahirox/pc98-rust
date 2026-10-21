@@ -54,6 +54,13 @@ mov bx, 1024
 mov cx, 0x0300
 mov dx, 1
 mov ax, 0x5690
+cmp byte [0x584], 0x80
+jne read_boot
+mov ax, 0x0680
+mov bx, 512
+xor cx, cx
+xor dx, dx
+read_boot:
 int 0x1b
 jc failed
 sti
