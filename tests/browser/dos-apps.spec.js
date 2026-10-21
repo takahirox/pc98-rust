@@ -104,7 +104,15 @@ test('Ap DOS: independently compiled FM routines reach Web Audio with the beeper
 
 test('Ap DOS: independent video player writes color planes and returns to FreeCOM', async ({ page }) => {
   test.setTimeout(60000);
+  // Freeze requestAnimationFrame before mounting the disk: otherwise animate()
+  // can advance past transient video frames between our bounded steps/samples.
+  // Other tests retain the live animation loop, including Web Audio coverage.
+  const time = new Date('2026-01-01T00:00:00Z');
+  await page.clock.install({ time });
+  await page.clock.pauseAt(time);
   await boot(page, '98videop');
+  await expect(page.locator('#pause')).toHaveText('Pause');
+  expect((await page.evaluate(() => pc98.stats())).instructions).toBe(0);
   const seen = new Set();
   await until(page, async () => {
     const rgb = (await pixels(page, 0, 0, 1, 1))[0][0]; seen.add(rgb.join(','));
