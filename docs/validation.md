@@ -1,5 +1,73 @@
 # Validation evidence
 
+## Issue #25 BIOS held-key bitmap validation (2026-10-21)
+
+The INT 09 firmware now consumes each ready keyboard port byte, updates only its
+scan-code bit at `0000:052A–0539`, and retains character-ring/modifier processing
+and PIC EOI. INT 18h/AH=04h reads that same table. Pending host input cannot bypass
+IRQ delivery or a guest DOS/TSR handler. The [keyboard contract](hardware.md#bios-held-key-bitmap)
+specifies grouping, make/break ordering, ring limits and the existing fresh-device
+reset policy. The layout and BIOS reference pages are linked from Issue #25;
+direct PDF retrieval returned HTTP 503 during this run, so no new claim about
+physical hardware reboot behavior is made.
+
+The following checks passed in the assigned macOS arm64 worktree:
+
+| Exact command | Result |
+| --- | --- |
+| `python3 tools/prepare_freedos.py` | Passed; minimal image unchanged; new keymap disk, exact MIT source/COM and complete pinned DOS sources/notices retained |
+| `python3 tools/prepare_font_fixture.py` | Passed; existing original font controls |
+| `python3 tools/prepare_dos_apps.py` | Passed; pinned application fixtures unchanged |
+| `python3 tools/prepare_cpu_fixture.py` | Passed; pinned CPULEVEL fixture |
+| `python3 tools/prepare_hdd_fixture.py` | Passed; pinned IDE/mouse fixture |
+| `python3 tools/prepare_music_fixture.py` | Passed; pinned PMD music fixture |
+| `python3 tools/prepare_device_fixture.py` | Passed; pinned DEBUG/EGC/PEGC fixture |
+| `python3 tools/build_font.py --check` | Passed; replacement font unchanged |
+| `cargo test --locked` | Passed; all 87 native integration tests, including seven new keyboard tests |
+| `cargo test --locked --test keyboard` | Passed on restored final firmware after the negative control described below |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `cargo fmt --check` | Passed |
+| `npm ci` and `npx playwright install chromium` | Passed |
+| `npm test -- --config=.issue25-playwright.config.js` | Passed; reproducible media/font, release production Wasm, ten-asset publication audit, all 38 Chromium cases at root and project paths in 36.9 seconds |
+| `git diff --check` | Passed |
+
+Unmodified `npm test` first reached a successful build/publication audit but could
+not bind the occupied local port 8000. The temporary configuration above imported
+the normal Playwright configuration and changed only server ports/base URLs to
+61080/61081; its project server retained the same root-asset rejection. Both
+temporary files were removed afterward. No running host service was stopped and
+no permanent test/CI configuration was changed.
+
+The exact Issue control is preserved in `guest/keymap.asm`, source SHA-256
+`833f8925cf99c2cbbcce5f05fd3d7a1c129ab229276203a7661eb4ad497440f5`.
+The preparation script checks that source hash and records all image/file hashes.
+The new `keymap.hdm` SHA-256 is
+`67848b321ea6ad1a96811bfab90243e1436abb9a605abffdb2a9d8dc8cfae0f6`.
+Both VM and Ap boot it through the real FreeDOS kernel and FreeCOM for five
+million slots, hold Return for one million and release for one million. Native
+and production-Wasm browser tests require both pass messages, absence of
+`KEYMAP BWA STALE`, a cleared bitmap and `PROBE SHELL RETURN` plus the DOS prompt.
+Browser tests use ordinary Enter down/up events at both serving paths and verify
+that the bitmap changes only after stepping the queued interrupts.
+
+As a negative control, the original checkpoint's `src/firmware.rs` was temporarily
+restored and the original-probe native test failed with `KEYMAP BWA STALE` as
+expected. The fixed firmware was restored immediately and all seven keyboard
+tests, Clippy and formatting were checked again. An early test-only expectation
+of exactly two guest hook entries was corrected to account for FIFO-ready IRQs
+latched during the guest prologue; empty BIOS entries must add no phantom key.
+
+The native cases exercise actual guest INT/IRET, CPU/PIC/ROM IRQ delivery, all 16
+groups, simultaneous holds including modifiers, raw break codes, queued makes
+and breaks, repeats, IF/mask gating, full/peek/get/flush ring behavior, reset and
+guest hooks that chain or consume input. A full-memory comparison restricts
+serviced Return writes to its bitmap byte, the existing ring and interrupt stack.
+All prior keyboard, DOS, timer, application, video, audio and persistence checks
+pass. No game, proprietary ROM/font or new publication asset is required. Optional
+MARKADIA/MUTATE retests were not performed; these results establish the keyboard
+contract, not game playability or music correctness. No post-merge verification
+is required by Issue #25.
+
 ## Issue #14 interval callback validation (2026-10-21)
 
 Implemented the normal-mode INT 1C/AH=02 single-event service from the

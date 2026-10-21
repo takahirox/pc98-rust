@@ -130,6 +130,16 @@ profiles. See the [interval service contract](docs/hardware.md#bios-interval-cal
 For the independent DOS game/video/audio tests and CPULEVEL diagnostic, select
 the Ap DOS machine and insert the generated `fixtures/dos-apps/*.hdm` disks; see [instructions](docs/dos-compatibility.md).
 
+The same preparation builds `fixtures/freedos/keymap.hdm` with the exact original
+MIT [Issue #25 keyboard probe](guest/keymap.asm). `cargo test --test keyboard`
+and actual-Wasm browser tests boot it through FreeDOS on both profiles, hold
+Return and release it through ordinary input, then assert `KEYMAP DOWN PASS`,
+`KEYMAP UP PASS` and shell return within seven million scheduler slots. Native
+tests also cover all 16 groups, simultaneous keys, repeats, break codes, IRQ
+gating, guest interrupt hooks, full-ring behavior and reset. See the
+[BIOS held-key contract](docs/hardware.md#bios-held-key-bitmap). No game or ROM
+is required, and this DOS fixture stays outside the Pages publication tree.
+
 `prepare_freedos.py` also builds `fixtures/freedos/hblank.hdm` from the original
 MIT [horizontal-blank probe](guest/hblank.asm). `cargo test --test gdc` requires
 this disk and verifies `HBLANK TRANSITION PASS` through guest DOS on both profiles,

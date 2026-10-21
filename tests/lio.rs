@@ -140,6 +140,35 @@ fn ginit_restores_defaults_preserves_frame_gaps_vram_and_repeats() {
 }
 
 #[test]
+fn ginit_preserves_both_bios_drawing_timing_selections_on_repeated_calls() {
+    let mut m = Machine::new(Profile::Pc9821ApDos);
+    for ch in [0x06, 0x16, 0x06] {
+        // Select timing through the guest INT 18h ROM handler, then enter
+        // GINIT through its separately registered ROM directory entry.
+        m.bus.mem[0x100..0x103].copy_from_slice(&[0xcd, 0x18, 0xf4]);
+        m.cpu.s[CS] = 0;
+        m.cpu.s[SS] = 0x3000;
+        m.cpu.r[SP] = 0x8000;
+        m.cpu.r[AX] = 0x4a00;
+        m.cpu.r[CX] = ch << 8;
+        m.cpu.ip = 0x100;
+        m.cpu.halted = false;
+        m.step(3); // INT 18h, ROM OUT, IRET
+        assert!(m.error.is_none(), "{:?}", m.error);
+        let timing = if ch == 0x06 { 8 } else { 0 };
+        assert_eq!(m.bus.mem[0x54d] & 8, timing);
+        assert_eq!(m.bus.gdcs[1].draw_during_display, timing != 0);
+        for _ in 0..2 {
+            call(&mut m, 0, 0x2000);
+            assert!(m.error.is_none(), "{:?}", m.error);
+            assert_eq!(m.cpu.byte(4), 0);
+            assert_eq!(m.bus.mem[0x54d], 0x40 | timing);
+            assert_eq!(m.bus.gdcs[1].draw_during_display, timing != 0);
+        }
+    }
+}
+
+#[test]
 fn ginit_renders_first_logical_screen_with_doubled_lines_and_keeps_text_independent() {
     for profile in PROFILES {
         let mut m = Machine::new(profile);

@@ -47,6 +47,7 @@ pub fn initialize(b: &mut Bus) {
     };
     b.write_seg(0, 0x524, 0x502, true);
     b.write_seg(0, 0x526, 0x502, true);
+    b.mem[0x52a..0x53a].fill(0); // BIOS key state: all released at initialization.
     for cell in 0..2048 {
         b.mem[0xa2000 + cell * 2] = 0xe1;
     }
@@ -156,8 +157,24 @@ pub fn service(c: &mut Cpu, b: &mut Bus) -> Result<(), String> {
             }
         }
         9 => {
-            b.keyboard.service();
-            sync_keys(b);
+            if b.input(0x43) & 2 != 0 {
+                let scan_pending = b.keyboard.scan_pending();
+                let code = b.input(0x41);
+                // Command replies share the port/FIFO but are not break codes.
+                if scan_pending {
+                    let scan = code & 0x7f;
+                    // Follow serviced FIFO order, not the host's newer held state.
+                    let state = &mut b.mem[0x52a + scan as usize / 8];
+                    let mask = 1 << (scan % 8);
+                    if code & 0x80 == 0 {
+                        *state |= mask;
+                    } else {
+                        *state &= !mask;
+                    }
+                    b.keyboard.service_scan(code);
+                    sync_keys(b);
+                }
+            }
             b.output(0, 0x20);
         }
         0x0a..=0x17 => {
@@ -196,7 +213,7 @@ pub fn service(c: &mut Cpu, b: &mut Bus) -> Result<(), String> {
             }
             4 => {
                 let group = c.byte(0) as usize;
-                c.set_byte(4, b.keyboard.pressed.get(group).copied().unwrap_or(0))
+                c.set_byte(4, if group < 16 { b.mem[0x52a + group] } else { 0 })
             }
             0x0a => b.mem[0x53c] = c.byte(0),
             0x0b => c.set_byte(0, b.mem[0x53c]),

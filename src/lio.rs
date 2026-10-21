@@ -71,7 +71,8 @@ pub(crate) fn service(c: &mut Cpu, b: &mut Bus) -> Result<(), String> {
     b.gdcs[1].pitch = 40;
     b.gdcs[1].enabled = true;
     b.mem[0x54c] |= 0x80;
-    b.mem[0x54d] = 0x40; // color, LOWER region
+    // Color, LOWER region; preserve the independently selected drawing timing.
+    b.mem[0x54d] = (b.mem[0x54d] & 8) | 0x40;
     for (i, color) in b.palette.iter_mut().enumerate() {
         let level = match i {
             0..=7 => 255,
