@@ -1,4 +1,5 @@
-//! Original compact Latin glyphs, MIT (same license as this project).
+//! Original compact Latin glyphs (MIT) and a licensed Shinonome JIS CG.
+//! See fixtures/fonts/README.md for the unchanged upstream source/license.
 //! Five columns, seven rows expanded to the PC-98 8x16 cell. No ROM data.
 pub fn row(ch: u8, y: u8) -> u8 {
     if !(1..15).contains(&y) {
@@ -68,4 +69,14 @@ pub fn row(ch: u8, y: u8) -> u8 {
         _ => [31, 17, 5, 4, 4, 0, 4],
     };
     pattern[((y - 1) / 2) as usize] << 2
+}
+
+/// JIS row/cell lookup. Rows are 16-bit MSB-first, left byte then right byte.
+/// The source and conversion are reproduced by tools/build_font.py.
+pub fn jis_byte(row: u8, cell: u8, byte: usize) -> u8 {
+    if !(0x21..=0x7e).contains(&row) || !(0x21..=0x7e).contains(&cell) || byte >= 32 {
+        return 0;
+    }
+    static JIS: &[u8; 94 * 94 * 32] = include_bytes!("../fixtures/fonts/jis0208.bin");
+    JIS[((row as usize - 0x21) * 94 + cell as usize - 0x21) * 32 + byte]
 }

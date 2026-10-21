@@ -1,0 +1,71 @@
+{
+  "assets": {
+    "adv98.zip": {
+      "url": "https://github.com/yarufu/pc98/releases/download/v0.1/ADV98.zip",
+      "sha256": "9aa590f53b331ec04fa1a2352f7ed6190407756d1f552c9c0bf76f9a05eb2d3d"
+    },
+    "adv98-engine-source.tar.gz": {
+      "url": "https://codeload.github.com/yarufu/pc98/tar.gz/11a9f1c59c6fd8169439d477d5276ee7c0f27566",
+      "sha256": "cd5fb3506518c959c625dbdb62b08e9b60fa1548f7f8e6a8a7a6a24943738977"
+    },
+    "adv98-scenario-source.tar.gz": {
+      "url": "https://codeload.github.com/yarufu/pc98/tar.gz/2f482577433f89abd3166e95209f3ffea21b9bbc",
+      "sha256": "79533a772499fc486cde2f32292a7389d9be53458c6843e1782050b4a1413a3f"
+    },
+    "98videop.com": {
+      "url": "https://github.com/maxotaku11niku/98VIDEOP/releases/download/v1.4.0/98VIDEOP.COM",
+      "sha256": "877a0086d16da70e8166d41f2ff6043269a6f6235c0aba9e4d818129b74cbb99"
+    },
+    "98videop-source.tar.gz": {
+      "url": "https://codeload.github.com/maxotaku11niku/98VIDEOP/tar.gz/c46b5f3cdcae83c81cf829adb900da400357bbc0",
+      "sha256": "0bff1983e0560be65e110851b87b0e6f82405e46fe893a1b4bdfa6b83476e68d"
+    }
+  },
+  "applications": {
+    "adv98": {
+      "license": "MIT (application); GPL-2.0-or-later (guest DOS)",
+      "image_sha256": "22ab347a2479e350ab8f9f875107b8cbccaa025386c4f844a2cdded999ef8c4d",
+      "files": {
+        "ADV98   EXE": "904f476516bf009b6d25d0a2738ddf649af05bcafac72cbb703c73d7159e5954",
+        "SCRIPT  TXT": "cdfb7b47e10cdc1ff2f17c7e51cc54e9f2653edcd819d898f474a7ebef3b7a17",
+        "ADV     PAL": "b0b015d063e692183fe5ebde0135a932b36fe536aa8d106f600b4a03bade4a7d",
+        "CLASS   G98": "1861d6dede59d22d9a312493ede340d3e9de76b864632c692d4736d93f1bdcaa",
+        "C01_N   SPR": "6168e1e0b8c25b8ffe8840dce75662f8e96feae1912134bef54f24030df22932",
+        "AUTOEXECBAT": "77c90d6918b6d9e8fe79c68e1c5032e46f5f5531c84984c9f06eb055c746b69a"
+      },
+      "version": "v0.1 engine, 11a9f1c; sample 2 from 2f482577",
+      "requirements": "PC-98 DOS, conventional RAM, 640x400 four-plane graphics, CG, keyboard, writable floppy",
+      "expected": "Japanese title/dialogue, Look/Talk/Move branches, SAVE1.DAT save/load",
+      "modifications": "Unmodified executable/scenario; original replacement G98B background and SPR0 marker; optional PMD/mouse absent"
+    },
+    "98videop": {
+      "license": "MIT (application); GPL-2.0-or-later (guest DOS)",
+      "image_sha256": "0d5cdcc42db90dfe1889283e879b5828ac6a9491cec8aca08198fa1c590b2ed5",
+      "files": {
+        "98VIDEOPCOM": "877a0086d16da70e8166d41f2ff6043269a6f6235c0aba9e4d818129b74cbb99",
+        "TEST    98V": "32ab58fb4acd63155f6316a0207599b30fd4f6197b69a8e46510090a8f660ce2",
+        "AUTOEXECBAT": "c6f8b5dca5526390b5244425ed1e59652ab87d3c445651e5c67ae2cbac3c7c04"
+      },
+      "version": "v1.4.0, c46b5f3c",
+      "requirements": "PC-98 DOS, 16-bit real mode, 640x400 four-plane graphics, VSYNC IRQ, PIT",
+      "expected": "Decode eight original test-video frames and return to FreeCOM",
+      "modifications": "Unmodified executable; original test video; buzzer fallback, no PCM board"
+    },
+    "fm98": {
+      "license": "MIT (application); GPL-2.0-or-later (guest DOS)",
+      "image_sha256": "fc72df9b57695c5e096660bdeadf784245369a764aaa6ba02e90ee14a63bf1b7",
+      "files": {
+        "FM98    COM": "0ff73bd58e4293137738e66b1bb67e324f24327ff370581243f1815f5beb28ea",
+        "AUTOEXECBAT": "1a77043a4aeb5ca161f24b7a12e9f684397bd45aa1770c69ae406dc5a979277c"
+      },
+      "version": "Unmodified ADV98 fm86.c/h at 2f482577; original DOS entry harness",
+      "requirements": "PC-98 DOS, 188/18A OPN ports, VSYNC status polling",
+      "expected": "Two FM notes, no beeper; print INDEPENDENT FM ROUTINES OK and return to DOS",
+      "build": "tools/build_fm_test.py; ia16-elf-gcc 6.3.0 -O0 -march=v30 -mcmodel=tiny, ia16-elf-ld 2.39; no runtime libraries"
+    }
+  },
+  "os_manifest": "../freedos/manifest.json",
+  "firmware": "original synthetic BIOS, guest/firmware.asm",
+  "font": "Shinonome 16, fixtures/fonts; see docs/dos-compatibility.md",
+  "excluded": "Release artwork, sprites, PLAY.M, SE.EFC, PMD and mouse TSR"
+}

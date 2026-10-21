@@ -4,7 +4,7 @@ const decoder = new TextDecoder();
 let core, running = false, audio, outputGain, nextAudio = 0, muted = true, loading = false;
 let audioEnergy = 0, scheduledSamples = 0;
 const mounted = [null, null], held = new Set();
-const controls = ['game', 'hello', 'pause', 'reset', 'sound', 'eject', 'export'];
+const controls = ['game', 'hello', 'pause', 'reset', 'sound', 'eject', 'export', 'profile'];
 function message(kind = 0) {
   const ptr = core.message(kind), len = core.message_len();
   return decoder.decode(new Uint8Array(core.memory.buffer, ptr, len));
@@ -93,6 +93,16 @@ $('sound').onclick = async () => {
   try { if (muted) await enableAudio(); else { muted = true; outputGain.gain.value = 0; $('sound').textContent = 'Enable sound'; $('sound').setAttribute('aria-pressed', 'false'); } }
   catch (error) { fail(error); }
 };
+$('profile').onchange = () => {
+  releaseKeys();
+  if (!core.set_profile(Number($('profile').value))) { fail(Error('Unsupported machine profile')); return; }
+  $('profile-label').textContent = $('profile').value === '1' ? 'PC-9821Ap DOS · experimental' : 'PC-9801VM · experimental';
+  $('display-mode').textContent = $('profile').value === '1'
+    ? '640 × 400 · 16 colors · Shinonome Japanese CG · approximate OPN'
+    : '640 × 400 · 8 colors · replacement Latin font';
+  clearError(); nextAudio = 0; core.audio_clear(); render();
+  if (mounted[0]) setRunning(true);
+};
 $('drive').onchange = showMedia;
 $('eject').onclick = () => { const drive = Number($('drive').value); core.eject(drive); mounted[drive] = null; showMedia(); };
 $('export').onclick = () => {
@@ -162,7 +172,7 @@ try {
   core = result.instance.exports;
   // Machine-readable inspection of the actual Wasm core for deterministic tests.
   window.pc98 = { core, text: () => message(1), read: (addr) => core.peek(addr),
-    stats: () => ({instructions:core.metric(0),reads:core.metric(1),writes:core.metric(2),beepEdges:core.metric(3),error:message(),beep:core.beep(),running,audioState:audio?.state,audioGain:outputGain?.gain.value,audioEnergy,scheduledSamples}),
+    stats: () => ({instructions:core.metric(0),reads:core.metric(1),writes:core.metric(2),beepEdges:core.metric(3),fmWrites:core.metric(6),fmKeyEdges:core.metric(7),error:message(),beep:core.beep(),running,audioState:audio?.state,audioGain:outputGain?.gain.value,audioEnergy,scheduledSamples}),
     exportDisk: (drive=0) => Array.from(exportBytes(drive)),
   };
   controls.forEach((id)=>$(id).disabled=false); showMedia(); status('Ready · choose a demo or insert a floppy'); render(); requestAnimationFrame(animate);

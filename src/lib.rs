@@ -5,9 +5,12 @@ pub mod devices;
 pub mod disk;
 pub mod firmware;
 pub mod font;
+pub mod profile;
+pub mod sound;
 use bus::Bus;
 use cpu::Cpu;
 use disk::Disk;
+pub use profile::Profile;
 pub struct Machine {
     pub cpu: Cpu,
     pub bus: Bus,
@@ -16,17 +19,23 @@ pub struct Machine {
 }
 impl Default for Machine {
     fn default() -> Self {
-        let mut m = Self {
-            cpu: Cpu::default(),
-            bus: Bus::default(),
-            error: None,
-            framebuffer: vec![0; 640 * 400 * 4],
-        };
-        firmware::initialize(&mut m.bus);
-        m
+        Self::new(Profile::Pc9801Vm)
     }
 }
 impl Machine {
+    pub fn new(profile: Profile) -> Self {
+        let mut m = Self {
+            cpu: Cpu::default(),
+            bus: Bus::new(profile),
+            error: None,
+            framebuffer: vec![0; 640 * 400 * 4],
+        };
+        if profile == Profile::Pc9821ApDos {
+            m.cpu.flags = 2;
+        }
+        firmware::initialize(&mut m.bus);
+        m
+    }
     pub fn insert(&mut self, drive: usize, bytes: Vec<u8>, name: &str) -> Result<(), String> {
         if drive > 1 {
             return Err("only two floppy drives".into());
@@ -38,7 +47,10 @@ impl Machine {
     pub fn reset(&mut self) {
         let disks = std::mem::take(&mut self.bus.disks);
         self.cpu = Cpu::default();
-        self.bus = Bus::default();
+        if self.bus.profile == Profile::Pc9821ApDos {
+            self.cpu.flags = 2;
+        }
+        self.bus = Bus::new(self.bus.profile);
         self.bus.disks = disks;
         self.error = None;
         firmware::initialize(&mut self.bus);
@@ -105,6 +117,20 @@ mod wasm {
         })
     }
     #[no_mangle]
+    pub extern "C" fn set_profile(id: u32) -> u32 {
+        let profile = match id {
+            0 => Profile::Pc9801Vm,
+            1 => Profile::Pc9821ApDos,
+            _ => return 0,
+        };
+        MACHINE.with(|m| {
+            let mut m = m.borrow_mut();
+            m.bus.profile = profile;
+            m.reset();
+        });
+        1
+    }
+    #[no_mangle]
     pub extern "C" fn reset() {
         MACHINE.with(|m| m.borrow_mut().reset())
     }
@@ -163,6 +189,8 @@ mod wasm {
                 2 => m.bus.fdc.writes as f64,
                 3 => m.bus.beep_edges as f64,
                 4 => u8::from(m.error.is_some()) as f64,
+                6 => m.bus.opn.writes as f64,
+                7 => m.bus.opn.key_edges as f64,
                 _ => m.bus.cycles as f64,
             }
         })

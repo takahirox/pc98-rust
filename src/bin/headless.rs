@@ -3,8 +3,12 @@ fn main() {
     let args: Vec<_> = std::env::args().collect();
     let path = args
         .get(1)
-        .expect("usage: headless IMAGE [STEP_BUDGET] [TRACE]");
-    let mut m = Machine::default();
+        .expect("usage: headless IMAGE [STEP_BUDGET] [trace] [--ap]");
+    let mut m = Machine::new(if args.iter().any(|a| a == "--ap") {
+        pc98_rust::Profile::Pc9821ApDos
+    } else {
+        pc98_rust::Profile::Pc9801Vm
+    });
     m.insert(0, std::fs::read(path).expect("read image"), path)
         .expect("parse image");
     m.reset();
@@ -12,7 +16,7 @@ fn main() {
         .get(2)
         .map(|v| v.parse().unwrap())
         .unwrap_or(1_000_000u64);
-    let trace = args.get(3).is_some();
+    let trace = args.iter().any(|a| a == "trace");
     let mut old_text = String::new();
     for i in 0..steps {
         if trace && i + 100 > steps {

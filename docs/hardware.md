@@ -1,11 +1,15 @@
 # Machine profile and implementation boundaries
 
-The target is a PC-9801VM-family V30 in 16-bit real mode, with 640 KiB conventional
-RAM, 12 KiB text storage, 192 KiB planar graphics storage and two floppy slots.
+This document describes the preserved VM default. The new selectable
+[Ap DOS subset, independent guests and exact limits](dos-compatibility.md) are
+documented separately; it does not implement a complete PC-9821.
+
+The default target is a PC-9801VM-family V30 in 16-bit real mode, with 640 KiB
+conventional RAM, 12 KiB text storage, 192 KiB planar graphics storage and two floppy slots.
 The scheduling clock is fixed at 8 MHz. The
 [NEC VM4 specification](https://support.nec-lavie.jp/support/product/data/spec/cpu/b183-1.html)
 and [generation overview](https://pc98.ne.jp/techdet/) identify the model boundaries.
-There is no 286, 386, PC-9821 or IBM VGA compatibility mode.
+This VM profile has no 286, 386, PC-9821 or IBM VGA compatibility mode.
 
 All hardware implementations are original Rust. `Cargo.lock` contains only this
 package; `cargo tree` has no emulator, Wasm binding, or other Rust dependencies.

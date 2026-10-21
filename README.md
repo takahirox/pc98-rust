@@ -11,10 +11,17 @@ The anticipated public demo is <https://takahirox.github.io/pc98-rust/> once the
 GitHub Pages deployment succeeds. **Publication is currently unverified**; the
 pre-merge checks below do not establish that the public URL works.
 
-The experimental profile targets a **PC-9801VM with 640 KiB RAM, V30 real mode,
-640×400 display and three graphics planes**. Compatibility is the subset exercised
+The default experimental profile targets a **PC-9801VM with 640 KiB RAM, V30 real
+mode, 640×400 display and three graphics planes**. Compatibility is the subset exercised
 by the included guests and the pinned FreeDOS(98) smoke test. This is not a general
 PC-98 compatibility claim. See [hardware, ports, firmware and limits](docs/hardware.md).
+
+A selectable **PC-9821Ap DOS subset** adds four-plane 16-color graphics,
+replacement Japanese CG/text and approximate OPN sound. Independent ADV98 and
+98VIDEOP programs now run through guest FreeDOS, with native and actual-Wasm
+browser tests. This is a partial step toward Issue #7: no full 486/32-bit ISA,
+HDD, EGC/PEGC, mouse or OPNA/PCM yet; the released ADV98 game requires an optional
+PMD driver for sound. See [guest provenance, commands and exact profile limits](docs/dos-compatibility.md).
 
 ## Build and play
 
@@ -59,7 +66,8 @@ Backspace, Tab, Shift, Ctrl, F1–F10, editing keys and numeric keypad. Alt maps
 GRPH, right Alt to XFER, left Meta to NFER; the expandable on-screen PC-98 keyboard
 also supplies Kana, NFER/XFER, STOP/COPY and Japanese punctuation. Key releases,
 modifiers and host key repeat reach the guest. Focus loss releases held keys;
-hiding the tab pauses execution. Kanji ROM/FEP input is not implemented.
+hiding the tab pauses execution. The Ap DOS profile supplies licensed replacement
+Japanese CG glyphs. FEP input is not implemented.
 
 ## Reproduce the checks
 
@@ -67,6 +75,8 @@ hiding the tab pauses execution. Kanji ROM/FEP input is not implemented.
 # Fetch checksum-pinned guest binaries AND matching complete source archives.
 # This makes a minimal GPL guest disk; it downloads no emulator code.
 python3 tools/prepare_freedos.py
+python3 tools/prepare_dos_apps.py
+python3 tools/build_font.py --check
 cargo test --locked
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
@@ -79,21 +89,23 @@ npm test
 
 `npm run build` checks reproducible media, compiles the real Rust/Wasm core and
 runs `npm run check:site`. The latter verifies a nonempty, compilable Wasm module
-with the emulator exports and an exact list of the nine distributable assets,
-including both approved disks and MIT notices. Unexpected files, directories or
-symlinks fail the check. `npm test` runs the same browser acceptance suite at the
+with the emulator exports and an exact list of the ten distributable assets,
+including both approved disks, MIT notices and the replacement font notice.
+Unexpected files, directories or symlinks fail the check. `npm test` runs the same browser acceptance suite at the
 local root and at a simulated Pages project subpath whose root asset URLs fail.
 To repeat just the project-path browser checks after building, run
 `npx playwright test --project=pages`.
 
-`cargo test --test dos` deliberately fails if the legal guest fixture is missing;
-it is never silently skipped. The fixture downloads require network access once.
+`cargo test --test dos` and `cargo test --test ap` deliberately fail if their legal
+guest fixtures are missing; they are never silently skipped. The fixture downloads require network access once.
 Their checksums and sources are pinned in the preparation script. **PROBE.COM**
 runs via the guest FreeDOS kernel and shell, including real INT 21h handling inside
 DOS. The emulator has no host DOS implementation. The minimal fixture excludes
 XMS drivers because this profile is real-mode V30, not a 286 machine. To try it in
 the browser, insert `fixtures/freedos/minimal.hdm`, wait for `A:\>`, and type `probe`.
 See [licensing and distribution](docs/licenses.md) before redistributing this disk.
+For the independent DOS game/video/audio tests, select the Ap DOS machine and
+insert the generated `fixtures/dos-apps/*.hdm` disks; see [instructions](docs/dos-compatibility.md).
 
 For a native/headless run of the same core:
 
