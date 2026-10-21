@@ -123,11 +123,23 @@ def main():
     (DEST / 'COPYING').write_bytes(files[b'COPYING    '])
     (DEST / 'FreeCOM-LICENSE').write_bytes(shell.read('license'))
     (DEST / 'distribution-READMEja.htm').write_bytes(distribution.read('READMEja.htm'))
+    # Separate original status probe; keep the pinned minimal image unchanged.
+    hblank_files = {**files,
+        b'HBLANK  COM': assemble('guest/hblank.asm'),
+        b'HBLANK  ASM': (ROOT / 'guest/hblank.asm').read_bytes(),
+        b'RUST    LIC': (ROOT / 'LICENSE').read_bytes(),
+        b'AUTOEXECBAT': b'@echo off\r\nHBLANK\r\necho HBLANK PROBE RETURNED\r\n'}
+    hblank = image_with_files(original[:1024], hblank_files)
+    (DEST / 'hblank.hdm').write_bytes(hblank)
     manifest = {
         'license': 'GPL-2.0-or-later (boot, kernel, FreeCOM); MIT (PROBE.COM)',
         'image_sha256': hashlib.sha256(image).hexdigest(),
         'assets': {k: {'url': v[0], 'sha256': v[1]} for k, v in ASSETS.items()},
         'files': {k.decode('ascii'): hashlib.sha256(v).hexdigest() for k, v in files.items()},
+        'hblank': {
+            'image_sha256': hashlib.sha256(hblank).hexdigest(),
+            'files': {k.decode('ascii'): hashlib.sha256(v).hexdigest() for k, v in hblank_files.items()},
+        },
     }
     (DEST / 'manifest.json').write_text(json.dumps(manifest, indent=2)+'\n')
     (DEST / 'README.txt').write_text(
@@ -141,6 +153,8 @@ def main():
         'No changes to kernel/boot/FreeCOM; the disk filesystem was rebuilt.\n'
         'See COPYING, FreeCOM-LICENSE, manifest.json, and the complete matching\n'
         'kernel-source.tar.gz and freecom-source.tar.gz (including build scripts).\n'
+        'hblank.hdm adds original MIT HBLANK.COM, HBLANK.ASM and RUST.LIC;\n'
+        'AUTOEXEC runs the bounded two-port horizontal-blank probe.\n'
         'Redistribute this entire folder with the image to preserve sources,\n'
         'licenses, original notices and upstream distribution documentation.\n')
     # Verify source archives are valid without extracting paths from downloads.

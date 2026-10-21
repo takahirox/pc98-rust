@@ -187,3 +187,98 @@ post comments or merge. CI execution on Linux remains for that workflow; the sam
 commands were run locally. No published-site test, proprietary media, physical
 machine test, independent AI PR review or subjective human gameplay was performed
 or required for this node. No required post-merge verification is introduced.
+
+## Issue #15 horizontal-blank validation (2026-10-21)
+
+The fixed horizontal timing contract is in [hardware.md](hardware.md#device-ports-and-interrupts).
+Bit 6 follows the same elapsed 8 MHz guest clock as other devices, with a shared
+phase for text and bitmap GDCs. Status reads add no time or state. The supported
+VM/Ap approximations do not change FIFO or vertical-sync behavior, scheduling,
+rendering, or programmable display-mode support.
+
+The following checks passed in the assigned macOS arm64 worktree:
+
+| Command | Result |
+| --- | --- |
+| `python3 tools/prepare_freedos.py` | Pinned GPL inputs and matching complete sources/notices verified; minimal image hash unchanged; original HBLANK probe disk built |
+| `python3 tools/prepare_dos_apps.py` | Passed; baseline application fixtures unchanged |
+| `python3 tools/prepare_cpu_fixture.py` | Passed |
+| `python3 tools/prepare_hdd_fixture.py` | Passed |
+| `python3 tools/prepare_music_fixture.py` | Passed |
+| `python3 tools/prepare_device_fixture.py` | Passed |
+| `cargo test --locked --test gdc` | All 5 new tests passed, including the DOS guest on VM and Ap |
+| `cargo test --locked` | All 69 integration tests passed; no ignored tests |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `cargo fmt --check` | Passed after fixing a new test comment's formatting |
+| `cargo tree` | Only pc98-rust; no Rust dependencies |
+| `npm ci` | Passed; unchanged development dependencies |
+| `npx playwright install chromium` | Passed |
+| `npm test -- --config <temporary-port-config>` | Passed: reproducible media/font checks, release Wasm build, publication audit, all 28 actual Chromium/Wasm tests (43.3 seconds) |
+| `git diff --check` | Passed |
+
+The first plain `npm test` built Wasm and passed the exact ten-asset publication
+audit, then stopped because existing listeners occupied ports 8000/8001. The
+successful rerun used a temporary config outside the worktree, importing the
+repository config and changing only server ports/base URLs to 18000/18001, with
+the same project-path server logic. Tests still ran at `/` and `/pc98-rust/`,
+with root asset URLs unavailable in the project-path server. Existing listeners
+were left running. No permanent configuration change was needed; the standard
+README commands remain the reproduction path when default ports are free.
+
+The new native coverage samples every clock across eight horizontal periods per
+profile, checks exact period/duty and both status ports, advances time without
+reads, repeats reads with no elapsed time, compares chunked elapsed time, checks
+FIFO readback and both vertical boundaries over two frames, and verifies reset
+and fixed-mode command behavior. The existing suites cover scheduler/REP bounds,
+VM boot/input, Ap planar video, packed-pixel PEGC, audio and persistence.
+
+`guest/hblank.asm` is an original MIT DOS program based on the Issue #13 control.
+It initializes the supported video mode, observes four set/clear pairs per port,
+and prints `TEXT GDC 0060 PASS`, `BITMAP GDC 00A0 PASS`, and
+`HBLANK TRANSITION PASS`. Each poll phase is bounded at 65535 reads. Both native
+and browser tests execute it via real FreeDOS/FreeCOM, require successful output
+and return to the shell within 16 million scheduler slots per profile, and reject
+`TIMEOUT`. The four new browser cases cover VM and Ap at each serving path.
+
+Prepared HBLANK disk SHA-256:
+`49931254f45f276fd5280d9fd8a9bd82a548535c4707b2abece117c0dee0c7da`.
+Release Wasm: 438021 bytes; generated binaries remain ignored and the probe disk
+is excluded from publication. No MARKADIA download or optional game playability
+recheck was performed. This verifies the independent status wait, not MARKADIA's
+opening, audio or keyboard progression. No push, PR, merge, GitHub comment,
+live deployment or post-merge verification was performed or required for #15.
+
+### Issue #15 review revision (2026-10-21)
+
+Integrated the changes from main `123116f4e75c1245d116459e55a9c97977f401f6`
+without a merge commit. The timer and horizontal-blank controls, their source and
+license notices, and both validation records are retained. The independent
+minimal, HBLANK and TIMER image hashes remain unchanged.
+
+The failed [acceptance run](https://github.com/takahirox/pc98-rust/actions/runs/39556249870)
+was inspected using its retained Playwright trace. All three full HDD exports
+spent 30.0–35.6 seconds transferring numeric arrays through Playwright; the last
+export crossed the existing 120-second deadline. The browser test now transfers
+the same complete exported bytes as base64, decoded to a Buffer before the
+existing assertions. Mouse/IRQ, DOS save, reimport, file-content preservation and
+invalid-geometry coverage are retained, with the same timeout and no retries.
+
+| Command | Result |
+| --- | --- |
+| All six `python3 tools/prepare_*` commands from README | Passed; pinned inputs and source/license outputs prepared |
+| `python3 tools/build_font.py --check` | Passed |
+| `cargo test --locked` | Passed: 77 native integration tests, including all eight timer and five GDC tests |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `cargo fmt --check` | Passed |
+| `npm ci` / `npx playwright install chromium` | Passed |
+| `npm test` | Media/font, release Wasm and ten-asset publication checks passed; browser server startup failed because default ports were already occupied |
+| `npm test -- --config /tmp/issue15-playwright.config.mjs` | Passed: all 32 Chromium/Wasm tests in 19.2 seconds, including both profiles' timer/HBLANK controls at both serving paths; HDD tests completed in 11.1 and 10.2 seconds |
+| `git merge-tree --write-tree <revision> 123116f4e75c1245d116459e55a9c97977f401f6` | Passed: no conflicts, without changing branch ancestry |
+| `git diff --cached --check` | Passed |
+
+The temporary browser configuration imported the repository configuration and
+changed only the server ports/base URLs to 18000/18001, retaining the project-path
+server's restriction to `/pc98-rust/`. Existing listeners were left running.
+These results are local macOS arm64 evidence. A passing GitHub acceptance run on
+the updated PR head remains pending publication: this revision node must not
+push or merge, so it cannot publish the new head or trigger its PR workflow.

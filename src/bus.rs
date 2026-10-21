@@ -399,8 +399,20 @@ impl Bus {
                 }
             }
             0x60 | 0xa0 => {
+                // Fixed 640x400 raster approximation at the 8 MHz guest clock:
+                // VM: 40 us/line, 32 us active; Ap: 32 us/line, 25 us active.
+                // Both GDCs share the scan phase, including while display is off.
+                // See docs/hardware.md; SYNC parameters are not modeled.
+                let (line, active) = match self.profile {
+                    Profile::Pc9801Vm => (320, 256),
+                    Profile::Pc9821ApDos => (256, 200),
+                };
                 0x04 | if self.cycles % 133_333 > 125_000 {
                     0x20
+                } else {
+                    0
+                } | if self.cycles % line >= active {
+                    0x40
                 } else {
                     0
                 } | if !self.gdcs[usize::from(p == 0xa0)].fifo.is_empty() {

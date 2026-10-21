@@ -130,9 +130,13 @@ profiles. See the [interval service contract](docs/hardware.md#bios-interval-cal
 For the independent DOS game/video/audio tests and CPULEVEL diagnostic, select
 the Ap DOS machine and insert the generated `fixtures/dos-apps/*.hdm` disks; see [instructions](docs/dos-compatibility.md).
 
-The original [user-character BIOS controls](docs/user-characters.md) also boot
-through this legal FreeDOS fixture and compare text/graphics pixels in native
-and browser Wasm tests.
+`prepare_freedos.py` also builds `fixtures/freedos/hblank.hdm` from the original
+MIT [horizontal-blank probe](guest/hblank.asm). `cargo test --test gdc` requires
+this disk and verifies `HBLANK TRANSITION PASS` through guest DOS on both profiles,
+within 16 million scheduler slots. Actual-browser tests run the same disk and
+budget on real Wasm at both serving paths. The probe initializes video and polls
+both `0060h` and `00A0h`; no game or ROM download is needed. See the
+[fixed display timing contract](docs/hardware.md#device-ports-and-interrupts).
 
 For a native/headless run of the same core:
 
@@ -149,6 +153,10 @@ Each step call is capped at 100,000 scheduler slots; REP instructions perform on
 iteration per slot. Rebuild checked-in guest artifacts with
 `python3 tools/build_media.py` after editing assembly sources. The generated
 `web/core.wasm` is build output and is not committed.
+
+The original [user-character BIOS controls](docs/user-characters.md) also boot
+through this legal FreeDOS fixture and compare text/graphics pixels in native
+and browser Wasm tests.
 
 [CI](.github/workflows/emulator.yml) performs the fixture preparation, native
 checks, Wasm build and browser tests on pull requests before merge. Local test
