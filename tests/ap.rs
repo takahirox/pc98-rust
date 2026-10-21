@@ -59,7 +59,9 @@ fn glyph(m: &mut Machine, jis: [u8; 2], x: usize, y: usize) {
 }
 fn fat_file(image: &[u8], name: &[u8; 11]) -> Vec<u8> {
     let entry = image[5 * 1024..11 * 1024]
-        .chunks_exact(32)
+        .as_chunks::<32>()
+        .0
+        .iter()
         .find(|e| &e[..11] == name)
         .expect("guest saved file");
     let size = u32::from_le_bytes(entry[28..32].try_into().unwrap()) as usize;
@@ -258,6 +260,31 @@ fn fm_write(fm: &mut Opn, a: u8, v: u8) {
     fm.address = a;
     fm.write(v);
 }
+
+#[test]
+fn opn_algorithm_two_second_operator_contributes_to_pcm() {
+    fn tone(second_total_level: u8) -> Vec<f32> {
+        let mut fm = Opn::default();
+        for slot in [0, 4, 8, 12] {
+            fm_write(&mut fm, 0x30 + slot, 1);
+            fm_write(&mut fm, 0x40 + slot, 24);
+            fm_write(&mut fm, 0x50 + slot, 31);
+            fm_write(&mut fm, 0x80 + slot, 15);
+        }
+        // Logical operator 2 occupies register offset 8 (physical order 1,3,2,4).
+        fm_write(&mut fm, 0x48, second_total_level);
+        for (a, v) in [(0xb0, 2), (0xa4, 0x22), (0xa0, 0x69), (0x28, 0xf0)] {
+            fm_write(&mut fm, a, v);
+        }
+        (0..4800).map(|_| fm.sample()).collect()
+    }
+
+    assert!(
+        tone(0) != tone(127),
+        "algorithm 2 must route operator 2 through operator 3 to the output"
+    );
+}
+
 #[test]
 fn opn_timers_irq_busy_fm_pitch_and_deterministic_pcm() {
     let mut fm = Opn::default();

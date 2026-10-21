@@ -219,9 +219,9 @@ impl Opn {
                 2,
                 hz,
                 match alg {
-                    0 => second,
+                    0 | 2 => second,
                     1 => first + second,
-                    2 | 5 => first,
+                    5 => first,
                     _ => 0.0,
                 },
             );
