@@ -94,7 +94,7 @@ this table is not a claim of complete chip emulation.
 | `00,02`; `08,0A` | Master/slave 8259: ICW vector/cascade initialization, masks, IRR/ISR, priority, specific/nonspecific EOI, auto EOI | Master IR7 cascades slave; masked/in-service IRQs cannot bypass priority |
 | `01–0F` odd, `11–1F` odd, `21,23,25,27` | 8237 address/count flip-flop, channel masks, direction/decrement, terminal count, bank registers | FDC uses channel 2; count/address change with actual byte transfers |
 | `31,33,35,37` | PPI startup inputs, output C, bit set/reset, active-low beep gate | Input straps are fixed VM-profile constants |
-| `41,43` | Keyboard byte FIFO, ready status, command acknowledgements, down/up scan bytes | IR1 / INT 09; firmware maintains BIOS ring and modifier state |
+| `41,43` | Keyboard byte FIFO, ready status, command acknowledgements, down/up scan bytes | IR1 / INT 09; firmware maintains BIOS ring, held-key bitmap and modifier state |
 | `60,62` | Master text GDC parameter/status and command/data readback | RESET, display enable, PITCH, CURS, CCHAR, PRAM start, CSRR |
 | `A0,A2` | Slave bitmap GDC command/parameter/status/readback | Same register subset; 640×400 direct VRAM path |
 | `68` | Text display enable | Fixed 80-column 25-row renderer |
@@ -181,6 +181,34 @@ are accepted for data, but boot firmware for 512-byte-sector IPLs is not validat
 No BASIC fallback, proprietary firmware identity string, HDD bootstrap or extended
 memory is provided. Firmware work-area initialization includes conventional RAM
 size, floppy equipment, boot DA/UA, text attributes and keyboard ring pointers.
+
+### BIOS held-key bitmap
+
+The work-area table at `0000:052A–0539` has 16 groups of eight scan codes.
+For scan `s`, byte `052A + s/8`, bit `s%8` is one while held. Return (`1Ch`)
+therefore uses `052Dh`, bit 4. This layout follows the
+[PC-9801 Programmer's Bible, printed p.69](https://pc98.ne.jp/devdocs/pc-9801programmersbible.pdf);
+[NEC's BIOS databook, printed pp.32–33](https://pc98.ne.jp/devdocs/pc-9800technicaldatabookbios.pdf)
+describes INT 18h/AH=04h grouped sensing (AL selects the group, AH returns it).
+
+Host input queues make/break scan bytes and requests IRQ1. The firmware checks
+ready status at `43h`, consumes one byte from `41h`, sets/clears its bitmap bit,
+processes the existing character ring/modifiers, and sends PIC EOI. AH=04h reads
+the same work-area bytes; out-of-range groups return zero. Pending input does
+not change either BIOS view until serviced, including while IF is clear or IRQ1
+is masked. `Keyboard::pressed` remains the host's physical state, which can be
+ahead of the BIOS when several events are queued. Repeated makes keep the bit
+set and enqueue characters up to the existing 16-word ring limit; breaks clear
+the bit without adding characters, even when the ring is full. Reading or
+flushing the ring does not release held keys. An empty IRQ adds no character.
+
+Guest DOS/TSR vectors still run first: chaining to the original INT 09 handler
+updates the table; consuming bytes without chaining leaves BIOS state to the
+guest handler. No scheduler or host-input shortcut writes the table. Machine
+creation/reset initializes all 16 bytes to zero and discards held/pending keys,
+modifiers and ring contents, consistent with the existing fresh-device reset.
+This is the emulator's initialization policy; it does not reconstruct keys
+physically held across a real hardware reboot.
 
 ## Accepted software and media
 

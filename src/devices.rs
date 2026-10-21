@@ -368,6 +368,10 @@ impl Keyboard {
     }
     pub fn service(&mut self) -> Option<u16> {
         let s = self.receive();
+        self.service_scan(s)
+    }
+    /// Translate a scan byte already consumed by the firmware's port read.
+    pub(crate) fn service_scan(&mut self, s: u8) -> Option<u16> {
         let scan = s & 127;
         if [0x70, 0x74, 0x73].contains(&scan) {
             let bit = match scan {

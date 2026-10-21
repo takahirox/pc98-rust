@@ -131,6 +131,16 @@ def main():
         b'AUTOEXECBAT': b'@echo off\r\nHBLANK\r\necho HBLANK PROBE RETURNED\r\n'}
     hblank = image_with_files(original[:1024], hblank_files)
     (DEST / 'hblank.hdm').write_bytes(hblank)
+    # Exact MIT control published in Issue #25; no game assets are needed.
+    keymap_source = (ROOT / 'guest/keymap.asm').read_bytes()
+    assert hashlib.sha256(keymap_source).hexdigest() == '833f8925cf99c2cbbcce5f05fd3d7a1c129ab229276203a7661eb4ad497440f5'
+    keymap_files = {**files,
+        b'KEYMAP  COM': assemble('guest/keymap.asm'),
+        b'KEYMAP  ASM': keymap_source,
+        b'RUST    LIC': (ROOT / 'LICENSE').read_bytes(),
+        b'AUTOEXECBAT': b'@echo off\r\nKEYMAP\r\necho PROBE SHELL RETURN\r\n'}
+    keymap = image_with_files(original[:1024], keymap_files)
+    (DEST / 'keymap.hdm').write_bytes(keymap)
     manifest = {
         'license': 'GPL-2.0-or-later (boot, kernel, FreeCOM); MIT (PROBE.COM)',
         'image_sha256': hashlib.sha256(image).hexdigest(),
@@ -139,6 +149,10 @@ def main():
         'hblank': {
             'image_sha256': hashlib.sha256(hblank).hexdigest(),
             'files': {k.decode('ascii'): hashlib.sha256(v).hexdigest() for k, v in hblank_files.items()},
+        },
+        'keymap': {
+            'image_sha256': hashlib.sha256(keymap).hexdigest(),
+            'files': {k.decode('ascii'): hashlib.sha256(v).hexdigest() for k, v in keymap_files.items()},
         },
     }
     (DEST / 'manifest.json').write_text(json.dumps(manifest, indent=2)+'\n')
@@ -155,6 +169,8 @@ def main():
         'kernel-source.tar.gz and freecom-source.tar.gz (including build scripts).\n'
         'hblank.hdm adds original MIT HBLANK.COM, HBLANK.ASM and RUST.LIC;\n'
         'AUTOEXEC runs the bounded two-port horizontal-blank probe.\n'
+        'keymap.hdm adds original MIT KEYMAP.COM, KEYMAP.ASM and RUST.LIC;\n'
+        'AUTOEXEC runs the Issue #25 held-key bitmap control.\n'
         'Redistribute this entire folder with the image to preserve sources,\n'
         'licenses, original notices and upstream distribution documentation.\n')
     # Verify source archives are valid without extracting paths from downloads.

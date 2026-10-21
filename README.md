@@ -138,6 +138,16 @@ budget on real Wasm at both serving paths. The probe initializes video and polls
 both `0060h` and `00A0h`; no game or ROM download is needed. See the
 [fixed display timing contract](docs/hardware.md#device-ports-and-interrupts).
 
+The same preparation builds `fixtures/freedos/keymap.hdm` with the exact original
+MIT [Issue #25 keyboard probe](guest/keymap.asm). `cargo test --test keyboard`
+and actual-Wasm browser tests boot it through FreeDOS on both profiles, hold
+Return and release it through ordinary input, then assert `KEYMAP DOWN PASS`,
+`KEYMAP UP PASS` and shell return within seven million scheduler slots. Native
+tests also cover all 16 groups, simultaneous keys, repeats, break codes, IRQ
+gating, guest interrupt hooks, full-ring behavior and reset. See the
+[BIOS held-key contract](docs/hardware.md#bios-held-key-bitmap). No game or ROM
+is required, and this DOS fixture stays outside the Pages publication tree.
+
 For a native/headless run of the same core:
 
 ```sh
