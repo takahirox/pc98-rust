@@ -297,6 +297,72 @@ fn flags_push_pop_and_near_call_use_dword_stack_entries() {
 }
 
 #[test]
+fn segment_pushes_preserve_upper_stack_bytes_and_check_only_the_selector() {
+    for (code, value) in [
+        (&[0x66, 0x06][..], 0x1234u16),    // ES
+        (&[0x66, 0x0e][..], 0),            // CS
+        (&[0x66, 0x16][..], 0x2000),       // SS
+        (&[0x66, 0x1e][..], 0x3456),       // DS
+        (&[0x66, 0x0f, 0xa0][..], 0x5678), // FS
+        (&[0x66, 0x0f, 0xa8][..], 0x6789), // GS
+    ] {
+        for sp in [0x9000u16, 2, 3] {
+            let (mut c, mut b) = cpu(code);
+            c.s = [0x1234, 0, 0x2000, 0x3456];
+            c.extra_segments = [0x5678, 0x6789];
+            c.set_reg32(SP, 0xabcd0000 | sp as u32);
+            let off = sp.wrapping_sub(4);
+            let address = Cpu::phys(c.s[SS], off);
+            b.mem[address..address + 4].fill(0xaa);
+            if sp == 3 {
+                // The selector crosses SS:FFFF. Even the #SS word frame cannot
+                // fit this odd SP; neither operation may leave partial writes.
+                assert_eq!(
+                    c.step(&mut b).unwrap_err(),
+                    "fault while delivering real-mode exception"
+                );
+                assert_eq!(c.ip, 0x1000);
+                assert_eq!(c.reg32(SP), 0xabcd0003);
+                assert_eq!(&b.mem[address..address + 4], &[0xaa; 4]);
+            } else {
+                // SP=2 wraps to FFFE: the selector fits, though a dword would not.
+                c.step(&mut b).unwrap();
+                assert_eq!(c.ip, 0x1000 + code.len() as u32);
+                assert_eq!(c.reg32(SP), 0xabcd0000 | off as u32);
+                assert_eq!(b.read16(address), value, "{code:02x?}");
+                assert_eq!(&b.mem[address + 2..address + 4], &[0xaa; 2]);
+            }
+        }
+    }
+}
+
+#[test]
+fn nested_dword_enter_traverses_bp_on_a_word_stack() {
+    // Both operand and address overrides leave the real-mode stack size at 16.
+    for code in [&[0x66, 0xc8, 0, 0, 3][..], &[0x67, 0x66, 0xc8, 0, 0, 3][..]] {
+        for bp in [0x17000u32, 0x10000] {
+            let (mut c, mut b) = cpu(code);
+            c.s[SS] = 0x2000;
+            c.set_reg32(BP, bp);
+            let first = Cpu::phys(c.s[SS], (bp as u16).wrapping_sub(4));
+            let second = Cpu::phys(c.s[SS], (bp as u16).wrapping_sub(8));
+            b.mem[first..first + 4].copy_from_slice(&0x12345678u32.to_le_bytes());
+            b.mem[second..second + 4].copy_from_slice(&0x9abcdef0u32.to_le_bytes());
+            c.step(&mut b).unwrap();
+            assert_eq!(c.ip, 0x1000 + code.len() as u32);
+            assert_eq!(c.reg32(BP), 0x8ffc);
+            assert_eq!(c.r[SP], 0x8ff0);
+            let frame = Cpu::phys(c.s[SS], c.r[SP]);
+            let expected: Vec<u8> = [0x8ffcu32, 0x9abcdef0, 0x12345678, bp]
+                .into_iter()
+                .flat_map(u32::to_le_bytes)
+                .collect();
+            assert_eq!(&b.mem[frame..frame + 16], expected.as_slice());
+        }
+    }
+}
+
+#[test]
 fn software_interrupts_ignore_operand_size_and_clear_ac() {
     for (instruction, vector) in [
         (&[0xcd, 0x30][..], 0x30),

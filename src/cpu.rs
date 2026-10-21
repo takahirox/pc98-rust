@@ -225,6 +225,13 @@ impl Cpu {
     fn push(&mut self, b: &mut Bus, v: u32) -> ExecResult<()> {
         self.push_width(b, v, self.bytes(true))
     }
+    fn push_segment(&mut self, b: &mut Bus, s: usize) -> ExecResult<()> {
+        // i486 selector pushes reserve the operand size but only access a word.
+        let sp = self.r[SP].wrapping_sub(self.bytes(true) as u16);
+        self.write_mem(b, SS, sp as u32, self.segment(s) as u32, 2)?;
+        self.r[SP] = sp;
+        Ok(())
+    }
     fn pop(&mut self, b: &Bus) -> ExecResult<u32> {
         self.pop_width(b, self.bytes(true))
     }
@@ -609,7 +616,7 @@ impl Cpu {
                 let o = self.decode(b, m, ov)?;
                 self.put(b, o, u32::from(self.cond(op & 15)), false)?;
             }
-            0xa0 | 0xa8 => self.push(b, self.segment(if op == 0xa0 { 4 } else { 5 }) as u32)?,
+            0xa0 | 0xa8 => self.push_segment(b, if op == 0xa0 { 4 } else { 5 })?,
             0xa1 | 0xa9 => {
                 let v = self.pop(b)? as u16;
                 self.set_segment(if op == 0xa1 { 4 } else { 5 }, v);
@@ -890,7 +897,7 @@ impl Cpu {
                     }
                 }
             }
-            0x06 | 0x0e | 0x16 | 0x1e => self.push(b, self.s[(op >> 3) as usize] as u32)?,
+            0x06 | 0x0e | 0x16 | 0x1e => self.push_segment(b, (op >> 3) as usize)?,
             0x07 | 0x17 | 0x1f => {
                 let r = (op >> 3) as usize;
                 self.s[r] = self.pop(b)? as u16;
@@ -1323,14 +1330,16 @@ impl Cpu {
                 self.check_stack_sequence(b, 1 + level as u32, true)?;
                 let bytes = self.bytes(true);
                 let original_bp = self.get(b, Operand::Reg(BP), true)?;
+                // Stack address size stays 16-bit even with 66/67 overrides.
+                let chain_bp = self.r[BP];
                 for i in 1..level {
-                    let bp = original_bp.wrapping_sub(bytes * i as u32) & self.mask(true);
+                    let bp = chain_bp.wrapping_sub((bytes * i as u32) as u16) as u32;
                     self.check_mem(b, SS, bp, bytes)?;
                 }
                 self.push(b, original_bp)?;
                 let frame = self.get(b, Operand::Reg(SP), true)?;
                 for i in 1..level {
-                    let bp = original_bp.wrapping_sub(bytes * i as u32) & self.mask(true);
+                    let bp = chain_bp.wrapping_sub((bytes * i as u32) as u16) as u32;
                     let v = self.read_mem(b, SS, bp, bytes)?;
                     self.push(b, v)?;
                 }
