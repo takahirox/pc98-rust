@@ -12,7 +12,9 @@ fn file(image: &[u8], name: &[u8; 11]) -> Vec<u8> {
     let volume = &image[4096 + 128 * 512..];
     let root = &volume[14 * 512..26 * 512];
     let e = root
-        .chunks_exact(32)
+        .as_chunks::<32>()
+        .0
+        .iter()
         .find(|e| &e[..11] == name)
         .expect("guest-created file");
     let size = u32::from_le_bytes(e[28..32].try_into().unwrap()) as usize;
