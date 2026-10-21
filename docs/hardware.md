@@ -169,6 +169,7 @@ command/result FIFO, seek, DMA and scheduler paths as guest-issued I/O.
 | INT 18 AH=00,01,02,03,04,05 | Blocking get, peek, modifier status, FIFO clear, held-key group, conditional get |
 | INT 18 AH=0A–0E,10–14,16–18 | CRT mode query/set, enable/disable, start, cursor, replacement font read, fill, beep on/off |
 | INT 18 AH=40–42 | Bitmap display on/off, 640×400 color mode |
+| INT 18 AH=4A (Ap only) | Flash/flashless drawing timing selection; see contract below |
 | INT 1B low AH=0,3,4,7,A | Reset/recalibrate, sense and read ID; unavailable drive reports carry/error |
 | INT 1B low AH=1,5,6 | Verify/read, write, read; CHRN and ES:BP/BX byte-count contract; uses controller/DMA |
 | INT 1C AH=0,2 | Fixed deterministic BCD RTC query (2026-01-01) and one-shot interval callback (see below) |
@@ -236,3 +237,56 @@ periodic IRQ0 tick word at 058Ah remain available; AH=02 still clears that word.
 This is a deterministic BIOS service, not a change to PIT clock/mode fidelity.
 Guest replacements for IRQ0 must chain to the BIOS to receive this service.
 High-resolution AH=03/04/05 timer services remain unsupported.
+
+## BIOS drawing timing (INT 18/AH=4A)
+
+The Ap DOS profile supports CH=06h (flash drawing) and CH=16h (flashless drawing),
+following the [NEC BIOS databook, printed p.91, PDF index 107](https://pc98.ne.jp/devdocs/pc-9800technicaldatabookbios.pdf).
+Flash permits drawing during active display; flashless requests drawing during
+blanking. AL and CL are not inputs. The synthetic service preserves all general
+and segment registers, including upper words and FS/GS, and FLAGS. The executable
+ROM thunk returns through IRET to the instruction after INT 18h with the original
+stack and caller flags.
+
+The request is stored as `gdcs[1].draw_during_display` on the bitmap GDC and as
+bit 3 of the BIOS work byte `0000:054D` (PRXDUPD): one for flash, zero for
+flashless. This work-area encoding is described in the
+[BIOS work-area reference](https://www.webtech.co.jp/company/doc/undocumented_mem/memsys.txt).
+Other work-byte bits and text GDC state are preserved. AH=42 graphics mode setup
+preserves the timing bit; display on/off also leaves the request intact. Machine
+creation/reset chooses flashless (false/bit 3 clear), a deterministic emulator
+default rather than a claim about every physical machine's power-on setting.
+Direct guest RAM writes to the work byte do not program the GDC.
+
+This is a timing **selection** contract. Both choices use the unchanged fixed
+8 MHz scheduler, horizontal/vertical status periods and instantaneous VRAM
+writes. Selection does not advance clocks, wait for blanking, restart scan phase,
+change display enable, consume the GDC FIFO or alter rendered pixels. The core
+has no GDC vector/area drawing engine, drawing-busy interval, display-memory
+contention, visible flash artifact or mode-dependent drawing throughput.
+Physical Ap machines can remain flashless regardless of this request; this
+subset records the requested mode and does not add a hardware capability flag
+or simulate that arbitration. No physical speed or flicker accuracy is claimed.
+
+Only the two documented CH values are accepted on Ap. Other CH values stop with
+an explicit unsupported-drawing-timing core error before changing state; no
+undocumented guest status code is invented. VM continues to reject AH=4A with
+its existing unsupported-BIOS diagnostic. Expanding the preserved VM profile is
+outside Issue #23; supporting Ap does not assert a VM drawing engine exists.
+
+`tools/prepare_freedos.py` builds separate `drawmode.hdm` and `drawtest.hdm` disks
+using the existing unmodified, checksum-pinned FreeDOS kernel and FreeCOM.
+The exact [original control](../guest/drawmode.asm) has source SHA-256
+`9c4e0fb1d0a043e5cc7b0978b53be2be89431df6a5d74af23637c5630bfdc792`.
+The [switching probe](../guest/drawtest.asm) checks all 16-bit general/segment
+registers, SP, FLAGS and the work byte through actual INT/IRET, exercising
+06h → 16h → 16h → 06h. It publishes observations at `9000:0000` (stage) and
+`9000:0001..0004` (work-byte snapshots), then waits for a keyboard event at each
+stage. Native and production-Wasm browser tests inspect the snapshots and live
+work byte, inject Enter, require `DRAW TIMING PASS`, `PROBE SHELL RETURN` and
+the DOS prompt, and verify reset and reboot. Each wait is capped at 16 million
+scheduler slots. Native service tests additionally check upper registers, all
+unsupported CH values, both profiles, internal GDC state and unchanged scan/FIFO
+state. Neither fixture requires a game, proprietary BIOS or font, or is published
+in `web/`. Successful return establishes this BIOS contract only; PIPOO
+playability and any later game stops remain unvalidated.

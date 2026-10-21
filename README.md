@@ -138,6 +138,12 @@ budget on real Wasm at both serving paths. The probe initializes video and polls
 both `0060h` and `00A0h`; no game or ROM download is needed. See the
 [fixed display timing contract](docs/hardware.md#device-ports-and-interrupts).
 
+The same preparation builds `fixtures/freedos/drawmode.hdm` (the exact Issue #23
+control) and `drawtest.hdm` (an original register/state/switching probe).
+`cargo test --test drawing_timing` and the browser suite execute them through
+FreeDOS on Ap, including return to the shell and reset. See the
+[drawing timing contract and limits](docs/hardware.md#bios-drawing-timing-int-18ah4a).
+
 For a native/headless run of the same core:
 
 ```sh
