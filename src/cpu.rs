@@ -51,7 +51,7 @@ impl Default for Cpu {
 }
 impl Cpu {
     pub fn phys(seg: u16, off: u16) -> usize {
-        ((seg as usize) * 16 + off as usize) & 0xfffff
+        (seg as usize) * 16 + off as usize
     }
     pub fn byte(&self, r: usize) -> u8 {
         if r < 4 {
@@ -510,10 +510,22 @@ impl Cpu {
                 self.ip = off;
             }
             0x9b => {}
-            0x9c => self.push(b, self.flags | 0xf002),
+            0x9c => self.push(
+                b,
+                self.flags
+                    | if b.profile == crate::Profile::Pc9801Vm {
+                        0xf002
+                    } else {
+                        2
+                    },
+            ),
             0x9d => {
                 let v = self.pop(b);
-                self.flags = (v & 0x0fd5) | 0xf002;
+                self.flags = if b.profile == crate::Profile::Pc9801Vm {
+                    (v & 0x0fd5) | 0xf002
+                } else {
+                    (v & 0x7fd5) | 2
+                };
             }
             0x9e => self.flags = (self.flags & !0xd5) | (self.byte(4) as u16 & 0xd5) | 2,
             0x9f => self.set_byte(4, self.flags as u8),
@@ -623,6 +635,11 @@ impl Cpu {
                 } else {
                     self.byte(1)
                 };
+                let n = if b.profile == crate::Profile::Pc9821ApDos {
+                    n & 31
+                } else {
+                    n
+                };
                 let v = self.shift((m >> 3) & 7, self.get(b, o, w), n, w);
                 self.put(b, o, v, w);
             }
@@ -688,11 +705,25 @@ impl Cpu {
             0xcf => {
                 self.ip = self.pop(b);
                 self.s[CS] = self.pop(b);
-                self.flags = (self.pop(b) & 0x0fd5) | 0xf002;
+                let v = self.pop(b);
+                self.flags = if b.profile == crate::Profile::Pc9801Vm {
+                    (v & 0x0fd5) | 0xf002
+                } else {
+                    (v & 0x7fd5) | 2
+                };
             }
             0xd4 | 0xd5 => {
-                let _encoded_radix = self.fetch(b);
-                let radix = 10;
+                let encoded_radix = self.fetch(b);
+                let radix = if b.profile == crate::Profile::Pc9801Vm {
+                    10
+                } else {
+                    encoded_radix
+                };
+                if op == 0xd4 && radix == 0 {
+                    self.ip = start;
+                    self.interrupt(b, 0);
+                    return Ok(());
+                }
                 if op == 0xd4 {
                     let a = self.byte(0);
                     self.set_byte(4, a / radix);
@@ -908,6 +939,12 @@ impl Cpu {
             }
             // V30 TEST1/CLR1/SET1/NOT1, register bit index (10..17) or immediate (18..1f).
             0x0f => {
+                if b.profile == crate::Profile::Pc9821ApDos {
+                    return Err(format!(
+                        "unsupported 386/486 opcode 0F at {:04x}:{start:04x}",
+                        self.s[CS]
+                    ));
+                }
                 let ext = self.fetch(b);
                 if (0x10..=0x1f).contains(&ext) {
                     let w = ext & 1 != 0;

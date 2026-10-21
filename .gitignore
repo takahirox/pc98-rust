@@ -5,4 +5,5 @@
 /test-results/
 /playwright-report/
 /fixtures/freedos/
+/fixtures/dos-apps/
 __pycache__/

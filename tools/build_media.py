@@ -23,6 +23,7 @@ def products():
         'guest/firmware.bin': assemble('guest/firmware.asm'),
         'web/LICENSE.txt': (ROOT / 'LICENSE').read_bytes(),
         'web/hello98-LICENSE.txt': (ROOT / 'fixtures/hello98/LICENSE').read_bytes(),
+        'web/shinonome-LICENSE.txt': (ROOT / 'fixtures/fonts/LICENSE').read_bytes() + b'\n' + (ROOT / 'fixtures/fonts/AUTHORS').read_bytes(),
         'web/media/startrail.hdm': game + bytes(1261568 - len(game)),
         'web/media/hello98.tfd': hello + bytes(1261568 - len(hello)),
     }

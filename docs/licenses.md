@@ -91,10 +91,28 @@ repository badge or a vague offer of source. The preparation script and original
 PROBE source must accompany it as well. Nothing requires bundling or accepting
 proprietary media.
 
-## Playable-demo selection
+## Independent Ap DOS applications and replacement Japanese font
 
-[ADV98](https://github.com/yarufu/pc98/blob/main/README.md) is a DOS-based 16-color
-engine, tested on PC-9821 systems with optional sound boards. It is not an 8-color
+The new Ap DOS test fixtures use MIT ADV98 and 98VIDEOP, with original test art
+and video. The release's original artwork/music and optional PMD/mouse drivers
+are excluded. The exact source/license review, application behavior and limits
+are in [the DOS compatibility audit](dos-compatibility.md); hashes are pinned in
+[the per-title manifest](../fixtures/dos-apps-manifest.json). The generated disks
+remain outside Pages and require the same GPL source-preservation obligations as
+the FreeDOS fixture above. The additional FM COM compiles unmodified MIT ADV98
+FM routines with an original DOS entry harness; no C runtime is linked.
+
+The [Shinonome replacement font](../fixtures/fonts/README.md) is explicitly
+redistributable and convertible under its original public-domain/non-exercise
+license. Original source, AUTHORS and LICENSE are retained; generated JIS data
+is embedded in Rust/Wasm. The static distribution includes that notice and author
+list. No NEC font ROM or chip ROM/sample data was added.
+
+## Original VM playable-demo selection
+
+During the original VM work,
+[ADV98](https://github.com/yarufu/pc98/blob/main/README.md) was identified as a
+DOS-based 16-color engine, tested on PC-9821 systems with optional sound boards. It is not an 8-color
 VM acceptance candidate. [Space Panicco's specific rights notice](https://github.com/gikonekos/Space-Panicco-Archive/blob/main/RIGHTS.md)
 does not provide a clear unrestricted redistribution basis for its original
 binaries, so none are copied. Archival availability or freeware status is not a

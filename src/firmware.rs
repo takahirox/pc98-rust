@@ -13,8 +13,21 @@ pub fn initialize(b: &mut Bus) {
     }
     b.mem[0x501] = 4; // 640 KiB, normal resolution, 8 MHz PIT.
     b.mem[0x500] = 0x20;
-    b.mem[0x481] = 0; // no optional 16-color board / no EGC
-    b.mem[0x54c] = 0x20;
+    b.mem[0x481] = if b.profile == crate::Profile::Pc9821ApDos {
+        0x40
+    } else {
+        0
+    }; // desktop keyboard without NUM key; no EGC advertised
+    b.mem[0x401] = if b.profile == crate::Profile::Pc9821ApDos {
+        24
+    } else {
+        0
+    }; // 3 MiB in 128 KiB units
+    b.mem[0x54c] = if b.profile == crate::Profile::Pc9821ApDos {
+        0x66 // 640x400, 31 kHz CRT, fourth plane and GRCG
+    } else {
+        0x20
+    };
     b.mem[0x53c] = 1; // 80 columns, 25 rows
     b.mem[0x55c] = 1 | if b.disks[1].is_some() { 2 } else { 0 };
     b.mem[0x584] = 0x90;
@@ -193,8 +206,18 @@ pub fn service(c: &mut Cpu, b: &mut Bus) -> Result<(), String> {
             }
             0x17 => b.set_beep(true),
             0x18 => b.set_beep(false),
-            0x40 => b.gdcs[1].enabled = true,
-            0x41 => b.gdcs[1].enabled = false,
+            0x40 => {
+                b.gdcs[1].enabled = true;
+                if b.profile == crate::Profile::Pc9821ApDos {
+                    b.mem[0x54c] |= 128;
+                }
+            }
+            0x41 => {
+                b.gdcs[1].enabled = false;
+                if b.profile == crate::Profile::Pc9821ApDos {
+                    b.mem[0x54c] &= !128;
+                }
+            }
             0x42 => {
                 if c.byte(5) & 0xc0 != 0xc0 {
                     return Err("unsupported graphics BIOS mode".into());
