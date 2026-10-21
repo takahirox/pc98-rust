@@ -21,9 +21,6 @@ The additional original `guest/hdd-ipl.asm`, `guest/mouse98.asm`,
 fixtures include `RUST.LIC` with the repository notice. They contain no borrowed
 firmware, mouse driver, sound implementation, melody or instrument sample.
 
-The original `guest/hblank.asm` status probe is also MIT and includes its source
-and `RUST.LIC` in the generated DOS fixture.
-
 The original `guest/keymap.asm` is the exact MIT research control offered in
 Issue #25 (source SHA-256
 `833f8925cf99c2cbbcce5f05fd3d7a1c129ab229276203a7661eb4ad497440f5`).
@@ -31,6 +28,16 @@ Issue #25 (source SHA-256
 `RUST.LIC`, records per-file hashes in `manifest.json`, and uses the same pinned
 unmodified DOS boot/kernel/shell. Keep the complete FreeDOS source and notices
 beside it. No game bytes or proprietary firmware/font are used or published.
+
+The original `guest/hblank.asm` status probe is also MIT and includes its source
+and `RUST.LIC` in the generated DOS fixture.
+
+The original Issue #23 `guest/drawmode.asm` and `guest/drawtest.asm` controls are
+also MIT. Their separate FreeDOS images contain the ASM source, assembled COM
+and `RUST.LIC`; the generated manifest's `drawing_timing` entry records all file
+and image hashes. Keep the complete FreeDOS output folder, its matching GPL
+sources/notices and the preparation script when redistributing these images.
+They contain no PIPOO data, proprietary ROM or font and remain outside `web/`.
 
 ## HelloWorld-PC98
 

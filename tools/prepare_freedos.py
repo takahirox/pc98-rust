@@ -123,14 +123,6 @@ def main():
     (DEST / 'COPYING').write_bytes(files[b'COPYING    '])
     (DEST / 'FreeCOM-LICENSE').write_bytes(shell.read('license'))
     (DEST / 'distribution-READMEja.htm').write_bytes(distribution.read('READMEja.htm'))
-    # Separate original status probe; keep the pinned minimal image unchanged.
-    hblank_files = {**files,
-        b'HBLANK  COM': assemble('guest/hblank.asm'),
-        b'HBLANK  ASM': (ROOT / 'guest/hblank.asm').read_bytes(),
-        b'RUST    LIC': (ROOT / 'LICENSE').read_bytes(),
-        b'AUTOEXECBAT': b'@echo off\r\nHBLANK\r\necho HBLANK PROBE RETURNED\r\n'}
-    hblank = image_with_files(original[:1024], hblank_files)
-    (DEST / 'hblank.hdm').write_bytes(hblank)
     # Exact MIT control published in Issue #25; no game assets are needed.
     keymap_source = (ROOT / 'guest/keymap.asm').read_bytes()
     assert hashlib.sha256(keymap_source).hexdigest() == '833f8925cf99c2cbbcce5f05fd3d7a1c129ab229276203a7661eb4ad497440f5'
@@ -141,19 +133,45 @@ def main():
         b'AUTOEXECBAT': b'@echo off\r\nKEYMAP\r\necho PROBE SHELL RETURN\r\n'}
     keymap = image_with_files(original[:1024], keymap_files)
     (DEST / 'keymap.hdm').write_bytes(keymap)
+    # Separate original status probe; keep the pinned minimal image unchanged.
+    hblank_files = {**files,
+        b'HBLANK  COM': assemble('guest/hblank.asm'),
+        b'HBLANK  ASM': (ROOT / 'guest/hblank.asm').read_bytes(),
+        b'RUST    LIC': (ROOT / 'LICENSE').read_bytes(),
+        b'AUTOEXECBAT': b'@echo off\r\nHBLANK\r\necho HBLANK PROBE RETURNED\r\n'}
+    hblank = image_with_files(original[:1024], hblank_files)
+    (DEST / 'hblank.hdm').write_bytes(hblank)
+    # Independent Issue #23 controls; preserve every established fixture byte.
+    drawing_manifest = {}
+    for name in ['drawmode', 'drawtest']:
+        source = ROOT / 'guest' / (name + '.asm')
+        drawing_files = {**files,
+            (name.upper().ljust(8) + 'COM').encode(): assemble('guest/' + name + '.asm'),
+            (name.upper().ljust(8) + 'ASM').encode(): source.read_bytes(),
+            b'RUST    LIC': (ROOT / 'LICENSE').read_bytes(),
+            b'AUTOEXECBAT': (f'@echo off\r\nPROMPT $p$g\r\n{name}\r\n'
+                             'echo PROBE SHELL RETURN\r\n').encode()}
+        drawing_image = image_with_files(original[:1024], drawing_files)
+        (DEST / (name + '.hdm')).write_bytes(drawing_image)
+        drawing_manifest[name] = {
+            'image_sha256': hashlib.sha256(drawing_image).hexdigest(),
+            'files': {k.decode('ascii'): hashlib.sha256(v).hexdigest()
+                      for k, v in drawing_files.items()},
+        }
     manifest = {
         'license': 'GPL-2.0-or-later (boot, kernel, FreeCOM); MIT (PROBE.COM)',
         'image_sha256': hashlib.sha256(image).hexdigest(),
         'assets': {k: {'url': v[0], 'sha256': v[1]} for k, v in ASSETS.items()},
         'files': {k.decode('ascii'): hashlib.sha256(v).hexdigest() for k, v in files.items()},
-        'hblank': {
-            'image_sha256': hashlib.sha256(hblank).hexdigest(),
-            'files': {k.decode('ascii'): hashlib.sha256(v).hexdigest() for k, v in hblank_files.items()},
-        },
         'keymap': {
             'image_sha256': hashlib.sha256(keymap).hexdigest(),
             'files': {k.decode('ascii'): hashlib.sha256(v).hexdigest() for k, v in keymap_files.items()},
         },
+        'hblank': {
+            'image_sha256': hashlib.sha256(hblank).hexdigest(),
+            'files': {k.decode('ascii'): hashlib.sha256(v).hexdigest() for k, v in hblank_files.items()},
+        },
+        'drawing_timing': drawing_manifest,
     }
     (DEST / 'manifest.json').write_text(json.dumps(manifest, indent=2)+'\n')
     (DEST / 'README.txt').write_text(
@@ -167,10 +185,12 @@ def main():
         'No changes to kernel/boot/FreeCOM; the disk filesystem was rebuilt.\n'
         'See COPYING, FreeCOM-LICENSE, manifest.json, and the complete matching\n'
         'kernel-source.tar.gz and freecom-source.tar.gz (including build scripts).\n'
-        'hblank.hdm adds original MIT HBLANK.COM, HBLANK.ASM and RUST.LIC;\n'
-        'AUTOEXEC runs the bounded two-port horizontal-blank probe.\n'
         'keymap.hdm adds original MIT KEYMAP.COM, KEYMAP.ASM and RUST.LIC;\n'
         'AUTOEXEC runs the Issue #25 held-key bitmap control.\n'
+        'hblank.hdm adds original MIT HBLANK.COM, HBLANK.ASM and RUST.LIC;\n'
+        'AUTOEXEC runs the bounded two-port horizontal-blank probe.\n'
+        'drawmode.hdm and drawtest.hdm add original MIT drawing-timing controls,\n'
+        'their ASM/COM and RUST.LIC; AUTOEXEC invokes them through guest DOS.\n'
         'Redistribute this entire folder with the image to preserve sources,\n'
         'licenses, original notices and upstream distribution documentation.\n')
     # Verify source archives are valid without extracting paths from downloads.

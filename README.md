@@ -130,14 +130,6 @@ profiles. See the [interval service contract](docs/hardware.md#bios-interval-cal
 For the independent DOS game/video/audio tests and CPULEVEL diagnostic, select
 the Ap DOS machine and insert the generated `fixtures/dos-apps/*.hdm` disks; see [instructions](docs/dos-compatibility.md).
 
-`prepare_freedos.py` also builds `fixtures/freedos/hblank.hdm` from the original
-MIT [horizontal-blank probe](guest/hblank.asm). `cargo test --test gdc` requires
-this disk and verifies `HBLANK TRANSITION PASS` through guest DOS on both profiles,
-within 16 million scheduler slots. Actual-browser tests run the same disk and
-budget on real Wasm at both serving paths. The probe initializes video and polls
-both `0060h` and `00A0h`; no game or ROM download is needed. See the
-[fixed display timing contract](docs/hardware.md#device-ports-and-interrupts).
-
 The same preparation builds `fixtures/freedos/keymap.hdm` with the exact original
 MIT [Issue #25 keyboard probe](guest/keymap.asm). `cargo test --test keyboard`
 and actual-Wasm browser tests boot it through FreeDOS on both profiles, hold
@@ -147,6 +139,20 @@ tests also cover all 16 groups, simultaneous keys, repeats, break codes, IRQ
 gating, guest interrupt hooks, full-ring behavior and reset. See the
 [BIOS held-key contract](docs/hardware.md#bios-held-key-bitmap). No game or ROM
 is required, and this DOS fixture stays outside the Pages publication tree.
+
+`prepare_freedos.py` also builds `fixtures/freedos/hblank.hdm` from the original
+MIT [horizontal-blank probe](guest/hblank.asm). `cargo test --test gdc` requires
+this disk and verifies `HBLANK TRANSITION PASS` through guest DOS on both profiles,
+within 16 million scheduler slots. Actual-browser tests run the same disk and
+budget on real Wasm at both serving paths. The probe initializes video and polls
+both `0060h` and `00A0h`; no game or ROM download is needed. See the
+[fixed display timing contract](docs/hardware.md#device-ports-and-interrupts).
+
+The same preparation builds `fixtures/freedos/drawmode.hdm` (the exact Issue #23
+control) and `drawtest.hdm` (an original register/state/switching probe).
+`cargo test --test drawing_timing` and the browser suite execute them through
+FreeDOS on Ap, including return to the shell and reset. See the
+[drawing timing contract and limits](docs/hardware.md#bios-drawing-timing-int-18ah4a).
 
 For a native/headless run of the same core:
 

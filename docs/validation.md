@@ -350,3 +350,48 @@ server's restriction to `/pc98-rust/`. Existing listeners were left running.
 These results are local macOS arm64 evidence. A passing GitHub acceptance run on
 the updated PR head remains pending publication: this revision node must not
 push or merge, so it cannot publish the new head or trigger its PR workflow.
+
+## Issue #23: Ap BIOS drawing timing (2026-10-21)
+
+Implemented AH=4Ah CH=06h/16h selection with register preservation, bitmap GDC
+request state and PRXDUPD bit 3. The [contract](hardware.md#bios-drawing-timing-int-18ah4a)
+records reset defaults, unsupported inputs/VM behavior and timing limits.
+The manufacturer's databook printed p.91 (PDF index 107) was checked directly;
+no emulator implementation or proprietary guest was acquired.
+
+| Command | Result |
+| --- | --- |
+| All seven `python3 tools/prepare_*` commands in README | Passed; pinned guests and matching complete source/license outputs retained |
+| `python3 tools/build_font.py --check` | Passed |
+| `cargo test --locked` | Passed: 84 native tests, zero failures/ignored; includes four new drawing-timing tests |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `cargo fmt --check` | Passed |
+| `cargo build --locked --release --bin headless` | Passed |
+| `target/release/headless "$PWD/fixtures/freedos/drawmode.hdm" 16000000 --ap` | Exit 0; exact original control printed `DRAWMODE RETURNED`, `PROBE SHELL RETURN` and reached the DOS prompt |
+| `npm ci` / `npx playwright install chromium` | Passed |
+| `npm run build` | Passed: reproducible media/font, production Wasm and exact ten-asset publication audit |
+| `npm test -- --config=playwright.issue23.config.js` | Passed: 36 Chromium/Wasm tests at root and project path in 42.6 seconds |
+| Local documentation link checks / `git diff --check` | Passed |
+
+Plain `npm test` built successfully, then could not start its server because a
+default port was occupied. The successful run used a temporary config importing
+the repository config and serving the same `web/` directory at ports 18000/18001.
+The project server exposed only `/pc98-rust/`; root asset URLs remained absent.
+Existing listeners were left running and the temporary config was removed.
+No permanent browser configuration or publication assets changed.
+
+Rebuilding the baseline preparation script from HEAD into a temporary directory
+confirmed `minimal.hdm`, `timer.hdm` and `hblank.hdm` are byte-identical to the
+new preparation's versions. All existing checked-in guest manifests also passed.
+The generated drawing controls include their MIT source and license; the full
+FreeDOS folder retains GPL sources and notices. New image SHA-256 values:
+
+- `drawmode.hdm`: `3f942fb2b734ff18792c2ea20b77634582ebdd769c8fa38ef953487c10468e53`
+- `drawtest.hdm`: `1427038f73cd42abb39de0dec4d7327564338c50e7fed8d8e11b9276ed189ef1`
+
+Native and Wasm execute the same original controls through real FreeDOS, inspect
+both mode states and repeated selection, require shell return and verify reset.
+Native tests also cover upper registers, unrelated work bits, GDC/FIFO/scan state,
+all unsupported CH values and preserved VM rejection. These are bounded BIOS
+contract checks; PIPOO was not acquired or run and no playability is claimed.
+No push, PR, merge, comment or post-merge verification was performed or required.
