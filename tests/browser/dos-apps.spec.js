@@ -1,14 +1,15 @@
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs/promises';
 
-async function boot(page, name, sound = false) {
+async function boot(page, name, sound = false, extension = 'hdm') {
   await page.goto('./');
   await expect(page.locator('#profile')).toBeEnabled();
   expect(await page.evaluate(() => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
   await page.locator('#profile').selectOption('1');
+  if (extension === 'hdi') await page.locator('#drive').selectOption({value: '2'});
   if (sound) await page.locator('#sound').click();
-  const buffer = await fs.readFile(new URL(`../../fixtures/dos-apps/${name}.hdm`, import.meta.url));
-  await page.locator('#file').setInputFiles({ name: `${name}.hdm`, mimeType: 'application/octet-stream', buffer });
+  const buffer = await fs.readFile(new URL(`../../fixtures/dos-apps/${name}.${extension}`, import.meta.url));
+  await page.locator('#file').setInputFiles({ name: `${name}.${extension}`, mimeType: 'application/octet-stream', buffer });
 }
 async function hash(page) {
   return page.evaluate(() => {
@@ -136,4 +137,126 @@ test('Ap DOS: independent CPULEVEL executes 386 operands and verifies 486 EFLAGS
   await page.evaluate(() => pc98.core.reset());
   expect(await page.evaluate(() => pc98.core.metric(8))).toBe(0);
   await until(page, async () => (await page.evaluate(() => pc98.text())).includes('CPULEVEL 486 VERIFIED'));
+});
+
+async function waitTitle(page) {
+  const font = await fs.readFile(new URL('../../fixtures/fonts/jis0208.bin', import.meta.url));
+  const at = ((0x24 - 0x21) * 94 + 0x4f - 0x21) * 32;
+  await until(page, async () => {
+    const data = await pixels(page, 160, 317, 16, 16);
+    return data.every((row, y) => row.every((rgb, x) =>
+      rgb.every(n => n === 255) === Boolean(font[at + y * 2 + (x >> 3)] & (128 >> (x & 7)))));
+  }, 260);
+  for (let i = 0; i < 20; i++) await page.evaluate(() => pc98.core.step(100000));
+}
+
+function hdiFile(image, name) {
+  const volume = image.subarray(4096 + 128 * 512);
+  const root = volume.subarray(14 * 512, 26 * 512);
+  let entry;
+  for (let i = 0; i < root.length; i += 32) {
+    if (root.subarray(i, i + 11).toString() === name) { entry = root.subarray(i, i+32); break; }
+  }
+  expect(entry, `guest-created HDD file ${name}`).toBeDefined();
+  const chunks = [];
+  let cluster = entry.readUInt16LE(26);
+  for (let i = 0; i < 2010 && cluster < 0xff8; i++) {
+    expect(cluster).toBeGreaterThanOrEqual(2); expect(cluster).toBeLessThan(2010);
+    const at = (26 + (cluster - 2) * 4) * 512;
+    chunks.push(volume.subarray(at, at + 2048));
+    cluster = (volume.readUInt16LE(1024 + Math.floor(cluster * 3 / 2)) >>> (cluster & 1 ? 4 : 0)) & 0xfff;
+  }
+  return Buffer.concat(chunks).subarray(0, entry.readUInt32LE(28));
+}
+
+test('Ap IDE HDD boots DOS and ADV98; mouse reaches IRQ driver and game; export preserves DOS saves', async ({ page }) => {
+  test.setTimeout(120000);
+  await boot(page, 'adv98', false, 'hdi');
+  await waitTitle(page);
+  const title = await hash(page);
+  let stats = await page.evaluate(() => pc98.stats());
+  expect(stats.hddReads).toBeGreaterThan(100); expect(stats.hddWrites).toBeGreaterThan(0);
+  expect(stats.reads).toBe(0);
+  const state = await page.evaluate(() => {
+    const signature = [...'M98STATE'].map(c => c.charCodeAt(0));
+    for (let i = 0x600; i < 0xa0000; i++) {
+      if (signature.every((v, j) => pc98.read(i + j) === v)) return i;
+    }
+    throw Error('resident mouse driver not found');
+  });
+  await page.locator('#mouse').check();
+  const box = await page.locator('#screen').boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.move(box.x + box.width * (352 / 640), box.y + box.height * (184 / 400));
+  await page.mouse.down();
+  await until(page, async () => await page.evaluate(state => pc98.read(state + 12) === 1, state), 20);
+  expect(await page.evaluate(state => pc98.read(state+8) | pc98.read(state+9) << 8, state)).toBe(352);
+  expect(await page.evaluate(state => pc98.read(state+10) | pc98.read(state+11) << 8, state)).toBe(184);
+  await page.mouse.up();
+  await until(page, async () => (await hash(page)) !== title, 50);
+  // Movement can choose a different title entry. Reboot before the separate
+  // keyboard save workflow so its initial menu selection is deterministic.
+  await page.locator('#reset').click(); await waitTitle(page);
+  await press(page, 'Enter');
+  await press(page, 'Enter'); await press(page, 'ArrowRight'); await press(page, 'Enter');
+  await press(page, 'Escape'); await press(page, 'Enter'); await press(page, 'Enter');
+  const saved = Buffer.from(await page.evaluate(() => pc98.exportDisk(2)));
+  // A save created by the independent game's DOS I/O, absent from initial HDI.
+  const save = hdiFile(saved, 'SAVE1   DAT');
+  expect(save.subarray(0,8).toString()).toBe('ADV98SAV');
+  expect(hdiFile(saved, 'HDDSAVE TXT').toString()).toBe('DURABLE DOS WRITE\r\n');
+  expect((await page.evaluate(() => pc98.stats())).mouseLatches).toBeGreaterThan(0);
+  await page.locator('#file').setInputFiles({ name: 'saved.hdi', mimeType: 'application/octet-stream', buffer: saved });
+  await waitTitle(page);
+  await press(page, 'ArrowRight'); await press(page, 'Enter'); await press(page, 'Enter');
+  expect(await hash(page)).not.toBe(title);
+  expect(hdiFile(Buffer.from(await page.evaluate(() => pc98.exportDisk(2))), 'SAVE1   DAT')).toEqual(save);
+  await expect(page.locator('#error')).toBeHidden();
+  // Rejected geometry must preserve the mounted disk and avoid a Wasm trap.
+  const bad = Buffer.from(saved); bad.writeUInt32LE(0xffffffff, 28);
+  await page.locator('#file').setInputFiles({ name: 'bad.hdi', mimeType: 'application/octet-stream', buffer: bad });
+  await expect(page.locator('#error')).toContainText('invalid HDI geometry');
+  await expect(page.locator('#media-name')).toHaveText('saved.hdi');
+  expect(hdiFile(Buffer.from(await page.evaluate(() => pc98.exportDisk(2))), 'SAVE1   DAT')).toEqual(save);
+});
+
+test('Ap DOS: unchanged ADV98 starts sequenced PMD FM music into actual Web Audio', async ({ page }) => {
+  test.setTimeout(120000);
+  await boot(page, 'music', true); await waitTitle(page);
+  const before = await page.evaluate(() => pc98.stats());
+  expect(before.fmKeyEdges).toBe(0); expect(before.audioEnergy).toBe(0);
+  await press(page, 'Enter');
+  await until(page, async () => (await page.evaluate(() => pc98.stats())).fmKeyEdges > 24, 200, 100000, true);
+  const stats = await page.evaluate(() => pc98.stats());
+  expect(stats.audioState).toBe('running'); expect(stats.audioEnergy).toBeGreaterThan(1);
+  expect(stats.scheduledSamples).toBeGreaterThan(1000); expect(stats.fmWrites).toBeGreaterThan(500);
+  expect(stats.beepEdges).toBe(0); expect(stats.error).toBe('');
+});
+
+test('Ap DOS: independent 98VIDEOP uses 86 PCM FIFO and Web Audio', async ({ page }) => {
+  await boot(page, '98videop', true);
+  await until(page, async () => (await page.evaluate(() => pc98.text())).includes('VIDEO RETURNED'), 300, 100000, true);
+  const stats = await page.evaluate(() => pc98.stats());
+  expect(stats.pcmWrites).toBeGreaterThan(100); expect(stats.pcmSamples).toBeGreaterThan(100);
+  expect(stats.beepEdges).toBe(0); expect(stats.audioEnergy).toBeGreaterThan(0.01);
+  expect(stats.audioState).toBe('running'); expect(stats.scheduledSamples).toBeGreaterThan(1000);
+  expect(stats.error).toBe('');
+});
+
+test('Ap DOS: independent DEBUG drives EGC, PEGC banks and a 256-color framebuffer', async ({ page }) => {
+  test.setTimeout(120000);
+  await boot(page, 'pegc');
+  await until(page, async () => (await page.evaluate(() => pc98.text())).includes('PEGC UTILITY COMPLETE'), 260);
+  expect(await page.evaluate(() => pc98.text())).toContain('EXTENDED MEMORY OK');
+  expect(await page.evaluate(() => Array.from({length:16}, (_,i) => pc98.read(0x200000+i))))
+    .toEqual([...Buffer.from('PC98 INT1F RAM!!')]);
+  expect(await page.evaluate(() => Array.from({length:64}, (_,i) => pc98.read(0x90000+i))))
+    .toEqual([...Array(48).fill(255), ...Array(16).fill(0)]);
+  const data = await pixels(page, 0, 0, 640, 50);
+  for (let y = 0; y < 50; y++) for (let x = 0; x < 640; x += 128) {
+    const color = Math.floor((y * 640 + x) / 128);
+    expect(data[y][x]).toEqual([color, 255-color, color ^ 85]);
+  }
+  await expect(page.locator('#display-mode')).toContainText('256 colors');
+  expect((await page.evaluate(() => pc98.stats())).error).toBe('');
 });

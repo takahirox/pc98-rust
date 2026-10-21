@@ -3,8 +3,12 @@ pub mod bus;
 pub mod cpu;
 pub mod devices;
 pub mod disk;
+pub mod egc;
 pub mod firmware;
 pub mod font;
+pub mod hdd;
+pub mod mouse;
+pub mod pcm;
 pub mod profile;
 pub mod sound;
 use bus::Bus;
@@ -37,21 +41,37 @@ impl Machine {
         m
     }
     pub fn insert(&mut self, drive: usize, bytes: Vec<u8>, name: &str) -> Result<(), String> {
+        if drive == 2 {
+            if self.bus.profile != Profile::Pc9821ApDos {
+                return Err("IDE requires the Ap profile".into());
+            }
+            let disk = hdd::HardDisk::parse(bytes)?;
+            self.bus.ide.mount(Some(disk));
+            self.bus.boot_hdd = true;
+            return Ok(());
+        }
         if drive > 1 {
             return Err("only two floppy drives".into());
         }
         let disk = Disk::parse(bytes, name)?;
         self.bus.disks[drive] = Some(disk);
+        if drive == 0 {
+            self.bus.boot_hdd = false;
+        }
         Ok(())
     }
     pub fn reset(&mut self) {
         let disks = std::mem::take(&mut self.bus.disks);
+        let hdd = self.bus.ide.disk.take();
+        let boot_hdd = self.bus.boot_hdd;
         self.cpu = Cpu::default();
         if self.bus.profile == Profile::Pc9821ApDos {
             self.cpu.flags = 2;
         }
         self.bus = Bus::new(self.bus.profile);
         self.bus.disks = disks;
+        self.bus.ide.disk = hdd;
+        self.bus.boot_hdd = boot_hdd;
         self.error = None;
         firmware::initialize(&mut self.bus);
     }
@@ -89,7 +109,7 @@ mod wasm {
     thread_local! {static MACHINE:RefCell<Machine>=RefCell::new(Machine::default());static TRANSFER:RefCell<Vec<u8>>=const{RefCell::new(Vec::new())};static MESSAGE:RefCell<Vec<u8>>=const{RefCell::new(Vec::new())};}
     #[no_mangle]
     pub extern "C" fn input_buffer(len: usize) -> *mut u8 {
-        if len > 4 * 1024 * 1024 {
+        if len > hdd::MAX_HDI_BYTES {
             return std::ptr::null_mut();
         }
         TRANSFER.with(|b| {
@@ -138,6 +158,8 @@ mod wasm {
     pub extern "C" fn eject(drive: usize) {
         if drive < 2 {
             MACHINE.with(|m| m.borrow_mut().bus.disks[drive] = None)
+        } else if drive == 2 {
+            MACHINE.with(|m| m.borrow_mut().bus.ide.mount(None))
         }
     }
     #[no_mangle]
@@ -151,6 +173,10 @@ mod wasm {
     #[no_mangle]
     pub extern "C" fn key(scan: u8, down: u32) {
         MACHINE.with(|m| m.borrow_mut().bus.key(scan, down != 0))
+    }
+    #[no_mangle]
+    pub extern "C" fn mouse(dx: i32, dy: i32, buttons: u8) {
+        MACHINE.with(|m| m.borrow_mut().bus.mouse.motion(dx, dy, buttons))
     }
     #[no_mangle]
     pub extern "C" fn peek(addr: usize) -> u32 {
@@ -192,6 +218,13 @@ mod wasm {
                 6 => m.bus.opn.writes as f64,
                 7 => m.bus.opn.key_edges as f64,
                 8 => m.cpu.extended_retired as f64,
+                9 => m.bus.ide.reads as f64,
+                10 => m.bus.ide.writes as f64,
+                11 => m.bus.mouse.events as f64,
+                12 => m.bus.mouse.latches as f64,
+                13 => u8::from(m.bus.pegc) as f64,
+                14 => m.bus.pcm.writes as f64,
+                15 => m.bus.pcm.samples as f64,
                 _ => m.bus.cycles as f64,
             }
         })
@@ -221,9 +254,17 @@ mod wasm {
     pub extern "C" fn export_disk(drive: usize) -> *const u8 {
         MACHINE.with(|m| {
             let m = m.borrow();
-            if let Some(Some(d)) = m.bus.disks.get(drive) {
+            let bytes = if drive == 2 {
+                m.bus.ide.disk.as_ref().map(|d| &d.bytes)
+            } else {
+                m.bus
+                    .disks
+                    .get(drive)
+                    .and_then(|d| d.as_ref().map(|d| &d.bytes))
+            };
+            if let Some(bytes) = bytes {
                 TRANSFER.with(|b| {
-                    *b.borrow_mut() = d.bytes.clone();
+                    *b.borrow_mut() = bytes.clone();
                     b.borrow().as_ptr()
                 })
             } else {

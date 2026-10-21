@@ -29,8 +29,15 @@ pub fn initialize(b: &mut Bus) {
         0x20
     };
     b.mem[0x53c] = 1; // 80 columns, 25 rows
-    b.mem[0x55c] = 1 | if b.disks[1].is_some() { 2 } else { 0 };
-    b.mem[0x584] = 0x90;
+    b.mem[0x55c] = u8::from(b.disks[0].is_some()) | if b.disks[1].is_some() { 2 } else { 0 };
+    if b.profile == crate::Profile::Pc9821ApDos && b.ide.disk.is_some() {
+        b.mem[0x55d] = 1;
+    }
+    b.mem[0x584] = if (b.boot_hdd || b.disks[0].is_none()) && b.mem[0x55d] != 0 {
+        0x80
+    } else {
+        0x90
+    };
     b.write_seg(0, 0x524, 0x502, true);
     b.write_seg(0, 0x526, 0x502, true);
     for cell in 0..2048 {
@@ -227,6 +234,10 @@ pub fn service(c: &mut Cpu, b: &mut Bus) -> Result<(), String> {
             _ => return Err(format!("unsupported BIOS INT 18 AH={ah:02x}")),
         },
         0x1b => {
+            if c.byte(0) & 0x7f == 0 && b.profile == crate::Profile::Pc9821ApDos {
+                hdd_service(c, b);
+                return Ok(());
+            }
             let drive = c.byte(0) & 3;
             let device = c.byte(0) & 0xfc;
             if ![0x90, 0x30, 0xb0, 0x70].contains(&device)
@@ -329,13 +340,10 @@ pub fn service(c: &mut Cpu, b: &mut Bus) -> Result<(), String> {
                 _ => return Err(format!("unsupported BIOS INT 1C AH={ah:02x}")),
             }
         }
-        0x1e => {
-            return Err(
-                "Boot failed: drive 1 needs supported PC-98 1024-byte-sector boot media".into(),
-            )
-        }
+        0x1e => return Err("Boot failed: no readable PC-98 floppy or IDE IPL".into()),
         0x1f => {
-            carry(c, b, true);
+            let ok = ah == 0x90 && b.profile == crate::Profile::Pc9821ApDos && extended_copy(c, b);
+            carry(c, b, !ok);
         }
         _ => {
             return Err(format!(
@@ -346,4 +354,133 @@ pub fn service(c: &mut Cpu, b: &mut Bus) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// NEC INT 1F/90: CX bytes, ES:BX GDT, SI=DI=0 (RBIL release 61).
+/// Only RAM data descriptors are accepted; invalid requests have no side effects.
+fn extended_copy(c: &Cpu, b: &mut Bus) -> bool {
+    if c.r[SI] != 0 || c.r[DI] != 0 {
+        return false;
+    }
+    let table = Cpu::phys(c.s[ES], c.r[BX]);
+    let descriptor = |offset: usize, write: bool| -> Option<usize> {
+        let p = table.checked_add(offset)?;
+        if p + 8 > 0xa0000 {
+            return None;
+        }
+        let access = b.read(p + 5);
+        // Present, ordinary data, expand-up. Destination must be writable.
+        if access & 0xfc != 0x90 || (write && access & 2 == 0) || b.read(p + 6) != 0 {
+            return None;
+        }
+        let base = b.read16(p + 2) as usize
+            | ((b.read(p + 4) as usize) << 16)
+            | ((b.read(p + 7) as usize) << 24);
+        let len = c.r[CX] as usize;
+        if len > b.read16(p) as usize + 1 {
+            return None;
+        }
+        let end = base.checked_add(len)?;
+        if (base < 0xa0000 && end <= 0xa0000) || (base >= 0x100000 && end <= 0x400000) {
+            Some(base)
+        } else {
+            None
+        }
+    };
+    let (Some(source), Some(dest)) = (descriptor(0x10, false), descriptor(0x18, true)) else {
+        return false;
+    };
+    // Service accesses physical extended RAM without changing the caller's A20
+    // latch. The CPU still cannot address beyond its real-mode segment limits.
+    b.mem.copy_within(source..source + c.r[CX] as usize, dest);
+    true
+}
+
+/// PC-98 IDE uses the SASI BIOS DA/UA 00h (LBA) or 80h (zero-based CHS).
+/// Transfers use the same PIO task file and data buffer as guest port accesses.
+fn hdd_service(c: &mut Cpu, b: &mut Bus) {
+    let Some(disk) = b.ide.disk.as_ref() else {
+        c.set_byte(4, 0x80);
+        carry(c, b, true);
+        return;
+    };
+    let ah = c.byte(4);
+    let op = ah & 15;
+    if op == 4 {
+        c.r[BX] = 512;
+        c.r[CX] = disk.cylinders;
+        c.r[DX] = ((disk.heads as u16) << 8) | disk.sectors as u16;
+        c.set_byte(4, 0);
+        carry(c, b, false);
+        return;
+    }
+    if matches!(op, 0 | 3 | 7 | 0xe) {
+        b.output(0x74c, 4);
+        b.output(0x74c, 0);
+        c.set_byte(4, 0);
+        carry(c, b, false);
+        return;
+    }
+    let lba = if c.byte(0) & 128 != 0 {
+        disk.chs(c.r[CX], c.byte(6), c.byte(2))
+    } else {
+        Some(c.r[CX] as usize | ((c.r[DX] as usize) << 16))
+    };
+    let count = c.r[BX] as usize / 512;
+    let Some(mut lba) = lba.filter(|&l| {
+        count != 0
+            && c.r[BX].is_multiple_of(512)
+            && l + count <= disk.sector_count()
+            && matches!(op, 1 | 5 | 6)
+    }) else {
+        c.set_byte(4, 0x40);
+        carry(c, b, true);
+        return;
+    };
+    let mut addr = Cpu::phys(c.s[ES], c.r[BP]);
+    b.output(0x432, 0);
+    // Firmware polls, so mask controller IRQ while preserving guest PIC state.
+    b.output(0x74c, 2);
+    let mut ok = true;
+    for _ in 0..count {
+        b.output(0x644, 1);
+        b.output(0x646, lba as u8);
+        b.output(0x648, (lba >> 8) as u8);
+        b.output(0x64a, (lba >> 16) as u8);
+        b.output(0x64c, 0xe0 | ((lba >> 24) as u8 & 15));
+        b.output(
+            0x64e,
+            if op == 5 {
+                0x30
+            } else if op == 1 {
+                0x40
+            } else {
+                0x20
+            },
+        );
+        if b.input(0x64e) & 1 != 0 {
+            ok = false;
+            break;
+        }
+        if op != 1 {
+            for i in 0..512 {
+                if op == 5 {
+                    let v = b.read(addr + i);
+                    b.output(0x640 + (i & 1) as u16, v);
+                } else {
+                    let v = b.input(0x640 + (i & 1) as u16);
+                    b.write(addr + i, v);
+                }
+            }
+            if b.input(0x64e) & 1 != 0 {
+                ok = false;
+                break;
+            }
+        }
+        lba += 1;
+        addr += 512;
+    }
+    b.output(0x74c, 0);
+    c.set_byte(4, if ok { 0 } else { 0x40 });
+    carry(c, b, !ok);
 }

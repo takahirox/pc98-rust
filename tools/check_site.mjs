@@ -29,7 +29,7 @@ assert.deepEqual([...wasm.subarray(0, 8)], [0, 97, 115, 109, 1, 0, 0, 0]);
 // Compile the entire module; a magic header alone is not a valid Wasm binary.
 const module = await WebAssembly.compile(wasm);
 const exported = WebAssembly.Module.exports(module).map(entry => entry.name);
-for (const name of ['memory', 'insert', 'step', 'frame', 'key', 'reset', 'set_profile']) {
+for (const name of ['memory', 'insert', 'step', 'frame', 'key', 'mouse', 'reset', 'set_profile', 'export_disk']) {
   assert(exported.includes(name), `Missing emulator export: ${name}`);
 }
 console.log(`Publication checked: ${expected.length} approved assets; valid emulator Wasm (${wasm.length} bytes)`);

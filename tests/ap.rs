@@ -136,8 +136,10 @@ fn independent_adv98_japanese_game_input_save_and_reload() {
 fn independent_video_decodes_four_planes_and_returns_to_dos() {
     let mut m = machine("98videop");
     let mut colors = std::collections::BTreeSet::new();
-    for _ in 0..500 {
-        advance(&mut m, 1);
+    for _ in 0..5000 {
+        m.step(10_000);
+        m.bus.audio.clear();
+        assert!(m.error.is_none(), "{:?}", m.error);
         if m.bus.analog && m.bus.gdcs[1].enabled && !m.bus.gdcs[0].enabled {
             let rgb: [u8; 3] = pixel(m.render(), 0, 0).try_into().unwrap();
             colors.insert(rgb);
@@ -153,6 +155,10 @@ fn independent_video_decodes_four_planes_and_returns_to_dos() {
         "{colors:?}"
     );
     assert!(!m.bus.beep);
+    assert!(
+        m.bus.pcm.writes > 0,
+        "independent video player must use 86 PCM"
+    );
 }
 
 #[test]

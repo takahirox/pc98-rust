@@ -1,6 +1,7 @@
 use crate::{cpu::Cpu, devices::*, disk::Disk, profile::Profile};
 pub struct Bus {
     pub profile: Profile,
+    pub boot_hdd: bool,
     pub a20: bool,
     cg_code: [u8; 2],
     cg_line: u8,
@@ -11,10 +12,13 @@ pub struct Bus {
     pub pics: [Pic; 2],
     pub pit: Pit,
     pub opn: crate::sound::Opn,
+    pub pcm: crate::pcm::Pcm86,
     pub dma: Dma,
     pub keyboard: Keyboard,
+    pub mouse: crate::mouse::Mouse,
     pub gdcs: [Gdc; 2],
     pub fdc: Fdc,
+    pub ide: crate::hdd::Ide,
     pub disks: [Option<Disk>; 2],
     pub cycles: u64,
     pub beep: bool,
@@ -26,7 +30,12 @@ pub struct Bus {
     pub cpu_page: u8,
     pub palette: [[u8; 3]; 16],
     pub grcg_mode: u8,
+    pub egc: crate::egc::Egc,
     pub analog: bool,
+    pub pegc: bool,
+    pegc_unlock: bool,
+    pegc_banks: [u8; 2],
+    pub pegc_palette: [[u8; 3]; 256],
     palette_index: usize,
     tiles: [u8; 4],
     tile_index: usize,
@@ -51,6 +60,7 @@ impl Bus {
         }
         Self {
             profile,
+            boot_hdd: false,
             a20: false,
             cg_code: [0; 2],
             cg_line: 0,
@@ -64,17 +74,27 @@ impl Bus {
                     4 << 20
                 }
             ],
-            graphics: vec![0; 2 * profile.planes() * 0x8000],
+            graphics: vec![
+                0;
+                if profile == Profile::Pc9821ApDos {
+                    0x80000
+                } else {
+                    0x30000
+                }
+            ],
             pics: [Pic::new(8), Pic::new(0x10)],
             pit: Pit::default(),
             opn: crate::sound::Opn::default(),
+            pcm: crate::pcm::Pcm86::default(),
             dma: Dma {
                 mask: 15,
                 ..Dma::default()
             },
             keyboard: Keyboard::default(),
+            mouse: crate::mouse::Mouse::default(),
             gdcs: [Gdc::default(), Gdc::default()],
             fdc: Fdc::default(),
+            ide: crate::hdd::Ide::default(),
             disks: [None, None],
             cycles: 0,
             beep: false,
@@ -86,7 +106,12 @@ impl Bus {
             cpu_page: 0,
             palette,
             grcg_mode: 0,
+            egc: crate::egc::Egc::default(),
             analog: false,
+            pegc: false,
+            pegc_unlock: false,
+            pegc_banks: [0, 1],
+            pegc_palette: [[0; 3]; 256],
             palette_index: 0,
             tiles: [0; 4],
             tile_index: 0,
@@ -110,6 +135,9 @@ impl Bus {
         self.profile.planes() * 0x8000
     }
     fn graphics_offset(&self, a: usize) -> Option<usize> {
+        if self.pegc {
+            return None;
+        }
         match a {
             0xa8000..=0xbffff => Some(a - 0xa8000),
             0xe0000..=0xe7fff if self.profile == Profile::Pc9821ApDos => {
@@ -127,8 +155,25 @@ impl Bus {
     }
     pub fn read(&self, a: usize) -> u8 {
         let a = self.address(a);
+        if self.pegc {
+            match a {
+                0xa8000..=0xb7fff => {
+                    let window = (a - 0xa8000) / 0x8000;
+                    return self.graphics[self.pegc_banks[window] as usize * 0x8000 + (a & 0x7fff)];
+                }
+                0xe0004 | 0xe0006 => return self.pegc_banks[(a - 0xe0004) / 2],
+                0xe0000..=0xe7fff => return 0,
+                _ => {}
+            }
+        }
         if let Some(off) = self.graphics_offset(a) {
             let base = self.cpu_page as usize * self.page_bytes();
+            if self.egc.enabled && self.grcg_mode & 128 != 0 {
+                return self.egc.read(
+                    std::array::from_fn(|p| self.graphics[base + p * 0x8000 + (off & 0x7fff)]),
+                    off & 1,
+                );
+            }
             if self.profile == Profile::Pc9821ApDos && self.grcg_mode & 128 != 0 {
                 let mut result = 255;
                 for plane in 0..self.profile.planes() {
@@ -155,9 +200,30 @@ impl Bus {
     }
     pub fn write(&mut self, a: usize, v: u8) {
         let a = self.address(a);
+        if self.pegc {
+            match a {
+                0xa8000..=0xb7fff => {
+                    let window = (a - 0xa8000) / 0x8000;
+                    self.graphics[self.pegc_banks[window] as usize * 0x8000 + (a & 0x7fff)] = v;
+                    return;
+                }
+                0xe0004 | 0xe0006 => {
+                    self.pegc_banks[(a - 0xe0004) / 2] = v & 15;
+                    return;
+                }
+                0xe0000..=0xe7fff => return,
+                _ => {}
+            }
+        }
         if let Some(off) = self.graphics_offset(a) {
             let base = self.cpu_page as usize * self.page_bytes();
-            if self.grcg_mode & 128 == 0 {
+            if self.egc.enabled && self.grcg_mode & 128 != 0 {
+                let data =
+                    std::array::from_fn(|p| self.graphics[base + p * 0x8000 + (off & 0x7fff)]);
+                for (p, value) in self.egc.write(data, v, off & 1).into_iter().enumerate() {
+                    self.graphics[base + p * 0x8000 + (off & 0x7fff)] = value;
+                }
+            } else if self.grcg_mode & 128 == 0 {
                 self.graphics[base + off] = v;
             } else {
                 let byte = off & 0x7fff;
@@ -197,9 +263,15 @@ impl Bus {
     pub fn tick(&mut self, cycles: u32) {
         let old_frame = self.cycles / 133_333;
         self.cycles += cycles as u64;
+        if self.mouse.tick(cycles) {
+            self.pics[1].request(5);
+        }
+        if self.profile == Profile::Pc9821ApDos && self.ide.irq_enabled() {
+            self.pics[1].request(1);
+        }
         if self.profile == Profile::Pc9821ApDos {
             self.opn.tick(cycles);
-            if self.opn.irq() {
+            if self.opn.irq() || (self.pcm.irq && self.pcm.control & 32 != 0) {
                 self.pics[1].request(4);
             }
         }
@@ -215,7 +287,7 @@ impl Bus {
         while self.audio_fraction >= 8_000_000 {
             self.audio_fraction -= 8_000_000;
             let fm = if self.profile == Profile::Pc9821ApDos {
-                self.opn.sample()
+                self.opn.sample() + self.pcm.sample()
             } else {
                 0.0
             };
@@ -264,6 +336,25 @@ impl Bus {
     }
     pub fn input(&mut self, p: u16) -> u8 {
         match p {
+            0x7fd9 | 0x7fdb | 0x7fdd | 0xbfdb => {
+                self.mouse.input(p, self.profile == Profile::Pc9821ApDos)
+            }
+            0x430
+            | 0x432
+            | 0x640..=0x641
+            | 0x642
+            | 0x644
+            | 0x646
+            | 0x648
+            | 0x64a
+            | 0x64c
+            | 0x64e
+            | 0x74c
+            | 0x74e
+                if self.profile == Profile::Pc9821ApDos =>
+            {
+                self.ide.input(p)
+            }
             0 | 2 => self.pics[0].read(p == 2),
             8 | 10 => self.pics[1].read(p == 10),
             1..=0x11 if p & 1 != 0 => self.dma.read(p),
@@ -300,7 +391,17 @@ impl Bus {
             0x94 => 0x40,
             0xbe => 1,
             0xa8 | 0xaa | 0xac | 0xae => {
-                if self.analog {
+                if self.pegc {
+                    if p == 0xa8 {
+                        self.palette_index as u8
+                    } else {
+                        self.pegc_palette[self.palette_index][match p {
+                            0xaa => 1,
+                            0xac => 0,
+                            _ => 2,
+                        }]
+                    }
+                } else if self.analog {
                     if p == 0xa8 {
                         self.palette_index as u8
                     } else {
@@ -330,11 +431,27 @@ impl Bus {
             0x40 => 0x20,
             0x64 => 0,
             0x6e => 0,
-            0x188 if self.profile == Profile::Pc9821ApDos => self.opn.status(),
-            0x18a if self.profile == Profile::Pc9821ApDos => {
-                self.opn.registers[self.opn.address as usize]
+            0x188 if self.profile == Profile::Pc9821ApDos && self.pcm.mask & 2 == 0 => {
+                self.opn.status()
             }
-            0xa460 if self.profile == Profile::Pc9821ApDos => 0xff, // no 86 PCM FIFO
+            0x18a if self.profile == Profile::Pc9821ApDos && self.pcm.mask & 2 == 0 => {
+                if self.opn.address == 14 {
+                    0xff // SSG port A: inactive joystick, interrupt selection INT5/IRQ12.
+                } else if self.opn.address == 255 {
+                    1 // YM2608 identification register.
+                } else {
+                    self.opn.registers[self.opn.address as usize]
+                }
+            }
+            0xa460 | 0xa466 | 0xa468 | 0xa46a | 0xa46c if self.profile == Profile::Pc9821ApDos => {
+                self.pcm.input(p)
+            }
+            0x18c if self.profile == Profile::Pc9821ApDos && self.pcm.mask & 3 == 1 => {
+                self.opn.status()
+            }
+            0x18e if self.profile == Profile::Pc9821ApDos && self.pcm.mask & 3 == 1 => {
+                self.opn.registers[256 + self.opn.bank_address as usize]
+            }
             0x188 => 255,
             _ => {
                 self.unknown_ports.insert(p);
@@ -344,6 +461,22 @@ impl Bus {
     }
     pub fn output(&mut self, p: u16, v: u8) {
         match p {
+            0x7fd9 | 0x7fdb | 0x7fdd | 0x7fdf | 0xbfdb => self.mouse.output(p, v),
+            0x430
+            | 0x432
+            | 0x640..=0x641
+            | 0x642
+            | 0x644
+            | 0x646
+            | 0x648
+            | 0x64a
+            | 0x64c
+            | 0x64e
+            | 0x74c
+                if self.profile == Profile::Pc9821ApDos =>
+            {
+                self.ide.output(p, v)
+            }
             0 | 2 => self.pics[0].write(p == 2, v),
             8 | 10 => self.pics[1].write(p == 10, v),
             1..=0x29 if p & 1 != 0 => self.dma.write(p, v),
@@ -377,6 +510,19 @@ impl Bus {
             0x6a => {
                 if v <= 1 {
                     self.analog = v == 1
+                } else if self.profile == Profile::Pc9821ApDos && matches!(v, 6 | 7) {
+                    self.pegc_unlock = v == 7;
+                } else if self.profile == Profile::Pc9821ApDos
+                    && matches!(v, 4 | 5)
+                    && self.pegc_unlock
+                {
+                    self.egc.enabled = v == 5;
+                } else if self.profile == Profile::Pc9821ApDos
+                    && matches!(v, 0x20 | 0x21)
+                    && self.pegc_unlock
+                {
+                    self.pegc = v == 0x21;
+                    self.palette_index = 0;
                 } else {
                     self.unknown_ports.insert(p);
                 }
@@ -406,6 +552,15 @@ impl Bus {
                 self.tiles[self.tile_index] = v;
                 self.tile_index = (self.tile_index + 1) & 3;
             }
+            0x4a0..=0x4af
+                if self.profile == Profile::Pc9821ApDos
+                    && self.egc.enabled
+                    && self.grcg_mode & 128 != 0 =>
+            {
+                let register = &mut self.egc.registers[((p - 0x4a0) / 2) as usize];
+                let shift = (p & 1) * 8;
+                *register = (*register & !(255 << shift)) | ((v as u16) << shift);
+            }
             0x71 | 0x73 | 0x75 | 0x77 => self.pit.write(((p - 0x71) / 2) as usize, v),
             0x3fd9 | 0x3fdb | 0x3fdd | 0x3fdf => self.pit.write(((p - 0x3fd9) / 2) as usize, v),
             0xdf => self.pit.write(3, v), // OUT imm8 truncation in the independent hello fixture.
@@ -434,6 +589,18 @@ impl Bus {
             0xa4 => self.display_page = v & 1,
             0xa6 => self.cpu_page = v & 1,
             0xa8 | 0xaa | 0xac | 0xae => {
+                if self.pegc {
+                    if p == 0xa8 {
+                        self.palette_index = v as usize;
+                    } else {
+                        self.pegc_palette[self.palette_index][match p {
+                            0xaa => 1,
+                            0xac => 0,
+                            _ => 2,
+                        }] = v;
+                    }
+                    return;
+                }
                 if self.analog {
                     if p == 0xa8 {
                         self.palette_index = (v & if self.profile == Profile::Pc9821ApDos {
@@ -461,9 +628,22 @@ impl Bus {
                     ]
                 }
             }
-            0x188 if self.profile == Profile::Pc9821ApDos => self.opn.address = v,
-            0x18a if self.profile == Profile::Pc9821ApDos => self.opn.write(v),
-            0x40 | 0x50 | 0x52 | 0xbe | 0x188 | 0x18a => {}
+            0x188 if self.profile == Profile::Pc9821ApDos && self.pcm.mask & 2 == 0 => {
+                self.opn.address = v
+            }
+            0x18a if self.profile == Profile::Pc9821ApDos && self.pcm.mask & 2 == 0 => {
+                self.opn.write(v)
+            }
+            0x18c if self.profile == Profile::Pc9821ApDos && self.pcm.mask & 3 == 1 => {
+                self.opn.bank_address = v
+            }
+            0x18e if self.profile == Profile::Pc9821ApDos && self.pcm.mask & 3 == 1 => {
+                self.opn.write_bank(v)
+            }
+            0xa460 | 0xa466 | 0xa468 | 0xa46a | 0xa46c if self.profile == Profile::Pc9821ApDos => {
+                self.pcm.output(p, v)
+            }
+            0x40 | 0x50 | 0x52 | 0x5f | 0xbe | 0x188 | 0x18a => {}
             0xf0 => self.firmware_request = true,
             _ => {
                 self.unknown_ports.insert(p);
@@ -600,7 +780,12 @@ impl Bus {
             for x in 0..640 {
                 let mut color = 0;
                 let mut text_rgb = None;
-                if graphics {
+                if graphics && self.pegc {
+                    let start =
+                        self.display_page as usize * 0x40000 + self.gdcs[1].start as usize * 8;
+                    let a = (start + y * self.gdcs[1].pitch as usize * 8 + x) & 0x7ffff;
+                    color = self.graphics[a];
+                } else if graphics {
                     let a = ((self.gdcs[1].start as usize * 2 + y * 80 + x / 8) & 0x7fff) + page;
                     let mask = 0x80 >> (x & 7);
                     for plane in 0..if self.analog {
@@ -653,8 +838,12 @@ impl Bus {
                     }
                 }
                 let idx = (y * 640 + x) * 4;
-                out[idx..idx + 3]
-                    .copy_from_slice(text_rgb.as_ref().unwrap_or(&self.palette[color as usize]));
+                let rgb = if self.pegc {
+                    &self.pegc_palette[color as usize]
+                } else {
+                    &self.palette[color as usize]
+                };
+                out[idx..idx + 3].copy_from_slice(text_rgb.as_ref().unwrap_or(rgb));
                 out[idx + 3] = 255;
             }
         }

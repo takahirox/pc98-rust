@@ -3,6 +3,10 @@
 This document describes the preserved VM default. The new selectable
 [Ap DOS subset, independent guests and exact limits](dos-compatibility.md) are
 documented separately; it does not implement a complete PC-9821.
+The [Issue #11 device audit](ap-devices.md) describes the Ap-only IDE, memory,
+EGC/PEGC and sound additions and their guest fixtures. The port table below
+otherwise describes the preserved VM behavior; both profiles expose the PC-98
+bus mouse's 7FD9/7FDD/7FDF/BFDB interface.
 
 The default target is a PC-9801VM-family V30 in 16-bit real mode, with 640 KiB
 conventional RAM, 12 KiB text storage, 192 KiB planar graphics storage and two floppy slots.

@@ -22,15 +22,18 @@ replacement Japanese CG/text and approximate OPN sound. Independent ADV98 and
 browser tests. The Ap profile also supports a tested 386/486 real-mode integer
 subset, including 32-bit operands and addresses, SIB, FS/GS and guest faults.
 The independent public-domain CPULEVEL diagnostic verifies 486 EFLAGS through DOS.
-Issue #9 remains incomplete: extended-memory BIOS/XMS, HDD, EGC/PEGC, mouse and
-OPNA/PCM are still absent; the released ADV98 game requires an optional PMD driver
-for sound. Protected mode, DPMI, FPU and full 486 fidelity are not implemented.
+Issue #11 adds guest INT 1F extended-memory access, IDE HDD boot and persistence,
+aligned EGC raster operations, PEGC packed 256-color video, bus mouse input,
+sequenced ADV98 music through a guest PMD driver, and OPNA/86 PCM subsets.
+See [device contracts, fixtures and unsupported features](docs/ap-devices.md).
+Protected mode, DPMI, FPU and full 486 fidelity are not implemented.
 See [guest provenance, commands and exact profile limits](docs/dos-compatibility.md).
 
 ## Build and play
 
-Install Rust through rustup (including the Wasm target), Python 3.10+, NASM 2.16+,
-and Node.js 22+ for browser testing. The application itself has no npm runtime
+Install Rust through rustup (including the Wasm target), Python 3.12+, NASM 2.16+,
+Node.js 22+, a C compiler and make for reproducible guest builds and browser
+testing. The application itself has no npm runtime
 dependencies. Run from the repository root:
 
 ```sh
@@ -49,11 +52,15 @@ there are no network requests after the selected media loads.
 
 **Pause / Resume** controls execution. **Reset** reboots the CPU and devices while
 preserving inserted media and its writes. Select drive 1 or 2, then **Insert
-floppy** or drop an image on the screen. Inserting drive 1 boots it; inserting drive
+media** or drop an image on the screen. Inserting drive 1 boots it; inserting drive
 2 changes media without rebooting. **Eject** removes the selected disk. **Export
-disk** downloads that drive's current bytes, preserving D88 headers and write
-protection. Reinsert the export to restore saved disk data. Star Trail records the
-last run's moves and score in sector 8; a new game starts at zero. There is no
+disk** downloads that drive's current bytes, preserving D88/HDI headers and
+floppy write protection. Reinsert the export to restore saved disk data. Star Trail records the
+last run's moves and score in sector 8; a new game starts at zero.
+For Ap, **IDE · HDI boot** mounts a geometry-validated HDI up to 32 MiB.
+Inserting IDE selects HDD boot; inserting floppy 1 selects floppy boot.
+Enable **Send mouse movement and buttons** for guest mouse input; INT 33h
+applications require a guest driver. The prepared HDD includes one. There is no
 automatic browser storage or CPU save-state persistence.
 
 Supported media: raw `.TFD`, `.HDM`, `.XDF`, `.2HD`, `.IMG` with exactly
@@ -81,6 +88,9 @@ Japanese CG glyphs. FEP input is not implemented.
 python3 tools/prepare_freedos.py
 python3 tools/prepare_dos_apps.py
 python3 tools/prepare_cpu_fixture.py
+python3 tools/prepare_hdd_fixture.py
+python3 tools/prepare_music_fixture.py
+python3 tools/prepare_device_fixture.py
 python3 tools/build_font.py --check
 cargo test --locked
 cargo clippy --all-targets -- -D warnings
@@ -133,8 +143,9 @@ iteration per slot. Rebuild checked-in guest artifacts with
 checks, Wasm build and browser tests on pull requests before merge. Local test
 coverage and execution evidence are in [validation](docs/validation.md). No
 published site, post-merge deployment, human playtest or original hardware is
-required for pre-merge acceptance. No FM/OPNA, EGC, protected mode, HDD/SCSI, NEC
-BASIC or Kanji font is claimed. Unsupported CPU/BIOS operations report errors;
+required for pre-merge acceptance. No protected mode, SCSI, NEC BASIC, proprietary
+font, complete EGC/PEGC or complete OPNA fidelity is claimed.
+Unsupported CPU/BIOS operations report errors;
 unmapped ports return an open bus and are recorded for headless diagnostics.
 
 ## GitHub Pages deployment

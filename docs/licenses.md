@@ -16,6 +16,11 @@ new Latin-only glyph data in `src/font.rs`; it is not copied from NEC or another
 font package. `tools/build_media.py --check` reproduces these binaries offline
 using NASM and detects stale checked-in artifacts.
 
+The additional original `guest/hdd-ipl.asm`, `guest/mouse98.asm`,
+`guest/memory98.asm` and `guest/play.mml` are also MIT. Their generated DOS
+fixtures include `RUST.LIC` with the repository notice. They contain no borrowed
+firmware, mouse driver, sound implementation, melody or instrument sample.
+
 ## HelloWorld-PC98
 
 Upstream: [TakedaHiromasa/HelloWorld-PC98](https://github.com/TakedaHiromasa/HelloWorld-PC98),
@@ -142,3 +147,43 @@ its archive/source and the entire `fixtures/freedos` output, including complete
 GPL DOS sources and notices, when redistributing this optional disk. The generated
 batch/configuration and preparation script are original MIT files. CPULEVEL and
 its disk remain outside `web/` and the unchanged Pages asset allowlist.
+
+## Issue #11 HDD, music and device fixtures
+
+The [device audit](ap-devices.md) and checked-in HDD/music/device manifests list
+all selected files, exact inputs, hashes, requirements and adaptation/build steps.
+The HDD uses the existing pinned GPL FreeDOS kernel and shell and an unchanged
+FreeDOS `nec98/boot/boot.asm` assembled with `NEC98HDD` and `ISFAT12`. Its original
+MIT partition IPL and mouse TSR have source in `guest/`. Keep complete FreeDOS
+sources/notices and the original and adapted guest sources with any redistribution.
+All three new images remain in ignored `fixtures/dos-apps/`, outside Pages.
+
+PMD/MC are published guest programs from M.Kajihara (KAJA), version 4.8s,
+[source commit c620dc95](https://github.com/d2lmirrors/pmd/tree/c620dc95c5e47970e7839cb5f0b7b9ab742d4f46).
+The author's original UTF-8 `readme.txt` explicitly permits free use of the
+published sources while retaining copyright. This is a custom permission, not
+an MIT/GPL claim. Preserve that notice as `PMD-permission.txt` (also `PMD.TXT` in
+the disk), the full source archive and the adapted sources/build script. Changes
+only normalize include filenames, express EQU string macros as JWasm TEXTEQU,
+and expand one out-of-range LOOP with a flags-preserving jump trampoline. The
+music script records original and adapted source hashes and generated binaries.
+No PMD guest code is translated or linked into the Rust emulator. The MC compiler
+executes inside guest FreeDOS at boot, compiling the original MIT score and voice
+in `guest/play.mml`; the unchanged ADV98 executable loads and starts that score.
+The ADV98 release's original `PLAY.M`, effects and artwork remain excluded.
+
+Paul Vojta's DEBUG 1.25 (2011-08-08) has an MIT permission notice in `DEBUG.ASM`;
+Japheth explicitly places his extensions in the public domain. The pinned original
+`DEBUG125.zip` includes its full sources/notices. Its optional startup x87 probe
+is bypassed for this no-FPU profile, and the adapted source is retained alongside
+the archive. Port/memory/DOS command processing is unchanged. The disk includes
+the original notice-bearing source and README; no DEBUGX, DPMI examples, Win32
+DLLs or unrelated archive contents are installed in the guest image.
+
+[JWasm](https://github.com/JWasm/JWasm/tree/a5c4ea03cc0545a15d81a354251b5f534bef7a1b)
+is a host assembler build tool under its upstream Sybase Open Watcom license and
+notices. Its pinned full source archive and extracted source/notices remain in
+the fixture output. It is not a runtime dependency and is never placed in Pages
+or linked into a guest executable as a library. Only guest programs and a compiler
+are acquired; no emulator/chip source or ROM is introduced. Rust dependencies
+remain empty. Pages' ten-asset publication allowlist is unchanged.
