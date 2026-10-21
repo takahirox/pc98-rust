@@ -120,6 +120,12 @@ DOS. The emulator has no host DOS implementation. The minimal fixture excludes
 XMS drivers because this profile is real-mode V30, not a 286 machine. To try it in
 the browser, insert `fixtures/freedos/minimal.hdm`, wait for `A:\>`, and type `probe`.
 See [licensing and distribution](docs/licenses.md) before redistributing this disk.
+The same preparation also builds `fixtures/freedos/timer.hdm` from the original
+MIT `guest/timer.asm`. It boots TIMER.COM through FreeDOS/FreeCOM and validates
+the BIOS interval callback's flag, interrupt stack and return address before
+printing `TIMER CALLBACK PASS`. The guest stays in an observation loop so native
+and actual-Wasm browser tests can confirm that it fires only once in both
+profiles. See the [interval service contract](docs/hardware.md#bios-interval-callback-int-1cah02).
 For the independent DOS game/video/audio tests and CPULEVEL diagnostic, select
 the Ap DOS machine and insert the generated `fixtures/dos-apps/*.hdm` disks; see [instructions](docs/dos-compatibility.md).
 
