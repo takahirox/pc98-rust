@@ -19,9 +19,13 @@ PC-98 compatibility claim. See [hardware, ports, firmware and limits](docs/hardw
 A selectable **PC-9821Ap DOS subset** adds four-plane 16-color graphics,
 replacement Japanese CG/text and approximate OPN sound. Independent ADV98 and
 98VIDEOP programs now run through guest FreeDOS, with native and actual-Wasm
-browser tests. This is a partial step toward Issue #7: no full 486/32-bit ISA,
-HDD, EGC/PEGC, mouse or OPNA/PCM yet; the released ADV98 game requires an optional
-PMD driver for sound. See [guest provenance, commands and exact profile limits](docs/dos-compatibility.md).
+browser tests. The Ap profile also supports a tested 386/486 real-mode integer
+subset, including 32-bit operands and addresses, SIB, FS/GS and guest faults.
+The independent public-domain CPULEVEL diagnostic verifies 486 EFLAGS through DOS.
+Issue #9 remains incomplete: extended-memory BIOS/XMS, HDD, EGC/PEGC, mouse and
+OPNA/PCM are still absent; the released ADV98 game requires an optional PMD driver
+for sound. Protected mode, DPMI, FPU and full 486 fidelity are not implemented.
+See [guest provenance, commands and exact profile limits](docs/dos-compatibility.md).
 
 ## Build and play
 
@@ -76,6 +80,7 @@ Japanese CG glyphs. FEP input is not implemented.
 # This makes a minimal GPL guest disk; it downloads no emulator code.
 python3 tools/prepare_freedos.py
 python3 tools/prepare_dos_apps.py
+python3 tools/prepare_cpu_fixture.py
 python3 tools/build_font.py --check
 cargo test --locked
 cargo clippy --all-targets -- -D warnings
@@ -96,16 +101,17 @@ local root and at a simulated Pages project subpath whose root asset URLs fail.
 To repeat just the project-path browser checks after building, run
 `npx playwright test --project=pages`.
 
-`cargo test --test dos` and `cargo test --test ap` deliberately fail if their legal
-guest fixtures are missing; they are never silently skipped. The fixture downloads require network access once.
+`cargo test --test dos`, `cargo test --test ap` and `cargo test --test cpu386`
+deliberately fail if their legal guest fixtures are missing; they are never
+silently skipped. The fixture downloads require network access once.
 Their checksums and sources are pinned in the preparation script. **PROBE.COM**
 runs via the guest FreeDOS kernel and shell, including real INT 21h handling inside
 DOS. The emulator has no host DOS implementation. The minimal fixture excludes
 XMS drivers because this profile is real-mode V30, not a 286 machine. To try it in
 the browser, insert `fixtures/freedos/minimal.hdm`, wait for `A:\>`, and type `probe`.
 See [licensing and distribution](docs/licenses.md) before redistributing this disk.
-For the independent DOS game/video/audio tests, select the Ap DOS machine and
-insert the generated `fixtures/dos-apps/*.hdm` disks; see [instructions](docs/dos-compatibility.md).
+For the independent DOS game/video/audio tests and CPULEVEL diagnostic, select
+the Ap DOS machine and insert the generated `fixtures/dos-apps/*.hdm` disks; see [instructions](docs/dos-compatibility.md).
 
 For a native/headless run of the same core:
 

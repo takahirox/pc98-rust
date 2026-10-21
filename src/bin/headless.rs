@@ -25,10 +25,9 @@ fn main() {
                 m.cpu.s[1],
                 m.cpu.ip,
                 (0..8)
-                    .map(|n| m.bus.read(pc98_rust::cpu::Cpu::phys(
-                        m.cpu.s[1],
-                        m.cpu.ip.wrapping_add(n)
-                    )))
+                    .map(|n| m
+                        .bus
+                        .read(m.cpu.s[1] as usize * 16 + m.cpu.ip.wrapping_add(n) as usize))
                     .collect::<Vec<_>>(),
                 m.cpu.r,
                 m.cpu.s,

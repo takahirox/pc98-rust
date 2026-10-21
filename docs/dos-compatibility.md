@@ -1,7 +1,11 @@
-# Issue #7: independent DOS compatibility slice
+# DOS compatibility: implemented subsets and remaining Issue #9 work
 
-This is a **partial implementation of Issue #7**, not a claim of broad PC-9821
-compatibility or grounds to close the Issue. Two independently authored native
+Issue #7 was closed by the partial PR #8. Its outstanding acceptance is now tracked
+by [Issue #9](https://github.com/takahirox/pc98-rust/issues/9), which must remain
+open. This checkpoint adds a validated 386/486 real-mode integer CPU subset;
+it **does not complete Issue #9** or establish broad PC-9821 game compatibility.
+
+The existing PR #8 baseline is preserved: Two independently authored native
 PC-98 DOS applications now execute their actual x86 code under the pinned guest
 FreeDOS kernel and FreeCOM: ADV98's Japanese adventure sample and 98VIDEOP. There
 is no application-name recognition, host INT 21h implementation, host font
@@ -12,6 +16,7 @@ rasterization, host game logic, or substitution of application graphics.
 ```sh
 python3 tools/prepare_freedos.py
 python3 tools/prepare_dos_apps.py
+python3 tools/prepare_cpu_fixture.py
 python3 tools/build_font.py --check
 cargo test --locked
 cargo clippy --all-targets -- -D warnings
@@ -97,8 +102,8 @@ complete reproduction of those specifications.
 
 | Area | Implemented and tested | Remaining limits |
 | --- | --- | --- |
-| CPU | Existing original 8/16-bit common real-mode interpreter; Ap uses masked shift counts, encoded AAM/AAD radix, 486-style 16-bit FLAGS reserved bits; rejects V30 0F extensions | No 66/67 prefixes, 32-bit registers/addressing, full 386/486 ISA, FPU, protected mode or DPMI; accepted guests use the common 16-bit instructions. Segment accesses still wrap offsets like the VM core, without 286+ segment-limit exceptions |
-| RAM | 640 KiB conventional plus 3 MiB at physical 100000–3FFFFF; BWA 401h reports 24 × 128 KiB; holes and firmware retain PC-98 mapping | RAM beyond HMA is not reachable through this interpreter's 16-bit real-mode addresses; no XMS, EMS or INT 1F copy implementation. Accepted guests do not request them |
+| CPU | Original shared 8/16/32-bit real-mode interpreter; 66/67 overrides, EAX–EDI, FS/GS, ModR/M/SIB, dword ALU/stack/strings/control flow/I/O, selected 386/486 integer 0F instructions, EFLAGS AC, restartable #DE/#BR/#UD/#SS/#GP and #DB traps. Ap retains masked shift counts and encoded AAM/AAD radix; V30 behavior remains selected by VM | No protected mode, unreal mode, paging, DPMI, FPU, CPUID, system/control/debug-register instructions or complete 486 ISA/timing. Explicit invalid encodings fault; valid unimplemented instructions stop with a diagnostic. See CPU coverage below |
+| RAM | 640 KiB conventional plus 3 MiB at physical 100000–3FFFFF; BWA 401h reports 24 × 128 KiB; holes and firmware retain PC-98 mapping | HMA is reachable with A20 enabled, including dword accesses. Address override does not enlarge the real-mode 64 KiB segment limit, so RAM beyond HMA still needs unimplemented XMS, EMS or INT 1F copy services. Accepted guests do not request them |
 | A20 | PC-98 F2 write enables A20; F6=02/03 enables/disables; F2/F6 read bit 0 reports masked state; reset masks it | No IBM port 92 or AT keyboard-controller gate. F0 remains the private synthetic-firmware trap, not an emulated CPU reset port |
 | Bitmap | Two four-plane 128 KiB pages; B/R/G at A8000/B0000/B8000, intensity at E0000; independent CPU/display pages; analog palette 16 × 12-bit RGB; four-plane GRCG TDW/RMW/TCR | Only 256 KiB of the real machine's 512 KiB graphics storage is exposed; no EGC, PEGC/256-color, 480-line mode or GDC vector engine. None is exercised by these guests |
 | Text/CG | Shinonome JIS X 0208 16×16 glyphs; A1/A3 glyph selection, A5 half/line, A9 data, A4000 CG window in dot access mode; text VRAM low byte JIS row minus 20h, high byte cell, right-half flag; text color independent of bitmap analog palette | CG window implements the selected 32-byte ordinary glyph, mirrored across the decoded window. No user-defined fonts, NEC extended glyphs, FEP or full Japanese ANK/kana coverage; ANK still uses the original simplified Latin font |
@@ -131,8 +136,8 @@ the actual release Wasm at both `/` and `/pc98-rust/`. It uses bounded core slic
 not a mocked core. Existing Star Trail, HelloWorld, FreeDOS and Pages tests remain
 required. Results for this checkpoint are recorded below after validation.
 
-The end-to-end DOS-game vertical slice is now reproducible, but Issue #7 remains
-open: broaden the CPU to genuine 386/486 operand/address behavior and exceptions,
+The end-to-end DOS-game vertical slice is reproducible, and the CPU extension below
+adds 386/486 operand/address behavior and exceptions. Issue #9 remains open:
 complete the Ap RAM/BIOS and necessary extended-memory interfaces, add bootable
 HDD support, and continue guest-first coverage for EGC/PEGC, Japanese ANK/CG,
 mouse and OPNA/PCM. The released ADV98 game remains silent without PMD; game-driven
@@ -141,7 +146,7 @@ game. The approximate OPN implementation and wrapped-routine audio test do not
 establish broad game sound compatibility. No human sign-off, proprietary media,
 live Pages URL or post-merge action is required to continue or test this work.
 
-## Validation results for this checkpoint
+## Historical PR #8 validation results
 
 Executed on 2026-10-21 in the assigned macOS arm64 worktree:
 
@@ -172,3 +177,94 @@ Local review against Issue #7: this checkpoint establishes the documented DOS
 slice with rights-cleared fixtures and regressions, but the missing capabilities
 listed above remain blocking findings for any claim to finish the whole Issue.
 No external approval or human-only test blocks continued implementation.
+
+## Issue #9 CPU coverage and independent guest evidence
+
+The shared decoder now applies operand and address overrides independently. Repeated
+66/67 prefixes select an override rather than toggling it. Register byte/word writes
+preserve upper words; dword writes replace all 32 bits. ModR/M/SIB handles scaled
+indices, no-base/disp32, signed displacements and default SS for EBP/ESP bases.
+FS/GS overrides, MOV segment, PUSH/POP FS/GS and LSS/LFS/LGS are available on Ap.
+
+Common instructions now support dword ALU/TEST, INC/DEC, shifts/rotates, signed and
+unsigned multiply/divide, MOV/XCHG, LEA, stack/PUSHAD/POPAD/ENTER/LEAVE, immediate
+and indirect near/far transfers, IRETD, PUSHFD/POPFD, CBW/CWDE/CWD/CDQ, strings
+and I/O. REP uses the address size for ECX/ESI/EDI and retires at most one element
+per scheduler slot. Added 0F forms include near Jcc, SETcc, MOVZX/MOVSX, IMUL,
+BSF/BSR, BT/BTS/BTR/BTC, SHLD/SHRD, CMPXCHG/XADD and 32-bit BSWAP. BOUND is
+implemented for Ap. CPULEVEL's ID-flag probe fails as expected for an early DX2;
+its AC-flag probe succeeds. This does not advertise a working FPU or CPUID.
+
+Ap memory operands and instruction fetches respect the real-mode 64 KiB segment
+limit, including multi-byte accesses at FFFF and overlong instructions. #DE, #BR,
+invalid encodings, #SS and #GP save the first prefix address in the 16-bit real-mode
+IVT frame. Faulting writes are checked before modifying any bytes; compound stack
+writes preflight every element. Register state is restored before fault delivery.
+Single-step traps save the next instruction address; SS-load and STI shadows are
+distinct. Real-mode INT/INT3/INTO, IRQs and exceptions always save a six-byte
+FLAGS/CS/IP frame, regardless of a 66 prefix, and clear IF, TF and AC on entry.
+Ordinary IRET consumes this word frame; IRETD consumes a software-constructed
+three-dword frame and can restore AC. A broken exception stack produces a bounded
+diagnostic; double/triple-fault reset behavior is not implemented. VM retains
+wrapped offsets and its existing V30 bit/flags/radix behavior.
+
+Instruction behavior was implemented from architectural documentation, including
+[Intel's instruction/system manuals](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html),
+and the [original 80386 instruction reference, hosted by Stanford](https://www.scs.stanford.edu/05au-cs240c/lab/i386/c17.htm),
+without consulting or copying an emulator implementation. These are functional
+semantics, not a physical 66 MHz timing model.
+
+[CPULEVEL provenance](../fixtures/cpu-manifest.json) pins Eric Auer's independent
+2004–2008 public-domain CPU diagnostic, its complete original archive and each
+selected source/binary hash. `prepare_cpu_fixture.py` assembles its unmodified
+NASM source and includes that source on `cpu386.hdm`, alongside the same pinned
+FreeDOS/FreeCOM used by existing tests. The downloaded archive is retained with
+the disk and DOS sources/notices. No new guest is published by Pages.
+
+Native `tests/cpu386.rs` exercises instruction/flag/address/fault edges and boots
+this disk through the actual kernel and shell. CPULEVEL executes 26 operand-size
+overrides and returns DOS errorlevel 4; the guest batch prints `CPULEVEL 486 VERIFIED`.
+The test also requires the diagnostic's `i486 or compatible` and negative CPUID
+messages. Browser `dos-apps.spec.js` repeats this on real release Wasm at both
+root and Pages paths, including reset/re-execution. This is a portable third-party
+DOS utility, **not** a new game, musical fixture or a substitute for the remaining
+HDD/mouse/256-color/game-audio acceptance.
+
+Issue #9 remains incomplete. Its extended-memory services, bootable HDD/controller
+and persistence, EGC/GDC additions, PEGC 256-color mode, expanded ANK/CG, mouse and
+OPNA/86 PCM/game music still require implementation and independent guest fixtures.
+The existing two independent PC-98 DOS applications, native floppy/save/audio
+checks and browser demos remain regression requirements. No issue-closing keyword,
+push, PR, merge, GitHub comment or post-merge action is part of this checkpoint.
+
+### Issue #9 CPU checkpoint validation (2026-10-21)
+
+Executed in the assigned macOS arm64 worktree, after the final CPU changes:
+
+| Command | Result |
+| --- | --- |
+| `python3 tools/prepare_freedos.py` | Passed; baseline disk and complete matching DOS sources/notices preserved |
+| `python3 tools/prepare_dos_apps.py` | Passed; original ADV98/98VIDEOP/FM image and per-file hashes unchanged |
+| `python3 tools/prepare_cpu_fixture.py` | Passed; pinned archive, unmodified-source assembly and final disk match `fixtures/cpu-manifest.json` |
+| `python3 tools/build_media.py --check` | Passed; firmware and both published demo disk hashes unchanged |
+| `python3 tools/build_font.py --check` | Passed; Shinonome JIS data unchanged |
+| `cargo test --locked` | Passed: 47 native integration tests (22 core, 8 Ap, 16 CPU, 1 FreeDOS); no ignored tests |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `cargo fmt --check` | Passed |
+| `npm ci` / `npx playwright install chromium` | Passed |
+| `npm test` | Passed: locked release `wasm32-unknown-unknown` build, ten-asset publication audit, 16 real-Wasm Chromium tests across `/` and `/pc98-rust/` (12.0 seconds) |
+| `git diff --check` / local documentation-link and manifest checks | Passed |
+
+The final Wasm is 424996 bytes. The build command inside `npm test` is
+`cargo build --locked --release --target wasm32-unknown-unknown --lib`.
+The new diagnostic executes the same original Rust core natively and in Wasm;
+existing video, Japanese game input/save/reload, floppy, beeper and FM tests pass.
+The old Ap test expecting a host error for V30's 0F escape was updated to require
+a guest #UD frame and its correct restart address. The existing VM tests retain
+their V30 expectations; one IP assertion now uses the widened EIP type.
+
+Source-Issue review: this CPU checkpoint is useful, validated **partial work**.
+It fails overall Issue #9 completeness because the remaining memory, HDD,
+video/CG, mouse and game-audio criteria above are still outstanding. These are
+implementation gaps, not a human approval or post-merge dependency. No claim is
+made that the new tests validate those missing devices. Keep Issue #9 open.

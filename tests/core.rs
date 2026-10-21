@@ -191,7 +191,7 @@ fn v30_bit_instructions_flags_and_operands() {
                         } else {
                             assert_eq!(c.flags, flags, "{context}");
                         }
-                        assert_eq!(c.ip, 0x100 + code.len() as u16, "{context}");
+                        assert_eq!(c.ip, 0x100 + code.len() as u32, "{context}");
                         assert_eq!(c.byte(CX), index, "CL: {context}");
                     }
                 }

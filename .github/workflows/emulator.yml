@@ -23,6 +23,7 @@ jobs:
       - run: python3 tools/build_media.py --check
       - run: python3 tools/prepare_freedos.py
       - run: python3 tools/prepare_dos_apps.py
+      - run: python3 tools/prepare_cpu_fixture.py
       - run: python3 tools/build_font.py --check
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings

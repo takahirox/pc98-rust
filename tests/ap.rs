@@ -250,8 +250,12 @@ fn ap_common_real_mode_flags_radix_and_v30_escape_are_distinct() {
     m.step(2);
     assert_eq!(m.cpu.r[0], 0x010f);
     assert_eq!(m.cpu.flags & 0xf000, 0);
+    m.cpu.r[4] = 0x8000;
+    m.bus.mem[6 * 4..6 * 4 + 4].copy_from_slice(&[0, 7, 0, 0]);
     m.step(1);
-    assert!(m.error.as_ref().unwrap().contains("unsupported 386/486"));
+    assert!(m.error.is_none());
+    assert_eq!(m.cpu.ip, 0x700); // #UD, not the V30 TEST1 extension.
+    assert_eq!(m.bus.read16(0x7ffa), 0x604); // Restart at 0F, not past it.
     m.reset();
     assert_eq!(m.cpu.flags, 2);
 }
