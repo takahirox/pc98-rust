@@ -97,7 +97,7 @@ this table is not a claim of complete chip emulation.
 | `41,43` | Keyboard byte FIFO, ready status, command acknowledgements, down/up scan bytes | IR1 / INT 09; firmware maintains BIOS ring, held-key bitmap and modifier state |
 | `60,62` | Master text GDC parameter/status and command/data readback | RESET, display enable, PITCH, CURS, CCHAR, PRAM start, CSRR |
 | `A0,A2` | Slave bitmap GDC command/parameter/status/readback | Same register subset; 640×400 direct VRAM path |
-| `68` | Text display enable | Fixed 80-column 25-row renderer |
+| `68` | Text display enable; graphics 200/400-line selection | Fixed 80-column 25-row text; 200-line graphics doubles rows |
 | `6A,A8,AA,AC,AE` | Digital 8-color pairs; analog index and 4-bit RGB levels when enabled | Eight palette entries only; no fourth graphics plane / 16-color board |
 | `A4,A6` | Display and CPU graphics page select | Two independent three-plane pages |
 | `7C,7E` | GRCG mode/tile writes | TDW and RMW, plane masks; no EGC |
@@ -174,6 +174,7 @@ command/result FIFO, seek, DMA and scheduler paths as guest-issued I/O.
 | INT 1B low AH=1,5,6 | Verify/read, write, read; CHRN and ES:BP/BX byte-count contract; uses controller/DMA |
 | INT 1C AH=0,2 | Fixed deterministic BCD RTC query (2026-01-01) and one-shot interval callback (see below) |
 | INT 1F | Unsupported extended memory, returns carry set |
+| Guest-registered F990h ROM entry | Graph LIO GINIT; other directory entries fail explicitly (see below) |
 
 Unknown BIOS services fail visibly except INT 1F's documented unavailable-memory
 response and disk-controller error returns. Verify currently performs an actual
@@ -215,6 +216,71 @@ creation/reset initializes all 16 bytes to zero and discards held/pending keys,
 modifiers and ring contents, consistent with the existing fresh-device reset.
 This is the emulator's initialization policy; it does not reconstruct keys
 physically held across a real hardware reboot.
+
+## Graph LIO directory and GINIT
+
+The original implementation in `src/lio.rs` follows the published interface in
+the [NEC PC-9800 Technical Databook BIOS](https://pc98.ne.jp/devdocs/pc-9800technicaldatabookbios.pdf),
+printed pp.135, 138 and 141–146 (PDF pages 151, 154 and 157–162, zero-based).
+The same scanned book is available from the [VTDA archive](https://vtda.org/docs/computing/NEC/PC-9800TechnicalDataBookBIOS%2BOCR_1992.pdf).
+Only the interface description and diagrams were used; no NEC ROM instructions,
+private work-area bytes or existing emulator implementation were used.
+
+At physical `F9900h`, a four-byte header contains entry count `11h` and three
+zero reserved bytes. Seventeen four-byte records follow: little-endian word ID
+(`00A0h` through `00AFh`, then `00CEh`) and an offset relative to segment `F990h`.
+The GINIT offset is therefore at `F990:0006`. A trailing ID-zero GRAPH BIO record
+follows at offset 72 decimal. All records have distinct executable OUT/IRET
+thunks at offsets `0100h` through `0144h`. The directory is ROM, rebuilt on reset.
+It does not install LIO vectors: DOS programs must save/register/restore them.
+The service is selected by the ROM entry reached, including when registered at
+a different interrupt number; INT A0h itself is not intercepted.
+
+GINIT takes a `1200h`-byte work area at `DS:0000`, and uses the guest's interrupt
+stack. Callers should reserve the documented approximately 128-byte stack area.
+It returns AH=00h and preserves DS, SS and SP. Both profiles support these defaults:
+
+- Color graphics, 640×200, ordinary drawing, graphics display enabled. The fixed
+  640×400 output doubles each graphics scanline; text retains its own scanlines
+  and display state. This does not change the existing fixed scan timing.
+- Active logical screen 0, display-screen selection 1, full inclusive viewport
+  `(0,0)–(639,199)`. Display selection 1 means the first logical screen in hardware
+  bank 0, not hardware display bank 1. CPU/display bank selectors become zero;
+  bitmap start is zero, pitch 40 words, BIOS mode byte `0054Dh` is `40h` (LOWER)
+  with bit 3 retaining the independently selected drawing timing.
+- Palette mode 0 (eight digital colors), identity black/blue/red/magenta/green/
+  cyan/yellow/white. The sixteen stored RGB values are initialized as in printed
+  p.143, including gray and the seven dark colors for a later analog selection.
+- Foreground 7, background 0, border 0; no charger/EGC/PEGC drawing mode. GINIT
+  initializes the view and control state; it does not perform GCLS or erase VRAM.
+
+Only common work `DS:0620h–069Fh` and command scratch `DS:1000h–11FFh` are
+initialized. The documented caller-usable gaps and external guards are preserved,
+including on repeated calls. The common bytes use an original opaque encoding:
+at `0620h`, eight bytes hold mode, display switch, active screen, display selection,
+palette mode, foreground, background and border; four little-endian words at
+`0628h` hold viewport left, top, right and bottom. Remaining common/scratch bytes
+are zero. This is an implementation detail, not an NEC-compatible private memory
+layout or a promise that applications may access LIO-owned work bytes.
+
+The supported buffer must fit completely within conventional RAM `00600h–9FFFFh`
+and not overlap the six-byte interrupt frame. Invalid buffers fail with an explicit
+`Machine.error` before GINIT changes work or display state; no undocumented AH
+error value is invented. Every other LIO entry, including GRAPH BIO, similarly
+stops with an explicit unsupported-service error. No drawing, GSCREEN, GCOPY,
+monochrome/high-resolution LIO mode, or C5h drawing callback is implemented.
+
+`guest/lioinit.asm` is the unchanged MIT Issue #24 control, source SHA-256
+`53a6da02462395a8b5a56a9be33c7ab9f2f3278a38625e87a4344724c9ad23a3`.
+`guest/liotest.asm` checks the directory, registers GINIT at INT 66h through DOS,
+checks return registers, guards/gaps, scratch, palette and page state, and repeats
+after dirtying hardware/work state. Its retained blue/red pixels distinguish the
+first logical 200-line screen and doubled rows from hidden VRAM in native and
+production-Wasm framebuffer checks. The native test observes every slot of a
+16-million-slot DOS run: exactly one reset-vector entry and three AH=00h returns.
+Browser tests run the same bounded control twice across a reset at both hosting
+paths and on both profiles. No claim of TRIANS98 initialization beyond GINIT,
+file creation, drawing, gameplay, or save/reload follows from this control.
 
 ## Accepted software and media
 

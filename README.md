@@ -148,6 +148,15 @@ budget on real Wasm at both serving paths. The probe initializes video and polls
 both `0060h` and `00A0h`; no game or ROM download is needed. See the
 [fixed display timing contract](docs/hardware.md#device-ports-and-interrupts).
 
+The same FreeDOS preparation builds `fixtures/freedos/lio.hdm` with the original
+MIT [LIO boot-loop control](guest/lioinit.asm) and [GINIT contract test](guest/liotest.asm).
+`cargo test --test lio` requires this disk. Native tests check ROM registration,
+work-area guards, palette/page defaults, repeated calls, reset and rendered pixels;
+they observe one initial reset and AH=00h returns during 16 million slots.
+Production-Wasm browser tests exercise the same DOS programs and pixels on both
+profiles and serving paths. See the [GINIT boundary](docs/hardware.md#graph-lio-directory-and-ginit);
+later LIO commands are explicitly unsupported. The disk is outside publication.
+
 The same preparation builds `fixtures/freedos/drawmode.hdm` (the exact Issue #23
 control) and `drawtest.hdm` (an original register/state/switching probe).
 `cargo test --test drawing_timing` and the browser suite execute them through

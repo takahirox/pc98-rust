@@ -7,6 +7,7 @@ pub mod egc;
 pub mod firmware;
 pub mod font;
 pub mod hdd;
+mod lio;
 pub mod mouse;
 pub mod pcm;
 pub mod profile;

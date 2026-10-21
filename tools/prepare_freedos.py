@@ -141,6 +141,19 @@ def main():
         b'AUTOEXECBAT': b'@echo off\r\nHBLANK\r\necho HBLANK PROBE RETURNED\r\n'}
     hblank = image_with_files(original[:1024], hblank_files)
     (DEST / 'hblank.hdm').write_bytes(hblank)
+    # Original LIO controls run on the same unmodified boot/kernel/shell.
+    lio_files = {**files,
+        b'LIOINIT COM': assemble('guest/lioinit.asm'),
+        b'LIOINIT ASM': (ROOT / 'guest/lioinit.asm').read_bytes(),
+        b'LIOTEST COM': assemble('guest/liotest.asm'),
+        b'LIOTEST ASM': (ROOT / 'guest/liotest.asm').read_bytes(),
+        b'RUST    LIC': (ROOT / 'LICENSE').read_bytes(),
+        b'AUTOEXECBAT': (b'@echo off\r\nPROMPT $p$g\r\nLIOINIT\r\n'
+                         b'if errorlevel 1 echo LIOINIT FAILED\r\n'
+                         b'echo PROBE SHELL RETURN\r\nLIOTEST\r\n'
+                         b'if errorlevel 1 echo LIOTEST FAILED\r\n')}
+    lio = image_with_files(original[:1024], lio_files)
+    (DEST / 'lio.hdm').write_bytes(lio)
     # Independent Issue #23 controls; preserve every established fixture byte.
     drawing_manifest = {}
     for name in ['drawmode', 'drawtest']:
@@ -171,6 +184,10 @@ def main():
             'image_sha256': hashlib.sha256(hblank).hexdigest(),
             'files': {k.decode('ascii'): hashlib.sha256(v).hexdigest() for k, v in hblank_files.items()},
         },
+        'lio': {
+            'image_sha256': hashlib.sha256(lio).hexdigest(),
+            'files': {k.decode('ascii'): hashlib.sha256(v).hexdigest() for k, v in lio_files.items()},
+        },
         'drawing_timing': drawing_manifest,
     }
     (DEST / 'manifest.json').write_text(json.dumps(manifest, indent=2)+'\n')
@@ -189,6 +206,8 @@ def main():
         'AUTOEXEC runs the Issue #25 held-key bitmap control.\n'
         'hblank.hdm adds original MIT HBLANK.COM, HBLANK.ASM and RUST.LIC;\n'
         'AUTOEXEC runs the bounded two-port horizontal-blank probe.\n'
+        'lio.hdm adds original MIT LIOINIT/LIOTEST ASM/COM and RUST.LIC;\n'
+        'AUTOEXEC runs the unchanged Issue #24 control and GINIT checks.\n'
         'drawmode.hdm and drawtest.hdm add original MIT drawing-timing controls,\n'
         'their ASM/COM and RUST.LIC; AUTOEXEC invokes them through guest DOS.\n'
         'Redistribute this entire folder with the image to preserve sources,\n'

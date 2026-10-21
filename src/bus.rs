@@ -29,6 +29,7 @@ pub struct Bus {
     pub system_c: u8,
     pub display_page: u8,
     pub cpu_page: u8,
+    pub graphics_200: bool,
     pub palette: [[u8; 3]; 16],
     pub grcg_mode: u8,
     pub egc: crate::egc::Egc,
@@ -107,6 +108,7 @@ impl Bus {
             system_c: 8,
             display_page: 0,
             cpu_page: 0,
+            graphics_200: false,
             palette,
             grcg_mode: 0,
             egc: crate::egc::Egc::default(),
@@ -126,7 +128,7 @@ impl Bus {
     }
 }
 impl Bus {
-    fn address(&self, a: usize) -> usize {
+    pub(crate) fn address(&self, a: usize) -> usize {
         if self.profile == Profile::Pc9801Vm {
             a & 0xfffff
         } else if self.a20 {
@@ -541,6 +543,9 @@ impl Bus {
             0x60 | 0xa0 => self.gdcs[usize::from(p == 0xa0)].data(v),
             0x62 | 0xa2 => self.gdcs[usize::from(p == 0xa2)].command(v),
             0x68 => {
+                if v & 0xfe == 8 {
+                    self.graphics_200 = v & 1 != 0;
+                }
                 if self.profile == Profile::Pc9821ApDos && v & 0xfe == 0x0a {
                     self.cg_dot = v & 1 != 0;
                 }
@@ -827,7 +832,8 @@ impl Bus {
                     let a = (start + y * self.gdcs[1].pitch as usize * 8 + x) & 0x7ffff;
                     color = self.graphics[a];
                 } else if graphics {
-                    let a = ((self.gdcs[1].start as usize * 2 + y * 80 + x / 8) & 0x7fff) + page;
+                    let line = if self.graphics_200 { y / 2 } else { y };
+                    let a = ((self.gdcs[1].start as usize * 2 + line * 80 + x / 8) & 0x7fff) + page;
                     let mask = 0x80 >> (x & 7);
                     for plane in 0..if self.analog {
                         self.profile.planes()
