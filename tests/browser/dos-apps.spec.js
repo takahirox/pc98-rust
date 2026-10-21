@@ -169,6 +169,20 @@ function hdiFile(image, name) {
   return Buffer.concat(chunks).subarray(0, entry.readUInt32LE(28));
 }
 
+async function exportHdd(page) {
+  // Transfer the full image as one base64 string. Serializing millions of
+  // individual numbers through Playwright can exhaust the CI timeout.
+  const encoded = await page.evaluate(() => {
+    const bytes = pc98.exportDisk(2);
+    let binary = '';
+    for (let at = 0; at < bytes.length; at += 32768) {
+      binary += String.fromCharCode(...bytes.slice(at, at + 32768));
+    }
+    return btoa(binary);
+  });
+  return Buffer.from(encoded, 'base64');
+}
+
 test('Ap IDE HDD boots DOS and ADV98; mouse reaches IRQ driver and game; export preserves DOS saves', async ({ page }) => {
   test.setTimeout(120000);
   await boot(page, 'adv98', false, 'hdi');
@@ -200,7 +214,7 @@ test('Ap IDE HDD boots DOS and ADV98; mouse reaches IRQ driver and game; export 
   await press(page, 'Enter');
   await press(page, 'Enter'); await press(page, 'ArrowRight'); await press(page, 'Enter');
   await press(page, 'Escape'); await press(page, 'Enter'); await press(page, 'Enter');
-  const saved = Buffer.from(await page.evaluate(() => pc98.exportDisk(2)));
+  const saved = await exportHdd(page);
   // A save created by the independent game's DOS I/O, absent from initial HDI.
   const save = hdiFile(saved, 'SAVE1   DAT');
   expect(save.subarray(0,8).toString()).toBe('ADV98SAV');
@@ -210,14 +224,14 @@ test('Ap IDE HDD boots DOS and ADV98; mouse reaches IRQ driver and game; export 
   await waitTitle(page);
   await press(page, 'ArrowRight'); await press(page, 'Enter'); await press(page, 'Enter');
   expect(await hash(page)).not.toBe(title);
-  expect(hdiFile(Buffer.from(await page.evaluate(() => pc98.exportDisk(2))), 'SAVE1   DAT')).toEqual(save);
+  expect(hdiFile(await exportHdd(page), 'SAVE1   DAT')).toEqual(save);
   await expect(page.locator('#error')).toBeHidden();
   // Rejected geometry must preserve the mounted disk and avoid a Wasm trap.
   const bad = Buffer.from(saved); bad.writeUInt32LE(0xffffffff, 28);
   await page.locator('#file').setInputFiles({ name: 'bad.hdi', mimeType: 'application/octet-stream', buffer: bad });
   await expect(page.locator('#error')).toContainText('invalid HDI geometry');
   await expect(page.locator('#media-name')).toHaveText('saved.hdi');
-  expect(hdiFile(Buffer.from(await page.evaluate(() => pc98.exportDisk(2))), 'SAVE1   DAT')).toEqual(save);
+  expect(hdiFile(await exportHdd(page), 'SAVE1   DAT')).toEqual(save);
 });
 
 test('Ap DOS: unchanged ADV98 starts sequenced PMD FM music into actual Web Audio', async ({ page }) => {
@@ -260,3 +274,39 @@ test('Ap DOS: independent DEBUG drives EGC, PEGC banks and a 256-color framebuff
   await expect(page.locator('#display-mode')).toContainText('256 colors');
   expect((await page.evaluate(() => pc98.stats())).error).toBe('');
 });
+
+for (const profile of ['0', '1']) {
+  test(`DOS timer callback: guest IRQ frame, IRET and one-shot flag (profile ${profile})`, async ({ page }) => {
+    // Freeze animation so the asserted maximum is the actual Wasm step budget.
+    const time = new Date('2026-01-01T00:00:00Z');
+    await page.clock.install({ time });
+    await page.clock.pauseAt(time);
+    await page.goto('./');
+    await expect(page.locator('#profile')).toBeEnabled();
+    await page.locator('#profile').selectOption(profile);
+    expect(await page.evaluate(() => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
+    const buffer = await fs.readFile(new URL('../../fixtures/freedos/timer.hdm', import.meta.url));
+    await page.locator('#file').setInputFiles({ name: 'timer.hdm', mimeType: 'application/octet-stream', buffer });
+    await until(page, async () => (await page.evaluate(() => pc98.text())).includes('TIMER CALLBACK PASS'), 160);
+    const state = await page.evaluate(() => {
+      const signature = [...'T98STATE'].map(c => c.charCodeAt(0));
+      for (let p = 0x600; p < 0x9ffe0; p++) {
+        if (signature.every((v, j) => pc98.read(p + j) === v) && pc98.read(p + 9) === 1) return p;
+      }
+      throw Error('guest did not validate the callback frame');
+    });
+    const values = await page.evaluate(p => {
+      const word = off => pc98.read(p + off) | pc98.read(p + off + 1) << 8;
+      return { fired: pc98.read(p + 8), result: pc98.read(p + 9), sp: word(10), entrySp: word(12),
+        ip: word(14), cs: word(16), flags: word(18), segment: word(20), start: word(22), end: word(24) };
+    }, state);
+    expect(values.fired).toBe(1); expect(values.result).toBe(1);
+    expect(values.entrySp).toBe(values.sp - 6);
+    expect(values.ip).toBeGreaterThanOrEqual(values.start); expect(values.ip).toBeLessThan(values.end);
+    expect(values.cs).toBe(values.segment); expect(values.flags & 0x200).toBe(0x200);
+    expect(state).toBe(values.segment * 16 + 0x300);
+    for (let i = 0; i < 10; i++) await page.evaluate(() => pc98.core.step(100000));
+    expect(await page.evaluate(p => pc98.read(p + 8), state)).toBe(1);
+    expect((await page.evaluate(() => pc98.stats())).error).toBe('');
+  });
+}

@@ -17,9 +17,12 @@ font package. `tools/build_media.py --check` reproduces these binaries offline
 using NASM and detects stale checked-in artifacts.
 
 The additional original `guest/hdd-ipl.asm`, `guest/mouse98.asm`,
-`guest/memory98.asm`, `guest/hblank.asm` and `guest/play.mml` are also MIT. Their
-generated DOS fixtures include `RUST.LIC` with the repository notice. They contain no borrowed
+`guest/memory98.asm`, `guest/timer.asm` and `guest/play.mml` are also MIT. Their generated DOS
+fixtures include `RUST.LIC` with the repository notice. They contain no borrowed
 firmware, mouse driver, sound implementation, melody or instrument sample.
+
+The original `guest/hblank.asm` status probe is also MIT and includes its source
+and `RUST.LIC` in the generated DOS fixture.
 
 ## HelloWorld-PC98
 
@@ -77,6 +80,13 @@ filesystem slack or proprietary files from the full guest distribution are copie
 The full distribution is a downloaded input only, not included in the derived
 image. The real-mode profile excludes its 286 XMS driver; it does not fake A20 or
 protected mode to install that driver.
+
+The separate `timer.hdm` uses the same pinned, unmodified boot/kernel/shell and
+configuration with the original MIT `TIMER.COM`, its `TIMER.ASM` source and
+`RUST.LIC`, replacing PROBE and starting TIMER from AUTOEXEC. Its generated
+`timer-manifest.json` records per-file and image hashes. Keep the same complete
+FreeDOS source/license folder and preparation script with this fixture; neither
+DOS fixture is part of the ten-asset Pages publication tree.
 
 The generated `manifest.json` records hashes for every selected file, the final
 image, input archives, source archives and exact source URLs. Expected minimal

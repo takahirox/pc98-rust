@@ -171,7 +171,7 @@ command/result FIFO, seek, DMA and scheduler paths as guest-issued I/O.
 | INT 18 AH=40–42 | Bitmap display on/off, 640×400 color mode |
 | INT 1B low AH=0,3,4,7,A | Reset/recalibrate, sense and read ID; unavailable drive reports carry/error |
 | INT 1B low AH=1,5,6 | Verify/read, write, read; CHRN and ES:BP/BX byte-count contract; uses controller/DMA |
-| INT 1C AH=0,2 | Fixed deterministic BCD RTC query (2026-01-01) and timer reset |
+| INT 1C AH=0,2 | Fixed deterministic BCD RTC query (2026-01-01) and one-shot interval callback (see below) |
 | INT 1F | Unsupported extended memory, returns carry set |
 
 Unknown BIOS services fail visibly except INT 1F's documented unavailable-memory
@@ -205,3 +205,34 @@ All other software remains unvalidated. In particular, an arbitrary period game
 may need missing instructions, BIOS services, Kanji, sound or graphics commands.
 The browser and headless command expose failures; no compatibility workaround
 recognizes a guest filename or substitutes host-rendered output.
+
+## BIOS interval callback (INT 1C/AH=02)
+
+The normal-mode single-event service follows the manufacturer's
+[PC-9800 BIOS databook, printed p.13](https://pc98.ne.jp/devdocs/pc-9800technicaldatabookbios.pdf)
+and the [PC-9801 programmer reference, printed p.52](https://pc98.ne.jp/devdocs/pc-9801programmersbible.pdf).
+CX specifies 10 ms units; CX=0 means 65,536 units (655.36 seconds). ES:BX is
+the guest interrupt routine. All request registers are preserved (the databook
+only guarantees registers other than AX). The callback must preserve the
+registers it uses and return with IRET, as required by the programmer reference.
+
+There is one active request. A subsequent AH=02 request replaces its interval
+and address, even if the previous expiry is waiting for interrupt delivery.
+This is the emulator's deliberate replacement contract for the single-event
+service: the references describe one interval/address and distinguish it from
+the separate high-resolution multievent services, but do not specify overlapping
+AH=02 requests. There is no queue or implicit periodic callback. A callback may
+issue AH=02 again; its previous request is disarmed before guest entry.
+
+Scheduling uses the existing 8 MHz virtual clock, with expiry at request time
+plus CX × 80,000 cycles, independent of host time and step slice size. Expiry
+latches IRQ0 and waits for IF, STI/MOV SS interrupt shadows, PIC masking and
+priority. The synthetic IRQ0 handler acknowledges the PIC and transfers to
+ES:BX with its real six-byte FLAGS/CS/IP interrupt frame. Guest instructions
+execute the handler; IRET restores the interrupted address, stack and FLAGS.
+No instruction executes early; delivery may be late while interrupts are gated.
+Reset clears both armed and expired requests. The existing PIT programming and
+periodic IRQ0 tick word at 058Ah remain available; AH=02 still clears that word.
+This is a deterministic BIOS service, not a change to PIT clock/mode fidelity.
+Guest replacements for IRQ0 must chain to the BIOS to receive this service.
+High-resolution AH=03/04/05 timer services remain unsupported.
