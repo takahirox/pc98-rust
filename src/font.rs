@@ -80,3 +80,37 @@ pub fn jis_byte(row: u8, cell: u8, byte: usize) -> u8 {
     static JIS: &[u8; 94 * 94 * 32] = include_bytes!("../fixtures/fonts/jis0208.bin");
     JIS[((row as usize - 0x21) * 94 + cell as usize - 0x21) * 32 + byte]
 }
+
+/// Ap user-character RAM: two JIS rows, 94 full-width characters per row.
+/// Kept separately from the immutable replacement font; machine reset clears it.
+pub struct UserCharacters {
+    patterns: Vec<[u8; 32]>,
+}
+impl Default for UserCharacters {
+    fn default() -> Self {
+        Self {
+            patterns: vec![[0; 32]; 188],
+        }
+    }
+}
+impl UserCharacters {
+    pub fn index(code: u16) -> Option<usize> {
+        let row = (code >> 8) as u8;
+        let cell = code as u8;
+        if (0x76..=0x77).contains(&row) && (0x21..=0x7e).contains(&cell) {
+            Some((row as usize - 0x76) * 94 + cell as usize - 0x21)
+        } else {
+            None
+        }
+    }
+    pub fn define(&mut self, code: u16, pattern: [u8; 32]) {
+        self.patterns[Self::index(code).expect("validated user-character code")] = pattern;
+    }
+    pub fn byte(&self, row: u8, cell: u8, byte: usize) -> u8 {
+        if let Some(index) = Self::index(u16::from_be_bytes([row, cell])) {
+            self.patterns[index].get(byte).copied().unwrap_or(0)
+        } else {
+            jis_byte(row, cell, byte)
+        }
+    }
+}

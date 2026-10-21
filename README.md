@@ -86,6 +86,7 @@ Japanese CG glyphs. FEP input is not implemented.
 # Fetch checksum-pinned guest binaries AND matching complete source archives.
 # This makes a minimal GPL guest disk; it downloads no emulator code.
 python3 tools/prepare_freedos.py
+python3 tools/prepare_font_fixture.py
 python3 tools/prepare_dos_apps.py
 python3 tools/prepare_cpu_fixture.py
 python3 tools/prepare_hdd_fixture.py
@@ -152,6 +153,10 @@ Each step call is capped at 100,000 scheduler slots; REP instructions perform on
 iteration per slot. Rebuild checked-in guest artifacts with
 `python3 tools/build_media.py` after editing assembly sources. The generated
 `web/core.wasm` is build output and is not committed.
+
+The original [user-character BIOS controls](docs/user-characters.md) also boot
+through this legal FreeDOS fixture and compare text/graphics pixels in native
+and browser Wasm tests.
 
 [CI](.github/workflows/emulator.yml) performs the fixture preparation, native
 checks, Wasm build and browser tests on pull requests before merge. Local test
