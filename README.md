@@ -129,6 +129,14 @@ profiles. See the [interval service contract](docs/hardware.md#bios-interval-cal
 For the independent DOS game/video/audio tests and CPULEVEL diagnostic, select
 the Ap DOS machine and insert the generated `fixtures/dos-apps/*.hdm` disks; see [instructions](docs/dos-compatibility.md).
 
+`prepare_freedos.py` also builds `fixtures/freedos/hblank.hdm` from the original
+MIT [horizontal-blank probe](guest/hblank.asm). `cargo test --test gdc` requires
+this disk and verifies `HBLANK TRANSITION PASS` through guest DOS on both profiles,
+within 16 million scheduler slots. Actual-browser tests run the same disk and
+budget on real Wasm at both serving paths. The probe initializes video and polls
+both `0060h` and `00A0h`; no game or ROM download is needed. See the
+[fixed display timing contract](docs/hardware.md#device-ports-and-interrupts).
+
 For a native/headless run of the same core:
 
 ```sh

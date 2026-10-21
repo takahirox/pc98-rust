@@ -21,6 +21,9 @@ The additional original `guest/hdd-ipl.asm`, `guest/mouse98.asm`,
 fixtures include `RUST.LIC` with the repository notice. They contain no borrowed
 firmware, mouse driver, sound implementation, melody or instrument sample.
 
+The original `guest/hblank.asm` status probe is also MIT and includes its source
+and `RUST.LIC` in the generated DOS fixture.
+
 ## HelloWorld-PC98
 
 Upstream: [TakedaHiromasa/HelloWorld-PC98](https://github.com/TakedaHiromasa/HelloWorld-PC98),
@@ -91,6 +94,15 @@ image SHA-256:
 `015faaa0dfb4c23f7a8aa4b74bbad2d460afc55c64517c5b4ea7330d4a8f8d1e`.
 This fixture has been booted through the synthetic IPL/FDC into the actual FreeDOS
 kernel and FreeCOM, then used to execute PROBE.COM through DOS.
+
+The same preparation command also creates `fixtures/freedos/hblank.hdm`, a
+separate test disk whose AUTOEXEC runs the original `guest/hblank.asm` control.
+It retains the minimal disk's files and adds `HBLANK.COM`, its complete
+`HBLANK.ASM` source and `RUST.LIC` (MIT). The generated manifest's `hblank` entry
+records its image and per-file hashes. Keep this entire FreeDOS output directory
+with its matching GPL sources/notices if redistributing either disk. This control
+contains no MARKADIA, music driver, game data or proprietary firmware; it is not
+included in the web publication tree.
 
 The script writes the full matching `kernel-source.tar.gz` and
 `freecom-source.tar.gz`, original distribution documentation, `COPYING`, the
