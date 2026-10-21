@@ -4,7 +4,7 @@ const BASE = 0x21400;
 async function ready(page) {
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
-  await page.goto('/');
+  await page.goto('./');
   await expect(page.locator('#game')).toBeEnabled();
   expect(await page.evaluate(() => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
   return errors;
@@ -89,7 +89,7 @@ test('floppy validation, second drive, eject, and virtual PC-98 keyboard', async
 
 test('missing or broken Wasm fails visibly and cannot masquerade as a working demo',async({page})=>{
   await page.route('**/core.wasm',route=>route.fulfill({status:404,body:'missing'}));
-  await page.goto('/');await expect(page.locator('#error')).toContainText('Missing Wasm bundle');
+  await page.goto('./');await expect(page.locator('#error')).toContainText('Missing Wasm bundle');
   await expect(page.locator('#game')).toBeDisabled();expect(await page.evaluate(()=>window.pc98)).toBeUndefined();
   await page.route('**/core.wasm',route=>route.fulfill({status:200,body:'this is not WebAssembly'}));
   await page.reload();await expect(page.locator('#status')).toHaveText('Unable to start');await expect(page.locator('#game')).toBeDisabled();

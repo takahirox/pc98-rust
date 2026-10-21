@@ -7,6 +7,10 @@ The browser displays the Rust framebuffer and plays the core's clocked PCM.
 There are no emulation dependencies, proprietary ROMs, font dumps, or server-side
 execution.
 
+The anticipated public demo is <https://takahirox.github.io/pc98-rust/> once the
+GitHub Pages deployment succeeds. **Publication is currently unverified**; the
+pre-merge checks below do not establish that the public URL works.
+
 The experimental profile targets a **PC-9801VM with 640 KiB RAM, V30 real mode,
 640×400 display and three graphics planes**. Compatibility is the subset exercised
 by the included guests and the pinned FreeDOS(98) smoke test. This is not a general
@@ -67,11 +71,20 @@ cargo test --locked
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 
-# Build real Wasm, serve the shipped app, and run Chromium acceptance tests.
+# Build/check the publication tree and run Chromium at / and /pc98-rust/.
 npm ci
 npx playwright install chromium
 npm test
 ```
+
+`npm run build` checks reproducible media, compiles the real Rust/Wasm core and
+runs `npm run check:site`. The latter verifies a nonempty, compilable Wasm module
+with the emulator exports and an exact list of the nine distributable assets,
+including both approved disks and MIT notices. Unexpected files, directories or
+symlinks fail the check. `npm test` runs the same browser acceptance suite at the
+local root and at a simulated Pages project subpath whose root asset URLs fail.
+To repeat just the project-path browser checks after building, run
+`npx playwright test --project=pages`.
 
 `cargo test --test dos` deliberately fails if the legal guest fixture is missing;
 it is never silently skipped. The fixture downloads require network access once.
@@ -102,9 +115,68 @@ iteration per slot. Rebuild checked-in guest artifacts with
 checks, Wasm build and browser tests on pull requests before merge. Local test
 coverage and execution evidence are in [validation](docs/validation.md). No
 published site, post-merge deployment, human playtest or original hardware is
-required. No FM/OPNA, EGC, protected mode, HDD/SCSI, NEC BASIC or Kanji font is
-claimed. Unsupported CPU/BIOS operations report errors; unmapped ports return an
-open bus and are recorded for headless diagnostics.
+required for pre-merge acceptance. No FM/OPNA, EGC, protected mode, HDD/SCSI, NEC
+BASIC or Kanji font is claimed. Unsupported CPU/BIOS operations report errors;
+unmapped ports return an open bus and are recorded for headless diagnostics.
+
+## GitHub Pages deployment
+
+[`.github/workflows/pages.yml`](.github/workflows/pages.yml) rebuilds and deploys
+on **every push to `main`**, including merges. It also supports manual reruns via
+Actions → GitHub Pages → Run workflow on `main`; dispatches from other branches
+are skipped. Pull requests run the build, packaging check and browser tests in
+the existing [acceptance workflow](.github/workflows/emulator.yml), with no public
+deployment or Pages write permission.
+
+The Pages build installs the Wasm target and NASM, runs `npm ci` and
+`npm run build`, then uploads **only `web/`** with the official
+`actions/upload-pages-artifact` action. `actions/configure-pages` and
+`actions/deploy-pages` publish that artifact in a separate job with Pages write
+and OIDC permissions. The `github-pages` environment records the output URL;
+deployments are serialized and have no manual reviewer gate. Generated
+`web/core.wasm` stays gitignored. No generated branch, backend, proprietary ROM,
+emulator library, `target/` or `fixtures/freedos/` is published. The two cleared
+demo disks and their license notices are included; optional GPL test fixtures
+remain outside the distributable. HTML, script, styles, Wasm and media references
+are relative, so local serving and `/pc98-rust/` use the same files.
+
+The repository setting must be **Settings → Pages → Build and deployment →
+Source: GitHub Actions** (`build_type: workflow` in the API). This initial setup
+was applied for Issue #5; see the [configuration and validation record](docs/pages-validation.md).
+The `github-pages` environment permits `main` with no required reviewers. If the
+site is disabled later, an authenticated administrator can restore the Actions
+source through Settings or the [Pages REST API](https://docs.github.com/en/rest/pages/pages):
+
+```sh
+gh api repos/takahirox/pc98-rust/pages --jq '{build_type,html_url,status}'
+# Only when the site is disabled (GET returns 404):
+gh api --method POST repos/takahirox/pc98-rust/pages -f build_type=workflow
+# For an existing site that uses branch publishing instead:
+gh api --method PUT repos/takahirox/pc98-rust/pages -f build_type=workflow
+```
+
+The default Actions `GITHUB_TOKEN` cannot always enable a disabled site.
+`configure-pages` therefore does not request automatic enablement; that option
+requires additional repository administration/Pages privileges. Keep all admin
+credentials outside code, logs and the repository. If setup is denied, record the
+API status and missing permissions and use the exact Actions-source setting above
+as operational follow-up; it is not a human approval or pre-merge gate.
+
+For failures, inspect the GitHub Pages workflow's failed step. Reproduce a build
+or packaging failure with `npm ci && npm run build`; install NASM and the Wasm
+target as described above. Reproduce runtime/path issues with `npm test`.
+Missing `core.wasm` or a stale disk must be fixed by rebuilding, not by committing
+generated Wasm. For configure/deploy errors, confirm `build_type: workflow`, the
+job's Pages/OIDC permissions and that the environment allows `main` without
+required reviewers. A successful local build does not prove publication.
+
+**Required post-merge operational follow-up for Issue #5 (pending):** check that
+the merge's `main` push starts the Pages workflow, inspect its result and verify
+the public project URL loads real Wasm, Star Trail and keyboard/audio behavior.
+If deployment, source enablement, HTTP access or runtime behavior fails, create a
+new `task`-labeled Issue with the run URL, error and reproduction and address it
+independently. This follow-up does not block review approval, Issue closure or
+merge. Until it is performed successfully, report publication as unverified.
 
 ## Attribution and contributing
 
