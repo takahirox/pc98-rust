@@ -197,6 +197,54 @@ fn unsupported_entries_invalid_work_and_spoofed_traps_fail_explicitly() {
 }
 
 #[test]
+fn ginit_checks_interrupt_frame_aliases_with_profile_and_a20_mapping() {
+    for profile in PROFILES {
+        for a20 in [false, true] {
+            // The review reproduction, plus frames straddling each work-area
+            // boundary so that even a single overlapping byte is rejected.
+            for sp in [0x0c36u16, 0x0611, 0x1815] {
+                let mut m = Machine::new(profile);
+                m.bus.a20 = a20;
+                m.bus.mem[0x600..0x1800].fill(0xa5);
+                let off = m.bus.read16(0xf9906);
+                m.bus.write_seg(0, 0xa0 * 4, off, true);
+                m.bus.write_seg(0, 0xa0 * 4 + 2, 0xf990, true);
+                m.bus.mem[0x100..0x103].copy_from_slice(&[0xcd, 0xa0, 0xf4]);
+                m.cpu.s = [0, 0, 0xffff, 0x0060];
+                m.cpu.r[SP] = sp;
+                m.cpu.flags = DF | CF | 2;
+                m.cpu.ip = 0x100;
+                m.cpu.halted = false;
+                m.step(1); // Save the real interrupt frame before GINIT.
+                assert!(m.error.is_none(), "{:?}", m.error);
+                assert_eq!((m.cpu.s[CS], m.cpu.ip), (0xf990, u32::from(off)));
+                let memory = m.bus.mem.clone();
+                let palette = m.bus.palette;
+                m.step(2); // ROM OUT, then IRET if the stack is disjoint.
+                if profile == Profile::Pc9821ApDos && a20 {
+                    assert!(m.error.is_none(), "{:?}", m.error);
+                    assert_eq!((m.cpu.s[CS], m.cpu.ip), (0, 0x102));
+                    assert_eq!((m.cpu.s[DS], m.cpu.s[SS], m.cpu.r[SP]), (0x60, 0xffff, sp));
+                    assert_eq!(m.cpu.byte(4), 0);
+                    assert_eq!(m.cpu.flags & (DF | CF), DF | CF);
+                    assert!(m.bus.graphics_200);
+                } else {
+                    assert!(m
+                        .error
+                        .as_ref()
+                        .unwrap()
+                        .contains("unsupported GINIT work area"));
+                    assert_eq!(m.bus.mem, memory, "rejected GINIT mutated memory or frame");
+                    assert_eq!(m.bus.palette, palette);
+                    assert!(!m.bus.graphics_200);
+                    assert_eq!(m.cpu.r[SP], sp.wrapping_sub(6));
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn original_controls_return_through_real_dos_without_a_second_reset() {
     let image = std::fs::read(concat!(
         env!("CARGO_MANIFEST_DIR"),

@@ -41,7 +41,8 @@ pub(crate) fn service(c: &mut Cpu, b: &mut Bus) -> Result<(), String> {
     let work = usize::from(c.s[DS]) * 16;
     // Do not wrap into the IVT, video memory or ROM. Validate before mutations.
     let overlaps_frame = (0..6).any(|i| {
-        let a = usize::from(c.s[SS]) * 16 + usize::from(c.r[SP].wrapping_add(i));
+        // Match stack accesses, including segment-offset and profile/A20 wrap.
+        let a = b.address(Cpu::phys(c.s[SS], c.r[SP].wrapping_add(i)));
         (work..work + 0x1200).contains(&a)
     });
     if work < 0x600 || work + 0x1200 > 0xa0000 || overlaps_frame {

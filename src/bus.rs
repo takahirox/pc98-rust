@@ -128,7 +128,7 @@ impl Bus {
     }
 }
 impl Bus {
-    fn address(&self, a: usize) -> usize {
+    pub(crate) fn address(&self, a: usize) -> usize {
         if self.profile == Profile::Pc9801Vm {
             a & 0xfffff
         } else if self.a20 {
