@@ -114,9 +114,35 @@ I/O transfers, formatter/scanner commands, GDC vector/area drawing and all GDC
 raster partitions are outside the tested subset. Unsupported FDC commands return
 an invalid-command result. No pretend FM register bank is implemented.
 
-GDC status derives vertical blank from elapsed guest cycles and reports actual
-readback FIFO availability; there is no horizontal scan simulation. The renderer
-composites planar graphics with text attributes (visible, reverse, underline and
+GDC status at `0060h` and `00A0h` now reports horizontal blank (bit 6) from
+elapsed guest clocks. The supported fixed 640×400 modes approximate horizontal
+display timing at the existing 8 MHz scheduler clock:
+
+| Profile | Line period | Active interval | Horizontal blank interval |
+| --- | --- | --- | --- |
+| VM, approximately 24 kHz class | 320 clocks (40 µs, 25 kHz) | Phases 0–255 (32 µs) | Phases 256–319 (8 µs, 20%) |
+| Ap, approximately 31 kHz class | 256 clocks (32 µs, 31.25 kHz) | Phases 0–199 (25 µs) | Phases 200–255 (7 µs, 21.875%) |
+
+Phase is `bus.cycles % line_period`; it starts at zero (bit 6 clear) on machine
+creation/reset and advances even without port reads or with display disabled.
+Text and bitmap GDCs share this phase. Firmware mode initialization, BIOS display
+commands, GDC RESET/START/STOP, and PITCH do not restart it. SYNC/RESET timing
+parameters, porch subdivision, monitor-frequency switching, zoom and interlace
+are not modeled. These fixed intervals are deliberate integer-clock approximations,
+not exact physical VM/Ap frequencies or programmable uPD7220 timing. They apply to
+both existing Ap planar and packed-pixel display paths; no new PEGC mode is added.
+
+The [PC-98 display-port definitions](https://www.webtech.co.jp/company/doc/undocumented_mem/io_disp.txt)
+identify bit 6 at both ports and the master/slave display synchronization. The
+[NEC uPD7220 Design Manual, chapter 6](https://ftpmirror.your.org/pub/misc/bitsavers/components/nec/uPD72220_GDC_Design_Manual_Version_3.pdf)
+describes the active interval and blanked front porch, sync and back porch that
+motivate this approximation. The model uses no guest identity or port-read count.
+
+Existing status semantics are preserved: bit 5 is set when
+`bus.cycles % 133333 > 125000`, bit 2 stays set, and bit 0 reflects the selected
+GDC's actual readback FIFO. Vertical status and IRQ timing retain their independent
+approximation; horizontal and vertical phases are not a complete physical raster.
+The renderer composites planar graphics with text attributes (visible, reverse, underline and
 color), cursor and GDC display start. Text scrolling also works through guest RAM
 copies, as used by FreeDOS. Glyphs are newly drawn 5×7 Latin shapes expanded into
 8×16 cells; lowercase uses uppercase shapes and unknown glyphs use a question box.

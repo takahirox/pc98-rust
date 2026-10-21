@@ -1,5 +1,65 @@
 # Validation evidence
 
+## Issue #15 horizontal-blank validation (2026-10-21)
+
+The fixed horizontal timing contract is in [hardware.md](hardware.md#device-ports-and-interrupts).
+Bit 6 follows the same elapsed 8 MHz guest clock as other devices, with a shared
+phase for text and bitmap GDCs. Status reads add no time or state. The supported
+VM/Ap approximations do not change FIFO or vertical-sync behavior, scheduling,
+rendering, or programmable display-mode support.
+
+The following checks passed in the assigned macOS arm64 worktree:
+
+| Command | Result |
+| --- | --- |
+| `python3 tools/prepare_freedos.py` | Pinned GPL inputs and matching complete sources/notices verified; minimal image hash unchanged; original HBLANK probe disk built |
+| `python3 tools/prepare_dos_apps.py` | Passed; baseline application fixtures unchanged |
+| `python3 tools/prepare_cpu_fixture.py` | Passed |
+| `python3 tools/prepare_hdd_fixture.py` | Passed |
+| `python3 tools/prepare_music_fixture.py` | Passed |
+| `python3 tools/prepare_device_fixture.py` | Passed |
+| `cargo test --locked --test gdc` | All 5 new tests passed, including the DOS guest on VM and Ap |
+| `cargo test --locked` | All 69 integration tests passed; no ignored tests |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `cargo fmt --check` | Passed after fixing a new test comment's formatting |
+| `cargo tree` | Only pc98-rust; no Rust dependencies |
+| `npm ci` | Passed; unchanged development dependencies |
+| `npx playwright install chromium` | Passed |
+| `npm test -- --config <temporary-port-config>` | Passed: reproducible media/font checks, release Wasm build, publication audit, all 28 actual Chromium/Wasm tests (43.3 seconds) |
+| `git diff --check` | Passed |
+
+The first plain `npm test` built Wasm and passed the exact ten-asset publication
+audit, then stopped because existing listeners occupied ports 8000/8001. The
+successful rerun used a temporary config outside the worktree, importing the
+repository config and changing only server ports/base URLs to 18000/18001, with
+the same project-path server logic. Tests still ran at `/` and `/pc98-rust/`,
+with root asset URLs unavailable in the project-path server. Existing listeners
+were left running. No permanent configuration change was needed; the standard
+README commands remain the reproduction path when default ports are free.
+
+The new native coverage samples every clock across eight horizontal periods per
+profile, checks exact period/duty and both status ports, advances time without
+reads, repeats reads with no elapsed time, compares chunked elapsed time, checks
+FIFO readback and both vertical boundaries over two frames, and verifies reset
+and fixed-mode command behavior. The existing suites cover scheduler/REP bounds,
+VM boot/input, Ap planar video, packed-pixel PEGC, audio and persistence.
+
+`guest/hblank.asm` is an original MIT DOS program based on the Issue #13 control.
+It initializes the supported video mode, observes four set/clear pairs per port,
+and prints `TEXT GDC 0060 PASS`, `BITMAP GDC 00A0 PASS`, and
+`HBLANK TRANSITION PASS`. Each poll phase is bounded at 65535 reads. Both native
+and browser tests execute it via real FreeDOS/FreeCOM, require successful output
+and return to the shell within 16 million scheduler slots per profile, and reject
+`TIMEOUT`. The four new browser cases cover VM and Ap at each serving path.
+
+Prepared HBLANK disk SHA-256:
+`49931254f45f276fd5280d9fd8a9bd82a548535c4707b2abece117c0dee0c7da`.
+Release Wasm: 438021 bytes; generated binaries remain ignored and the probe disk
+is excluded from publication. No MARKADIA download or optional game playability
+recheck was performed. This verifies the independent status wait, not MARKADIA's
+opening, audio or keyboard progression. No push, PR, merge, GitHub comment,
+live deployment or post-merge verification was performed or required for #15.
+
 ## Issue #11 device validation (2026-10-21)
 
 The following commands passed in the assigned macOS arm64 worktree. Native Rust
