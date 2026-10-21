@@ -49,8 +49,8 @@ addresses wrap at 20 bits; segment offsets and register/stack operations wrap at
 
 ## CPU and scheduler
 
-`src/cpu.rs` implements 8/16-bit registers, segment overrides, all 8086 ModR/M
-effective-address combinations, ALU and flag logic, decimal adjustment,
+For the default VM profile, `src/cpu.rs` implements 8/16-bit registers, segment
+overrides, all 8086 ModR/M effective-address combinations, ALU and flag logic, decimal adjustment,
 multiply/divide, shifts/rotates, stack, near/far call/jump/return, conditionals,
 string operations and REP/REPE/REPNE, interrupt entry/IRET, byte/word IN/OUT,
 CLI/STI/HLT. Immediate push, PUSHA/POPA, ENTER/LEAVE and immediate shifts implement
@@ -62,7 +62,13 @@ and [NEC V-Series data book](https://bitsavers.org/components/nec/_dataBooks/199
 Unimplemented opcodes fail with CS:IP and opcode information. V30 8080 emulation
 mode, packed BCD string extensions, bit-field extensions, coprocessor/ESC, BOUND,
 TF single-step traps, NMI, undocumented opcodes and later x86 extensions are not
-implemented. LOCK has no bus-contention effect in this single-CPU machine.
+implemented in VM. LOCK has no bus-contention effect in this single-CPU machine.
+
+The selectable Ap profile extends this same decoder with 32-bit operands and
+addresses, SIB, FS/GS and selected 386/486 real-mode integer instructions. It checks
+64 KiB segment limits and delivers guest exceptions; it does not provide protected
+mode, DPMI or an FPU. See the [exact Ap CPU coverage and independent DOS diagnostic](dos-compatibility.md#issue-9-cpu-coverage-and-independent-guest-evidence).
+VM retains the V30 behavior described above.
 
 An instruction or one REP element consumes one 8-clock scheduling slot. This is a
 deterministic work/cycle model, **not instruction-cycle accuracy**. Firmware FDC

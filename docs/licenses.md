@@ -123,3 +123,22 @@ fallback is the entirely original MIT Star Trail guest.
 No NEC BIOS/font, commercial DOS, period commercial game, third-party sample
 artwork or unclear-rights freeware is bundled. Users can insert their own legally
 obtained supported floppy images.
+
+## CPULEVEL: independent public-domain DOS diagnostic
+
+[Eric Auer's CPULEVEL archive](https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/util/system/cpulevel/cpulevel2007.zip)
+contains `cpulevel.asm` and its released compressed COM. The source's first line
+explicitly donates the tool to the public domain. The author asks that source
+accompany the binary because it contains the documentation. The
+[per-file manifest](../fixtures/cpu-manifest.json) pins the archive, original
+source, original COM, uncompressed COM assembled from unmodified source, and all
+files of the generated `cpu386.hdm` disk. The original downloaded ZIP is retained
+beside the disk; `CPULEVEL.ASM` is also included inside the disk. No emulator or
+chip implementation is fetched. The COM is a guest CPU diagnostic executed through
+the real FreeDOS kernel/shell, not linked into the host.
+
+Run `python3 tools/prepare_cpu_fixture.py` after the existing FreeDOS setup. Keep
+its archive/source and the entire `fixtures/freedos` output, including complete
+GPL DOS sources and notices, when redistributing this optional disk. The generated
+batch/configuration and preparation script are original MIT files. CPULEVEL and
+its disk remain outside `web/` and the unchanged Pages asset allowlist.

@@ -114,3 +114,18 @@ test('Ap DOS: independent video player writes color planes and returns to FreeCO
   expect([...seen].some(s => s.split(',').includes('119'))).toBe(true);
   expect((await page.evaluate(() => pc98.stats())).error).toBe('');
 });
+
+test('Ap DOS: independent CPULEVEL executes 386 operands and verifies 486 EFLAGS', async ({ page }) => {
+  await boot(page, 'cpu386');
+  await until(page, async () => (await page.evaluate(() => pc98.text())).includes('CPULEVEL 486 VERIFIED'));
+  const stats = await page.evaluate(() => pc98.stats());
+  const text = await page.evaluate(() => pc98.text());
+  expect(text).toContain('i486 or compatible');
+  expect(text).toContain('CPUID support check negative');
+  expect(stats.reads).toBeGreaterThan(10);
+  expect(await page.evaluate(() => pc98.core.metric(8))).toBeGreaterThanOrEqual(26);
+  // Reset must clear upper registers/flags and diagnostic counters in the core.
+  await page.evaluate(() => pc98.core.reset());
+  expect(await page.evaluate(() => pc98.core.metric(8))).toBe(0);
+  await until(page, async () => (await page.evaluate(() => pc98.text())).includes('CPULEVEL 486 VERIFIED'));
+});

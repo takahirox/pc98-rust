@@ -191,6 +191,7 @@ mod wasm {
                 4 => u8::from(m.error.is_some()) as f64,
                 6 => m.bus.opn.writes as f64,
                 7 => m.bus.opn.key_edges as f64,
+                8 => m.cpu.extended_retired as f64,
                 _ => m.bus.cycles as f64,
             }
         })
