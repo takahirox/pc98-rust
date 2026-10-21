@@ -7,8 +7,8 @@ assignee after checking existing Issues for duplicates:
 [#16](https://github.com/takahirox/pc98-rust/issues/16).
 The sections below preserve their problem, scope and acceptance; each posted
 Issue also includes its relevant original probe and standalone local preparation
-instructions. The GitWeave node prohibits comments, so the final comment on #13
-remains unposted. See the [investigation report](compatibility-investigation-13.md)
+instructions. The [final research comment on #13](https://github.com/takahirox/pc98-rust/issues/13#issuecomment-6309507515)
+is posted. See the [investigation report](compatibility-investigation-13.md)
 for baseline, acquisition terms, exact hashes, matrix and limitations.
 
 Each problem below was observed in a period game and independently reproduced

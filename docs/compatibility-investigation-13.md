@@ -17,10 +17,10 @@ were registered as English `task` Issues with no assignee:
 Existing Issues #1/#3/#5/#7/#9/#11/#13 were checked through GitHub before
 registration; no separate tickets for these defects were found.
 
-The node instruction prohibits posting comments. Consequently, **the final
-research comment on #13 was not posted**. That external completion criterion
-remains pending; this checkpoint must not close #13. A proposed comment appears
-below. No PR, push, merge, CI upload, or deployment was performed.
+The [final research comment on #13](https://github.com/takahirox/pc98-rust/issues/13#issuecomment-6309507515)
+summarizes the matrix, verified follow-ups, skipped candidates and publication
+audit. The research documents are submitted for review; no merge, game-media CI
+upload, or deployment was performed.
 
 ## Environment and isolation
 
@@ -225,7 +225,7 @@ is in the commit/publication tree. The three new GitHub Issues contain only
 original-written diagnostics, public provenance links and original probe source;
 no external media or raw captures were published.
 
-## Proposed final research comment (not posted)
+## Final research summary
 
 Locally exercised six new period PC-98 DOS games on the post-PR #12 Ap profile:
 Samurai Shoujoden 1.10, Circuit Angel 1.01a, Dengeki Butouki TURBO 1.56a,
