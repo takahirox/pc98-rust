@@ -33,6 +33,13 @@ reference databook is included in `web/`. The F990h directory and Rust GINIT
 service are independently written from the published interface; no NEC code,
 game assets or emulator implementation is copied or downloaded for these tests.
 
+The original Issue #23 `guest/drawmode.asm` and `guest/drawtest.asm` controls are
+also MIT. Their separate FreeDOS images contain the ASM source, assembled COM
+and `RUST.LIC`; the generated manifest's `drawing_timing` entry records all file
+and image hashes. Keep the complete FreeDOS output folder, its matching GPL
+sources/notices and the preparation script when redistributing these images.
+They contain no PIPOO data, proprietary ROM or font and remain outside `web/`.
+
 ## HelloWorld-PC98
 
 Upstream: [TakedaHiromasa/HelloWorld-PC98](https://github.com/TakedaHiromasa/HelloWorld-PC98),

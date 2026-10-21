@@ -144,6 +144,23 @@ def main():
                          b'if errorlevel 1 echo LIOTEST FAILED\r\n')}
     lio = image_with_files(original[:1024], lio_files)
     (DEST / 'lio.hdm').write_bytes(lio)
+    # Independent Issue #23 controls; preserve every established fixture byte.
+    drawing_manifest = {}
+    for name in ['drawmode', 'drawtest']:
+        source = ROOT / 'guest' / (name + '.asm')
+        drawing_files = {**files,
+            (name.upper().ljust(8) + 'COM').encode(): assemble('guest/' + name + '.asm'),
+            (name.upper().ljust(8) + 'ASM').encode(): source.read_bytes(),
+            b'RUST    LIC': (ROOT / 'LICENSE').read_bytes(),
+            b'AUTOEXECBAT': (f'@echo off\r\nPROMPT $p$g\r\n{name}\r\n'
+                             'echo PROBE SHELL RETURN\r\n').encode()}
+        drawing_image = image_with_files(original[:1024], drawing_files)
+        (DEST / (name + '.hdm')).write_bytes(drawing_image)
+        drawing_manifest[name] = {
+            'image_sha256': hashlib.sha256(drawing_image).hexdigest(),
+            'files': {k.decode('ascii'): hashlib.sha256(v).hexdigest()
+                      for k, v in drawing_files.items()},
+        }
     manifest = {
         'license': 'GPL-2.0-or-later (boot, kernel, FreeCOM); MIT (PROBE.COM)',
         'image_sha256': hashlib.sha256(image).hexdigest(),
@@ -157,6 +174,7 @@ def main():
             'image_sha256': hashlib.sha256(lio).hexdigest(),
             'files': {k.decode('ascii'): hashlib.sha256(v).hexdigest() for k, v in lio_files.items()},
         },
+        'drawing_timing': drawing_manifest,
     }
     (DEST / 'manifest.json').write_text(json.dumps(manifest, indent=2)+'\n')
     (DEST / 'README.txt').write_text(
@@ -174,6 +192,8 @@ def main():
         'AUTOEXEC runs the bounded two-port horizontal-blank probe.\n'
         'lio.hdm adds original MIT LIOINIT/LIOTEST ASM/COM and RUST.LIC;\n'
         'AUTOEXEC runs the unchanged Issue #24 control and GINIT checks.\n'
+        'drawmode.hdm and drawtest.hdm add original MIT drawing-timing controls,\n'
+        'their ASM/COM and RUST.LIC; AUTOEXEC invokes them through guest DOS.\n'
         'Redistribute this entire folder with the image to preserve sources,\n'
         'licenses, original notices and upstream distribution documentation.\n')
     # Verify source archives are valid without extracting paths from downloads.

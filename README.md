@@ -147,6 +147,12 @@ Production-Wasm browser tests exercise the same DOS programs and pixels on both
 profiles and serving paths. See the [GINIT boundary](docs/hardware.md#graph-lio-directory-and-ginit);
 later LIO commands are explicitly unsupported. The disk is outside publication.
 
+The same preparation builds `fixtures/freedos/drawmode.hdm` (the exact Issue #23
+control) and `drawtest.hdm` (an original register/state/switching probe).
+`cargo test --test drawing_timing` and the browser suite execute them through
+FreeDOS on Ap, including return to the shell and reset. See the
+[drawing timing contract and limits](docs/hardware.md#bios-drawing-timing-int-18ah4a).
+
 For a native/headless run of the same core:
 
 ```sh
