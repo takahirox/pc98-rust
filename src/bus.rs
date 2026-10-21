@@ -42,6 +42,7 @@ pub struct Bus {
     pub text_enabled: bool,
     pub unknown_ports: std::collections::BTreeSet<u16>,
     pub firmware_request: bool,
+    pub(crate) interval: Option<crate::firmware::IntervalTimer>,
 }
 impl Default for Bus {
     fn default() -> Self {
@@ -118,6 +119,7 @@ impl Bus {
             text_enabled: true,
             unknown_ports: Default::default(),
             firmware_request: false,
+            interval: None,
         }
     }
 }
@@ -262,7 +264,17 @@ impl Bus {
     }
     pub fn tick(&mut self, cycles: u32) {
         let old_frame = self.cycles / 133_333;
+        let old_cycles = self.cycles;
         self.cycles += cycles as u64;
+        if self
+            .interval
+            .as_ref()
+            .is_some_and(|t| old_cycles < t.deadline && self.cycles >= t.deadline)
+        {
+            // Latch one IRQ, including while IF is clear or IRQ0 is masked.
+            // Delivery shares normal PIC priority, EOI and CPU IRQ shadows.
+            self.pics[0].request(0);
+        }
         if self.mouse.tick(cycles) {
             self.pics[1].request(5);
         }

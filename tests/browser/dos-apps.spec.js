@@ -260,3 +260,39 @@ test('Ap DOS: independent DEBUG drives EGC, PEGC banks and a 256-color framebuff
   await expect(page.locator('#display-mode')).toContainText('256 colors');
   expect((await page.evaluate(() => pc98.stats())).error).toBe('');
 });
+
+for (const profile of ['0', '1']) {
+  test(`DOS timer callback: guest IRQ frame, IRET and one-shot flag (profile ${profile})`, async ({ page }) => {
+    // Freeze animation so the asserted maximum is the actual Wasm step budget.
+    const time = new Date('2026-01-01T00:00:00Z');
+    await page.clock.install({ time });
+    await page.clock.pauseAt(time);
+    await page.goto('./');
+    await expect(page.locator('#profile')).toBeEnabled();
+    await page.locator('#profile').selectOption(profile);
+    expect(await page.evaluate(() => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
+    const buffer = await fs.readFile(new URL('../../fixtures/freedos/timer.hdm', import.meta.url));
+    await page.locator('#file').setInputFiles({ name: 'timer.hdm', mimeType: 'application/octet-stream', buffer });
+    await until(page, async () => (await page.evaluate(() => pc98.text())).includes('TIMER CALLBACK PASS'), 160);
+    const state = await page.evaluate(() => {
+      const signature = [...'T98STATE'].map(c => c.charCodeAt(0));
+      for (let p = 0x600; p < 0x9ffe0; p++) {
+        if (signature.every((v, j) => pc98.read(p + j) === v) && pc98.read(p + 9) === 1) return p;
+      }
+      throw Error('guest did not validate the callback frame');
+    });
+    const values = await page.evaluate(p => {
+      const word = off => pc98.read(p + off) | pc98.read(p + off + 1) << 8;
+      return { fired: pc98.read(p + 8), result: pc98.read(p + 9), sp: word(10), entrySp: word(12),
+        ip: word(14), cs: word(16), flags: word(18), segment: word(20), start: word(22), end: word(24) };
+    }, state);
+    expect(values.fired).toBe(1); expect(values.result).toBe(1);
+    expect(values.entrySp).toBe(values.sp - 6);
+    expect(values.ip).toBeGreaterThanOrEqual(values.start); expect(values.ip).toBeLessThan(values.end);
+    expect(values.cs).toBe(values.segment); expect(values.flags & 0x200).toBe(0x200);
+    expect(state).toBe(values.segment * 16 + 0x300);
+    for (let i = 0; i < 10; i++) await page.evaluate(() => pc98.core.step(100000));
+    expect(await page.evaluate(p => pc98.read(p + 8), state)).toBe(1);
+    expect((await page.evaluate(() => pc98.stats())).error).toBe('');
+  });
+}
