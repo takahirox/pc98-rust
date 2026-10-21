@@ -1,6 +1,12 @@
 //! Newly written synthetic firmware services behind executable ROM thunks.
 //! INT 21h is deliberately not implemented: DOS must execute its own kernel.
 use crate::{bus::Bus, cpu::*};
+/// INT 1C/02 has one interval and one ES:BX target, not an event queue.
+pub(crate) struct IntervalTimer {
+    pub deadline: u64,
+    pub segment: u16,
+    pub offset: u16,
+}
 pub fn initialize(b: &mut Bus) {
     let rom = include_bytes!("../guest/firmware.bin");
     b.mem[0xf0000..0xf0000 + rom.len()].copy_from_slice(rom);
@@ -136,6 +142,14 @@ pub fn service(c: &mut Cpu, b: &mut Bus) -> Result<(), String> {
             let ticks = b.read16(0x58a).wrapping_add(1);
             b.write_seg(0, 0x58a, ticks, true);
             b.output(0, 0x20);
+            if b.interval.as_ref().is_some_and(|t| b.cycles >= t.deadline) {
+                let timer = b.interval.take().unwrap();
+                // IRQ0 already pushed FLAGS, CS, IP and cleared IF/TF. Hand
+                // that frame to the guest; its IRET resumes interrupted code.
+                // Disarm before entry so the handler may rearm the service.
+                c.s[CS] = timer.segment;
+                c.ip = timer.offset as u32;
+            }
         }
         9 => {
             b.keyboard.service();
@@ -360,6 +374,12 @@ pub fn service(c: &mut Cpu, b: &mut Bus) -> Result<(), String> {
                 }
                 2 => {
                     b.write_seg(0, 0x58a, 0, true);
+                    let count = if c.r[CX] == 0 { 65_536 } else { c.r[CX] as u64 };
+                    b.interval = Some(IntervalTimer {
+                        deadline: b.cycles + count * 80_000, // 10 ms at 8 MHz
+                        segment: c.s[ES],
+                        offset: c.r[BX],
+                    });
                 }
                 _ => return Err(format!("unsupported BIOS INT 1C AH={ah:02x}")),
             }
