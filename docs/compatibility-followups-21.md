@@ -1,15 +1,19 @@
-# Verified follow-up drafts — Issue #21
+# Verified follow-up Issues — Issue #21
 
-These are **three separate, unfiled tasks**, each intended for the `task` label.
-The GitWeave node prohibits GitHub writes. No Issue numbers or publication are
-claimed. The [research report](compatibility-investigation-21.md) contains the
+These are **three separate, published tasks**, each carrying the `task` label:
+[#23](https://github.com/takahirox/pc98-rust/issues/23) (drawing timing mode),
+[#24](https://github.com/takahirox/pc98-rust/issues/24) (Graph LIO/GINIT), and
+[#25](https://github.com/takahirox/pc98-rust/issues/25) (held-key bitmap).
+The [research report](compatibility-investigation-21.md) contains the
 six-title matrix, acquisition identifiers, configuration, isolation and evidence.
 The three contracts below have original, game-free reproductions; remaining
 unexplained video/input/audio behavior has no speculative ticket.
 
 Repository Issues, open and closed, were checked on 2026-10-21. Existing #14–#16
 cover different BIOS/GDC contracts; the older general compatibility tasks are not
-dedicated duplicates. Recheck for newly filed duplicates before publication.
+dedicated duplicates. The inventory was rechecked before filing these tasks on
+2026-10-21. Each published Issue includes its original probe and preparation
+steps, tested commit/profile, lawful source/version/hash and acceptance criteria.
 
 All probe source below was newly written for this investigation and is offered
 under this repository's MIT license. It contains no game instructions, art,
