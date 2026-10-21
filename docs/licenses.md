@@ -24,6 +24,15 @@ firmware, mouse driver, sound implementation, melody or instrument sample.
 The original `guest/hblank.asm` status probe is also MIT and includes its source
 and `RUST.LIC` in the generated DOS fixture.
 
+The original MIT `guest/lioinit.asm` (unchanged Issue #24 probe) and
+`guest/liotest.asm` are included with their COM binaries and `RUST.LIC` in the
+generated `fixtures/freedos/lio.hdm`. The existing FreeDOS manifest records all
+file hashes. Preserve the entire fixture folder, including complete matching
+GPL DOS sources and notices, on redistribution. Neither the fixture nor the
+reference databook is included in `web/`. The F990h directory and Rust GINIT
+service are independently written from the published interface; no NEC code,
+game assets or emulator implementation is copied or downloaded for these tests.
+
 ## HelloWorld-PC98
 
 Upstream: [TakedaHiromasa/HelloWorld-PC98](https://github.com/TakedaHiromasa/HelloWorld-PC98),

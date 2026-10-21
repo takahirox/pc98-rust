@@ -17,6 +17,7 @@ pub fn initialize(b: &mut Bus) {
         b.write_seg(0, (n * 4) as u16, off as u16, true);
         b.write_seg(0, (n * 4 + 2) as u16, 0xf000, true);
     }
+    crate::lio::initialize(b);
     b.mem[0x501] = 4; // 640 KiB, normal resolution, 8 MHz PIT.
     b.mem[0x500] = 0x20;
     b.mem[0x481] = if b.profile == crate::Profile::Pc9821ApDos {
@@ -132,6 +133,9 @@ pub fn disk_transfer(
     st0 & 0xc0 == 0 && st1 == 0
 }
 pub fn service(c: &mut Cpu, b: &mut Bus) -> Result<(), String> {
+    if c.s[CS] == 0xf990 {
+        return crate::lio::service(c, b);
+    }
     if c.s[CS] != 0xf000 || !(0x1002..0x1402).contains(&c.ip) || (c.ip - 0x1002) & 3 != 0 {
         return Err("firmware trap outside synthetic ROM".into());
     }
@@ -268,6 +272,7 @@ pub fn service(c: &mut Cpu, b: &mut Bus) -> Result<(), String> {
                     return Err("unsupported graphics BIOS mode".into());
                 }
                 b.mem[0x54d] = c.byte(5);
+                b.graphics_200 = false;
             }
             _ => return Err(format!("unsupported BIOS INT 18 AH={ah:02x}")),
         },
