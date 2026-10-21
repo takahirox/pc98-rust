@@ -267,7 +267,22 @@ pub fn service(c: &mut Cpu, b: &mut Bus) -> Result<(), String> {
                 if c.byte(5) & 0xc0 != 0xc0 {
                     return Err("unsupported graphics BIOS mode".into());
                 }
+                // Mode setup must not discard the independently selected
+                // drawing timing (PRXDUPD bit 3).
+                let timing = b.mem[0x54d] & 8;
                 b.mem[0x54d] = c.byte(5);
+                if b.profile == crate::Profile::Pc9821ApDos {
+                    b.mem[0x54d] = (b.mem[0x54d] & !8) | timing;
+                }
+            }
+            0x4a if b.profile == crate::Profile::Pc9821ApDos => {
+                let flash = match c.byte(5) {
+                    0x06 => true,
+                    0x16 => false,
+                    ch => return Err(format!("unsupported graphics drawing timing CH={ch:02x}")),
+                };
+                b.gdcs[1].draw_during_display = flash;
+                b.mem[0x54d] = (b.mem[0x54d] & !8) | if flash { 8 } else { 0 };
             }
             _ => return Err(format!("unsupported BIOS INT 18 AH={ah:02x}")),
         },

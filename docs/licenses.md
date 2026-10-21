@@ -24,6 +24,13 @@ firmware, mouse driver, sound implementation, melody or instrument sample.
 The original `guest/hblank.asm` status probe is also MIT and includes its source
 and `RUST.LIC` in the generated DOS fixture.
 
+The original Issue #23 `guest/drawmode.asm` and `guest/drawtest.asm` controls are
+also MIT. Their separate FreeDOS images contain the ASM source, assembled COM
+and `RUST.LIC`; the generated manifest's `drawing_timing` entry records all file
+and image hashes. Keep the complete FreeDOS output folder, its matching GPL
+sources/notices and the preparation script when redistributing these images.
+They contain no PIPOO data, proprietary ROM or font and remain outside `web/`.
+
 ## HelloWorld-PC98
 
 Upstream: [TakedaHiromasa/HelloWorld-PC98](https://github.com/TakedaHiromasa/HelloWorld-PC98),

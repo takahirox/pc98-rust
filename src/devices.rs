@@ -448,6 +448,9 @@ impl Keyboard {
 #[derive(Clone, Default)]
 pub struct Gdc {
     pub enabled: bool,
+    /// Requested drawing timing: true permits drawing during active display.
+    /// The fixed scheduler does not yet execute GDC drawing commands.
+    pub draw_during_display: bool,
     pub command: u8,
     pub params: Vec<u8>,
     pub cursor: u32,
