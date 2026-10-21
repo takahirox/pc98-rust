@@ -5,14 +5,17 @@ Research performed locally on 2026-10-21 for
 **All six exact versions were reacquired and executed; none is confirmed playable.**
 The three previously identified blockers are cleared in the affected real guests.
 Three new, distinct defects have original, game-free reproductions. Their
-[separate filing-ready drafts and probe sources](compatibility-followups-21.md)
-are deliverables, not already-created GitHub Issues.
+[separate follow-up Issues and probe sources](compatibility-followups-21.md)
+are published as [#23](https://github.com/takahirox/pc98-rust/issues/23),
+[#24](https://github.com/takahirox/pc98-rust/issues/24), and
+[#25](https://github.com/takahirox/pc98-rust/issues/25), each labeled `task`.
 
-The node instruction explicitly prohibits pushing, PRs, merging and comments.
-Consequently no results comment or follow-up Issue was posted, and #21's remote
-acceptance steps remain pending. This document can supply the results comment
-when a later workflow authorizes publication. No emulator fixes belong to this
-research checkpoint, and it does not claim to close #21.
+The [results comment on #21](https://github.com/takahirox/pc98-rust/issues/21#issuecomment-6313016410)
+was published on 2026-10-21 with the six-title before/after matrix, tested
+commit/profile, execution bounds, coverage limitations, isolation confirmation
+and follow-up links. The research publication requirements are complete. No
+emulator fixes belong to this research checkpoint; the defects are tracked by
+the separate Issues above. Publication did not repeat the recorded guest runs.
 
 ## Baseline, rights and isolation
 
@@ -173,9 +176,9 @@ prove the cause of every MUTATE input failure, or MARKADIA's blank video/audio.
 
 Existing repository Issues #1, #3, #5, #7, #9, #11 and #13–#16 plus #21 were checked
 through GitHub (open and closed); none is a dedicated duplicate of A/B/C. The
-three [draft tasks](compatibility-followups-21.md) group by these contracts, not
+three [filed tasks](compatibility-followups-21.md) group by these contracts, not
 by title, and provide original redistributable controls and objective acceptance.
-No tickets were actually filed under this node's no-write instruction.
+The inventory was rechecked before filing #23–#25 on 2026-10-21.
 
 ## Validation and publication audit
 
@@ -204,13 +207,15 @@ audit: nine allowed files are present, and generated `core.wasm` is absent in th
 worktree. This is not a new Wasm build or deployment claim. No game became a fixture, CI
 download or acceptance dependency. There is no required post-merge verification.
 
-## Downstream handoff
+## Publication status
 
-Local research and documentation are complete. When a later node is authorized
-to write to GitHub, file the three separate English `task` drafts, then post this
-six-title matrix on #21 with their actual URLs. Do not describe the drafts as
-existing Issues or mark the remote comment criterion satisfied beforehand.
-Do not upload private media/captures or require them in acceptance. The private
+Local research, the three English `task` Issues and the #21 results comment are
+complete. Publication was read back to verify the task labels, original probe
+sources and six-title matrix. PR #22's completion statement was updated to link
+the actual Issues and comment. This revision changes only the two research
+Markdown files; it does not push or merge, close #21 or implement follow-up fixes.
+
+Private media/captures must not be uploaded or required in acceptance. The private
 directory is ephemeral and is not a dependency for the report or original probe
 sources. No usage allowance was purchased, reset ticket redeemed, or provider/model
 switched. Current source/CI/Pages and all prior fixtures are preserved.
