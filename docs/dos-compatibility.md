@@ -201,9 +201,12 @@ invalid encodings, #SS and #GP save the first prefix address in the 16-bit real-
 IVT frame. Faulting writes are checked before modifying any bytes; compound stack
 writes preflight every element. Register state is restored before fault delivery.
 Single-step traps save the next instruction address; SS-load and STI shadows are
-distinct. Software INT with 66 builds a dword frame for IRETD. A broken exception
-stack produces a bounded diagnostic; double/triple-fault reset behavior is not
-implemented. VM retains wrapped offsets and its existing V30 bit/flags/radix behavior.
+distinct. Real-mode INT/INT3/INTO, IRQs and exceptions always save a six-byte
+FLAGS/CS/IP frame, regardless of a 66 prefix, and clear IF, TF and AC on entry.
+Ordinary IRET consumes this word frame; IRETD consumes a software-constructed
+three-dword frame and can restore AC. A broken exception stack produces a bounded
+diagnostic; double/triple-fault reset behavior is not implemented. VM retains
+wrapped offsets and its existing V30 bit/flags/radix behavior.
 
 Instruction behavior was implemented from architectural documentation, including
 [Intel's instruction/system manuals](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html),

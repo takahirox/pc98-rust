@@ -280,7 +280,7 @@ fn bit_string_signed_memory_index_and_register_mask() {
 }
 
 #[test]
-fn flags_push_pop_interrupt_iretd_and_near_call_use_dword_stack_entries() {
+fn flags_push_pop_and_near_call_use_dword_stack_entries() {
     let (mut c, mut b) = cpu(&[0x66, 0x9d, 0x66, 0x9c]);
     b.mem[0x9000..0x9004].copy_from_slice(&0xffffffffu32.to_le_bytes());
     c.step(&mut b).unwrap();
@@ -289,24 +289,113 @@ fn flags_push_pop_interrupt_iretd_and_near_call_use_dword_stack_entries() {
     c.flags &= !TF;
     c.step(&mut b).unwrap();
     assert_eq!(b.read16(0x9002), 4);
-    let (mut c, mut b) = cpu(&[0x66, 0xcd, 0x30]);
-    b.mem[0x30 * 4..0x30 * 4 + 4].copy_from_slice(&[0, 0x30, 0, 0]);
-    b.mem[0x3000..0x3002].copy_from_slice(&[0x66, 0xcf]);
-    c.flags_upper = 4;
-    c.step(&mut b).unwrap();
-    assert_eq!(c.ip, 0x3000);
-    assert_eq!(c.r[SP], 0x8ff4);
-    assert_eq!(b.read16(0x8ff4), 0x1003);
-    assert_eq!(b.read16(0x8ffe), 4);
-    c.step(&mut b).unwrap();
-    assert_eq!(c.ip, 0x1003);
-    assert_eq!(c.r[SP], 0x9000);
-    assert_eq!(c.flags_upper, 4);
     let (mut c, mut b) = cpu(&[0x66, 0xe8, 0xfa, 0x1f, 0, 0]); // call dword 3000h
     b.mem[0x3000..0x3002].copy_from_slice(&[0x66, 0xc3]);
     steps(&mut c, &mut b, 2);
     assert_eq!(c.ip, 0x1006);
     assert_eq!(c.r[SP], 0x9000);
+}
+
+#[test]
+fn software_interrupts_ignore_operand_size_and_clear_ac() {
+    for (instruction, vector) in [
+        (&[0xcd, 0x30][..], 0x30),
+        (&[0xcc][..], 3),
+        (&[0xce][..], 4),
+    ] {
+        for prefixed in [true, false] {
+            let mut code = Vec::new();
+            if prefixed {
+                code.push(0x66);
+            }
+            code.extend_from_slice(instruction);
+            let (mut c, mut b) = cpu(&[]);
+            c.s[CS] = 0x100;
+            c.s[SS] = 0x2000;
+            b.mem[0x2000..0x2000 + code.len()].copy_from_slice(&code);
+            b.mem[vector * 4..vector * 4 + 4].copy_from_slice(&[0, 4, 0, 3]);
+            b.mem[0x3400] = 0xcf; // Ordinary IRET, even for a prefixed INT.
+            let flags = 2 | CF | IF | TF | OF;
+            c.flags = flags;
+            c.flags_upper = 4;
+            c.step(&mut b).unwrap();
+            assert_eq!((c.s[CS], c.ip), (0x300, 0x400));
+            assert_eq!(c.r[SP], 0x8ffa);
+            assert_eq!(b.read16(0x28ffa), 0x1000 + code.len() as u16);
+            assert_eq!(b.read16(0x28ffc), 0x100);
+            assert_eq!(b.read16(0x28ffe), flags);
+            assert_eq!(c.flags, flags & !(IF | TF));
+            assert_eq!(c.flags_upper, 0);
+            c.step(&mut b).unwrap();
+            assert_eq!((c.s[CS], c.ip), (0x100, 0x1000 + code.len() as u32));
+            assert_eq!(c.r[SP], 0x9000);
+            assert_eq!(c.flags, flags);
+            assert_eq!(c.flags_upper, 0); // A word IRET cannot restore AC.
+        }
+    }
+    let (mut c, mut b) = cpu(&[0x66, 0xce]); // INTO without overflow never enters.
+    c.flags_upper = 4;
+    c.step(&mut b).unwrap();
+    assert_eq!(c.ip, 0x1002);
+    assert_eq!(c.r[SP], 0x9000);
+    assert_eq!(c.flags_upper, 4);
+}
+
+#[test]
+fn iretd_restores_an_explicit_dword_frame_including_ac() {
+    let (mut c, mut b) = cpu(&[0x66, 0xcf]);
+    // IRETD consumes three dwords supplied by software, unlike an INT frame.
+    for (i, value) in [0x4567u32, 0x1234, 0x40000 | 2 | CF as u32 | IF as u32]
+        .into_iter()
+        .enumerate()
+    {
+        b.mem[0x9000 + i * 4..0x9004 + i * 4].copy_from_slice(&value.to_le_bytes());
+    }
+    c.step(&mut b).unwrap();
+    assert_eq!((c.s[CS], c.ip), (0x1234, 0x4567));
+    assert_eq!(c.r[SP], 0x900c);
+    assert_eq!(c.flags, 2 | CF | IF);
+    assert_eq!(c.flags_upper, 4);
+}
+
+#[test]
+fn hardware_irq_and_fault_entry_clear_ac() {
+    let (mut c, mut b) = cpu(&[0x90]);
+    b.mem[9 * 4..9 * 4 + 4].copy_from_slice(&[0, 0x30, 0, 0]);
+    b.mem[0x3000] = 0xf4;
+    c.flags = 2 | IF | TF;
+    c.flags_upper = 4;
+    c.halted = true;
+    b.pics[0].mask = 0xfd;
+    b.pics[0].request(1);
+    c.step(&mut b).unwrap();
+    assert_eq!(b.pics[0].isr, 2);
+    assert_eq!(c.ip, 0x3001);
+    assert_eq!(c.r[SP], 0x8ffa);
+    assert_eq!(b.read16(0x8ffa), 0x1000);
+    assert_eq!(b.read16(0x8ffe), 2 | IF | TF);
+    assert_eq!(c.flags, 2);
+    assert_eq!(c.flags_upper, 0);
+
+    for (code, vector) in [
+        (&[0x66, 0xf7, 0xf3][..], 0), // DIV EBX with a zero divisor: #DE.
+        (&[0x8e, 0xc8][..], 6),       // MOV CS,AX: #UD.
+        (&[0x8b, 0x07][..], 13),      // MOV AX,[BX] across DS limit: #GP.
+        (&[0x8b, 0x46, 0][..], 12),   // MOV AX,[BP] across SS limit: #SS.
+    ] {
+        let (mut c, mut b) = cpu(code);
+        if vector >= 12 {
+            c.r[BX] = 0xffff;
+            c.r[BP] = 0xffff;
+        }
+        c.flags = 2 | IF | TF;
+        c.flags_upper = 4;
+        c.step(&mut b).unwrap();
+        fault(&c, &b, vector, 0x1000);
+        assert_eq!(b.read16(0x8ffe), 2 | IF | TF);
+        assert_eq!(c.flags, 2);
+        assert_eq!(c.flags_upper, 0);
+    }
 }
 
 #[test]

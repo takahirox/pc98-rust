@@ -228,7 +228,9 @@ impl Cpu {
     fn pop(&mut self, b: &Bus) -> ExecResult<u32> {
         self.pop_width(b, self.bytes(true))
     }
-    fn interrupt_frame(&mut self, b: &mut Bus, n: u8, bytes: u32) -> ExecResult<()> {
+    fn deliver_interrupt(&mut self, b: &mut Bus, n: u8) -> ExecResult<()> {
+        // Real-mode entry always saves FLAGS, CS and IP as words, even for 66 INT.
+        let bytes = 2;
         // Preflight each push: the 16-bit stack pointer may wrap between words.
         for i in 1..=3 {
             self.check_mem(
@@ -238,27 +240,21 @@ impl Cpu {
                 bytes,
             )?;
         }
-        self.push_width(
-            b,
-            self.flags as u32 | ((self.flags_upper as u32) << 16),
-            bytes,
-        )?;
+        self.push_width(b, self.flags as u32, bytes)?;
         self.push_width(b, self.s[CS] as u32, bytes)?;
         self.push_width(b, self.ip, bytes)?;
         self.flags &= !(IF | TF);
+        self.flags_upper &= !4; // Real-mode interrupt/exception entry clears AC.
         self.trap_suppressed = true;
         self.ip = b.read16(n as usize * 4) as u32;
         self.s[CS] = b.read16(n as usize * 4 + 2);
         self.halted = false;
         Ok(())
     }
-    /// Inject a default-size real-mode interrupt from a native caller.
+    /// Inject a real-mode interrupt with a six-byte frame from a native caller.
     pub fn interrupt(&mut self, b: &mut Bus, n: u8) -> Result<(), String> {
         self.deliver_interrupt(b, n)
             .map_err(|_| "invalid real-mode interrupt stack".to_string())
-    }
-    fn deliver_interrupt(&mut self, b: &mut Bus, n: u8) -> ExecResult<()> {
-        self.interrupt_frame(b, n, 2)
     }
     fn flag(&mut self, f: u16, on: bool) {
         if on {
@@ -1349,14 +1345,14 @@ impl Cpu {
                 let v = self.pop(b)?;
                 self.put(b, Operand::Reg(BP), v, true)?;
             }
-            0xcc => self.interrupt_frame(b, 3, self.bytes(true))?,
+            0xcc => self.deliver_interrupt(b, 3)?,
             0xcd => {
                 let n = self.fetch(b)?;
-                self.interrupt_frame(b, n, self.bytes(true))?;
+                self.deliver_interrupt(b, n)?;
             }
             0xce => {
                 if self.flags & OF != 0 {
-                    self.interrupt_frame(b, 4, self.bytes(true))?
+                    self.deliver_interrupt(b, 4)?
                 }
             }
             0xcf => {
