@@ -86,6 +86,7 @@ Japanese CG glyphs. FEP input is not implemented.
 # Fetch checksum-pinned guest binaries AND matching complete source archives.
 # This makes a minimal GPL guest disk; it downloads no emulator code.
 python3 tools/prepare_freedos.py
+python3 tools/prepare_font_fixture.py
 python3 tools/prepare_dos_apps.py
 python3 tools/prepare_cpu_fixture.py
 python3 tools/prepare_hdd_fixture.py
@@ -120,6 +121,9 @@ DOS. The emulator has no host DOS implementation. The minimal fixture excludes
 XMS drivers because this profile is real-mode V30, not a 286 machine. To try it in
 the browser, insert `fixtures/freedos/minimal.hdm`, wait for `A:\>`, and type `probe`.
 See [licensing and distribution](docs/licenses.md) before redistributing this disk.
+The original [user-character BIOS controls](docs/user-characters.md) also boot
+through this legal FreeDOS fixture and compare text/graphics pixels in native
+and browser Wasm tests.
 For the independent DOS game/video/audio tests and CPULEVEL diagnostic, select
 the Ap DOS machine and insert the generated `fixtures/dos-apps/*.hdm` disks; see [instructions](docs/dos-compatibility.md).
 

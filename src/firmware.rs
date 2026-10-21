@@ -195,6 +195,15 @@ pub fn service(c: &mut Cpu, b: &mut Bus) -> Result<(), String> {
             0x11 => b.gdcs[0].cursor_visible = true,
             0x12 => b.gdcs[0].cursor_visible = false,
             0x13 => b.gdcs[0].cursor = (c.r[DX] / 2) as u32,
+            0x14 if b.profile == crate::Profile::Pc9821ApDos
+                && (0x21..=0x7e).contains(&c.byte(6)) =>
+            {
+                // Full-width JIS read: scratch word, then 16 left/right rows.
+                for i in 0..32u16 {
+                    let byte = b.user_characters.byte(c.byte(6), c.byte(2), i as usize);
+                    b.write_seg(c.r[BX], c.r[CX].wrapping_add(2 + i), byte as u16, false);
+                }
+            }
             0x14 => {
                 for y in 0..16 {
                     b.write_seg(
@@ -213,6 +222,21 @@ pub fn service(c: &mut Cpu, b: &mut Bus) -> Result<(), String> {
             }
             0x17 => b.set_beep(true),
             0x18 => b.set_beep(false),
+            0x1a if b.profile == crate::Profile::Pc9821ApDos => {
+                if crate::font::UserCharacters::index(c.r[DX]).is_none() {
+                    // Hardware does not validate codes; out-of-contract writes
+                    // have no promised result. Do not invent a BIOS status code.
+                    return Err(format!(
+                        "unsupported user-character registration code {:04x}",
+                        c.r[DX]
+                    ));
+                }
+                let mut pattern = [0; 32];
+                for (i, byte) in pattern.iter_mut().enumerate() {
+                    *byte = b.read_seg(c.r[BX], c.r[CX].wrapping_add(2 + i as u16), false) as u8;
+                }
+                b.user_characters.define(c.r[DX], pattern);
+            }
             0x40 => {
                 b.gdcs[1].enabled = true;
                 if b.profile == crate::Profile::Pc9821ApDos {

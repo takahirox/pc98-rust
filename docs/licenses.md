@@ -96,6 +96,11 @@ repository badge or a vague offer of source. The preparation script and original
 PROBE source must accompany it as well. Nothing requires bundling or accepting
 proprietary media.
 
+The original Issue #16 `fontload` control and `guest/userfont.asm` are MIT,
+including their synthetic glyph patterns. `tools/prepare_font_fixture.py` builds
+them on the same pinned FreeDOS fixture, alongside its sources/notices; neither
+image is published. No PIPOO or other proprietary font/program data is included.
+
 ## Independent Ap DOS applications and replacement Japanese font
 
 The new Ap DOS test fixtures use MIT ADV98 and 98VIDEOP, with original test art

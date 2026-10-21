@@ -74,8 +74,9 @@ cargo run --release --bin headless -- fixtures/dos-apps/pegc.hdm 22000000 --ap
 | Sound | SSG port A reports inactive joystick and INT5/IRQ12 selection, fixing PMD's real interrupt discovery. Existing mathematical OPN synthesis extends to six FM channels through the masked 18C/18E bank, register 29 channel enable, timers/IRQ. A460 ID/mask; A466/A468/A46A/A46C bounded 32 KiB playback FIFO, eight hardware rates, signed 8/16-bit mono/stereo input, threshold IRQ and reset. PCM and FM mix into the existing 48 kHz mono Web Audio stream | Approximate FM/envelopes, no analog fidelity, prescaler switching, channel-3 special mode, LFO, exact pan/envelope scaling, built-in rhythm samples, ADPCM RAM/decoder or recording. The accepted game uses FM/SSG, and 98VIDEOP uses 86 PCM; neither needs rhythm or ADPCM. No chip sample ROM is included |
 
 The original GDC display start/PITCH/PRAM and CPU-driven raster/scroll paths remain
-in use. No vector drawing engine or extra ANK/kana/user-defined CG was needed by
-these guests; those remain unsupported. Shinonome Japanese glyphs, license and
+in use. No vector drawing engine or extra ANK/kana CG was needed by
+these guests; those remain unsupported. [Issue #16 user-character support](user-characters.md)
+adds mutable Ap font RAM separately. Shinonome Japanese glyphs, license and
 attribution are unchanged. The fixed 8 MHz scheduling model is retained; it is
 not a physical i486DX2/66 MHz timing model.
 

@@ -6,6 +6,7 @@ pub struct Bus {
     cg_code: [u8; 2],
     cg_line: u8,
     cg_dot: bool,
+    pub user_characters: crate::font::UserCharacters,
     vsync_armed: bool,
     pub mem: Vec<u8>,
     pub graphics: Vec<u8>,
@@ -65,6 +66,7 @@ impl Bus {
             cg_code: [0; 2],
             cg_line: 0,
             cg_dot: false,
+            user_characters: crate::font::UserCharacters::default(),
             vsync_armed: false,
             mem: vec![
                 0;
@@ -150,7 +152,8 @@ impl Bus {
         if self.cg_code[0] == 0 {
             crate::font::row(self.cg_code[1], (byte / 2) as u8)
         } else {
-            crate::font::jis_byte(self.cg_code[1].wrapping_add(0x20), self.cg_code[0], byte)
+            self.user_characters
+                .byte(self.cg_code[1].wrapping_add(0x20), self.cg_code[0], byte)
         }
     }
     pub fn read(&self, a: usize) -> u8 {
@@ -189,7 +192,21 @@ impl Bus {
         match a {
             0..=0x9ffff | 0xa0000..=0xa2fff | 0xf0000..=0xfffff => self.mem[a],
             0xa4000..=0xa4fff if self.profile == Profile::Pc9821ApDos && self.cg_dot => {
-                self.cg_byte((a - 0xa4000) & 31)
+                if crate::font::UserCharacters::index(u16::from_be_bytes([
+                    self.cg_code[1].wrapping_add(0x20),
+                    self.cg_code[0],
+                ]))
+                .is_some()
+                {
+                    // User RAM exposes only the selected half on odd addresses.
+                    if a & 1 == 0 {
+                        255
+                    } else {
+                        self.cg_byte((a & 30) + usize::from(self.cg_line & 32 == 0))
+                    }
+                } else {
+                    self.cg_byte((a - 0xa4000) & 31)
+                }
             }
             0x100000..=0x3fffff if self.profile == Profile::Pc9821ApDos => self.mem[a],
             _ => 255,
@@ -804,7 +821,7 @@ impl Bus {
                     let attr = self.mem[0xa2000 + cell * 2];
                     let high = self.mem[0xa0000 + cell * 2 + 1];
                     let glyph = if self.profile == Profile::Pc9821ApDos && high != 0 {
-                        crate::font::jis_byte(
+                        self.user_characters.byte(
                             (ch & 127).wrapping_add(0x20),
                             high,
                             (y % 16) * 2 + usize::from(ch & 128 != 0),
