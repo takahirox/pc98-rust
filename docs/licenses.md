@@ -21,6 +21,14 @@ The additional original `guest/hdd-ipl.asm`, `guest/mouse98.asm`,
 fixtures include `RUST.LIC` with the repository notice. They contain no borrowed
 firmware, mouse driver, sound implementation, melody or instrument sample.
 
+The original `guest/keymap.asm` is the exact MIT research control offered in
+Issue #25 (source SHA-256
+`833f8925cf99c2cbbcce5f05fd3d7a1c129ab229276203a7661eb4ad497440f5`).
+`prepare_freedos.py` creates the separate `keymap.hdm` with its source, COM and
+`RUST.LIC`, records per-file hashes in `manifest.json`, and uses the same pinned
+unmodified DOS boot/kernel/shell. Keep the complete FreeDOS source and notices
+beside it. No game bytes or proprietary firmware/font are used or published.
+
 The original `guest/hblank.asm` status probe is also MIT and includes its source
 and `RUST.LIC` in the generated DOS fixture.
 

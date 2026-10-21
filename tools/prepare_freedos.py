@@ -123,6 +123,16 @@ def main():
     (DEST / 'COPYING').write_bytes(files[b'COPYING    '])
     (DEST / 'FreeCOM-LICENSE').write_bytes(shell.read('license'))
     (DEST / 'distribution-READMEja.htm').write_bytes(distribution.read('READMEja.htm'))
+    # Exact MIT control published in Issue #25; no game assets are needed.
+    keymap_source = (ROOT / 'guest/keymap.asm').read_bytes()
+    assert hashlib.sha256(keymap_source).hexdigest() == '833f8925cf99c2cbbcce5f05fd3d7a1c129ab229276203a7661eb4ad497440f5'
+    keymap_files = {**files,
+        b'KEYMAP  COM': assemble('guest/keymap.asm'),
+        b'KEYMAP  ASM': keymap_source,
+        b'RUST    LIC': (ROOT / 'LICENSE').read_bytes(),
+        b'AUTOEXECBAT': b'@echo off\r\nKEYMAP\r\necho PROBE SHELL RETURN\r\n'}
+    keymap = image_with_files(original[:1024], keymap_files)
+    (DEST / 'keymap.hdm').write_bytes(keymap)
     # Separate original status probe; keep the pinned minimal image unchanged.
     hblank_files = {**files,
         b'HBLANK  COM': assemble('guest/hblank.asm'),
@@ -153,6 +163,10 @@ def main():
         'image_sha256': hashlib.sha256(image).hexdigest(),
         'assets': {k: {'url': v[0], 'sha256': v[1]} for k, v in ASSETS.items()},
         'files': {k.decode('ascii'): hashlib.sha256(v).hexdigest() for k, v in files.items()},
+        'keymap': {
+            'image_sha256': hashlib.sha256(keymap).hexdigest(),
+            'files': {k.decode('ascii'): hashlib.sha256(v).hexdigest() for k, v in keymap_files.items()},
+        },
         'hblank': {
             'image_sha256': hashlib.sha256(hblank).hexdigest(),
             'files': {k.decode('ascii'): hashlib.sha256(v).hexdigest() for k, v in hblank_files.items()},
@@ -171,6 +185,8 @@ def main():
         'No changes to kernel/boot/FreeCOM; the disk filesystem was rebuilt.\n'
         'See COPYING, FreeCOM-LICENSE, manifest.json, and the complete matching\n'
         'kernel-source.tar.gz and freecom-source.tar.gz (including build scripts).\n'
+        'keymap.hdm adds original MIT KEYMAP.COM, KEYMAP.ASM and RUST.LIC;\n'
+        'AUTOEXEC runs the Issue #25 held-key bitmap control.\n'
         'hblank.hdm adds original MIT HBLANK.COM, HBLANK.ASM and RUST.LIC;\n'
         'AUTOEXEC runs the bounded two-port horizontal-blank probe.\n'
         'drawmode.hdm and drawtest.hdm add original MIT drawing-timing controls,\n'
