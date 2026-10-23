@@ -1643,3 +1643,131 @@ reports do not establish full accuracy or commercial compatibility. No
 proprietary ROM was acquired. Remote CI and independent review were not run;
 this node does not push, open PRs, comment or merge. No post-merge verification
 is required by Issue #45.
+
+## Issue #47 8253 binary mode 3 (2026-10-23)
+
+Implemented binary mode-3 initial loading and steady counting on all three
+counters, both timer port banks and both profiles. Encodings 3/7 select the same
+mode, zero encodes 65,536, and a complete initial count loads on a separate clock.
+Even divisors subtract two; odd divisors first subtract one in the high half and
+three in the low half. Full-divisor reloads toggle OUT. Bounded phase arithmetic
+retains any rising edge across large batches, including hidden transitions with
+identical endpoint levels, and preserves the scheduler conversion and fractional
+remainder. The existing bus programming-edge detection and PIC latch now receive
+mode-3 rises; falling edges and held-high output do not request IRQ0. Only the
+mode-3 beeper polarity consumer changes to OUT; enable, amplitude, sample rate,
+queue bound and other modes' mixer behavior remain unchanged. See the
+[hardware contract and Intel sources](hardware.md#8253-binary-mode-3-subset).
+
+`tests/pit.rs` retains all 12 mode-2 tests and adds 10 mode-3 tests. Independent
+explicit traces cover divisors 2/3/4/5, both encodings, all channels, ordinary
+reads and a separate load. Boundary/access checks include LSB-only, MSB-only,
+paired, incomplete initial writes, 65,535 and every zero encoding. Latches remain
+frozen across continued counting into the low half. Single clocks and irregular
+batches compare entire device state and aggregate edges, including many periods,
+hidden transitions, fractional/zero advancement and `u32::MAX` scheduler cycles.
+Both profiles/banks exercise all channels, programming rises, falling-edge
+silence, masks/IRR/ISR/EOI, request coalescing and mode-2/3 reprogramming. CPU tests
+cover IF-clear/HLT delivery followed by EOI/IRET; reset checks active and partial
+programming, latches, fraction and pending IRQ state. A mixer regression checks
+both even and odd low-half reloads where a raw-count threshold gives the wrong
+polarity. The existing square-wave frequency, silence, enable and queue-bound
+regressions pass. `tests/core.rs::pit_keyboard_and_beeper` acknowledges the setup
+IRQ separately and now expects the documented mode-3 count 6 after 998 PIT
+clocks (load, 500 high clocks, 497 low clocks), retaining keyboard/beeper checks.
+
+Negative controls used exactly baseline
+`e382535d3d11d2e137d9e0feeda226b66f9ef468`'s `src/devices.rs` and `src/bus.rs`,
+restored afterward in a Python `finally` block. Actual commands/results:
+
+| Command on baseline sources | Result |
+| --- | --- |
+| `cargo test --locked --test pit issue47_initial_load_reproduction -- --nocapture` | Expected failure, exit 101: actual `(3, false)`, required `(4, true)` |
+| `cargo test --locked --test pit original_mode3_boot_probe_before_and_after_reset_in_both_profiles -- --nocapture` | Expected failure, exit 101: guest printed `PIT MODE3 FAIL`, subtract-two proof unset |
+
+Both pass with the implementation restored. Initial new test setup failures
+(latch sampling too close to the low-half reload, accumulated fractional clocks
+in bus timing, and a masked setup IRQ in the core regression) were corrected
+without weakening the hardware expectations or existing assertions.
+
+The original MIT [probe](../guest/pit_mode3.asm) builds offline with
+`nasm -f bin guest/pit_mode3.asm -o pit_mode3.bin`. The checked
+[manifest](../fixtures/pit-mode3-manifest.json) pins provenance, source/boot/image
+hashes, assembly command, exact result/guard layout and the 2,000,000-slot budget.
+Source SHA-256 is
+`2db96377924049700e7c1aac368ce5df8554d642a71a3bbbc82860eb65f3e9fa`;
+image SHA-256 is
+`7c373364f171b90e86123777f6d99b8c50bc65adab4f0f634d323603df300a44`.
+The guest initializes all 32 bytes at `8000h..801Fh`, latches two running even
+counts from divisor 60000 separated by 500 LOOP instructions, and requires a
+1900..2200 decrement, distinguishing subtract-two from the baseline countdown.
+A new alias-7 mode word programs divisor 2000, followed by PIC initialization to
+discard setup edges. Two periodic hardware IRQ0 entries check ISR=1, a nonzero
+even count <=2000, EOI, ISR=0 and IRET. Guest and hosts compare all result/guard
+bytes:
+`a501020101000001a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5`.
+Hosts only boot, step and inspect; they inject no IRQs or results.
+
+The identical image passed on VM and Ap before/after reset, natively and in
+production-release Wasm at `/` and `/pc98-rust/`. All **12 boots completed in
+4,000 scheduler slots each**, below the fixed 2,000,000-slot budget. Every run
+required exact results/guards, `PIT MODE3 PASS` without `FAIL`, unchanged disk
+bytes and no core/host/browser errors. Existing CI now prepares this fixture;
+the browser suite discovers four new cases, each including reset.
+
+Exact checks in this macOS arm64 worktree:
+
+| Command | Outcome |
+| --- | --- |
+| `python3 -m unittest discover -s tools -p test_fixture_fetch.py` | Passed: 7 offline downloader tests |
+| `python3 tools/prepare_dma_fixture.py` | Passed |
+| `python3 tools/prepare_gdtr_fixture.py` | Passed |
+| `python3 tools/prepare_idtr_fixture.py` | Passed |
+| `python3 tools/prepare_smsw_fixture.py` | Passed |
+| `python3 tools/prepare_pic_fixture.py` | Passed |
+| `python3 tools/prepare_pic_smm_fixture.py` | Passed |
+| `python3 tools/prepare_pit_mode2_fixture.py` | Passed |
+| `python3 tools/prepare_pit_mode3_fixture.py --update-manifest` | Created checked manifest from original source |
+| `python3 tools/prepare_pit_mode3_fixture.py` | Passed: reproduced hashes and retained assembly/license/manifest beside image |
+| `python3 tools/prepare_freedos.py` | Passed: pinned legal binaries and complete sources retained; existing image hashes unchanged |
+| `python3 tools/prepare_font_fixture.py` | Passed |
+| `python3 tools/prepare_dos_apps.py` | Passed |
+| `python3 tools/prepare_cpu_fixture.py` | Passed via existing checksum-pinned mirror after primary HTTP 503 |
+| `python3 tools/prepare_hdd_fixture.py` | Passed |
+| `python3 tools/prepare_music_fixture.py` | Passed |
+| `python3 tools/prepare_device_fixture.py` | Passed via existing checksum-pinned mirror after primary HTTP 503 |
+| `python3 tools/build_media.py --check` | Passed: existing firmware/media hashes reproduced |
+| `python3 tools/build_font.py --check` | Passed: existing CG hash reproduced |
+| `cargo test --locked --test pit -- --nocapture` | Passed: 22 tests, including four mode-3 native boots at 4,000 slots each |
+| `cargo test --locked --test pit` | Passed: final all-channel port read assertions, 22 tests |
+| `cargo test --locked --test core pit_keyboard_and_beeper` | Passed with corrected mode-3 trace and separate setup IRQ accounting |
+| `cargo test --locked` | Passed: 182 integration tests across 17 targets, zero failed or ignored; unit/doc targets also passed |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `cargo fmt --check` | Passed |
+| `npm ci` | Passed: zero vulnerabilities |
+| `npx playwright install chromium` | Passed |
+| `npm test` | Release Wasm build and ten-asset site audit passed; browser server could not bind occupied port 8000 |
+| `npm test -- --config=.issue47-playwright.config.js` | Passed: release Wasm build/site audit and all 70 browser tests, zero skipped, 42.0 seconds |
+| `git diff --check` | Passed |
+
+The temporary Playwright config imported the normal config and changed only
+ports/base URLs to 62080/62081. Its project server copied the existing symlink
+server with only port 8001 replaced by 62081, preserving rejection of root asset
+URLs. Both complete projects, assertions and budgets were preserved; existing
+listeners were left alone. Both temporary files were removed after the run.
+Existing mode-2, PIC/SMM, BIOS interval, CPU interrupt-shadow, DOS/application,
+VM and game assertions and budgets pass without relaxation. No checks were
+skipped. Remote CI and independent review are unestablished.
+
+All 26 inventory categories retain their complete fixed scopes and statuses:
+**partial** cpu-v30, cpu386, protected-mode, memory, pic, pit, dma, keyboard, mouse,
+fdc, gdc, egc, pegc, text-cg, display-timing, opn, opna, bios, lio, integration;
+**unimplemented** paging, fpu, rtc; **implemented, unverified** ide, grcg, pcm86.
+PIT remains partial: active mode-3 rewrites without a new mode word, mode-0
+continuation after terminal count, mode-specific behavior for 1/4/5,
+GATE/retriggering, BCD, divisor 1, comprehensive latch/access sequencing and fuller
+beeper timing remain outstanding. Protected execution, paging and basic FPU
+remain required goals. Limited probes and six-game reports do not establish full
+accuracy or commercial compatibility. No commercial ROM or guest was acquired.
+No push, PR, comment or merge was performed. Issue #47 requires no post-merge
+verification.

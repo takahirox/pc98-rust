@@ -367,13 +367,58 @@ reads and services two periodic IRQ0 entries with EOI/IRET. Its
 result/guard layout, offline preparation and the two-million-slot boot budget.
 See [actual validation evidence](validation.md#issue-45-8253-binary-mode-2-2026-10-23).
 
-PIT remains **partial**. External GATE wiring/retriggering, BCD, divisor-1
-accuracy, other mode-specific corrections, comprehensive latch/read-write
-sequencing and mode-accurate beeper mixing remain outstanding. The shared
-counter supports mode 2 on all channels; this does not establish channel-1 audio
-fidelity, instruction-cycle accuracy, full hardware accuracy or commercial
-compatibility. All 26 fixed inventory categories, scopes and statuses are
-unchanged; the existing six-game reports retain their original limits.
+### 8253 binary mode-3 subset
+
+All three counters, both profiles and both timer port banks support encodings
+`011` and `111` as binary mode 3 with GATE held high, for divisors 2–65,536.
+Encoded zero represents 65,536. A new mode word sets OUT high, clears partial
+read/write/latch state and waits for a complete initial LSB, MSB or paired count.
+The next PIT clock loads the divisor without decrementing. Pre-load count values
+are undefined and are not part of the tested contract.
+
+Intel's [8253/8253-5 datasheet, Control Word Format, Counter Loading, Mode 3 and
+Read/Write Procedures](https://web.cecs.pdx.edu/~mpj/llp/references/8253.pdf)
+specifies decrement-by-two for even divisors. An odd divisor first subtracts one
+in the high half and three in the low half, then subtracts two on later clocks.
+At terminal count the full divisor reloads and OUT toggles, giving high and low
+durations of ceil(N/2) and floor(N/2) clocks. Starting at the load clock:
+
+| Divisor | Successive (count, OUT) samples |
+| --- | --- |
+| 4 | (4,H), (2,H), (4,L), (2,L), (4,H) |
+| 5 | (5,H), (4,H), (2,H), (5,L), (2,L), (5,H) |
+
+Ordinary reads and count latches expose this sequence while counting continues.
+OUT0 rising transitions, including mode-programming rises, feed the existing PIC
+latch as in mode 2. Falling transitions and held-high output do not request IRQ0,
+following Intel's [8259A edge-triggered IR-input contract](https://courses.cs.washington.edu/courses/cse451/25wi/documentation/8259A.pdf#page=17).
+Bounded arithmetic skips entire periods and reports any intervening rise even
+when both batch endpoints are high or both are low. Final count, OUT, phase and
+fractional scheduler state match single-clock advancement. Multiple rises still
+coalesce into one PIC request. Scheduler conversion is unchanged.
+
+The mode-3 beeper uses channel 1 OUT for polarity, retaining the existing enable,
+amplitude, 48 kHz sampling and 4096-sample queue bound. Other modes retain their
+previous mixer behavior. Audio resampling within large scheduler batches is
+unchanged. New mode words support reprogramming and transitions between modes
+2 and 3; reset clears active, partial, latched and fractional state.
+
+Original [Rust tests](../tests/pit.rs) cover specification traces and boundaries,
+all channels/access forms, latches, batching, PIC/CPU integration and reset.
+The separate MIT [boot probe](../guest/pit_mode3.asm) proves decrement-by-two
+through guest latches and services periodic hardware IRQ0 with EOI/IRET. Its
+[manifest](../fixtures/pit-mode3-manifest.json) records offline assembly, hashes,
+provenance, exact results/guards and the two-million-slot budget. See the
+[validation record](validation.md#issue-47-8253-binary-mode-3-2026-10-23).
+
+PIT remains **partial**. Active mode-3 divisor rewrites without a new mode word,
+mode-0 continuation after terminal count, mode-specific behavior for 1/4/5,
+external GATE/retriggering, BCD, divisor-1 behavior, comprehensive latch/access
+sequencing and fuller beeper timing remain outstanding. These shared counter
+subsets do not establish instruction-cycle accuracy, full audio or hardware
+accuracy, or commercial compatibility. All 26 fixed inventory categories, scopes
+and statuses are unchanged; the existing six-game reports retain their limits.
+Protected execution, paging and basic FPU remain required project goals.
 
 The hello source uses `OUT 3FDFh,AL`, an immediate-port encoding that truncates to
 `DFh`. That timer mirror is decoded too. PIT behavior beyond the subset above,

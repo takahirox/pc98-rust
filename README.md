@@ -92,6 +92,7 @@ python3 tools/prepare_smsw_fixture.py
 python3 tools/prepare_pic_fixture.py
 python3 tools/prepare_pic_smm_fixture.py
 python3 tools/prepare_pit_mode2_fixture.py
+python3 tools/prepare_pit_mode3_fixture.py
 # Fetch checksum-pinned guest binaries AND matching complete source archives.
 # This makes a minimal GPL guest disk; it downloads no emulator code.
 python3 tools/prepare_freedos.py
@@ -136,6 +137,16 @@ image on VM and Ap before/after reset, at both browser roots. Each boot requires
 `PIT MODE2 PASS`, exact guest-owned results/guards, unchanged disk bytes and no
 error or `FAIL` within two million slots. Its offline
 [manifest](fixtures/pit-mode2-manifest.json) pins hashes, license and result layout.
+
+The original MIT [mode-3 PIT probe](guest/pit_mode3.asm) checks two latched
+counts from a running 60000-count divisor to distinguish decrement-by-two from
+the old countdown. It programs a new mode word with divisor 2000, discards setup
+edges by initializing the PIC, then checks two periodic hardware IRQ0 entries
+with EOI/IRET. Native and production-release Wasm tests boot the identical image
+on VM and Ap before/after reset, at both browser roots, requiring exact results
+and guards, `PIT MODE3 PASS` without `FAIL` or errors, and unchanged disk bytes
+within two million slots. Its offline
+[manifest](fixtures/pit-mode3-manifest.json) pins hashes, provenance and results.
 
 The separate original MIT [special-mask probe](guest/pic_smm.asm) enters a
 keyboard handler with a confirmed timer request pending and IR0 lowest. It

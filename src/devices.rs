@@ -146,6 +146,7 @@ pub struct Counter {
     low: u8,
     latch: Option<u16>,
     load_pending: bool,
+    mode3_phase: u32,
     pub enabled: bool,
     pub output: bool,
 }
@@ -161,6 +162,7 @@ impl Default for Counter {
             low: 0,
             latch: None,
             load_pending: false,
+            mode3_phase: 0,
             enabled: false,
             output: false,
         }
@@ -190,6 +192,10 @@ impl Counter {
                 if !self.enabled {
                     self.load_pending = true;
                 }
+            } else if self.mode == 3 {
+                // Initial programming transfers on a separate clock. Active
+                // rewrites without a new mode word remain outside this subset.
+                self.load_pending = true;
             } else {
                 self.remaining = self.reload;
             }
@@ -228,6 +234,9 @@ impl Counter {
         if self.mode == 2 {
             return self.tick_mode2(ticks);
         }
+        if self.mode == 3 {
+            return self.tick_mode3(ticks);
+        }
         if ticks >= self.remaining {
             if self.mode == 0 {
                 self.enabled = false;
@@ -264,6 +273,49 @@ impl Counter {
         self.output = self.remaining != 1;
         true // At least one rising edge, even if the final output is low.
     }
+    fn tick_mode3(&mut self, mut ticks: u32) -> bool {
+        if ticks == 0 {
+            return false;
+        }
+        if self.load_pending {
+            self.load_pending = false;
+            self.mode3_phase = 0;
+            ticks -= 1;
+        }
+        // A full period ends with the low-to-high transition. Detect it before
+        // reducing modulo N, so even hidden transitions reach the PIC latch.
+        let rising = ticks >= self.reload - self.mode3_phase;
+        self.mode3_phase = (self.mode3_phase + ticks) % self.reload;
+        let high_clocks = self.reload.div_ceil(2);
+        self.output = self.mode3_phase < high_clocks;
+        let elapsed = if self.output {
+            self.mode3_phase
+        } else {
+            self.mode3_phase - high_clocks
+        };
+        self.remaining = if elapsed == 0 {
+            self.reload
+        } else if self.reload & 1 == 0 {
+            self.reload - 2 * elapsed
+        } else {
+            // Odd counts subtract one on the first high clock, three on the
+            // first low clock, then two on every subsequent clock (Intel 8253).
+            let adjusted = if self.output {
+                self.reload + 1
+            } else {
+                self.reload - 1
+            };
+            adjusted - 2 * elapsed
+        };
+        rising
+    }
+    pub(crate) fn beep_high(&self) -> bool {
+        if self.mode == 3 {
+            self.output
+        } else {
+            self.remaining > self.reload / 2
+        }
+    }
 }
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct Pit {
@@ -288,10 +340,11 @@ impl Pit {
                     c.write_hi = false;
                     c.read_hi = false;
                     c.load_pending = false;
-                    if c.mode == 2 {
+                    if matches!(c.mode, 2 | 3) {
                         c.enabled = false;
                         c.output = true;
                         c.latch = None;
+                        c.mode3_phase = 0;
                     }
                 }
             }
