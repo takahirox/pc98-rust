@@ -74,7 +74,8 @@ addresses, SIB, FS/GS and selected 386/486 real-mode integer instructions. It ch
 mode, DPMI or an FPU. See the [exact Ap CPU coverage and independent DOS diagnostic](dos-compatibility.md#issue-9-cpu-coverage-and-independent-guest-evidence).
 VM retains the V30 behavior described above.
 Ap also provides the [real-mode GDTR](#ap-real-mode-gdtr) and
-[IDTR prerequisites](#ap-real-mode-idtr) below.
+[IDTR prerequisites](#ap-real-mode-idtr), plus
+[SMSW status readback](#ap-real-mode-smsw) below.
 
 An instruction or one REP element consumes one 8-clock scheduling slot. This is a
 deterministic work/cycle model, **not instruction-cycle accuracy**. Firmware FDC
@@ -83,6 +84,47 @@ retirement while clocks and IRQs continue. STI and MOV/POP SS inhibit delivery f
 the next instruction. A frame runs at most two slices of 16,667 slots; the core
 caps each call at 100,000 slots. There is no unbounded catch-up after a suspended
 tab. This bounds UI work even for infinite loops and maximum-length REP strings.
+
+## Ap real-mode SMSW
+
+Ap implements `0F 01 /4` SMSW from one CPU-local machine-status word representing
+CR0 bits 15:0. Construction and Machine reset expose **0010h**: ET set;
+PE, MP, EM, TS and NE clear. Reserved low-word bits are zero by explicit emulator
+policy. This follows [Intel486 PRM §10.1, Figure 10-2](https://manuals.plus/m/d86207aaebd9b10464f2058efc61559e6141d3b072db100e89bfe17c8187e143).
+ET readback does not establish working x87 support.
+
+Register destinations replace only the low word. Operand16 preserves the upper
+half; operand32 also preserves it as a deterministic emulator policy where Intel
+specifies undefined upper bits. Memory destinations receive exactly two
+little-endian bytes with either operand size. Flags and unrelated architectural
+state are preserved. Address size independently selects effective-address decoding,
+including ModR/M, SIB, default SS and segment overrides. Repeated size overrides
+select the override once; the final segment override wins. See the
+[Intel SDM SMSW entry, printed pp. 4-647–648](https://cdrdv2-public.intel.com/782151/253667-sdm-vol-2b.pdf#page=649).
+
+Both memory bytes are preflighted before writing through the existing Bus, so A20
+mapping and ROM write protection apply. **FFFEh** is the last valid start;
+**FFFFh** and address32 offsets above it raise restartable exception **13**, including
+SS-selected operands, following the **Intel486 PRM SMSW real-address table,
+printed p. 26-268**. The modern SDM instead lists exception **12** for SS overruns;
+these tables disagree, and this instruction deliberately uses the target-era
+contract. General memory helpers retain their existing SS exception behavior.
+LOCK on either register or memory forms raises exception **6**. Faults save the
+first prefix IP in the existing six-byte real-mode frame and permit guest
+repair/IRET/retry. VM retains its unsupported V30 `0F 01` decoder behavior.
+
+The original MIT [boot probe](../guest/smsw.asm) builds offline with
+`python3 tools/prepare_smsw_fixture.py`. Its
+[manifest](../fixtures/smsw-manifest.json) pins source/boot/image hashes, assembler
+command, exact results/guards, license and two-million-slot budget. Native and
+production release Wasm tests boot the identical image before and after reset,
+with browser coverage at `/` and `/pc98-rust/`. They require `SMSW PASS`, no `FAIL`
+or host error, exact results and unchanged disk bytes. Generated fixtures and
+license/source copies stay outside publication assets.
+
+This adds readback only. Guest status writers, MOV control-register instructions,
+LMSW, CLTS, protected execution, paging and x87 execution remain unimplemented.
+No whole inventory category is promoted to verified by this bounded acceptance.
 
 ## Ap real-mode GDTR
 

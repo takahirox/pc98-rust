@@ -1,0 +1,23 @@
+{
+  "source": "guest/smsw.asm",
+  "license": "MIT; LICENSE and original assembly copied alongside image",
+  "assembly": "nasm -f bin guest/smsw.asm -o smsw.bin",
+  "source_sha256": "0a24cbaaacf7eb43461975814b0434eadbb7e7534deba4acd51fc9a820217f64",
+  "boot_sha256": "92e54dbe9d54d8f76a7e2b92912382dc4cd45e84ca217f1852234a279155d740",
+  "image": "fixtures/smsw/smsw.hdm",
+  "image_sha256": "f8cfb119774c110bb947b9dd5fa06ac2d2feb9e5067f07df038a00cddd4bbd1a",
+  "geometry": "77 cylinders, 2 heads, 8 sectors, 1024 bytes per sector",
+  "profile": "Ap real mode; no DOS, proprietary ROM or emulator code",
+  "contract": "Reset MSW 0010h, preserved register upper halves and flags, exact two-byte memory stores with either operand size, repeated size overrides, SS SIB, FFFE, atomic DS/SS #GP and LOCK register/memory #UD with six-byte first-prefix frames, guest repair/IRET/retry, Machine reset",
+  "result_address": "0x8000",
+  "result_length": 80,
+  "result_hex": "a51000cdaba5a5a5a51000debca5a5a5a51000a5a5a5a5a5a51000a5a5a5a5a5a51000a5a5a5a5a5a51000a5a5a5a5a5a51000a5a5a5a5a5a51000a5a5a5a5a5a51000efcda5a5a5a50202a5a5a5a5a5",
+  "last_operand_address": "0xfffd",
+  "last_operand_hex": "a51000",
+  "markers": [
+    "SMSW PASS",
+    "SMSW FAIL"
+  ],
+  "slot_budget": 2000000,
+  "distribution": "Test only; excluded from web/"
+}

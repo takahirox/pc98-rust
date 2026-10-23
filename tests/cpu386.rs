@@ -30,6 +30,20 @@ fn fault(c: &Cpu, b: &Bus, vector: u32, restart: u16) {
 }
 
 #[test]
+fn smsw_minimal_register_reproduction() {
+    let (mut c, mut b) = cpu(&[0x0f, 0x01, 0xe0, 0x90]);
+    c.set_reg32(AX, 0xabcdffff);
+    c.flags = 2 | CF | PF | AF | ZF | SF | DF | OF;
+    let flags = c.flags;
+    c.step(&mut b).unwrap();
+    assert_eq!(c.reg32(AX), 0xabcd0010);
+    assert_eq!(c.flags, flags);
+    assert_eq!(c.ip, 0x1003);
+    c.step(&mut b).unwrap();
+    assert_eq!(c.ip, 0x1004);
+}
+
+#[test]
 fn operands_preserve_upper_words_and_repeated_overrides_do_not_toggle() {
     let (mut c, mut b) = cpu(&[
         0x66, 0xb8, 0x78, 0x56, 0x34, 0x12, // mov eax,12345678
@@ -959,19 +973,22 @@ fn gdtr_bus_mapping_a20_rom_and_independent_reset_state() {
 
 #[test]
 fn gdtr_other_group_operations_and_vm_remain_explicitly_unsupported() {
-    for kind in [4, 5, 6, 7] {
+    for kind in [5, 6, 7] {
         let (mut c, mut b) = cpu(&[0x0f, 0x01, (kind << 3) | 6, 0, 0x40]);
         assert!(c
             .step(&mut b)
             .unwrap_err()
             .contains("unimplemented i486 opcode 0F 01"));
     }
-    let (mut c, mut b) = cpu(&[0x0f, 0x01, 0x16, 0, 0x40]);
-    b.profile = Profile::Pc9801Vm;
-    assert!(c
-        .step(&mut b)
-        .unwrap_err()
-        .contains("unsupported V30 opcode 0F 01"));
+    for modrm in [0x16, 0x26, 0xe0] {
+        // LGDT and both SMSW destination forms.
+        let (mut c, mut b) = cpu(&[0x0f, 0x01, modrm, 0, 0x40]);
+        b.profile = Profile::Pc9801Vm;
+        assert!(c
+            .step(&mut b)
+            .unwrap_err()
+            .contains("unsupported V30 opcode 0F 01"));
+    }
 }
 
 #[test]
@@ -1706,6 +1723,342 @@ fn idtr_original_boot_probe_before_and_after_machine_reset() {
         assert!(m.error.is_none());
         assert_eq!((m.cpu.ip, m.cpu.r[SP], m.cpu.retired), before);
         assert_eq!(m.bus.pics[0].isr, 0);
+        assert_eq!(m.bus.disks[0].as_ref().unwrap().bytes, image);
+    }
+}
+
+// Original Issue #39 acceptance. No status-writing guest instructions are added.
+#[test]
+fn smsw_all_registers_sizes_repeated_overrides_and_unrelated_state() {
+    for operand32 in [false, true] {
+        for address32 in [false, true] {
+            for destination in 0..8 {
+                let mut code = vec![0x26, 0x65];
+                if operand32 {
+                    code.extend_from_slice(&[0x66, 0x66]);
+                }
+                if address32 {
+                    code.extend_from_slice(&[0x67, 0x67]);
+                }
+                code.extend_from_slice(&[0x0f, 0x01, 0xe0 | destination as u8]);
+                let (mut c, mut b) = cpu(&code);
+                for r in 0..8 {
+                    c.set_reg32(r, 0xabcd1234 + r as u32 * 0x10001);
+                }
+                c.s[DS] = 0x3000;
+                c.extra_segments = [0x5000, 0x6000];
+                c.flags = 2 | CF | PF | AF | ZF | SF | IF | DF | OF;
+                c.flags_upper = 4;
+                c.gdtr_base = 0xabcdef01;
+                let saved = c.clone();
+                let memory = b.mem.clone();
+                c.step(&mut b).unwrap();
+                let mut expected = saved.r;
+                expected[destination] = 0x10;
+                assert_eq!(c.r, expected);
+                assert_eq!(c.upper, saved.upper);
+                smsw_preserved(&c, &saved);
+                assert_eq!(b.mem, memory);
+                assert_eq!(c.ip, 0x1000 + code.len() as u32);
+                assert_eq!(c.retired, 1);
+            }
+        }
+    }
+}
+
+fn smsw_preserved(c: &Cpu, saved: &Cpu) {
+    assert_eq!(c.s, saved.s);
+    assert_eq!(c.extra_segments, saved.extra_segments);
+    assert_eq!((c.flags, c.flags_upper), (saved.flags, saved.flags_upper));
+    assert_eq!(
+        (c.gdtr_limit, c.gdtr_base),
+        (saved.gdtr_limit, saved.gdtr_base)
+    );
+    assert_eq!(
+        (c.idtr_limit, c.idtr_base),
+        (saved.idtr_limit, saved.idtr_base)
+    );
+    assert_eq!(c.machine_status, saved.machine_status);
+    assert_eq!(c.shutdown, saved.shutdown);
+    assert_eq!(c.halted, saved.halted);
+}
+
+#[test]
+fn smsw_memory_sizes_sib_segments_unaligned_and_exact_width() {
+    // 16-bit [bx+si], [bp+si], disp16 and all segment overrides;
+    // 32-bit scaled SIB, EBP/ESP defaults, index-only EBP (DS), disp32.
+    type MemoryCase = (bool, &'static [u8], &'static [u8], usize, usize);
+    let cases: &[MemoryCase] = &[
+        (false, &[], &[0x20], DS, 0x4021),
+        (false, &[], &[0x22], SS, 0x4121),
+        (false, &[], &[0x26, 1, 0x40], DS, 0x4001),
+        (false, &[0x26], &[0x27], ES, 0x4001),
+        (false, &[0x2e], &[0x27], CS, 0x4001),
+        (false, &[0x36], &[0x27], SS, 0x4001),
+        (false, &[0x3e], &[0x62, 0], DS, 0x4121),
+        (false, &[0x64], &[0x27], 4, 0x4001),
+        (false, &[0x26, 0x64, 0x65], &[0x27], 5, 0x4001),
+        (true, &[], &[0x64, 0x8b, 1], DS, 0x4022),
+        (true, &[], &[0xa4, 0x8b, 0xf0, 0xff, 0xff, 0xff], DS, 0x4011),
+        (true, &[], &[0x64, 0x25, 0], SS, 0x4101),
+        (true, &[], &[0x24, 0x24], SS, 0x9000),
+        (true, &[], &[0x24, 0x2d, 0, 0, 0, 0], DS, 0x4101),
+        (true, &[], &[0x25, 1, 0x40, 0, 0], DS, 0x4001),
+        (true, &[0x26], &[0x23], ES, 0x4001),
+        (true, &[0x2e], &[0x23], CS, 0x4001),
+        (true, &[0x36], &[0x23], SS, 0x4001),
+        (true, &[0x3e], &[0x65, 0], DS, 0x4101),
+        (true, &[0x64], &[0x23], 4, 0x4001),
+        (true, &[0x26, 0x64, 0x65], &[0x23], 5, 0x4001),
+    ];
+    for &(address32, prefixes, encoding, segment, offset) in cases {
+        for operand32 in [false, true] {
+            for status in [0x10, 0xa53f] {
+                let mut code = prefixes.to_vec();
+                if operand32 {
+                    code.extend_from_slice(&[0x66, 0x66]);
+                }
+                if address32 {
+                    code.extend_from_slice(&[0x67, 0x67]);
+                }
+                code.extend_from_slice(&[0x0f, 0x01]);
+                code.extend_from_slice(encoding);
+                let (mut c, mut b) = cpu(&code);
+                c.machine_status = status; // Host-only state variation proves CPU-local readback.
+                c.s[DS] = 0x3000;
+                c.s[ES] = 0x4000;
+                c.s[SS] = 0x5000;
+                c.extra_segments = [0x6000, 0x7000];
+                c.set_reg32(BX, 0x4001);
+                c.set_reg32(BP, 0x4101);
+                c.set_reg32(CX, 8);
+                c.set_reg32(SI, 0x20);
+                c.flags = 2 | CF | PF | AF | ZF | SF | IF | DF | OF;
+                c.flags_upper = 4;
+                let seg = if segment < 4 {
+                    c.s[segment]
+                } else {
+                    c.extra_segments[segment - 4]
+                };
+                let address = seg as usize * 16 + offset;
+                b.mem[address - 1..address + 5].fill(0xa5);
+                let saved = c.clone();
+                let mut expected = b.mem.clone();
+                expected[address..address + 2].copy_from_slice(&status.to_le_bytes());
+                c.step(&mut b).unwrap();
+                assert_eq!(b.mem, expected, "{code:02x?}");
+                assert_eq!(c.r, saved.r);
+                assert_eq!(c.upper, saved.upper);
+                smsw_preserved(&c, &saved);
+                assert_eq!(c.ip, 0x1000 + code.len() as u32);
+            }
+        }
+    }
+}
+
+#[test]
+fn smsw_limits_gp_even_for_ss_atomic_frame_and_iret_retry() {
+    for operand32 in [false, true] {
+        for address32 in [false, true] {
+            for stack in [false, true] {
+                for offset in [0xfffe, 0xffff, 0x10000, u32::MAX] {
+                    if !address32 && offset > 0xffff {
+                        continue;
+                    }
+                    let mut code = vec![if stack { 0x36 } else { 0x3e }];
+                    if operand32 {
+                        code.push(0x66);
+                    }
+                    if address32 {
+                        code.push(0x67);
+                    }
+                    code.extend_from_slice(&[
+                        0x0f,
+                        0x01,
+                        if stack {
+                            if address32 {
+                                0x65
+                            } else {
+                                0x66
+                            }
+                        } else if address32 {
+                            0x63
+                        } else {
+                            0x67
+                        },
+                        0,
+                    ]);
+                    let (mut c, mut b) = cpu(&code);
+                    let reg = if stack { BP } else { BX };
+                    c.set_reg32(reg, offset);
+                    c.flags = 2 | CF | DF | OF;
+                    b.mem[0xfffd..0x10004].fill(0xa5);
+                    let saved = c.clone();
+                    let mut expected = b.mem.clone();
+                    c.step(&mut b).unwrap();
+                    if offset == 0xfffe {
+                        expected[0xfffe..0x10000].copy_from_slice(&[0x10, 0]);
+                        assert_eq!(b.mem, expected);
+                        assert_eq!(c.r, saved.r);
+                        assert_eq!(c.upper, saved.upper);
+                        smsw_preserved(&c, &saved);
+                        continue;
+                    }
+                    fault(&c, &b, 13, 0x1000);
+                    expected[0x8ffa..0x9000].copy_from_slice(&[
+                        0,
+                        0x10,
+                        0,
+                        0,
+                        saved.flags as u8,
+                        (saved.flags >> 8) as u8,
+                    ]);
+                    assert_eq!(b.mem, expected); // Only the six-byte exception frame changed.
+                    assert_eq!(c.reg32(reg), offset);
+                    assert_eq!(c.machine_status, saved.machine_status);
+                    assert_eq!(c.flags_upper, saved.flags_upper);
+                    b.mem[c.ip as usize] = 0xcf;
+                    c.set_reg32(reg, 0x4001);
+                    b.mem[0x4000..0x4005].fill(0xa5);
+                    c.step(&mut b).unwrap();
+                    assert_eq!((c.ip, c.r[SP], c.flags), (0x1000, 0x9000, saved.flags));
+                    c.step(&mut b).unwrap();
+                    assert_eq!(c.ip, 0x1000 + code.len() as u32);
+                    assert_eq!(&b.mem[0x4000..0x4005], &[0xa5, 0x10, 0, 0xa5, 0xa5]);
+                    smsw_preserved(&c, &saved);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn smsw_lock_ud_register_memory_first_prefix_repair_and_retry() {
+    for operand32 in [false, true] {
+        for memory in [false, true] {
+            let mut code = vec![0x26, 0xf0];
+            if operand32 {
+                code.push(0x66);
+            }
+            code.extend_from_slice(&[0x0f, 0x01, if memory { 0x27 } else { 0xe0 }]);
+            let (mut c, mut b) = cpu(&code);
+            c.set_reg32(AX, 0xabcdffff);
+            c.r[BX] = 0x4001;
+            c.flags = 2 | CF | DF | OF;
+            let saved = c.clone();
+            b.mem[0x4000..0x4005].fill(0xa5);
+            c.step(&mut b).unwrap();
+            fault(&c, &b, 6, 0x1000);
+            assert_eq!(b.read16(0x8ffe), saved.flags);
+            assert_eq!(c.reg32(AX), saved.reg32(AX));
+            assert_eq!(&b.mem[0x4000..0x4005], &[0xa5; 5]);
+            b.mem[c.ip as usize] = 0xcf;
+            c.step(&mut b).unwrap();
+            c.step(&mut b).unwrap(); // Unrepaired LOCK faults again.
+            fault(&c, &b, 6, 0x1000);
+            b.mem[0x1001] = 0x3e; // Repair LOCK in place, retain prefix length.
+            c.step(&mut b).unwrap();
+            assert_eq!(c.ip, 0x1000);
+            c.step(&mut b).unwrap();
+            assert_eq!(c.ip, 0x1000 + code.len() as u32);
+            assert_eq!(c.r[SP], 0x9000);
+            assert_eq!(c.reg32(AX), if memory { 0xabcdffff } else { 0xabcd0010 });
+            assert_eq!(
+                &b.mem[0x4000..0x4005],
+                if memory {
+                    &[0xa5, 0x10, 0, 0xa5, 0xa5]
+                } else {
+                    &[0xa5; 5]
+                }
+            );
+            smsw_preserved(&c, &saved);
+        }
+    }
+}
+
+#[test]
+fn smsw_bus_a20_rom_cpu_isolation_and_machine_reset_readback() {
+    let (mut c, mut b) = cpu(&[0x64, 0x66, 0x0f, 0x01, 0x26, 0x20, 0]);
+    c.extra_segments[0] = 0xffff;
+    for a20 in [false, true] {
+        if a20 {
+            b.output(0xf2, 0);
+        } else {
+            b.output(0xf6, 3);
+        }
+        assert_eq!(b.a20, a20);
+        b.mem[0xf..0x15].fill(0xa5);
+        b.mem[0x10000f..0x100015].fill(0xa5);
+        c.ip = 0x1000;
+        c.step(&mut b).unwrap();
+        let address = if a20 { 0x10000f } else { 0xf };
+        let untouched = if a20 { 0xf } else { 0x10000f };
+        assert_eq!(
+            &b.mem[address..address + 6],
+            &[0xa5, 0x10, 0, 0xa5, 0xa5, 0xa5]
+        );
+        assert_eq!(&b.mem[untouched..untouched + 6], &[0xa5; 6]);
+    }
+    c.extra_segments[0] = 0xf000;
+    b.mem[0xf001f..0xf0025].fill(0xa5);
+    c.ip = 0x1000;
+    c.step(&mut b).unwrap();
+    assert_eq!(&b.mem[0xf001f..0xf0025], &[0xa5; 6]);
+    let (mut other, mut other_bus) = cpu(&[0x0f, 0x01, 0xe0]);
+    c.machine_status = 0xa53f;
+    other.step(&mut other_bus).unwrap();
+    assert_eq!(other.r[AX], 0x10);
+    c.ip = 0x1000;
+    b.mem[0x1000..0x1003].copy_from_slice(&[0x0f, 0x01, 0xe0]);
+    c.step(&mut b).unwrap();
+    assert_eq!(c.r[AX], 0xa53f);
+    let mut m = Machine::new(Profile::Pc9821ApDos);
+    m.cpu = c;
+    m.reset();
+    assert_eq!(m.cpu.machine_status, 0x10);
+    m.cpu.s = [0; 4];
+    m.cpu.ip = 0x1000;
+    m.cpu.set_reg32(AX, 0xdeadffff);
+    m.bus.mem[0x1000..0x1004].copy_from_slice(&[0x66, 0x0f, 0x01, 0xe0]);
+    m.cpu.step(&mut m.bus).unwrap();
+    assert_eq!(m.cpu.reg32(AX), 0xdead0010);
+    assert_eq!(other.machine_status, 0x10);
+}
+
+#[test]
+fn smsw_original_boot_probe_before_and_after_machine_reset() {
+    let image = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/fixtures/smsw/smsw.hdm"
+    ))
+    .expect("run python3 tools/prepare_smsw_fixture.py");
+    let mut m = Machine::new(Profile::Pc9821ApDos);
+    m.insert(0, image.clone(), "smsw.hdm").unwrap();
+    for run in 0..2 {
+        if run == 1 {
+            m.reset();
+        }
+        let mut slots = 0;
+        for _ in 0..20 {
+            slots += m.step(100_000);
+            assert!(m.error.is_none(), "{:?}", m.error);
+            if m.bus.text().contains("SMSW PASS") || m.bus.text().contains("SMSW FAIL") {
+                break;
+            }
+        }
+        assert!(m.bus.text().contains("SMSW PASS"), "{}", m.bus.text());
+        assert!(!m.bus.text().contains("FAIL"));
+        assert!(slots <= 2_000_000);
+        let mut expected = [0xa5; 80];
+        for (offset, value) in [(1, 0xabcd0010u32), (9, 0xbcde0010), (65, 0xcdef0010)] {
+            expected[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        for offset in [17, 25, 33, 41, 49, 57] {
+            expected[offset..offset + 2].copy_from_slice(&[0x10, 0]);
+        }
+        expected[73..75].copy_from_slice(&[2, 2]);
+        assert_eq!(&m.bus.mem[0x8000..0x8050], &expected);
+        assert_eq!(&m.bus.mem[0xfffd..0x10000], &[0xa5, 0x10, 0]);
         assert_eq!(m.bus.disks[0].as_ref().unwrap().bytes, image);
     }
 }
