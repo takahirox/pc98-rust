@@ -239,6 +239,8 @@ impl Pit {
 pub struct Dma {
     pub addr: [u16; 4],
     pub count: [u16; 4],
+    pub(crate) base_addr: [u16; 4],
+    pub(crate) base_count: [u16; 4],
     pub page: [u8; 4],
     pub mode: [u8; 4],
     pub mask: u8,
@@ -267,16 +269,20 @@ impl Dma {
         match p {
             1..=15 => {
                 let i = ((p - 1) / 4) as usize;
-                let reg = if p & 2 == 0 {
-                    &mut self.addr[i]
+                let (reg, base) = if p & 2 == 0 {
+                    (&mut self.addr[i], &mut self.base_addr[i])
                 } else {
-                    &mut self.count[i]
+                    (&mut self.count[i], &mut self.base_count[i])
                 };
-                *reg = if self.high {
-                    (*reg & 255) | ((v as u16) << 8)
-                } else {
-                    (*reg & 0xff00) | v as u16
-                };
+                // Each byte updates both registers, preserving each one's other
+                // byte even when the current register has progressed since setup.
+                for word in [reg, base] {
+                    *word = if self.high {
+                        (*word & 255) | ((v as u16) << 8)
+                    } else {
+                        (*word & 0xff00) | v as u16
+                    };
+                }
                 self.high = !self.high;
             }
             0x15 => {
@@ -309,7 +315,9 @@ impl Dma {
     pub fn address(&self, n: usize) -> usize {
         ((self.page[n] as usize) << 16) | self.addr[n] as usize
     }
-    pub fn advance(&mut self, n: usize) {
+    /// Advance one serviced byte and report this transfer's terminal-count pulse.
+    /// The pulse is independent of the sticky status and auto-init readback.
+    pub fn advance(&mut self, n: usize) -> bool {
         self.addr[n] = if self.mode[n] & 0x20 != 0 {
             self.addr[n].wrapping_sub(1)
         } else {
@@ -320,8 +328,13 @@ impl Dma {
             self.status |= 1 << n;
             if self.mode[n] & 16 == 0 {
                 self.mask |= 1 << n;
+            } else {
+                self.addr[n] = self.base_addr[n];
+                self.count[n] = self.base_count[n];
             }
+            return true;
         }
+        false
     }
 }
 #[derive(Clone)]

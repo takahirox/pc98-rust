@@ -1,0 +1,17 @@
+{
+  "source": "guest/dma_autoinit.asm",
+  "license": "MIT; LICENSE copied alongside the generated image",
+  "assembly": "nasm -f bin guest/dma_autoinit.asm -o autoinit.bin",
+  "source_sha256": "39b1fc6b5cbd20b24952809fd44626eb7e5f19d5b624c0735f99beb8e05729e3",
+  "boot_sha256": "fdbd45eb4b2c142b40da00fdd42d13072cee22d8096995dd6ee7bf6fb889d506",
+  "image": "fixtures/dma/autoinit.hdm",
+  "image_sha256": "6a6ad8aa20488741613e0760924a2e4001d418a16f5a08f53bdacfc4113b3a70",
+  "geometry": "77 cylinders, 2 heads, 8 sectors, 1024 bytes per sector",
+  "contract": "Two raw READ DATA and two raw WRITE DATA commands; one DMA setup per direction; register reload, buffer patterns, guards, result bytes and IRQ; bounded waits",
+  "markers": [
+    "DMA AUTO INIT PASS",
+    "DMA AUTO INIT FAIL"
+  ],
+  "slot_budget": 2000000,
+  "distribution": "Test only; no proprietary software or firmware; excluded from web/"
+}

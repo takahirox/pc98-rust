@@ -395,3 +395,100 @@ Native tests also cover upper registers, unrelated work bits, GDC/FIFO/scan stat
 all unsupported CH values and preserved VM rejection. These are bounded BIOS
 contract checks; PIPOO was not acquired or run and no playability is claimed.
 No push, PR, merge, comment or post-merge verification was performed or required.
+
+## Issue #29: DMA terminal-count auto-init
+
+Local macOS arm64 validation on 2026-10-23 implements only the
+[bounded DMA contract](hardware.md#dma-terminal-count-and-auto-initialization).
+Base address/count bytes are retained independently of current progress. Each
+serviced byte reports a fresh TC event; FDC completion consumes that event even
+when auto-init has already reloaded the registers or the status latch is still
+set from a prior command. Existing PC-98 bank mapping and all other hardware
+inventory categories and required scope are preserved.
+
+The five original native tests in `tests/dma.rs` cover:
+
+- A 64-case matrix: four channels × increment/decrement × auto-init on/off ×
+  counts `0`, `1`, `03FFh`, `FFFFh`, each serviced twice. Independently calculated
+  address/count expectations check intermediate reads, wrapping, TC pulses,
+  mask/status behavior, no bank carry and channel isolation.
+- Shared read/write byte-pointer sequencing and individual low/high address/count
+  byte writes after partial progress on every channel. Interleaved channels also
+  verify independent bases, masks and accumulated clear-on-read TC latches.
+- Both profiles, both transfer directions and lengths 1024, 2048, 1301 and 37:
+  two same-direction raw FDC commands reuse the buffer without DMA reprogramming.
+  Each verifies exact bytes and guards (whole-image comparison for writes),
+  termination before EOT, seven normal result bytes, IRQ 13h and command readiness.
+  TC status remains latched between commands, including multi-sector transfers.
+- The original MIT boot probe on VM and Ap, including exact disk writes and
+  unchanged surrounding media.
+
+The separate test-only `fixtures/dma/autoinit.hdm` is generated offline from
+[guest/dma_autoinit.asm](../guest/dma_autoinit.asm) by
+`python3 tools/prepare_dma_fixture.py`. Its
+[checked manifest](../fixtures/dma-manifest.json) records MIT rights, the exact
+`nasm -f bin guest/dma_autoinit.asm -o autoinit.bin` command, source/boot/image
+SHA-256 values and the two-million-slot test budget. The generated directory
+also retains source, manifest and LICENSE. It is ignored build output outside
+`web/`; no existing fixture or distributable asset was modified.
+
+After the synthetic IPL loads the boot sector, the probe uses raw DMA/FDC ports
+and its own IR11 handler: two reads of differently patterned sectors, then two
+writes with distinct payloads, with only one DMA setup per direction. It checks
+reloaded current registers, buffer patterns and guards, normal seven-byte result
+phases and a new IRQ for each command. All waits are bounded; it prints exactly
+`DMA AUTO INIT PASS` or `DMA AUTO INIT FAIL` and halts. Native `Machine` and
+production-Wasm browser tests execute the same image. The four browser cases
+cover both VM/Ap profiles at `/` and `/pc98-rust/`, checking the full exported
+image, final buffer and guards. This probe needs no DOS or proprietary software.
+
+Regression sensitivity was checked in a temporary export of baseline
+`e75c1b848c955111f641cc7ed7611d588faa85fc`, without changing this worktree's
+implementation. The new test's API-compatible raw FDC helpers and boot-probe
+tests were copied to `tests/dma_regression.rs`, together with the generated disk.
+`cargo test --locked --test dma_regression` exited 101 with both tests failing:
+readback was `2400h` instead of `2000h`, and the guest printed
+`DMA AUTO INIT FAIL`. The unchanged new tests pass with this implementation.
+
+| Command | Result |
+| --- | --- |
+| `python3 tools/prepare_dma_fixture.py` | Passed; image SHA-256 `6a6ad8aa20488741613e0760924a2e4001d418a16f5a08f53bdacfc4113b3a70` |
+| `python3 tools/prepare_freedos.py` | Passed; existing legal guest preparation unchanged |
+| `python3 tools/prepare_font_fixture.py` | Passed |
+| `python3 tools/prepare_dos_apps.py` | Passed |
+| `python3 tools/prepare_cpu_fixture.py` | Passed after obtaining the exact pinned archive from the Princeton FreeDOS mirror |
+| `python3 tools/prepare_hdd_fixture.py` | Passed |
+| `python3 tools/prepare_music_fixture.py` | Passed |
+| `python3 tools/prepare_device_fixture.py` | Passed after obtaining the exact pinned archive from the GWDG FreeDOS mirror |
+| `python3 tools/build_media.py --check` | Passed; established firmware/demo disk bytes unchanged |
+| `python3 tools/build_font.py --check` | Passed; established font bytes unchanged |
+| `cargo test --locked` | Passed: 105 native integration tests; zero failures or ignored tests |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `cargo fmt --check` | Passed |
+| `npm ci` | Passed; zero reported vulnerabilities |
+| `npx playwright install chromium` | Passed |
+| `npm test` | Media/font checks, production release Wasm and exact ten-asset publication audit passed; browser startup failed because port 8000 was already occupied |
+| `npm test -- --config=playwright.issue29.config.js` | Passed: 48 Chromium/Wasm tests in 24.2 seconds, including all four new DMA cases and all existing acceptance assertions |
+| `git diff --check` | Passed |
+
+The CPULEVEL and DEBUG preparation URLs initially returned HTTP 503. The first
+native suite therefore stopped on the missing CPU fixture; no tests were skipped.
+The successful mirror downloads were
+[CPULEVEL](https://mirror.math.princeton.edu/pub/freeDOS/files/util/system/cpulevel/cpulevel2007.zip)
+and [DEBUG 1.25](https://ftp.gwdg.de/pub/misc/freedos/files/dos/debug/DEBUG125.zip).
+Both matched the existing pinned archive hashes exactly, and their unchanged
+preparation scripts then verified their existing manifests. No checksum,
+provenance, certificate requirement or existing test assertion was weakened.
+
+The temporary browser config imported the repository config and changed only
+ports/base URLs to 18000/18001 and the corresponding server commands. It served
+the same `web/` at the root and through a temporary `pc98-rust` symlink, preserving
+the project server's rejection of root asset URLs. The pre-existing port-8000
+listener was left running; the temporary config was removed after validation.
+
+DMA remains partial: external EOP, transfer/request arbitration, software
+requests, verify, memory-to-memory, cascade/rotating priority and broader device
+interactions are still excluded or unverified. Broader FDC commands and physical
+timing are unchanged. These results establish this contract, not full hardware
+accuracy or commercial compatibility. No push, PR, merge or comment was made;
+no post-merge verification is required by the Issue.
