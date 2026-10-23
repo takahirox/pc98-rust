@@ -2859,3 +2859,102 @@ categories and full scopes remain retained with their existing status (22 partia
 IDE/GRCG implemented_unverified, paging/FPU unimplemented); this bounded acceptance
 upgrades no category and makes no commercial compatibility claim. No required
 post-merge verification was specified.
+
+## Issue #65 V30 memory nibble rotations (2026-10-24)
+
+VM now executes memory-only `ROL4 mem8` (`0F 28 /0`) and `ROR4 mem8`
+(`0F 2A /0`) through the existing effective-address and byte Bus access paths.
+Inputs are snapshotted before outputs change; FLAGS, AH and unrelated registers
+are preserved. NEC leaves AL's upper nibble unspecified; preservation is an
+explicit emulator policy, tested separately from the documented low-nibble
+mapping. See the [hardware contract and specification links](hardware.md#v30-memory-nibble-rotations).
+Register destinations, AL overlap and nonzero ModR/M.reg encodings retain
+unsupported emulator-limitation diagnostics without operand writes. Ap retains
+its existing unimplemented-i486-opcode diagnostic, without a hardware exception
+claim. No other NEC extensions, LOCK/REP behavior or cycle accuracy were added.
+
+Before production changes, added and ran
+`cargo test --locked --test core v30_nibble_mem_minimal_reproduction`.
+Both original reproductions failed (exit 101; 0 passed, 2 failed) with
+`unsupported V30 opcode 0F 28` and `unsupported V30 opcode 0F 2a`.
+The same tests now pass: initial memory `12h`, AX=`5A83h`, FLAGS=`FFD7h` gives
+memory/AX `23h`/`5A81h` for ROL4 and `31h`/`5A82h` for ROR4. Both advance
+exactly five instruction bytes, preserve full FLAGS/AH and then execute the
+following NOP.
+
+Focused native coverage adds 32,768 rotations: all 256 memory bytes, all 16
+incoming AL low nibbles, both directions and four AL upper nibbles. The oracle
+rotates three base-16 digits independently of production shift/mask formulas;
+hardware-defined results and the upper-nibble policy have distinct assertions.
+The 242 addressing cases cover every 16-bit ModR/M family, direct `FFFFh`, signed
+negative disp8, disp16, default DS/SS, all four segment overrides with distinct
+segments, effective-offset and 20-bit physical wrapping, full FLAGS/register
+preservation and forward progress. Whole backing-RAM comparisons assert that
+only the destination changes. ROM writes remain ignored; planar VRAM with GRCG
+disabled reads a byte deliberately different from backing RAM and changes only
+that plane byte. All 464 excluded ModR/M/direction combinations are rejected
+without register or backing-RAM writes. Ap negative tests retain its diagnostic
+without executing NEC rotations or writing operands.
+
+The original MIT [assembly probe](../guest/v30_nibble_mem.asm) boots without DOS,
+commercial media, proprietary ROMs or copied emulator implementation. Four
+rotations include nondecimal A..F, distinct incoming AL upper nibbles and AH,
+complete FLAGS snapshots before/after, immediate operand guards checked after
+every rotation, exact result guards and balanced SP. Only after checking every
+result byte does guest code print `V30 NIBBLE MEM PASS`; AL is masked to its
+hardware-defined low nibble before storage. Hosts only insert, reset, step and
+read/export. The [manifest](../fixtures/v30-nibble-mem-manifest.json) records
+source/license, NASM command, source/boot/image SHA-256, exact result/operand
+bytes, layout, guards and the 2,000,000-slot budget. Preparation is offline:
+`python3 tools/prepare_v30_nibble_mem_fixture.py`. It checks the committed
+manifest and retains original assembly, MIT license and manifest beside the
+image. CI prepares it before native/browser acceptance. Generated media and
+Wasm stay outside Git/publication; the ten-asset publication allowlist is intact.
+
+Final image SHA-256: `ad5c47683981240878359c517a1a2f3bebe4e19e9585a83808cfbb43778f961e`. Exact result bytes at
+`8000h..8023h`: `a523015aa5d7fcd7fc31026ba502f002f0fe0a7ca502f002f0ea0f8da5d7fcd7fca5a5a5`;
+operand/guards at `9000h..9002h`: `a5ea5a`.
+
+Validation in the assigned macOS arm64 worktree:
+
+| Command | Actual outcome |
+| --- | --- |
+| `python3 -m unittest discover -s tools -p test_fixture_fetch.py` | Passed, 7 tests |
+| All README fixture preparation prerequisites | Passed: DMA/GDTR/IDTR/SMSW/PIC/SMM/polling, PIT modes and rewrites/latch, V30 BOUND/REPC, RTC, FreeDOS/font/DOS apps/CPU/HDD/music/devices; CPULEVEL and DEBUG primary HTTP 503 responses recovered through the existing checksum-pinned mirrors |
+| `python3 tools/prepare_v30_nibble_mem_fixture.py` | Passed offline; final checked manifest reproduced |
+| `python3 tools/build_font.py --check` | Passed; unchanged existing font hash |
+| `cargo test --locked --test core v30_nibble_mem_ -- --nocapture` | Passed, 7 tests; final guest boots in 1,000 slots before and after reset |
+| `cargo test --locked --test cpu386 ap_v30_nibble_mem_` | Passed, 1 test |
+| `cargo test --locked` | Passed, all 271 native integration tests across 18 targets, zero failed/ignored; unit/doc targets also passed |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `cargo fmt --check` | Passed |
+| `git diff --check` | Passed |
+| `npm ci` / `npx playwright install chromium` | Passed; zero npm vulnerabilities |
+| `npm test` | Production release-Wasm build and ten-asset publication checks passed; browser startup failed because port 8000 was occupied; no browser tests ran in that attempt |
+| `npm test -- --config=.issue65-playwright.config.js` | Passed: production release-Wasm/publication checks and all 98 browser tests, zero skipped, 1.1 minutes |
+
+The temporary browser configuration imported the checked Playwright configuration
+and changed only serving ports/base URLs to 18000 and 18001. A temporary copy of
+the project server changed only its listening port, retaining this worktree's
+`web/` and root-asset rejection. Both `/` and `/pc98-rust/` ran with the same
+projects, eight default workers, assertions and budgets. Existing listeners were
+untouched and the temporary files were removed. The new probe passed all four
+production release-Wasm boots (before/after reset at both roots) in 1,000 slots
+each, with guest PASS, exact result and immediate operand/guard bytes, unchanged
+disk bytes and no FAIL/core/browser errors. Existing hardware, CPU-shadow,
+DOS/application, VM and six-game assertions and budgets remain intact.
+
+All 26 fixed inventory categories, full scopes and statuses are retained:
+**partial** cpu-v30, cpu386, protected-mode, memory, pic, pit, dma, rtc, keyboard,
+mouse, fdc, gdc, egc, pegc, text-cg, display-timing, opn, opna, pcm86, bios, lio,
+integration; **implemented_unverified** ide, grcg; **unimplemented** paging, fpu.
+V30 still needs register-operand nibble rotations, packed-BCD strings, bit-field
+extensions, TF traps, NMI and broader instruction/prefix/fault acceptance.
+Protected execution, paging and basic x87 retain their fixed required scope.
+No category becomes verified and no full hardware accuracy or commercial
+compatibility is claimed. No required post-merge verification was specified.
+
+Reviewed the final implementation, tests, original fixture, CI preparation and
+documentation diff against every Issue #65 acceptance criterion. No existing
+assertions or budgets were removed or weakened. No push, pull request, merge or
+GitHub comment was performed.

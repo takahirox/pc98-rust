@@ -2321,3 +2321,27 @@ fn fs_gs_string_overrides_preserve_repeat_operand_and_address_sizes() {
         }
     }
 }
+
+#[test]
+fn ap_v30_nibble_mem_retains_unimplemented_diagnostic_without_writes() {
+    for ext in [0x28, 0x2a] {
+        for modrm in [6, 0x0e, 0xc0, 0xc3] {
+            let (mut c, mut b) = cpu(&[0x0f, ext, modrm, 0, 0x30]);
+            c.r[AX] = 0x5a83;
+            c.flags = 2 | CF | PF | AF | ZF | SF | DF | OF;
+            b.mem[0x3000] = 0x12;
+            let before = c.clone();
+            let ram = b.mem.clone();
+            // This is an emulator diagnostic, not an i486 exception claim.
+            assert_eq!(
+                c.step(&mut b).unwrap_err(),
+                format!("unimplemented i486 opcode 0F {ext:02x}")
+            );
+            assert_eq!(c.r, before.r);
+            assert_eq!(c.upper, before.upper);
+            assert_eq!(c.s, before.s);
+            assert_eq!(c.flags, before.flags);
+            assert_eq!(b.mem, ram);
+        }
+    }
+}
