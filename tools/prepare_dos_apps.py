@@ -41,17 +41,29 @@ def sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def fetch(name, url, checksum):
+def fetch(name, url, checksum, *, fallback_urls=()):
     path = DEST / name
+
+    def verify(data):
+        if len(data) > 8 * 1024 * 1024 or sha(data) != checksum:
+            raise ValueError(f'checksum or size mismatch: {name}')
+        return data
+
     if path.exists():
-        data = path.read_bytes()
-    else:
-        with urllib.request.urlopen(url, timeout=60) as response:
-            data = response.read(8 * 1024 * 1024 + 1)
-    if len(data) > 8 * 1024 * 1024 or sha(data) != checksum:
-        raise ValueError(f'checksum or size mismatch: {name}')
-    path.write_bytes(data)
-    return data
+        return verify(path.read_bytes())
+    urls = (url, *fallback_urls)
+    for index, candidate in enumerate(urls):
+        try:
+            with urllib.request.urlopen(candidate, timeout=60) as response:
+                data = verify(response.read(8 * 1024 * 1024 + 1))
+        except (OSError, ValueError) as error:
+            print(f'Failed to fetch {name} from {candidate}: {error}', file=sys.stderr)
+            if index == len(urls) - 1:
+                raise
+        else:
+            # Cache only bytes verified against the same pin at every mirror.
+            path.write_bytes(data)
+            return data
 
 
 def source_file(data, name):

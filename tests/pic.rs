@@ -2,6 +2,22 @@ use pc98_rust::{bus::Bus, devices::Pic, Machine, Profile};
 
 const PROFILES: [Profile; 2] = [Profile::Pc9801Vm, Profile::Pc9821ApDos];
 
+#[test]
+fn smm_minimal_reproduction() {
+    let mut p = pc98_rust::devices::Pic::new(8);
+    p.write(true, 0);
+    p.request(0);
+    assert_eq!(p.ack(), Some(8));
+    p.write(true, 1);
+    p.request(1);
+    assert_eq!(p.pending(), None);
+    p.write(false, 0x68);
+    assert_eq!(p.pending(), Some(1));
+    assert_eq!(p.ack(), Some(9));
+    p.write(false, 0x20);
+    assert_eq!(p.isr, 1);
+}
+
 fn pic(aeoi: bool) -> Pic {
     let mut p = Pic::new(8);
     p.write(false, 0x11);
@@ -18,6 +34,320 @@ fn status(p: &mut Pic, irr: u8, isr: u8, mask: u8) {
     p.write(false, 0x0b);
     assert_eq!(p.read(false), isr, "ISR");
     assert_eq!(p.read(true), mask, "IMR");
+}
+
+#[test]
+fn smm_arbitration_and_mask_transitions_at_every_priority_origin() {
+    for lowest in 0..8 {
+        let mut p = pic(false);
+        p.write(false, 0xc0 | lowest);
+        let [a, b, c, d] = [1, 2, 3, 4].map(|offset| (lowest + offset) & 7);
+        let bits = |lines: &[u8]| lines.iter().fold(0, |mask, n| mask | (1 << n));
+        for n in [c, a] {
+            p.request(n);
+            assert_eq!(p.ack(), Some(8 + n));
+        }
+        for n in [a, b, c, d] {
+            p.request(n);
+        }
+        p.write(true, 1 << a);
+        let irr = bits(&[a, b, c, d]);
+        status(&mut p, irr, bits(&[a, c]), 1 << a);
+        assert_eq!(p.ack(), None);
+        p.write(false, 0x68);
+        status(&mut p, irr, bits(&[a, c]), 1 << a);
+        assert_eq!(p.ack(), Some(8 + b));
+        status(&mut p, bits(&[a, c, d]), bits(&[a, b, c]), 1 << a);
+        assert_eq!(p.pending(), None); // unmasked ISR b still blocks
+        p.write(false, 0x20);
+        status(&mut p, bits(&[a, c, d]), bits(&[a, c]), 1 << a);
+        assert_eq!(p.pending(), None); // unmasked ISR c blocks itself and d
+        p.write(true, bits(&[a, c]));
+        assert_eq!(p.pending(), Some(d));
+        p.write(false, 0x48);
+        status(&mut p, bits(&[a, c, d]), bits(&[a, c]), bits(&[a, c]));
+        assert_eq!(p.pending(), None);
+        p.write(false, 0x68);
+        assert_eq!(p.pending(), Some(d));
+        p.write(true, 1 << c); // unmasking an ISR restores its blocking
+        assert_eq!(p.pending(), None);
+        p.write(true, bits(&[a, c]));
+        assert_eq!(p.ack(), Some(8 + d));
+        status(&mut p, bits(&[a, c]), bits(&[a, c, d]), bits(&[a, c]));
+        p.write(false, 0x20);
+        p.write(false, 0x60 | a);
+        p.write(false, 0x60 | c);
+        status(&mut p, bits(&[a, c]), 0, bits(&[a, c]));
+        assert_eq!(p.ack(), None); // masks still inhibit requests, retaining IRR
+        p.write(true, 0);
+        assert_eq!(p.ack(), Some(8 + a));
+        status(&mut p, 1 << c, 1 << a, 0);
+    }
+}
+
+#[test]
+fn smm_eoi_selection_rotation_and_empty_eligible_sets_at_every_origin() {
+    for lowest in 0..8 {
+        let [a, b, c, d, e, f] = [1, 2, 3, 4, 5, 6].map(|n| (lowest + n) & 7);
+        let service = (1 << a) | (1 << c) | (1 << e);
+        let mask = (1 << a) | (1 << e);
+        for command in [0x20, 0xa0, 0x60 | e, 0xe0 | e] {
+            let mut p = pic(false);
+            p.write(false, 0xc0 | lowest);
+            for n in [e, c, a] {
+                p.request(n);
+                assert_eq!(p.ack(), Some(8 + n));
+            }
+            for n in 0..8 {
+                p.request(n);
+            }
+            p.write(true, mask);
+            p.write(false, 0x68);
+            let specific = command & 0x40 != 0;
+            p.write(false, command);
+            status(
+                &mut p,
+                255,
+                service & !(1 << if specific { e } else { c }),
+                mask,
+            );
+            let next = match command {
+                0xa0 => d,
+                v if v & 0xe0 == 0xe0 => f,
+                _ => b,
+            };
+            assert_eq!(p.ack(), Some(8 + next));
+            status(
+                &mut p,
+                !(1 << next),
+                (service & !(1 << if specific { e } else { c })) | (1 << next),
+                mask,
+            );
+        }
+        for command in [0x20, 0xa0] {
+            let mut p = pic(false);
+            p.write(false, 0xc0 | lowest);
+            for n in [e, c, a] {
+                p.request(n);
+                assert_eq!(p.ack(), Some(8 + n));
+            }
+            p.write(true, service);
+            p.write(false, 0x68);
+            for n in 0..8 {
+                p.request(n);
+            }
+            for _ in 0..3 {
+                p.write(false, command);
+                status(&mut p, 255, service, service);
+                assert_eq!(p.pending(), Some(b));
+            }
+            // Unmask after nonrotating specific EOIs so even rotation to a
+            // masked line would be visible in the next delivered vector.
+            let mut order_check = p.clone();
+            for n in [a, c, e] {
+                order_check.write(false, 0x60 | n);
+            }
+            order_check.write(true, 0);
+            status(&mut order_check, 255, 0, 0);
+            assert_eq!(order_check.ack(), Some(8 + a));
+            p.write(false, 0x48);
+            assert_eq!(p.pending(), None);
+            p.write(false, 0x20); // normal mode again clears masked ISR a
+            status(&mut p, 255, service & !(1 << a), service);
+            assert_eq!(p.ack(), Some(8 + b));
+        }
+    }
+}
+
+#[test]
+fn smm_combined_status_commands_and_esmm_qualification_are_independent() {
+    let mut p = pic(false);
+    p.write(false, 0xc3); // 4 highest
+    p.request(4);
+    assert_eq!(p.ack(), Some(12));
+    p.write(true, 0x10);
+    p.request(4);
+    p.request(5);
+    p.request(0);
+    // command, selected register value, resulting arbitration
+    for (command, read, pending) in [
+        (0x2a, 0x31, None), // ESMM=0 cannot enable SMM
+        (0x6b, 0x10, Some(5)),
+        (0x08, 0x10, Some(5)), // RR=0 preserves status, ESMM=0 preserves mode
+        (0x28, 0x10, Some(5)),
+        (0x6a, 0x31, Some(5)),
+        (0x4b, 0x10, None),
+        (0x2b, 0x10, None),
+        (0x68, 0x10, Some(5)), // mode-only command preserves ISR selection
+        (0x0a, 0x31, Some(5)), // status-only command cannot disable SMM
+        (0x4a, 0x31, None),
+        (0x48, 0x31, None),
+    ] {
+        p.write(false, command);
+        for _ in 0..3 {
+            assert_eq!(p.read(false), read);
+            assert_eq!(p.read(true), 0x10);
+            assert_eq!((p.irr, p.isr, p.mask), (0x31, 0x10, 0x10));
+            assert_eq!(p.pending(), pending);
+        }
+    }
+    p.write(false, 0x68);
+    assert_eq!(p.ack(), Some(13)); // priority survived every transition/read
+}
+
+fn assert_normal_mode(p: &mut Pic) {
+    p.write(true, 0);
+    p.request(0);
+    assert_eq!(p.ack(), Some(p.base));
+    p.write(true, 1);
+    p.request(1);
+    status(p, 2, 1, 1);
+    assert_eq!(p.pending(), None);
+    p.write(false, 0x20); // normal nonspecific EOI clears masked ISR
+    status(p, 2, 0, 1);
+    assert_eq!(p.ack(), Some(p.base + 1));
+}
+
+#[test]
+fn smm_construction_icw1_machine_reset_and_instance_isolation() {
+    assert_normal_mode(&mut Pic::new(8));
+    for icw4 in [false, true] {
+        let mut p = pic(false);
+        p.write(false, 0x68);
+        p.write(false, if icw4 { 0x11 } else { 0x10 });
+        status(&mut p, 0, 0, 0);
+        p.write(true, 8);
+        p.write(true, 0x80);
+        if icw4 {
+            p.write(true, 1);
+        }
+        assert_normal_mode(&mut p);
+    }
+    for profile in PROFILES {
+        let mut m = Machine::new(profile);
+        let mut other = Machine::new(profile);
+        for p in &mut m.bus.pics {
+            p.write(false, 0x68);
+        }
+        for p in &mut other.bus.pics {
+            assert_normal_mode(p);
+        }
+        m.reset();
+        for p in &mut m.bus.pics {
+            status(p, 0, 0, 255);
+            assert_normal_mode(p);
+        }
+    }
+}
+
+#[test]
+fn smm_master_slave_ports_and_cascade_keep_modes_and_eois_independent() {
+    for profile in PROFILES {
+        let mut b = Bus::new(profile);
+        b.output(2, 0x7f); // only cascade IR7
+        b.output(10, 0);
+        b.pics[1].request(0);
+        assert_eq!(b.irq(), Some(0x10));
+        b.output(10, 1); // slave ISR0 masked
+        b.pics[1].request(1);
+        assert_eq!(b.irq(), None);
+        b.output(0, 0x68); // enabling master does not enable slave
+        assert_eq!(b.pics[1].pending(), None);
+        b.output(8, 0x6b);
+        assert_eq!(b.pics[1].pending(), Some(1));
+        assert_eq!(b.irq(), None); // unmasked master ISR7 still blocks cascade
+        b.output(0, 0x20);
+        assert_eq!(b.irq(), Some(0x11));
+        for (port, value) in [(0, 0x80), (8, 3), (2, 0x7f), (10, 1)] {
+            if port == 0 {
+                b.output(port, 0x0b);
+            }
+            assert_eq!(b.input(port), value);
+        }
+        b.output(8, 0x20); // skip masked slave ISR0, clear ISR1
+        assert_eq!(b.input(8), 1);
+        b.pics[1].request(2);
+        assert_eq!(b.irq(), None); // slave EOI did not complete master ISR7
+        b.output(0, 0x20);
+        assert_eq!(b.irq(), Some(0x12));
+        b.output(8, 0x20);
+        b.output(0, 0x20);
+        b.output(8, 0x4b); // disable slave; master remains special-mask
+        b.pics[1].request(3);
+        assert_eq!(b.irq(), None);
+        b.pics[0].request(0);
+        b.output(2, 0x7e);
+        assert_eq!(b.irq(), Some(8));
+        b.output(2, 0x7f); // mask master ISR0
+        b.pics[0].request(1);
+        b.output(2, 0x7d); // unmask IR1, retain mask on IR0
+        assert_eq!(b.irq(), Some(9)); // master mode survived slave disable
+        b.output(0, 0x20);
+        b.output(0, 0x60);
+        b.output(8, 0x60); // specific EOI can clear masked slave ISR0
+        assert_eq!(b.irq(), Some(0x13));
+        b.output(8, 0x20);
+        b.output(0, 0x20);
+        for port in [0, 8] {
+            b.output(port, 0x0a);
+            assert_eq!(b.input(port), 0);
+            b.output(port, 0x0b);
+            assert_eq!(b.input(port), 0);
+        }
+        assert_eq!(b.input(2), 0x7d);
+        assert_eq!(b.input(10), 1);
+    }
+}
+
+#[test]
+fn smm_hardware_irq_nesting_probe_before_and_after_reset_in_both_profiles() {
+    let image = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/fixtures/pic_smm/pic_smm.hdm"
+    ))
+    .expect("run python3 tools/prepare_pic_smm_fixture.py");
+    let expected = [
+        0xa5, 2, 3, 1, 0x1c, 3, 0, 1, 1, 0, 1, 0xa5, 2, 3, 2, 0xa5, 1, 0xfe, 0, 0, 0xa5, 0xa5,
+        0xa5, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5,
+    ];
+    for profile in PROFILES {
+        let mut m = Machine::new(profile);
+        m.insert(0, image.clone(), "pic_smm.hdm").unwrap();
+        for run in 0..2 {
+            if run != 0 {
+                m.reset();
+            }
+            let mut slots = 0;
+            let mut sent_key = false;
+            while slots < 2_000_000 {
+                slots += m.step(1000);
+                assert!(m.error.is_none(), "{:?}", m.error);
+                if m.bus.read(0x8001) == 1 && !sent_key {
+                    m.bus.key(0x1c, true); // physical input; guest owns all results
+                    sent_key = true;
+                }
+                let text = m.bus.text();
+                assert!(!text.contains("FAIL"), "{text}");
+                if text.contains("PIC SMM PASS") {
+                    break;
+                }
+            }
+            assert!(sent_key);
+            assert!(slots <= 2_000_000);
+            assert!(
+                m.bus.text().contains("PIC SMM PASS"),
+                "{} phase={} count={} timer={} ip={:x}",
+                m.bus.text(),
+                m.bus.read(0x8001),
+                m.bus.read(0x8002),
+                m.bus.read(0x8003),
+                m.cpu.ip
+            );
+            assert_eq!(&m.bus.mem[0x8000..0x8020], &expected);
+            assert_eq!(m.bus.disks[0].as_ref().unwrap().bytes, image);
+            m.bus.key(0x1c, false);
+        }
+    }
 }
 
 #[test]

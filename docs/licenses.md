@@ -54,6 +54,15 @@ command and boot/image hashes. `prepare_gdtr_fixture.py` retains source, license
 and manifest alongside the generated image in `fixtures/gdtr/`, outside `web/`.
 It requires no DOS, proprietary ROM, commercial guest or third-party emulator.
 
+The original MIT PIC probes [guest/pic.asm](../guest/pic.asm) and
+[guest/pic_smm.asm](../guest/pic_smm.asm) assemble offline without external guests.
+Their preparation scripts retain source, repository license and checked manifests
+beside the generated images in `fixtures/pic/` and `fixtures/pic_smm/`, outside
+`web/`. The [OCW2 manifest](../fixtures/pic-manifest.json) and
+[OCW3 manifest](../fixtures/pic-smm-manifest.json) pin source/image hashes,
+assembly commands and exact result contracts. No proprietary firmware, guest
+software or third-party emulator implementation is acquired for either probe.
+
 ## HelloWorld-PC98
 
 Upstream: [TakedaHiromasa/HelloWorld-PC98](https://github.com/TakedaHiromasa/HelloWorld-PC98),

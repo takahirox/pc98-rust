@@ -83,12 +83,14 @@ Japanese CG glyphs. FEP input is not implemented.
 ## Reproduce the checks
 
 ```sh
+python3 -m unittest discover -s tools -p test_fixture_fetch.py
 # Build the independent MIT boot probes offline.
 python3 tools/prepare_dma_fixture.py
 python3 tools/prepare_gdtr_fixture.py
 python3 tools/prepare_idtr_fixture.py
 python3 tools/prepare_smsw_fixture.py
 python3 tools/prepare_pic_fixture.py
+python3 tools/prepare_pic_smm_fixture.py
 # Fetch checksum-pinned guest binaries AND matching complete source archives.
 # This makes a minimal GPL guest disk; it downloads no emulator code.
 python3 tools/prepare_freedos.py
@@ -109,6 +111,12 @@ npx playwright install chromium
 npm test
 ```
 
+CPULEVEL and DEBUG preparation automatically try the pinned FreeDOS mirrors when
+the primary download fails. Every source uses the original SHA-256 and size
+checks before caching; existing cached archives are verified for offline reuse.
+The canonical provenance URLs, source archives and audited image manifests remain
+the same.
+
 The original MIT [PIC boot probe](guest/pic.asm) checks programmed priority and
 rotating EOIs using guest-programmed PIT and keyboard hardware interrupts. Native
 and release-Wasm tests on VM and Ap at both URL roots require the exact delivery
@@ -116,6 +124,16 @@ trace `1,0,0,1,1,0`, guest-confirmed competing IRR bits, `PIC PASS`, exact resul
 and guards, no `FAIL` or host error, and unchanged disk bytes within two million
 slots per boot, before and after reset. Its offline preparation script verifies
 the checked-in [source/image/result manifest](fixtures/pic-manifest.json).
+
+The separate original MIT [special-mask probe](guest/pic_smm.asm) enters a
+keyboard handler with a confirmed timer request pending and IR0 lowest. It
+demonstrates normal-mode blocking while IF is set, then enables OCW3 special-mask
+mode to nest the timer. Both profiles run the identical image natively and in
+release Wasm at both URL roots, before and after reset. Each boot requires
+`PIC SMM PASS`, trace `01 00 01`, ISR snapshots `02 03 02`, timer counts zero
+before enabling and one afterward, exact guards, unchanged disk bytes, no error
+or `FAIL`, and completion within two million slots. Its offline
+[manifest](fixtures/pic-smm-manifest.json) pins provenance, hashes and results.
 
 The original MIT [SMSW boot probe](guest/smsw.asm) checks CPU-local reset status,
 register upper halves, exact two-byte stores, addressing and guest-handled

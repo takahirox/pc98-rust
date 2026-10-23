@@ -1,0 +1,35 @@
+{
+  "source": "guest/pic_smm.asm",
+  "license": "MIT; LICENSE and original assembly copied alongside image",
+  "assembly": "nasm -f bin guest/pic_smm.asm -o pic_smm.bin",
+  "source_sha256": "8a98e7cf9c6cee7996b5a203a7cdc8b696c7452d4e226c2bde4ad8aa6f64007c",
+  "boot_sha256": "6c72ab0eded783aabc5fbfa55a49036f01861c0e7a7febc32fa9ae41ee4b9b7a",
+  "image": "fixtures/pic_smm/pic_smm.hdm",
+  "image_sha256": "271e962902092a9ff6649892f7d96778a8975ebde2ff7f598f01dddc6ceb6a1c",
+  "geometry": "77 cylinders, 2 heads, 8 sectors, 1024 bytes per sector",
+  "profiles": [
+    "VM",
+    "Ap real mode"
+  ],
+  "provenance": "Original source; no DOS, commercial ROM, guest binary or copied emulator implementation",
+  "contract": "Hardware keyboard IR1 outer handler with IR0 lowest; masked ISR1 blocks confirmed pending PIT IR0 in normal mode with IF set, then OCW3 68h admits nesting; nested nonspecific EOI preserves ISR1; outer specific EOI clears it",
+  "handshake": "At guest phase byte 0x8001 = 1 send physical Return down using existing input. Guest confirms IRR & 3 == 3 before STI, observes 256 normal-mode iterations, then enables SMM. Host never injects IRQs or writes guest results.",
+  "result_address": "0x8000",
+  "result_length": 32,
+  "result_hex": "a50203011c030001010001a5020302a501fe0000a5a5a5a5a5a5a5a5a5a5a5a5",
+  "guards": "All a5 bytes in result_hex must remain unchanged; guest and host compare all 32 bytes",
+  "trace_address": "0x8008",
+  "trace_hex": "010001",
+  "isr_address": "0x800c",
+  "isr_hex": "020302",
+  "timer_count_before_address": "0x8006",
+  "timer_count_after_address": "0x8007",
+  "timer_count_before_after_hex": "0001",
+  "markers": [
+    "PIC SMM PASS",
+    "PIC SMM FAIL"
+  ],
+  "slot_budget": 2000000,
+  "reset": "Same image, handshake, results and budget before and after Machine reset",
+  "distribution": "Test only; excluded from web/"
+}

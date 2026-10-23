@@ -8,6 +8,7 @@ pub struct Pic {
     init: u8,
     icw4: bool,
     read_isr: bool,
+    special_mask: bool,
     pub auto_eoi: bool,
     lowest_priority: u8,
     rotate_auto_eoi: bool,
@@ -22,6 +23,7 @@ impl Pic {
             init: 0,
             icw4: false,
             read_isr: false,
+            special_mask: false,
             auto_eoi: false,
             // Deterministic emulator power-on/reset policy: IR0 highest.
             lowest_priority: 7,
@@ -33,9 +35,9 @@ impl Pic {
     }
     pub fn pending(&self) -> Option<u8> {
         let available = self.irr & !self.mask;
+        let blocking = self.eligible_isr();
         for n in self.priority_order() {
-            // Normal-mode ISR blocking is independent of the mask register.
-            if self.isr & (1 << n) != 0 {
+            if blocking & (1 << n) != 0 {
                 break;
             }
             if available & (1 << n) != 0 {
@@ -43,6 +45,11 @@ impl Pic {
             }
         }
         None
+    }
+    // Special-mask mode excludes masked service levels from both arbitration
+    // and nonspecific EOI selection. Specific EOI still addresses the raw ISR.
+    fn eligible_isr(&self) -> u8 {
+        self.isr & if self.special_mask { !self.mask } else { 255 }
     }
     fn priority_order(&self) -> impl Iterator<Item = u8> {
         let lowest = self.lowest_priority;
@@ -96,7 +103,11 @@ impl Pic {
             self.rotate_auto_eoi = false;
             self.auto_eoi = false;
             self.read_isr = false;
+            self.special_mask = false;
         } else if v & 0x18 == 8 {
+            if v & 0x40 != 0 {
+                self.special_mask = v & 0x20 != 0;
+            }
             if v & 2 != 0 {
                 self.read_isr = v & 1 != 0
             }
@@ -110,7 +121,8 @@ impl Pic {
                     let n = if v & 0x40 != 0 {
                         Some(v & 7)
                     } else {
-                        self.priority_order().find(|n| self.isr & (1 << n) != 0)
+                        self.priority_order()
+                            .find(|n| self.eligible_isr() & (1 << n) != 0)
                     };
                     if let Some(n) = n {
                         self.isr &= !(1 << n);
