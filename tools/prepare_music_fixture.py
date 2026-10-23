@@ -41,7 +41,9 @@ def build():
             raise ValueError('oversize compiler source')
         tar.extractall(build_dir, filter='data')
     compiler = build_dir / 'JWasm-a5c4ea03cc0545a15d81a354251b5f534bef7a1b'
-    run(['make', '-s', '-f', 'GccUnix.mak', '-j2'], compiler)
+    # Keep the release flags and select pre-C23 C: this pinned JWasm typedefs bool.
+    run(['make', '-s', '-f', 'GccUnix.mak', '-j2',
+         'extra_c_flags=-DNDEBUG -O2 -std=gnu17'], compiler)
     assembler = compiler / 'GccUnixR/jwasm'
     provenance = {}
     for directory, source_name, output, mode in [
