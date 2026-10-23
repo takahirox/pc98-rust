@@ -1533,3 +1533,113 @@ under `target/fixture-fallback-validation/`.
 
 Remote GitHub Actions has not run against this revision: this node does not push
 or merge. Publication and remote CI verification remain downstream work.
+
+## Issue #45 8253 binary mode 2 (2026-10-23)
+
+Implemented original binary mode-2 counting on the shared PIT counters, preserving
+both PC-98 port banks and the existing 1,996,800/8,000,000 guest-clock conversion.
+Mode encodings 2 and 6 set OUT high, await a complete count and consume a separate
+initial load clock. Zero represents 65,536. Count 1 produces one low clock;
+reload produces the rising edge. Completed rewrites update the reload register
+without restarting the live period. Constant-time batch advancement finishes the
+old period before skipping new periods and reports any rise, including a complete
+low pulse between high endpoints. Bus programming detects a low-to-high OUT0
+transition immediately; held-high output does not request another IRQ. Existing
+PIC IRR latching coalesces elapsed periods without creating an interrupt backlog.
+The [hardware contract](hardware.md#8253-binary-mode-2-subset) records the Intel
+specifications and retained limits.
+
+The 12 original tests in `tests/pit.rs` include independent count/OUT/edge traces
+for divisors 2, 3 and 4, large-divisor boundary traces for 65,535 and encoded zero,
+both mode encodings, every supported byte access form, a separate initial load,
+completed/partial/multiple rewrites, every old-period boundary and an ordinary
+latched read during counting. Single-clock advancement is compared with each
+irregular batch's exact full device state and aggregate edge result, then a large
+deferred-reload batch and `u32::MAX` scheduler-cycle advancement. Fractional and
+zero advancement, both profiles and both port banks, channel isolation,
+programming-induced edges, periodic timing, masks/IRR/ISR/EOI, IF/HLT/IRET and reset
+of deferred reload/write/latch/fraction/request state are covered.
+
+Negative controls temporarily restored only baseline
+`77088025d060023d0bdcf1b4d5c4acc46db4e942`'s `src/devices.rs` and `src/bus.rs`.
+`cargo test --locked --test issue45_negative -- --nocapture` ran two temporary
+controls: the exact Issue reproduction failed (`left: 200`, `right: 91`), and
+the new boot probe printed `PIT MODE2 FAIL`. The implementation was restored in a
+`finally` block and the temporary test removed. All final focused tests passed.
+
+The separate original MIT `guest/pit_mode2.asm` is assembled offline with
+`nasm -f bin guest/pit_mode2.asm -o pit_mode2.bin`. Its
+[checked manifest](../fixtures/pit-mode2-manifest.json) pins the source, 1024-byte
+boot sector and complete disk hashes, license, command, result layout and budget.
+Source SHA-256 is
+`22723c6634cb3b0891da06612a24c07f97c50c8974e9289a208fd5100e58e03e`;
+image SHA-256 is
+`9ab69105bf22eef285787bf27e84df6ff562efe7d5fb1364e7c036049c03b8c2`.
+The guest initializes every result/guard byte at `8000h..801Fh`, latches a running
+60000-count period, rewrites 2000, and requires the new read to remain above 55000
+and advance by less than 100. It reinitializes the PIC after programming to discard
+setup transitions, then services exactly two periodic hardware IRQ0 entries using
+EOI/IRET, checks ISR before/after EOI, and verifies the new period's count is at
+most 2000. Guest and hosts require all 32 bytes:
+`a501020101000001a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5`.
+Hosts only boot, step and read; they inject neither IRQs nor results.
+
+VM and Ap each booted this identical image natively before and after reset, and
+in production release Wasm at `/` and `/pc98-rust/` before and after reset.
+All twelve boots completed in **32,000 scheduler slots each**, within the declared
+2,000,000-slot maximum. Each required `PIT MODE2 PASS`, no `FAIL`, host or browser
+error, exact results/guards and unchanged disk bytes. The fixture preparation is
+registered in existing CI; the browser suite discovers its four added cases.
+
+Exact checks in this macOS arm64 worktree:
+
+| Command | Outcome |
+| --- | --- |
+| `python3 -m unittest discover -s tools -p test_fixture_fetch.py` | Passed: 7 offline downloader tests |
+| `python3 tools/prepare_dma_fixture.py` | Passed |
+| `python3 tools/prepare_gdtr_fixture.py` | Passed |
+| `python3 tools/prepare_idtr_fixture.py` | Passed |
+| `python3 tools/prepare_smsw_fixture.py` | Passed |
+| `python3 tools/prepare_pic_fixture.py` | Passed |
+| `python3 tools/prepare_pic_smm_fixture.py` | Passed |
+| `python3 tools/prepare_pit_mode2_fixture.py --update-manifest` | Created the new checked manifest from original source |
+| `python3 tools/prepare_pit_mode2_fixture.py` | Passed: reproduced and checked manifest, retained assembly/license beside test image |
+| `python3 tools/prepare_freedos.py` | Passed: legal pinned guests and complete sources retained; existing image hashes unchanged |
+| `python3 tools/prepare_font_fixture.py` | Passed |
+| `python3 tools/prepare_dos_apps.py` | Passed |
+| `python3 tools/prepare_cpu_fixture.py` | Passed after primary HTTP 503 using existing automatic pinned mirror |
+| `python3 tools/prepare_hdd_fixture.py` | Passed |
+| `python3 tools/prepare_music_fixture.py` | Passed |
+| `python3 tools/prepare_device_fixture.py` | Passed after primary HTTP 503 using existing automatic pinned mirror |
+| `python3 tools/build_media.py --check` | Passed: existing media/firmware hashes reproduced |
+| `python3 tools/build_font.py --check` | Passed: existing CG hash reproduced |
+| `cargo test --locked --test pit -- --nocapture` | Passed: initial 11 focused tests, four native probe boots at 32,000 slots each |
+| `cargo test --locked --test pit` | Passed: final 12 focused tests |
+| `cargo test --locked` | Passed: all 172 native integration tests; zero failed or ignored; unit/doc targets also passed |
+| `cargo clippy --all-targets -- -D warnings` | Initial trace tuple type-complexity warning fixed with a local `Sample` alias; final run passed |
+| `cargo fmt --check` | Passed |
+| `npm ci` | Passed: zero vulnerabilities |
+| `npx playwright install chromium` | Passed |
+| `npm test` | Release Wasm build, media/font reproducibility and ten-asset site audit passed; browser servers could not bind occupied port 8000 |
+| `npm test -- --config=.issue45-playwright.config.js` | Passed: all 66 browser tests, zero skipped, in 32.9 seconds; production release Wasm build and site audit passed |
+| `git diff --check` | Passed |
+
+The temporary browser config imported the normal Playwright config and changed
+only server ports/base URLs to 61080/61081. Its project server copied the existing
+symlink server with only port 8001 changed to 61081, preserving root-asset
+rejection. Both complete projects, assertions, guests and execution budgets were
+preserved. Existing listeners were left alone. Both temporary files were removed
+after the run. Existing PIT/beeper, BIOS interval, PIC/SMM, interrupt-shadow,
+DOS/application, VM and game assertions and budgets were not relaxed.
+
+All 26 inventory categories retain their complete fixed scopes and supplied
+statuses: **partial** cpu-v30, cpu386, protected-mode, memory, pic, pit, dma,
+keyboard, mouse, fdc, gdc, egc, pegc, text-cg, display-timing, opn, opna, bios, lio,
+integration; **unimplemented** paging, fpu, rtc; **implemented, unverified** ide,
+grcg, pcm86. PIT remains partial: other mode-specific behavior, external gates,
+BCD, divisor-1 accuracy, comprehensive latch/sequencing and mode-accurate beeper
+mixing remain outstanding. These bounded probes and the existing six-game
+reports do not establish full accuracy or commercial compatibility. No
+proprietary ROM was acquired. Remote CI and independent review were not run;
+this node does not push, open PRs, comment or merge. No post-merge verification
+is required by Issue #45.

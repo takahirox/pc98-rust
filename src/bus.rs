@@ -607,9 +607,18 @@ impl Bus {
                 let shift = (p & 1) * 8;
                 *register = (*register & !(255 << shift)) | ((v as u16) << shift);
             }
-            0x71 | 0x73 | 0x75 | 0x77 => self.pit.write(((p - 0x71) / 2) as usize, v),
-            0x3fd9 | 0x3fdb | 0x3fdd | 0x3fdf => self.pit.write(((p - 0x3fd9) / 2) as usize, v),
-            0xdf => self.pit.write(3, v), // OUT imm8 truncation in the independent hello fixture.
+            0x71 | 0x73 | 0x75 | 0x77 | 0x3fd9 | 0x3fdb | 0x3fdd | 0x3fdf | 0xdf => {
+                let channel = match p {
+                    0xdf => 3, // OUT imm8 truncation in the independent hello fixture.
+                    0x71..=0x77 => ((p - 0x71) / 2) as usize,
+                    _ => ((p - 0x3fd9) / 2) as usize,
+                };
+                let was_high = self.pit.c[0].output;
+                self.pit.write(channel, v);
+                if !was_high && self.pit.c[0].output {
+                    self.pics[0].request(0);
+                }
+            }
             0x92 => {
                 if !self.fdc.pending && self.fdc.result.is_empty() {
                     self.fdc.command.push(v);
