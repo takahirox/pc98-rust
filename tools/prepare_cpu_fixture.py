@@ -18,6 +18,9 @@ from prepare_freedos import ROOT, extract_fat_file, image_with_files
 
 URL = ('https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/'
        'util/system/cpulevel/cpulevel2007.zip')
+FALLBACK_URLS = (
+    'https://mirror.math.princeton.edu/pub/freeDOS/files/util/system/cpulevel/cpulevel2007.zip',
+)
 # Source header explicitly donates CPULEVEL to the public domain. Keep the source
 # with the binary, as requested by the author (there is no separate README).
 ARCHIVE_SHA = 'c7c8d820846af5c2f33b2679c55c435bb7d2067014da911c0bfd49e47e8d61d3'
@@ -25,7 +28,7 @@ ARCHIVE_SHA = 'c7c8d820846af5c2f33b2679c55c435bb7d2067014da911c0bfd49e47e8d61d3'
 
 def main():
     DEST.mkdir(parents=True, exist_ok=True)
-    archive = fetch('cpulevel2007.zip', URL, ARCHIVE_SHA)
+    archive = fetch('cpulevel2007.zip', URL, ARCHIVE_SHA, fallback_urls=FALLBACK_URLS)
     with zipfile.ZipFile(io.BytesIO(archive)) as package:
         source = package.read('cpulevel.asm')
         binary = package.read('cpulevel.com')

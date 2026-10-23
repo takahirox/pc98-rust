@@ -83,6 +83,7 @@ Japanese CG glyphs. FEP input is not implemented.
 ## Reproduce the checks
 
 ```sh
+python3 -m unittest discover -s tools -p test_fixture_fetch.py
 # Build the independent MIT boot probes offline.
 python3 tools/prepare_dma_fixture.py
 python3 tools/prepare_gdtr_fixture.py
@@ -109,6 +110,12 @@ npm ci
 npx playwright install chromium
 npm test
 ```
+
+CPULEVEL and DEBUG preparation automatically try the pinned FreeDOS mirrors when
+the primary download fails. Every source uses the original SHA-256 and size
+checks before caching; existing cached archives are verified for offline reuse.
+The canonical provenance URLs, source archives and audited image manifests remain
+the same.
 
 The original MIT [PIC boot probe](guest/pic.asm) checks programmed priority and
 rotating EOIs using guest-programmed PIT and keyboard hardware interrupts. Native
