@@ -226,6 +226,7 @@ mod wasm {
                 13 => u8::from(m.bus.pegc) as f64,
                 14 => m.bus.pcm.writes as f64,
                 15 => m.bus.pcm.samples as f64,
+                16 => u8::from(m.cpu.shutdown) as f64,
                 _ => m.bus.cycles as f64,
             }
         })

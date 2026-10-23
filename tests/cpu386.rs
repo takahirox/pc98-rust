@@ -959,7 +959,7 @@ fn gdtr_bus_mapping_a20_rom_and_independent_reset_state() {
 
 #[test]
 fn gdtr_other_group_operations_and_vm_remain_explicitly_unsupported() {
-    for kind in [1, 3, 4, 5, 6, 7] {
+    for kind in [4, 5, 6, 7] {
         let (mut c, mut b) = cpu(&[0x0f, 0x01, (kind << 3) | 6, 0, 0x40]);
         assert!(c
             .step(&mut b)
@@ -1009,6 +1009,703 @@ fn gdtr_original_boot_probe_before_and_after_machine_reset() {
         assert_eq!(&m.bus.mem[0x8000..0x8050], &expected);
         assert_eq!(m.bus.mem[0xfff9], 0xa5);
         assert_eq!(&m.bus.mem[0xfffa..0x10000], &full);
+        assert_eq!(m.bus.disks[0].as_ref().unwrap().bytes, image);
+    }
+}
+
+#[test]
+fn idtr_minimal_lidt_sidt_reproduction() {
+    let (mut c, mut b) = cpu(&[0x0f, 0x01, 0x1e, 0, 0x40, 0x0f, 0x01, 0x0e, 0x10, 0x40]);
+    b.mem[0x4000..0x4006].copy_from_slice(&[0xff, 3, 0, 0x50, 0, 0xab]);
+    steps(&mut c, &mut b, 2);
+    assert_eq!(&b.mem[0x4010..0x4016], &[0xff, 3, 0, 0x50, 0, 0]);
+}
+
+// Original Issue #37 instruction acceptance, using six-byte encoding helper above.
+#[test]
+fn idtr_operand_and_address_sizes_preserve_state_and_exact_store_width() {
+    for operand32 in [false, true] {
+        for address32 in [false, true] {
+            for (limit, base) in [
+                (0, 0),
+                (0xffff, u32::MAX),
+                (0xffff, 0xfedcba98),
+                (0x1234, 0x12345678),
+            ] {
+                let mut code = vec![];
+                if operand32 {
+                    code.push(0x66);
+                }
+                if address32 {
+                    code.push(0x67);
+                }
+                code.extend_from_slice(&[
+                    0x0f,
+                    0x01,
+                    if address32 { 0x1d } else { 0x1e },
+                    0x01,
+                    0x40,
+                ]);
+                if address32 {
+                    code.extend_from_slice(&[0, 0]);
+                }
+                let store_start = code.len();
+                if operand32 {
+                    code.push(0x66);
+                }
+                if address32 {
+                    code.push(0x67);
+                }
+                code.extend_from_slice(&[
+                    0x0f,
+                    0x01,
+                    if address32 { 0x0d } else { 0x0e },
+                    0x11,
+                    0x40,
+                ]);
+                if address32 {
+                    code.extend_from_slice(&[0, 0]);
+                }
+                let (mut c, mut b) = cpu(&code);
+                for r in 0..8 {
+                    c.set_reg32(r, 0xabc00000 + r as u32);
+                }
+                c.r[SP] = 0x9000;
+                c.s[DS] = 0x3000;
+                c.s[ES] = 0x4000;
+                c.extra_segments = [0x5000, 0x6000];
+                c.flags = 2 | CF | PF | AF | ZF | SF | IF | DF | OF;
+                c.flags_upper = 4;
+                let saved = c.clone();
+                b.mem[0x34001..0x34007].copy_from_slice(&gdtr_bytes(limit, base));
+                b.mem[0x34010..0x34018].fill(0xa5);
+                c.step(&mut b).unwrap();
+                assert_eq!(c.r, saved.r);
+                assert_eq!(c.upper, saved.upper);
+                assert_eq!(c.s, saved.s);
+                assert_eq!(c.extra_segments, saved.extra_segments);
+                assert_eq!((c.flags, c.flags_upper), (saved.flags, saved.flags_upper));
+                assert_eq!(c.ip, 0x1000 + store_start as u32);
+                c.step(&mut b).unwrap();
+                assert_eq!(c.ip, 0x1000 + code.len() as u32);
+                let expected_base = if operand32 { base } else { base & 0xffffff };
+                assert_eq!(&b.mem[0x34011..0x34017], &gdtr_bytes(limit, expected_base));
+                assert_eq!((b.mem[0x34010], b.mem[0x34017]), (0xa5, 0xa5));
+                assert_eq!(c.r, saved.r);
+                assert_eq!(c.upper, saved.upper);
+                assert_eq!(c.s, saved.s);
+                assert_eq!(c.extra_segments, saved.extra_segments);
+                assert_eq!((c.flags, c.flags_upper), (saved.flags, saved.flags_upper));
+            }
+        }
+    }
+}
+
+#[test]
+fn idtr_full_base_survives_both_stores_then_word_load_clears_high_byte() {
+    let (mut c, mut b) = cpu(&[
+        0x66, 0x0f, 0x01, 0x1e, 0, 0x40, // lidt dword [4000]
+        0x0f, 0x01, 0x0e, 0x10, 0x40, // sidt word [4010]
+        0x66, 0x0f, 0x01, 0x0e, 0x20, 0x40, // sidt dword [4020]
+        0x0f, 0x01, 0x1e, 0, 0x40, // lidt word [4000]
+        0x0f, 0x01, 0x0e, 0x30, 0x40,
+    ]);
+    let source = [0x34, 0x12, 0x78, 0x56, 0x34, 0x12];
+    b.mem[0x4000..0x4006].copy_from_slice(&source);
+    steps(&mut c, &mut b, 5);
+    assert_eq!(&b.mem[0x4010..0x4016], &source);
+    assert_eq!(&b.mem[0x4020..0x4026], &source);
+    assert_eq!(&b.mem[0x4030..0x4036], &[0x34, 0x12, 0x78, 0x56, 0x34, 0]);
+}
+
+#[test]
+fn idtr_sib_default_ss_and_all_segment_overrides_with_repeated_prefixes() {
+    // Prefixes plus ModR/M+SIB/displacement; last segment override wins.
+    let cases: &[(&[u8], &[u8], usize, usize)] = &[
+        (&[], &[0x5c, 0x8b, 1], DS, 0x4022), // [ebx+ecx*4+1]
+        (&[], &[0x5c, 0x25, 0], SS, 0x4101), // [ebp]
+        (&[], &[0x1c, 0x24], SS, 0x9000),    // [esp]
+        (&[0x26], &[0x1b], ES, 0x4001),
+        (&[0x2e], &[0x1b], CS, 0x4001),
+        (&[0x36], &[0x1b], SS, 0x4001),
+        (&[0x3e], &[0x5c, 0x25, 0], DS, 0x4101),
+        (&[0x64], &[0x1b], 4, 0x4001),
+        (&[0x65], &[0x1b], 5, 0x4001),
+        (&[0x26, 0x64, 0x65], &[0x1b], 5, 0x4001),
+    ];
+    for &(prefixes, encoding, segment, offset) in cases {
+        for address32 in [false, true] {
+            // SIB encodings apply to address32; word case [bx] covers the overrides.
+            let mut code = prefixes.to_vec();
+            code.extend_from_slice(&[0x66, 0x66]);
+            if address32 {
+                code.extend_from_slice(&[0x67, 0x67]);
+            }
+            code.extend_from_slice(&[0x0f, 0x01]);
+            code.extend_from_slice(if address32 { encoding } else { &[0x1f] });
+            let (mut c, mut b) = cpu(&code);
+            c.s[DS] = 0x3000;
+            c.s[ES] = 0x4000;
+            c.s[SS] = 0x5000;
+            c.extra_segments = [0x6000, 0x7000];
+            c.set_reg32(BX, 0x4001);
+            c.set_reg32(BP, 0x4101);
+            c.set_reg32(CX, 8);
+            let s = if !address32 && prefixes.is_empty() {
+                DS
+            } else {
+                segment
+            };
+            let off = if address32 { offset } else { 0x4001 };
+            let seg = if s < 4 {
+                c.s[s]
+            } else {
+                c.extra_segments[s - 4]
+            };
+            let a = seg as usize * 16 + off;
+            b.mem[a..a + 6].copy_from_slice(&[1, 2, 3, 4, 5, 6]);
+            c.step(&mut b).unwrap();
+            assert_eq!(
+                (c.idtr_limit, c.idtr_base),
+                (0x201, 0x6050403),
+                "{code:02x?}"
+            );
+            // Exercise the identical addressing expression for SIDT.
+            c.ip = 0x1000;
+            let modrm = 0x1000 + prefixes.len() + 2 + if address32 { 2 } else { 0 } + 2;
+            b.mem[modrm] = (b.mem[modrm] & !0x38) | 8;
+            b.mem[a - 1..a + 7].fill(0xa5);
+            c.step(&mut b).unwrap();
+            assert_eq!(&b.mem[a..a + 6], &[1, 2, 3, 4, 5, 6]);
+            assert_eq!((b.mem[a - 1], b.mem[a + 6]), (0xa5, 0xa5));
+        }
+    }
+}
+
+#[test]
+fn idtr_six_byte_limit_faults_are_atomic_gp_even_for_ss_and_restart() {
+    for operand32 in [false, true] {
+        for load in [false, true] {
+            for stack in [false, true] {
+                for address32 in [false, true] {
+                    for offset in [0xfffa, 0xfffb, 0x10000, u32::MAX] {
+                        if !address32 && offset > 0xffff {
+                            continue;
+                        }
+                        let mut code = vec![];
+                        if operand32 {
+                            code.push(0x66);
+                        }
+                        if address32 {
+                            code.push(0x67);
+                        }
+                        code.extend_from_slice(&[
+                            0x0f,
+                            0x01,
+                            (if stack { 0x46 } else { 0x47 }) | if load { 0x18 } else { 8 },
+                            0,
+                        ]);
+                        // 32-bit rm=5 is EBP; 16-bit rm=6 is BP.
+                        if address32 {
+                            let m = code.len() - 2;
+                            code[m] = (code[m] & !7) | if stack { 5 } else { 3 };
+                        }
+                        let (mut c, mut b) = cpu(&code);
+                        c.set_reg32(if stack { BP } else { BX }, offset);
+                        c.idtr_limit = 0x1234;
+                        c.idtr_base = 0x6000;
+                        b.mem.copy_within(0..0x400, 0x6000);
+                        b.mem[0xfff9..0x10008].fill(0xa5);
+                        if offset == 0xfffa {
+                            c.step(&mut b).unwrap();
+                            if load {
+                                assert_eq!(
+                                    (c.idtr_limit, c.idtr_base),
+                                    (0xa5a5, if operand32 { 0xa5a5a5a5 } else { 0x00a5a5a5 })
+                                );
+                            } else {
+                                assert_eq!(&b.mem[0xfffa..0x10000], &gdtr_bytes(0x1234, 0x6000));
+                            }
+                            assert_eq!((b.mem[0xfff9], b.mem[0x10000]), (0xa5, 0xa5));
+                            continue;
+                        }
+                        let before = b.mem[0xfff9..0x10008].to_vec();
+                        c.flags = 2 | CF | DF | OF;
+                        c.step(&mut b).unwrap();
+                        fault(&c, &b, 13, 0x1000);
+                        assert_eq!(b.read16(0x8ffe), 2 | CF | DF | OF);
+                        assert_eq!((c.idtr_limit, c.idtr_base), (0x1234, 0x6000));
+                        assert_eq!(&b.mem[0xfff9..0x10008], &before);
+                        // Handler returns to the full prefixed instruction. Repair EA,
+                        // IRET, and retry without changing the saved instruction IP.
+                        b.mem[c.ip as usize] = 0xcf;
+                        c.set_reg32(if stack { BP } else { BX }, 0x4000);
+                        b.mem[0x3fff..0x4007].fill(0xa5);
+                        c.step(&mut b).unwrap();
+                        assert_eq!(c.ip, 0x1000);
+                        assert_eq!(c.r[SP], 0x9000);
+                        c.step(&mut b).unwrap();
+                        assert_eq!(c.ip, 0x1000 + code.len() as u32);
+                        if load {
+                            assert_eq!(
+                                (c.idtr_limit, c.idtr_base),
+                                (0xa5a5, if operand32 { 0xa5a5a5a5 } else { 0x00a5a5a5 })
+                            );
+                        } else {
+                            assert_eq!(&b.mem[0x4000..0x4006], &gdtr_bytes(0x1234, 0x6000));
+                        }
+                        assert_eq!((b.mem[0x3fff], b.mem[0x4006]), (0xa5, 0xa5));
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn idtr_invalid_register_and_lock_forms_fault_at_first_prefix() {
+    for code in [
+        vec![0x66, 0x67, 0x0f, 0x01, 0xc8],
+        vec![0x65, 0x66, 0x0f, 0x01, 0xdf],
+        vec![0x64, 0xf0, 0x0f, 0x01, 0x1e, 0, 0x40],
+        vec![0x66, 0xf0, 0x0f, 0x01, 0x0e, 0, 0x40],
+    ] {
+        let (mut c, mut b) = cpu(&code);
+        c.idtr_limit = 0x1234;
+        c.idtr_base = 0x6000;
+        b.mem.copy_within(0..0x400, 0x6000);
+        b.mem[0x3fff..0x4007].fill(0xa5);
+        c.step(&mut b).unwrap();
+        fault(&c, &b, 6, 0x1000);
+        assert_eq!((c.idtr_limit, c.idtr_base), (0x1234, 0x6000));
+        assert_eq!(&b.mem[0x3fff..0x4007], &[0xa5; 8]);
+        // A plain IRET retries and faults again, rather than executing past it.
+        b.mem[c.ip as usize] = 0xcf;
+        c.step(&mut b).unwrap();
+        c.step(&mut b).unwrap();
+        fault(&c, &b, 6, 0x1000);
+    }
+}
+
+#[test]
+fn idtr_bus_mapping_a20_rom_and_independent_reset_state() {
+    let (mut c, mut b) = cpu(&[
+        0x64, 0x66, 0x0f, 0x01, 0x1e, 0x10, 0, 0x65, 0x0f, 0x01, 0x0e, 0x10, 0, 0x64, 0x0f, 0x01,
+        0x0e, 0x20, 0,
+    ]);
+    c.extra_segments = [0xffff, 0xf000];
+    b.mem[..6].copy_from_slice(&gdtr_bytes(0, 0xfedcba98));
+    b.mem[0x100000..0x100006].copy_from_slice(&gdtr_bytes(0xffff, 0x87654321));
+    c.step(&mut b).unwrap();
+    assert_eq!((c.idtr_limit, c.idtr_base), (0, 0xfedcba98));
+    b.output(0xf2, 0);
+    c.ip = 0x1000;
+    c.step(&mut b).unwrap();
+    assert_eq!((c.idtr_limit, c.idtr_base), (0xffff, 0x87654321));
+    b.output(0xf6, 3); // A20 disabling cannot mask stored linear metadata.
+    b.mem[0xf000f..0xf0017].fill(0xa5);
+    c.step(&mut b).unwrap();
+    assert_eq!(&b.mem[0xf000f..0xf0017], &[0xa5; 8]);
+    assert_eq!(c.idtr_base, 0x87654321);
+    assert!(!b.a20);
+    b.mem[0x0f..0x17].fill(0xa5);
+    b.mem[0x10000f..0x100017].fill(0xa5);
+    let store_ip = c.ip;
+    c.step(&mut b).unwrap();
+    assert_eq!(&b.mem[0x10..0x16], &gdtr_bytes(0xffff, 0x87654321));
+    assert_eq!((b.mem[0x0f], b.mem[0x16]), (0xa5, 0xa5));
+    assert_eq!(&b.mem[0x10000f..0x100017], &[0xa5; 8]);
+    b.output(0xf2, 0);
+    c.ip = store_ip;
+    c.step(&mut b).unwrap();
+    assert_eq!(&b.mem[0x100010..0x100016], &gdtr_bytes(0xffff, 0x87654321));
+    assert_eq!((b.mem[0x10000f], b.mem[0x100016]), (0xa5, 0xa5));
+    let (mut other, mut other_bus) = cpu(&[0x0f, 0x01, 0x1e, 0, 0x40]);
+    assert_eq!((other.idtr_limit, other.idtr_base), (0x3ff, 0));
+    other_bus.mem[0x4000..0x4006].copy_from_slice(&gdtr_bytes(0x1111, 0x22222222));
+    other.step(&mut other_bus).unwrap();
+    assert_eq!((other.idtr_limit, other.idtr_base), (0x1111, 0x00222222));
+    assert_eq!((c.idtr_limit, c.idtr_base), (0xffff, 0x87654321));
+    let mut m = Machine::new(Profile::Pc9821ApDos);
+    m.cpu = c;
+    m.reset();
+    assert_eq!((m.cpu.idtr_limit, m.cpu.idtr_base), (0x3ff, 0));
+    // Reset is observable via the guest instruction, not just public fields.
+    m.cpu.s = [0; 4];
+    m.cpu.ip = 0x1000;
+    m.bus.mem[0x1000..0x1005].copy_from_slice(&[0x0f, 0x01, 0x0e, 0, 0x40]);
+    m.cpu.step(&mut m.bus).unwrap();
+    assert_eq!(&m.bus.mem[0x4000..0x4006], &[0xff, 3, 0, 0, 0, 0]);
+}
+
+fn relocated(c: &mut Cpu, b: &mut Bus, vectors: &[u8]) {
+    c.idtr_base = 0x6001; // deliberately unaligned table
+    for &n in vectors {
+        let at = 0x6001 + n as usize * 4;
+        b.mem[at..at + 4].copy_from_slice(&[0, 4, 0, 3]);
+        // Conflicting fixed IVT entry must never be followed by Ap.
+        b.mem[n as usize * 4..n as usize * 4 + 4].copy_from_slice(&[0, 5, 0, 4]);
+    }
+    b.mem[0x3400] = 0xcf;
+    b.mem[0x4500] = 0xf4;
+}
+
+#[test]
+fn idtr_relocated_software_entries_frames_and_iret() {
+    for (instruction, vector) in [
+        (&[0xcd, 0x30][..], 0x30),
+        (&[0xcc][..], 3),
+        (&[0xce][..], 4),
+    ] {
+        for prefix in [false, true] {
+            let mut code = if prefix { vec![0x66, 0x2e] } else { vec![] };
+            code.extend_from_slice(instruction);
+            let (mut c, mut b) = cpu(&[]);
+            c.s[CS] = 0x100;
+            c.s[SS] = 0x2000;
+            b.mem[0x2000..0x2000 + code.len()].copy_from_slice(&code);
+            relocated(&mut c, &mut b, &[vector]);
+            let flags = 2 | CF | IF | TF | OF;
+            c.flags = flags;
+            c.flags_upper = 4;
+            c.step(&mut b).unwrap();
+            assert_eq!((c.s[CS], c.ip), (0x300, 0x400));
+            assert_eq!(c.r[SP], 0x8ffa);
+            assert_eq!(
+                &b.mem[0x28ffa..0x29000],
+                &[
+                    ((0x1000 + code.len()) & 255) as u8,
+                    0x10,
+                    0,
+                    1,
+                    flags as u8,
+                    (flags >> 8) as u8
+                ]
+            );
+            assert_eq!((c.flags, c.flags_upper), (flags & !(IF | TF), 0));
+            c.step(&mut b).unwrap();
+            assert_eq!(
+                (c.s[CS], c.ip, c.r[SP], c.flags),
+                (0x100, 0x1000 + code.len() as u32, 0x9000, flags)
+            );
+        }
+    }
+    let (mut c, mut b) = cpu(&[0x66, 0xce]);
+    relocated(&mut c, &mut b, &[4]);
+    c.flags_upper = 4;
+    c.step(&mut b).unwrap();
+    assert_eq!((c.ip, c.r[SP], c.flags_upper), (0x1002, 0x9000, 4));
+}
+
+#[test]
+fn idtr_relocated_fault_trap_native_injection_and_vm_fixed_ivt() {
+    for (code, vector, saved_ip) in [
+        (&[0x66, 0xf7, 0xf3][..], 0, 0x1000), // #DE restart
+        (&[0x66, 0x40][..], 1, 0x1002),       // TF trap resume
+        (&[0x66, 0x8e, 0xc8][..], 6, 0x1000), // #UD restart
+    ] {
+        let (mut c, mut b) = cpu(code);
+        relocated(&mut c, &mut b, &[vector]);
+        c.flags = 2 | IF | TF;
+        c.flags_upper = 4;
+        c.step(&mut b).unwrap();
+        assert_eq!((c.s[CS], c.ip, c.r[SP]), (0x300, 0x400, 0x8ffa));
+        assert_eq!(
+            (b.read16(0x8ffa), b.read16(0x8ffc), b.read16(0x8ffe)),
+            (saved_ip, 0, 2 | IF | TF)
+        );
+        assert_eq!((c.flags, c.flags_upper), (2, 0));
+        c.step(&mut b).unwrap();
+        assert_eq!((c.s[CS], c.ip, c.r[SP]), (0, saved_ip as u32, 0x9000));
+    }
+    for vm in [false, true] {
+        let (mut c, mut b) = cpu(&[]);
+        relocated(&mut c, &mut b, &[0x30]);
+        if vm {
+            b.profile = Profile::Pc9801Vm;
+            c.idtr_limit = 0;
+        }
+        c.flags = 2 | IF | TF;
+        c.flags_upper = 4;
+        c.interrupt(&mut b, 0x30).unwrap();
+        assert_eq!(
+            (c.s[CS], c.ip),
+            if vm { (0x400, 0x500) } else { (0x300, 0x400) }
+        );
+        assert_eq!(c.r[SP], 0x8ffa);
+        assert_eq!((b.read16(0x8ffa), b.read16(0x8ffe)), (0x1000, 2 | IF | TF));
+        assert_eq!((c.flags, c.flags_upper), (2, 0));
+    }
+    for kind in [1, 3] {
+        let (mut c, mut b) = cpu(&[0x0f, 0x01, (kind << 3) | 6, 0, 0x40]);
+        b.profile = Profile::Pc9801Vm;
+        assert!(c
+            .step(&mut b)
+            .unwrap_err()
+            .contains("unsupported V30 opcode 0F 01"));
+    }
+}
+
+#[test]
+fn idtr_relocated_pic_irq_hlt_eoi_and_interrupt_shadows() {
+    for code in [
+        &[0xfb, 0x90][..],
+        &[0x8e, 0xd0, 0x90][..],
+        &[0x17, 0x90][..],
+    ] {
+        let (mut c, mut b) = cpu(code);
+        if code[0] == 0x17 {
+            b.mem[0x9000..0x9002].fill(0);
+        }
+        relocated(&mut c, &mut b, &[9]);
+        b.mem[0x3400..0x3405].copy_from_slice(&[0xb0, 0x20, 0xe6, 0, 0xcf]); // EOI / IRET
+        c.flags = 2; // establish the shadow before requesting IRQ
+        c.step(&mut b).unwrap();
+        c.flags |= IF;
+        c.flags_upper = 4;
+        let resume = c.ip + 1;
+        let sp = c.r[SP];
+        b.pics[0].mask = 0xfd;
+        b.pics[0].request(1);
+        c.step(&mut b).unwrap(); // shadowed NOP
+        assert_eq!(c.ip, resume);
+        assert_eq!(b.pics[0].isr, 0);
+        c.halted = true;
+        c.step(&mut b).unwrap(); // IRQ wakes HLT; executes MOV AL
+        assert!(!c.halted);
+        assert_eq!((c.s[CS], c.ip), (0x300, 0x402));
+        assert_eq!(b.pics[0].isr, 2);
+        assert_eq!(c.r[SP], sp - 6);
+        assert_eq!(
+            (
+                b.read16((sp - 6) as usize),
+                b.read16((sp - 4) as usize),
+                b.read16((sp - 2) as usize)
+            ),
+            (resume as u16, 0, 2 | IF)
+        );
+        assert_eq!((c.flags, c.flags_upper), (2, 0));
+        steps(&mut c, &mut b, 2); // EOI / IRET
+        assert_eq!(b.pics[0].isr, 0);
+        assert_eq!((c.s[CS], c.ip, c.r[SP], c.flags), (0, resume, sp, 2 | IF));
+    }
+    // MOV SS suppresses its own TF trap; STI does not.
+    for (code, first_ip) in [(&[0x8e, 0xd0, 0x90][..], 0x1002), (&[0xfb][..], 0x400)] {
+        let (mut c, mut b) = cpu(code);
+        relocated(&mut c, &mut b, &[1]);
+        c.flags |= TF;
+        c.step(&mut b).unwrap();
+        assert_eq!(c.ip, first_ip);
+        if code[0] == 0x8e {
+            c.step(&mut b).unwrap();
+            assert_eq!((c.s[CS], c.ip, b.read16(0x8ffa)), (0x300, 0x400, 0x1003));
+        }
+    }
+}
+
+#[test]
+fn idtr_inclusive_limit_double_fault_and_terminal_shutdown() {
+    for (limit, vector, saved_ip) in [(0xc3, 0x30, 0x1004), (0xc2, 8, 0x1000), (0x23, 8, 0x1000)] {
+        let (mut c, mut b) = cpu(&[0x66, 0x2e, 0xcd, 0x30]);
+        relocated(&mut c, &mut b, &[0x30]);
+        let a = c.idtr_base as usize + 8 * 4;
+        b.mem[a..a + 4].copy_from_slice(&[0, 5, 0, 3]);
+        b.mem[0x3500] = 0xcf;
+        c.idtr_limit = limit;
+        c.flags = 2 | CF | IF | TF;
+        c.flags_upper = 4;
+        b.mem[0x8ff8..0x9002].fill(0xa5);
+        c.step(&mut b).unwrap();
+        assert_eq!(
+            (c.s[CS], c.ip),
+            (0x300, if vector == 8 { 0x500 } else { 0x400 })
+        );
+        assert!(!c.shutdown);
+        assert_eq!(c.r[SP], 0x8ffa); // no partial original frame or error-code word
+        assert_eq!(
+            (b.read16(0x8ffa), b.read16(0x8ffc), b.read16(0x8ffe)),
+            (saved_ip, 0, 2 | CF | IF | TF)
+        );
+        assert_eq!((b.read16(0x8ff8), b.read16(0x9000)), (0xa5a5, 0xa5a5));
+        assert_eq!((c.flags, c.flags_upper), (2 | CF, 0));
+        c.idtr_limit = 0x3ff; // handler repair makes a retry possible
+        c.step(&mut b).unwrap();
+        assert_eq!((c.s[CS], c.ip, c.r[SP]), (0, saved_ip as u32, 0x9000));
+        if vector == 8 {
+            c.step(&mut b).unwrap();
+            assert_eq!((c.s[CS], c.ip, b.read16(0x8ffa)), (0x300, 0x400, 0x1004));
+        }
+    }
+    let (mut c, mut b) = cpu(&[0x66, 0x2e, 0xcd, 0x30]);
+    c.idtr_limit = 0x22;
+    c.flags |= IF;
+    b.mem[0x8ff0..0x9000].fill(0xa5);
+    c.step(&mut b).unwrap();
+    assert!(c.shutdown);
+    assert!(!c.halted); // distinct from HLT
+    assert_eq!((c.ip, c.r[SP]), (0x1000, 0x9000));
+    assert_eq!(&b.mem[0x8ff0..0x9000], &[0xa5; 16]);
+    let retired = c.retired;
+    b.pics[0].mask = 0xfd;
+    b.pics[0].request(1);
+    steps(&mut c, &mut b, 100);
+    c.interrupt(&mut b, 0).unwrap();
+    assert_eq!(
+        (c.ip, c.r[SP], c.retired, b.pics[0].isr),
+        (0x1000, 0x9000, retired, 0)
+    );
+    let mut m = Machine::new(Profile::Pc9821ApDos);
+    m.cpu = c;
+    m.reset();
+    assert!(!m.cpu.shutdown);
+    assert!(!m.cpu.halted);
+    assert_eq!((m.cpu.idtr_base, m.cpu.idtr_limit), (0, 0x3ff));
+    assert_eq!(m.step(10), 10);
+    assert!(m.error.is_none());
+}
+
+#[test]
+fn idtr_vector_bus_a20_and_wrapping_linear_addresses() {
+    for a20 in [false, true] {
+        let (mut c, mut b) = cpu(&[0xcc]);
+        c.idtr_base = 0x100000;
+        b.a20 = a20;
+        b.mem[12..16].copy_from_slice(&[0, 4, 0, 3]);
+        b.mem[0x10000c..0x100010].copy_from_slice(&[0, 5, 0, 4]);
+        c.step(&mut b).unwrap();
+        assert_eq!(
+            (c.s[CS], c.ip),
+            if a20 { (0x400, 0x500) } else { (0x300, 0x400) }
+        );
+        assert_eq!(c.idtr_base, 0x100000);
+    }
+    for (base, vector, expected) in [
+        (0xffff_fffc, 1, (0x300, 0x400)),
+        (0xffff_fffe, 0, (0x400, 0xffff)),
+    ] {
+        let (mut c, mut b) = cpu(&[]);
+        b.a20 = true;
+        c.idtr_base = base;
+        b.mem[..4].copy_from_slice(&[0, 4, 0, 3]);
+        c.interrupt(&mut b, vector).unwrap();
+        assert_eq!((c.s[CS], c.ip), expected);
+    }
+}
+
+#[test]
+fn idtr_external_delivery_limit_failures_stay_inside_guest() {
+    for event in [0, 1, 2] {
+        let (mut c, mut b) = cpu(&[0x8b, 0x07]); // GP for invalid DS word
+        relocated(&mut c, &mut b, &[8]);
+        c.idtr_limit = 0x23;
+        c.flags = 2 | IF;
+        c.r[BX] = 0xffff;
+        if event == 0 {
+            c.interrupt(&mut b, 0x30).unwrap();
+        } else if event == 1 {
+            b.mem[0x3400] = 0x90; // first instruction at #DF executes on IRQ step
+            b.pics[0].mask = 0xfd;
+            b.pics[0].request(1);
+            c.step(&mut b).unwrap();
+            assert_eq!(b.pics[0].isr, 2);
+        } else {
+            c.step(&mut b).unwrap();
+        }
+        assert_eq!(
+            (c.s[CS], c.ip),
+            (0x300, if event == 1 { 0x401 } else { 0x400 })
+        );
+        assert_eq!(
+            (
+                c.r[SP],
+                b.read16(0x8ffa),
+                b.read16(0x8ffc),
+                b.read16(0x8ffe)
+            ),
+            (0x8ffa, 0x1000, 0, 2 | IF)
+        );
+    }
+    for event in [0, 1, 2, 3] {
+        let (mut c, mut b) = cpu(&[0x90]);
+        c.idtr_limit = 2; // neither requested vector nor #DF is available
+        if event == 0 {
+            c.interrupt(&mut b, 3).unwrap();
+        } else {
+            if event == 1 {
+                c.flags |= TF;
+            } else if event == 2 {
+                c.flags |= IF;
+                b.pics[0].mask = 0xfd;
+                b.pics[0].request(1);
+            } else {
+                b.mem[0x1000] = 0xcc;
+            }
+            c.step(&mut b).unwrap();
+        }
+        assert!(c.shutdown);
+        assert_eq!(c.r[SP], 0x9000);
+        assert_eq!(c.ip, if event == 1 { 0x1001 } else { 0x1000 });
+        let before = c.retired;
+        steps(&mut c, &mut b, 100);
+        assert_eq!(c.retired, before);
+    }
+}
+
+#[test]
+fn idtr_original_boot_probe_before_and_after_machine_reset() {
+    let image = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/fixtures/idtr/idtr.hdm"
+    ))
+    .expect("run python3 tools/prepare_idtr_fixture.py");
+    let mut m = Machine::new(Profile::Pc9821ApDos);
+    m.insert(0, image.clone(), "idtr.hdm").unwrap();
+    for run in 0..2 {
+        if run == 1 {
+            m.reset();
+        }
+        assert!(!m.cpu.shutdown);
+        let mut slots = 0;
+        for _ in 0..20 {
+            slots += m.step(100_000);
+            assert!(m.error.is_none(), "{:?}", m.error);
+            if m.cpu.shutdown || m.bus.text().contains("IDTR FAIL") {
+                break;
+            }
+        }
+        assert!(
+            m.bus.text().contains("IDTR PASS"),
+            "{}; CS:IP={:04x}:{:04x}",
+            m.bus.text(),
+            m.cpu.s[CS],
+            m.cpu.ip
+        );
+        assert!(!m.bus.text().contains("FAIL"));
+        assert!(slots <= 2_000_000);
+        let mut expected = [0xa5; 80];
+        expected[1..7].copy_from_slice(&gdtr_bytes(0x3ff, 0));
+        for offset in [9, 17, 49] {
+            expected[offset..offset + 6].copy_from_slice(&gdtr_bytes(0x3ff, 0x12345678));
+        }
+        expected[25..31].copy_from_slice(&gdtr_bytes(0x3ff, 0x345678));
+        for offset in [33, 73] {
+            expected[offset..offset + 6].copy_from_slice(&gdtr_bytes(0xc3, 0x6001));
+        }
+        expected[41..44].copy_from_slice(&[3, 2, 2]);
+        expected[57] = 0x88;
+        expected[65] = 0x77;
+        assert_eq!(&m.bus.mem[0x8000..0x8050], &expected);
+        assert_eq!(&m.bus.mem[0xfff9..0x10000], &[0xa5, 0xc3, 0, 1, 0x60, 0, 0]);
+        assert!(m.cpu.shutdown);
+        assert!(!m.cpu.halted);
+        let before = (m.cpu.ip, m.cpu.r[SP], m.cpu.retired);
+        m.cpu.flags |= IF;
+        m.bus.pics[0].mask = 0xfd;
+        m.bus.pics[0].request(1);
+        assert_eq!(m.step(100_000), 100_000);
+        assert!(m.error.is_none());
+        assert_eq!((m.cpu.ip, m.cpu.r[SP], m.cpu.retired), before);
+        assert_eq!(m.bus.pics[0].isr, 0);
         assert_eq!(m.bus.disks[0].as_ref().unwrap().bytes, image);
     }
 }

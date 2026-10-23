@@ -73,7 +73,8 @@ addresses, SIB, FS/GS and selected 386/486 real-mode integer instructions. It ch
 64 KiB segment limits and delivers guest exceptions; it does not provide protected
 mode, DPMI or an FPU. See the [exact Ap CPU coverage and independent DOS diagnostic](dos-compatibility.md#issue-9-cpu-coverage-and-independent-guest-evidence).
 VM retains the V30 behavior described above.
-Ap also provides the [real-mode GDTR prerequisite](#ap-real-mode-gdtr) below.
+Ap also provides the [real-mode GDTR](#ap-real-mode-gdtr) and
+[IDTR prerequisites](#ap-real-mode-idtr) below.
 
 An instruction or one REP element consumes one 8-clock scheduling slot. This is a
 deterministic work/cycle model, **not instruction-cycle accuracy**. Firmware FDC
@@ -113,8 +114,9 @@ We choose the explicit full-base store operation in the
 not the older truncated-base interpretation. The real-address exception contract
 also agrees with the [SDM SGDT exception table](https://cdrdv2-public.intel.com/782151/253667-sdm-vol-2b.pdf).
 
-Other `0F 01` operations remain explicit unsupported errors. VM keeps its V30
-decoder. This prerequisite adds no LIDT/SIDT, CR0/PE transitions, descriptor
+`0F 01 /4` through `/7` remain explicit unsupported errors. VM keeps its V30
+decoder. LIDT/SIDT are documented below. These prerequisites add no CR0/PE
+transitions, descriptor
 lookup/validation or caches, privilege changes, paging, task switching, FPU or
 Windows support. Protected mode remains unimplemented; CPU386 and integration
 remain partial.
@@ -125,6 +127,60 @@ records assembly, license, hashes and the two-million-slot budget. Native
 `cargo test --locked --test cpu386 gdtr_` and release-Wasm browser tests require
 `GDTR PASS`, no `FAIL` or host error, exact result/guard bytes, and an unchanged
 disk on Ap before and after reset. Fixtures stay outside `web/`.
+
+## Ap real-mode IDTR
+
+Ap implements memory `0F 01 /3` LIDT and `0F 01 /1` SIDT. Each CPU resets
+IDTR to base **0**, inclusive byte limit **03FFh**. LIDT reads a little-endian
+word limit and 24 base bits with operand16 (clearing the high byte), or all
+32 base bits with operand32. Address size is independent. SIDT writes exactly
+six bytes, including the full base with either operand size, preserving flags
+and registers. LIDT retains linear metadata without accessing the table.
+Operands and vector bytes use existing Bus/A20 mapping and ROM protection.
+
+Both instructions preflight all six operand bytes: `FFFAh` succeeds, while
+`FFFBh` and address32 offsets above `FFFFh` raise restartable exception 13,
+including SS-selected operands. Register forms and LOCK raise exception 6.
+These instruction-specific real-address rules follow Intel486 PRM Table 10-1
+and pp. 26-193–194, 26-261; they intentionally differ from ordinary SS memory
+accesses. The [modern SIDT entry](https://cdrdv2-public.intel.com/782151/253667-sdm-vol-2b.pdf#page=645),
+printed pp. 4-643–644, lists exception 12 for SS overruns. Its explicit operation
+stores the full 32-bit base for both operand sizes; that operation is selected
+over its contradictory compatibility paragraph claiming a zero upper byte.
+The older PRM description calls the sixth byte undefined, and its compatibility
+note says zero for operand16. Tests require high-byte retention rather than
+those older interpretations.
+
+All Ap interrupt sources use `IDTR.base + 4 * vector`, with wrapping 32-bit
+linear arithmetic before Bus mapping. The full four-byte entry must fit the
+inclusive limit; entries remain word offset/word segment pointers. A table-limit
+failure raises exception 8 before writing any original frame. Software INT faults
+save the first-prefix IP, as specified by the
+[i486 datasheet §3.5, Table 3.1](https://device.report/m/d0d81f608917b4fb1baa0da42c97dede73f88575259f19de2d24492a995d89ff),
+printed pp. 43–44. Exceptions still push no error code in real mode; existing
+six-byte frames, resume/restart distinctions, IF/TF/AC clearing, interrupt shadows
+and IRET behavior are preserved. See also
+[Intel486 PRM §22.3](https://manuals.plus/m/d86207aaebd9b10464f2058efc61559e6141d3b072db100e89bfe17c8187e143).
+
+If vector 8 itself cannot fit (`0022h` versus the sufficient `0023h`), delivery
+enters bounded CPU shutdown. This state stops instruction execution and maskable
+IRQ acknowledgement, remains distinct from HLT, and clears on Machine reset.
+Native `Cpu.shutdown` and Wasm inspection metric 16 expose it to host assertions.
+No NMI recovery, general nested-fault handling or invalid-stack overhaul is added.
+VM retains its V30 decoder and fixed address-zero IVT.
+
+The original MIT [IDTR boot probe](../guest/idtr.asm) builds offline with
+`python3 tools/prepare_idtr_fixture.py`. The [manifest](../fixtures/idtr-manifest.json)
+records source/license, assembly, hashes, exact result/guard bytes and a maximum
+2,000,000-slot budget. Native and production release-Wasm tests at `/` and
+`/pc98-rust/` execute the same image before and after reset, require explicit
+PASS without FAIL, exact bytes, unchanged disk data and terminal shutdown.
+Fixtures remain outside `web/`.
+
+Protected mode and CPU386 remain partial. CR0/PE transitions, protected gates,
+descriptor lookup/caches, privilege transitions, LDTR/TR, task switching, paging,
+x87, NMI, DPMI, and Windows compatibility remain outstanding. These probes do
+not establish full protected-mode accuracy or commercial software compatibility.
 
 ## Device ports and interrupts
 

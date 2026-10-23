@@ -86,6 +86,7 @@ Japanese CG glyphs. FEP input is not implemented.
 # Build the independent MIT boot probes offline.
 python3 tools/prepare_dma_fixture.py
 python3 tools/prepare_gdtr_fixture.py
+python3 tools/prepare_idtr_fixture.py
 # Fetch checksum-pinned guest binaries AND matching complete source archives.
 # This makes a minimal GPL guest disk; it downloads no emulator code.
 python3 tools/prepare_freedos.py
@@ -105,6 +106,15 @@ npm ci
 npx playwright install chromium
 npm test
 ```
+
+The original MIT [IDTR boot probe](guest/idtr.asm) checks Ap LIDT/SIDT,
+relocated real-mode vectors, restartable operand faults, inclusive table limits
+and terminal shutdown. Run `cargo test --locked --test cpu386 idtr_` for the
+focused native checks. Production-Wasm browser tests execute the identical
+probe at both paths, before and after reset, checking exact bytes, guards,
+shutdown and unchanged disk data within two million slots per run. See its
+[manifest](fixtures/idtr-manifest.json) and the [implemented boundary and
+specification discrepancies](docs/hardware.md#ap-real-mode-idtr).
 
 The original MIT [GDTR boot probe](guest/gdtr.asm) checks Ap real-mode
 LGDT/SGDT, exact load/store bytes and guards, reset readback and restartable

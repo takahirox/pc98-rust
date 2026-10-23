@@ -1,0 +1,24 @@
+{
+  "source": "guest/idtr.asm",
+  "license": "MIT; LICENSE and original assembly copied alongside image",
+  "assembly": "nasm -f bin guest/idtr.asm -o idtr.bin",
+  "source_sha256": "b744ec58fad1d496fbd1ca4c3acefa6a40b735251454027e56fb01822a709752",
+  "boot_sha256": "33344d1a742b91cfabbf2662b8b1a22545a0c5fd20cb4a428d538983edffd730",
+  "image": "fixtures/idtr/idtr.hdm",
+  "image_sha256": "ed28cac29c193143f017f6d1ad4168e6a7aa2515a4515777a0911fe7040344e5",
+  "geometry": "77 cylinders, 2 heads, 8 sectors, 1024 bytes per sector",
+  "profile": "Ap real mode; no DOS, proprietary ROM or emulator code",
+  "contract": "Architectural reset, 24/32-bit loads, full-base stores, address32, unaligned relocated vectors versus conflicting fixed IVT, INT/INT3/INTO, FFFA, restartable DS/SS #GP, register/LOCK #UD, inclusive limit #DF with six-byte frame, wrapping 32-bit linear base arithmetic, terminal limit-22h shutdown and Machine reset",
+  "result_hex": "a5ff0300000000a5a5ff0378563412a5a5ff0378563412a5a5ff0378563400a5a5c30001600000a5a5030202a5a5a5a5a5ff0378563412a5a588a5a5a5a5a5a5a577a5a5a5a5a5a5a5c30001600000a5",
+  "last_operand_address": "0xfff9",
+  "last_operand_hex": "a5c30001600000",
+  "terminal_shutdown": true,
+  "markers": [
+    "IDTR PASS",
+    "IDTR FAIL"
+  ],
+  "slot_budget": 2000000,
+  "result_address": "0x8000",
+  "result_length": 80,
+  "distribution": "Test only; excluded from web/"
+}

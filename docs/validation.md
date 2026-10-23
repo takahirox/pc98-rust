@@ -895,3 +895,160 @@ caches/validation, CPL/privilege transitions, gates and task-state behavior rema
 outside this prerequisite. Paging and basic x87 remain separate work. These
 bounded probes establish neither full hardware accuracy nor commercial
 compatibility. Issue #35 requires no post-merge verification.
+
+## Issue #37: Ap real-mode IDTR and interrupt-table relocation (2026-10-23)
+
+Implemented per-CPU LIDT/SIDT, architectural reset base 0/limit 03FFh, relocated
+real-mode vector lookup, inclusive table limits and bounded shutdown when
+exception 8 cannot be delivered. The [hardware boundary and specification
+choices](hardware.md#ap-real-mode-idtr) document full-base SIDT stores despite
+contradictory compatibility text, and target-era exception 13 for SS-selected
+six-byte operands despite the modern SIDT exception table's exception 12.
+VM retains its V30 decoder and fixed IVT. Group `/1` and `/3` unsupported
+expectations were replaced with positive acceptance; `/4`–`/7` and VM rejection
+assertions remain. Existing GDTR, CPULEVEL, hardware, DOS, application, VM and
+game assertions are preserved.
+
+The fourteen original `idtr_` native tests cover all four operand/address-size
+combinations, unaligned operands, ModR/M/SIB, default SS and every segment
+override, repeated prefixes, exact six-byte stores with guards, high-base
+retention/clearing, preserved registers/flags, independent CPUs and reset
+readback. A matrix covers loads/stores, DS/SS and both operand sizes at FFFAh,
+FFFBh, address32 10000h and FFFFFFFFh. It checks atomic #GP, first-prefix IP,
+unchanged IDTR/destination, repair/IRET/retry, and restartable register/LOCK #UD.
+Operand and vector Bus/A20 mapping, ROM write protection, retained unmapped
+base metadata and wrapping 32-bit vector arithmetic are asserted explicitly.
+
+Relocation tests install conflicting address-zero vectors and assert software
+INT, INT3, taken/untaken INTO, PIC IRQ, CPU faults, TF traps and public native
+injection. They inspect exact six-byte frames, saved CS/IP/FLAGS, restart versus
+resume addresses, IRET, AC clearing, IRQ acknowledgement/EOI, STI and MOV/POP SS
+shadows. The final complete entry succeeds at C3h; C2h routes the same prefixed
+INT to relocated vector 8 with no partial original frame or error-code word.
+Limit 23h permits vector 8; 22h enters shutdown. Bounded repeated stepping and
+native injection cannot resume it or acknowledge a newly pending maskable IRQ;
+Machine reset clears shutdown and restores IDTR. IRQ, fault, trap and native
+injection table-limit failures are also checked without host errors.
+
+The original MIT `guest/idtr.asm` assembles offline into one 1024-byte boot
+sector, zero-padded to a 77×2×8×1024 floppy. Source, repository MIT license and
+manifest are copied beside the ignored image, outside `web/`. The guest checks
+reset readback, 24/32-bit bases, full stores, address32, relocated software
+entries, fault repair/retry, invalid forms, inclusive limit #DF and wrapping
+linear addresses. It validates saved first-prefix IP/CS and the #DF FLAGS slot
+without an error-code word. Fixed-IVT entries conflict with the relocated
+handlers. It emits `IDTR PASS` or `IDTR FAIL`, then the successful path enters
+terminal shutdown with limit 22h. The host requires shutdown separately from
+the PASS text, stable retirement through another 100,000 slots, exact complete
+80-byte results/guards at 8000h and seven bytes at FFF9h, no error, and unchanged
+disk bytes. Native checks additionally assert HLT is false and pending IRQ
+acknowledgement stays clear. The identical probe runs before and after Machine
+reset natively and in actual production release Wasm at both URL paths.
+
+| Fixture provenance | Value |
+| --- | --- |
+| Assembly | `nasm -f bin guest/idtr.asm -o idtr.bin` |
+| License | Original MIT; repository `LICENSE` copied beside image |
+| Source SHA-256 | `b744ec58fad1d496fbd1ca4c3acefa6a40b735251454027e56fb01822a709752` |
+| Boot SHA-256 | `33344d1a742b91cfabbf2662b8b1a22545a0c5fd20cb4a428d538983edffd730` |
+| Image SHA-256 | `ed28cac29c193143f017f6d1ad4168e6a7aa2515a4515777a0911fe7040344e5` |
+| Exact result bytes and guards | [fixtures/idtr-manifest.json](../fixtures/idtr-manifest.json), `result_hex` and `last_operand_hex` |
+| Execution budget | At most 2,000,000 slots per probe, in 100,000-slot slices |
+
+Baseline-negative evidence uses the final unchanged
+`idtr_minimal_lidt_sidt_reproduction` test. It failed on the initial worktree
+with `unimplemented i486 opcode 0F 01 /3`, then passed after implementation.
+It was also run against an isolated archive of the Issue's exact baseline:
+
+```sh
+mkdir -p target/idtr-baseline
+git archive 27e5655302458cd09cac6eb7f6f54065a811b20f | tar -x -C target/idtr-baseline
+python3 - <<'PY'
+from pathlib import Path
+s = Path('tests/cpu386.rs').read_text()
+helpers = s[:s.index('#[test]')]
+start = s.index('#[test]\nfn idtr_minimal_lidt_sidt_reproduction')
+end = s.index('// Original Issue #37', start)
+Path('target/idtr-baseline/tests/idtr_negative.rs').write_text(helpers + s[start:end])
+PY
+cargo test --locked --manifest-path target/idtr-baseline/Cargo.toml --test idtr_negative
+```
+
+The baseline compiled and exited 101 with that same unsupported `/3` error.
+Its `src/cpu.rs`, `src/bus.rs` and `src/lib.rs` were byte-compared with `git show`
+and remained identical to 27e5655. The isolated helper copy produced only unused
+`Machine` import/`fault` helper warnings. No implementation was substituted into
+the baseline. The unchanged test passes in the final fourteen-test focused run.
+
+Validation environment: Darwin 25.6.0 arm64; Homebrew Cargo/Rust 1.94.0 for
+native tests; rustup Rust 1.99.0 and `wasm32-unknown-unknown` for the existing
+production `build_web.py` compiler selection; NASM 3.02, Python 3.13.13,
+Node 24.12.0, npm 11.6.2, pinned Playwright 1.56.1 Chromium.
+
+| Exact command | Outcome |
+| --- | --- |
+| `python3 tools/prepare_idtr_fixture.py --update-manifest` | Created the original audited manifest |
+| `python3 tools/prepare_idtr_fixture.py` | Passed; source/boot/image hashes and result contract reproduced offline |
+| `python3 tools/prepare_dma_fixture.py` | Passed; existing hash unchanged |
+| `python3 tools/prepare_gdtr_fixture.py` | Passed; existing hash unchanged |
+| `python3 tools/prepare_freedos.py` | Passed; pinned guest binaries and complete matching sources retained |
+| `python3 tools/prepare_font_fixture.py` | Passed |
+| `python3 tools/prepare_dos_apps.py` | Passed; independent applications and source archives prepared |
+| `python3 tools/prepare_cpu_fixture.py` | Initial attempt and retry failed HTTP 503; passed after checksum-verified mirror cache preparation below |
+| `python3 tools/prepare_hdd_fixture.py` | Passed |
+| `python3 tools/prepare_music_fixture.py` | Passed; pinned guest sources and source-built assembler retained |
+| `python3 tools/prepare_device_fixture.py` | Initially failed HTTP 503; passed after checksum-verified mirror cache preparation below |
+| `cargo test --locked --test cpu386 idtr_` | Passed: 14 tests, zero skipped |
+| `cargo test --locked` | Passed: all 133 native integration tests, zero skipped; unit/doc harnesses also passed |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `cargo fmt --check` | Passed |
+| `python3 tools/build_media.py --check` | Passed; firmware and media hashes unchanged |
+| `python3 tools/build_font.py --check` | Passed; CG hash unchanged |
+| `npm ci` | Passed; locked dependencies installed |
+| `npx playwright install chromium` | Passed |
+| `npm test` | Media/font checks, release Wasm and ten-asset site audit passed; browser startup failed because port 8000 was occupied |
+| `npx playwright test --config=.gitweave-playwright.config.js tests/browser/idtr.spec.js` | Passed: both projects, before/after reset (2 cases, 5.8 seconds) |
+| `npm test -- --config=.gitweave-playwright.config.js` | Passed: production release Wasm (447263 bytes), ten-asset audit and all 52 browser tests in 25.2 seconds; zero skipped |
+| `git diff --check` and local documentation target/anchor checks | Passed |
+
+CPULEVEL and DEBUG's pinned ibiblio URLs returned HTTP 503. As in the previous
+validation, the following exact mirror archives were verified with the original
+pinned SHA-256 values before writing only ignored fixture caches. Unchanged
+preparation scripts then verified their complete manifests; no hash, license,
+source requirement or assertion was weakened.
+
+```sh
+python3 - <<'PY'
+import sys
+sys.path.insert(0, 'tools')
+from prepare_dos_apps import fetch
+from prepare_cpu_fixture import ARCHIVE_SHA
+from prepare_device_fixture import HASH
+fetch('cpulevel2007.zip', 'https://mirror.math.princeton.edu/pub/freeDOS/files/util/system/cpulevel/cpulevel2007.zip', ARCHIVE_SHA)
+fetch('debug125.zip', 'https://mirror.math.princeton.edu/pub/freeDOS/files/dos/debug/DEBUG125.zip', HASH)
+PY
+python3 tools/prepare_cpu_fixture.py
+python3 tools/prepare_device_fixture.py
+```
+
+The temporary `.gitweave-playwright.config.js` imported the repository config,
+changing only both base URLs/server commands to free ports 18000/18001. It kept
+both projects, all tests, workers, assertions and budgets. The root command was
+`python3 -m http.server 18000 --bind 127.0.0.1 --directory web`. The project
+command was `python3 target/idtr-serve-project.py`, a copy of
+`tests/browser/serve_project.py` setting `WEB` to this worktree's `web/` and port
+to 18001. Its temporary project symlink and root-asset rejection were preserved.
+The pre-existing port-8000 listener was left alone. The temporary config was
+removed after validation.
+
+Local review checked the complete diff against Issue #37, including operand
+atomicity, saved-IP distinctions, all delivery callers, shutdown bounds/reset,
+32-bit native/Wasm arithmetic, fixture provenance, CI preparation and preserved
+regressions. No blocking local review findings remain. All 26 inventory
+categories retain their supplied statuses and full scopes: protected mode and
+CPU386 remain partial; paging and x87 remain unimplemented. CR0/PE transitions,
+protected gates, descriptors/caches, privilege changes, LDTR/TR, task switching,
+NMI and general nested-fault/invalid-stack behavior remain outside this change.
+Probe success does not establish full protected-mode accuracy or commercial
+compatibility. No PR/CI-success or merge is claimed; Issue #37 requires no
+post-merge verification.
