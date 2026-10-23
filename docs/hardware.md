@@ -993,6 +993,55 @@ and broader synthesis verification remain outstanding. OPNA also retains LFO,
 pan/stereo, rhythm and ADPCM gaps. VM sound exposure remains outstanding.
 No inventory scope or status is promoted by these bounded probes.
 
+## Ap YM2608 timer IRQ enables
+
+Ap bank-zero register 29h D0/D1 independently enable Timer A/B IRQ output.
+D7 (SCH) retains its existing FM4–FM6 channel-enable role. Construction and
+Machine reset set 29h to `1Fh`: all five enables set, SCH clear, reserved D6:D5
+zero. The existing register storage retains written reserved bits, with no
+behavior assigned to them. D4:D2 are retained enables for unimplemented sources;
+no ADPCM-related flags are fabricated.
+
+For the currently implemented sources, device output is
+`(timer_flags & register_29 & 03h) != 0`, evaluated on each IRQ query. Changing
+29h immediately exposes or suppresses already-pending flags. It does not clear
+status, reload timers or discard accumulated/fractional clocks. Register 27h
+continues to control loading, overflow flag generation and independent flag
+clearing. Status reads are nondestructive. Timer frequencies are unchanged.
+
+The bus samples device output on the next normal scheduler tick and ORs it with
+PCM's independently enabled FIFO IRQ at slave IR4. Suppression changes only the
+device output: latched PIC IRR and ISR survive until ordinary acknowledgement
+and EOI. Both cascade controllers require EOI. Existing board I/O masks and
+upper-bank isolation remain in force. The probe explicitly programs slave base
+18h to observe vector 1Ch; it does not change the emulator's existing PIC reset
+or synthetic firmware base 10h. The shared Rust name `Opn` does not imply that
+YM2203 has register 29h; VM sound remains unexposed.
+
+References: Yamaha [YM2608 Application Manual §2-2-1, page 19](https://csclub.uwaterloo.ca/~pbarfuss/YM2608J_Translated.PDF#page=19)
+and [§2-8-3, page 36](https://csclub.uwaterloo.ca/~pbarfuss/YM2608J_Translated.PDF#page=36),
+and Intel [8259A interrupt sequence and EOI](https://courses.cs.washington.edu/courses/cse451/25wi/documentation/8259A.pdf#page=7).
+
+The original MIT [guest probe](../guest/opna_irq.asm) and
+[provenance manifest](../fixtures/opna-irq-manifest.json) cover both timers,
+suppressed overflow/status reads, enabling pending flags, retained requests,
+actual guest handler execution, ISR observations, EOIs and subsequent recovery.
+The enabled recovery enters the handler with device output asserted. As the
+existing scheduler can sample the active source again after CPU acknowledgement,
+the handler suppresses/clears the source, issues both EOIs, and acknowledges the
+retained request through PIC polling and another EOI pair. These observations
+are checked separately from the exact four CPU handler entries. Every result
+and guard byte is checked by guest and host, before/after reset, natively and in
+production release-Wasm at `/` and `/pc98-rust/`, within 500,000 slots per boot.
+
+OPN and OPNA remain **partial**. LFO, pan/stereo, rhythm, ADPCM playback/registers/
+IRQs, absent proprietary rhythm samples and broader synthesis validation remain
+outstanding. Shared gaps include CSM keying, combined channel-3 mode, frequency
+write latching, prescalers and fuller envelopes. Protected execution, paging and
+basic x87 remain required elsewhere. All 26 inventory scopes and statuses remain
+unchanged; this bounded timer contract establishes no complete OPNA accuracy or
+commercial compatibility.
+
 ## Synthetic firmware and boot
 
 `guest/firmware.asm` is assembled to the original IPL in `firmware.bin`. It runs

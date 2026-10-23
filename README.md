@@ -105,6 +105,7 @@ python3 tools/prepare_v30_segment_irq_fixture.py
 python3 tools/prepare_ide_verify_fixture.py
 python3 tools/prepare_rtc_fixture.py
 python3 tools/prepare_opn_ch3_fixture.py
+python3 tools/prepare_opna_irq_fixture.py
 # Fetch checksum-pinned guest binaries AND matching complete source archives.
 # This makes a minimal GPL guest disk; it downloads no emulator code.
 python3 tools/prepare_freedos.py
@@ -115,6 +116,8 @@ python3 tools/prepare_hdd_fixture.py
 python3 tools/prepare_music_fixture.py
 python3 tools/prepare_device_fixture.py
 python3 tools/build_font.py --check
+cargo test --locked --test sound86 opna_irq_
+cargo test --locked --test sound86 --test ap --test music --test pic
 cargo test --locked --test ap opn_ch3_
 cargo test --locked --test rtc
 cargo test --locked --test timer
@@ -152,6 +155,21 @@ within 2,000,000 slots per boot. Generated assets remain outside `web/`.
 Only frequency selection is implemented; CSM timer keying is absent and combined
 mode `11` remains explicitly unverified. See the [hardware scope](docs/hardware.md#opnopna-channel-3-frequency-selection)
 and [validation record](docs/validation.md#issue-67-opnopna-channel-3-frequency-selection-2026-10-24).
+
+The original MIT [YM2608 IRQ probe](guest/opna_irq.asm) checks Timer A/B
+suppression, pending-flag enables, retained PIC requests, actual vector-1Ch
+handlers, acknowledgement/EOI and recovery on Ap. Prepare it offline with
+`python3 tools/prepare_opna_irq_fixture.py`; run
+`cargo test --locked --test sound86 opna_irq_`, the full `sound86`, `ap`, `music`
+and `pic` targets, and `npm test`. The
+[checked manifest](fixtures/opna-irq-manifest.json) pins source, image, firmware,
+assembly command and expected records/guards. Native and production release-Wasm
+tests boot the same image before/after reset and at both browser roots, requiring
+`OPNA IRQ PASS`, all 128 result/guard bytes, exactly four handler entries,
+unchanged media and no errors within 500,000 scheduler slots per boot. Hosts only
+mount, step, reset and inspect outputs. Generated files stay outside `web/`.
+See the [bounded register-29 contract](docs/hardware.md#ap-ym2608-timer-irq-enables)
+and [validation record](docs/validation.md#issue-73-ym2608-timer-irq-enables-2026-10-24).
 
 The original MIT [RTC probe](guest/rtc.asm) exercises Ap parallel 40-bit and
 serial 52-bit calendar reads, BIOS agreement and advancement with IF clear.

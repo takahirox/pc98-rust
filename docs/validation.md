@@ -3349,3 +3349,122 @@ Existing hardware, DOS/application, VM, audio and six-game assertions/budgets ar
 preserved. These limited probes and prior game reports do not establish complete
 hardware accuracy or commercial compatibility. No post-merge verification is
 specified. No push, pull request, merge or GitHub comment was performed.
+
+## Issue #73: YM2608 timer IRQ enables (2026-10-24)
+
+This record reports local Coordinator/node execution in the assigned worktree,
+against baseline `9d821b50757801317c6afae5c65d0b08f3c864de` (the selected upstream
+contains only GitWeave metadata commits after that baseline). No remote CI or
+independent reviewer result is claimed. No push, PR, comment or merge was made.
+
+The original `opna_irq_disabled_timer_regression` was added before changing
+`src/sound.rs`. Running
+`cargo test --locked --test sound86 opna_irq_disabled_timer_regression -- --exact`
+failed as expected: **0 passed, 1 failed**, at
+“register 29h must suppress the pending Timer A IRQ.” It wrote 29h=80h,
+24h=FFh, 25h=03h, 27h=05h and advanced 145 guest CPU clocks. The preceding
+assertion observed Timer A flag=1. The same regression, with unchanged
+expectations, passes after the implementation. That first build also warned
+about the then-unused `Machine` import; the subsequent reset/probe tests use it.
+
+The core change initializes 29h to 1Fh and computes output as
+`(status & registers[0x29] & 3) != 0`. Reserved D6:D5 reset to zero and retain
+written values without assigned behavior. No timer period, register-27 behavior,
+PIC request/service state, PCM routing, scheduler or VM sound exposure changes.
+See the [bounded hardware contract and gaps](hardware.md#ap-ym2608-timer-irq-enables).
+
+Eight focused `opna_irq_*` tests exhaust all four timer-flag combinations against
+all four timer-enable combinations with SCH clear/set; exercise pending enables,
+independent clears, nondestructive reads, clocks/fraction across mask changes,
+27h flag-generation control, FM6/SCH independence, instance/reset isolation,
+board I/O gating, upper-bank isolation, real PCM FIFO IRQ contribution and
+slave IR4/vector 1Ch acknowledgement/EOI/recovery. Flags come from programmed
+timers and elapsed clocks. No test injects timer flags or sound PIC requests.
+One intermediate test run had **6 passed, 1 failed**: a newly authored restart
+assertion assumed a fresh fractional clock phase. It was corrected to check a
+half-period before overflow and a full period after it, retaining the exact
+145/2308-clock boundary checks across mask changes. Production timer behavior
+was not changed to accommodate that test.
+
+The original MIT [guest source](../guest/opna_irq.asm), offline builder
+`tools/prepare_opna_irq_fixture.py`, and
+[checked manifest](../fixtures/opna-irq-manifest.json) pin the assembly command,
+source/boot/image/firmware hashes, geometry, independent result oracle, guards,
+markers and fixed **500,000 scheduler slots per boot**. The source is assembled
+with `nasm -f bin guest/opna_irq.asm -o opna_irq.bin`; the image is that one
+1024-byte boot sector padded to a 1,261,568-byte floppy. Provenance copies include
+the original source, synthetic firmware source, manifest and MIT license.
+No proprietary ROM, rhythm sample or acquired guest binary is needed by this
+probe. Source SHA-256:
+`c62efe15fa6eaa29fda1915f8017ec16d26bd32f3bda7ce95e428e3e8fef4801`;
+image SHA-256:
+`821eed997de3dea24566debda3376058fcf18d8d7451e251b2e4138c92b42f20`.
+
+The guest programs both timers through 188h/18Ah and the PICs through their
+existing ports. It explicitly selects slave base 18h for vector 1Ch (IR4),
+without changing existing emulator/firmware PIC defaults. Each timer checks a
+suppressed overflow with two status reads, clean PIC IRR, enabling a pending
+flag, retained PIC IRR after suppression, an actual CPU handler with slave ISR4
+and master ISR7, device flag clearing and both EOIs, then a new enabled recovery.
+The recovery enters the handler with device output still asserted; the guest
+acknowledges the scheduler-retained request by PIC polling and EOI, rather than
+erasing PIC state when suppressing the source.
+
+All hosts only mount, step, reset and inspect outputs. Every boot requires
+`OPNA IRQ PASS`, no FAIL/emulator/browser error, all **128 result/guard bytes at
+8000h–807Fh**, exactly **four actual vector-1Ch handler entries**, and unchanged
+floppy bytes. The guest also verifies SP=7C00h. Results at 8010h/8020h are,
+respectively, `01010010100110800100000110800200` and
+`02020010100210800300000210800400`; poll records at 8040h are
+`0000878400008784`; all guards and the counter are pinned in the manifest.
+Native tests additionally check zero disk writes, cleared flags and empty ISRs.
+Generated probe assets stay outside `web/`; acceptance CI prepares the probe
+before its existing complete native and production browser suites.
+
+Fixture prerequisites were prepared with the README's commands. The original
+MIT probes were all built offline by invoking each `tools/prepare_*_fixture.py`
+except the five licensed fixture builders named below. The checksum-pinned
+licensed guests, corresponding source archives and notices were prepared with:
+
+```sh
+python3 tools/prepare_freedos.py
+python3 tools/prepare_font_fixture.py
+python3 tools/prepare_dos_apps.py
+python3 tools/prepare_cpu_fixture.py
+python3 tools/prepare_hdd_fixture.py
+python3 tools/prepare_music_fixture.py
+python3 tools/prepare_device_fixture.py
+```
+
+| Command/check | Local outcome |
+| --- | --- |
+| All fixture preparation above, plus `python3 tools/prepare_opna_irq_fixture.py` | Passed; checked source/image provenance; licensed fixtures and existing manifests unchanged |
+| `python3 -m unittest discover -s tools -p test_fixture_fetch.py` | Passed, 7 tests |
+| `python3 tools/build_media.py --check` | Passed; all six media/firmware/license products unchanged |
+| `python3 tools/build_font.py --check` | Passed; JIS CG hash `7ddc6bab059a22ae3e565a045b756dd78d6fe22a0e33c75130c316b62534cfbf` |
+| `cargo test --locked --test sound86 opna_irq_` and the same command with `-- --nocapture` | Passed, 8 tests; both native probe boots 3,000 slots and four handler entries; final complete `cargo test --locked --test sound86` also passed all 10 tests after strengthening the in-service suppression assertion |
+| `cargo test --locked --test sound86 --test ap --test music --test pic` | Passed, 56 tests: 10 sound86, 17 Ap, 1 six-game music, 28 PIC |
+| `cargo test --locked` | Passed, all 302 native integration tests, zero failures/ignored; unit and doc-test targets passed |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `cargo fmt --check` | Passed |
+| `npm ci` and `npx playwright install chromium` | Passed |
+| `npm run build` | Passed; production release-Wasm, media/font reproducibility and ten-asset publication audit; Wasm 455,067 bytes |
+| `npm test` | Build and publication audit passed; browser startup failed because port 8000 was occupied; no tests ran |
+| `npm test -- --config=.issue73-playwright.config.js` | Passed, all 106 browser cases, zero skipped, 1.5m; release-Wasm/publication checks passed; all four OPNA boots (both roots, before/after reset) 3,000 slots and four handler entries |
+| `git diff --check`, `git diff --cached --check`, new documentation links/anchors and complete diff review | Passed |
+
+The temporary browser configuration imports the checked Playwright config and
+changes only serving ports/base URLs to **18073/18074**. Its root server is
+`python3 -m http.server 18073 --bind 127.0.0.1 --directory web`; its project server
+copies `tests/browser/serve_project.py`, changing only port 8001 to 18074 and
+resolving `web/` from the worktree root. Tests, assertions, execution budgets,
+production core and paths `/` and `/pc98-rust/` remain unchanged. The existing
+port-8000 listener was left untouched. Temporary config/server files are removed
+after validation. The full suite includes all pre-existing DOS/application, VM,
+audio, hardware and six-game assertions and budgets.
+
+Final local diff review covered the source Issue, implementation, guest/host
+boundary, manifest reproducibility, CI wiring and documentation. Independent
+review and remote CI remain for the downstream review stage, before any merge.
+OPN/OPNA and all other inventory statuses remain unchanged; remaining synthesis,
+protected execution, paging and basic x87 gaps are not claimed resolved.
