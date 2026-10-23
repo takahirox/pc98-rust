@@ -336,6 +336,40 @@ electrical modeling and spurious-interrupt fidelity remain outside this subset.
 These bounded checks do not establish full hardware accuracy or commercial
 software compatibility.
 
+### 8253 binary mode-0 subset
+
+All three counters on VM/Ap and both primary/mirrored timer banks support a
+binary mode-0 lifecycle with GATE held high. A fresh mode word sets OUT low,
+clears partial read/write/latch state and stops counting until a complete LSB,
+MSB or paired initial count is written. Encoded zero means 65,536. The next PIT
+clock loads without decrementing; pre-load count readback is undefined.
+Each subsequent clock decrements once. The first terminal zero raises OUT, and
+the count continues modulo 65,536 with OUT high across later wraps. For count 4,
+samples starting at the load clock are `(4,L), (3,L), (2,L), (1,L), (0,H),
+(65535,H), (65534,H)`. Ordinary latches preserve a snapshot while counting
+continues. A new mode word starts an independent lifecycle, including transitions
+between modes 0, 2 and 3. Reset clears all programming and fractional state.
+
+This follows Intel's [8253/8253-5 Counter Loading, Mode 0 and Read/Write
+Procedures](https://web.cecs.pdx.edu/~mpj/llp/references/8253.pdf).
+Only the terminal rise of OUT0 requests IRQ0 through the existing PIC latch.
+Falling OUT, held-high OUT and further counter wraps do not request again;
+lowering OUT preserves an already latched request, following Intel's
+[8259A IRR/ISR and edge-triggered contract](https://courses.cs.washington.edu/courses/cse451/25wi/documentation/8259A.pdf#page=17).
+Batches report any terminal rise and use constant-time arithmetic, preserving
+the existing 1,996,800 / 8,000,000 clock conversion and fractional remainder.
+
+Original [Rust tests](../tests/pit.rs) exercise count/OUT traces, all channels and
+access forms, incomplete programming, latches, repeated wraps, mode transitions,
+reset, scheduler batching and PIC/CPU delivery. The original MIT
+[guest probe](../guest/pit_mode0.asm) checks advancing post-terminal counts and
+exactly one hardware IRQ0 per fresh arming, observing another full wrap before
+rearming. Its [manifest](../fixtures/pit-mode0-manifest.json) records offline
+assembly, hashes, licensing, exact results/guards and a two-million-slot budget.
+See [actual validation](validation.md#issue-49-8253-binary-mode-0-2026-10-23).
+Count-only mode-0 rewrites, external GATE, BCD, comprehensive latch/access corner
+cases and mode-0 audio remain outside this verified contract.
+
 ### 8253 binary mode-2 subset
 
 Both profiles and both timer port banks support mode encodings `010` and `110`
@@ -412,7 +446,7 @@ provenance, exact results/guards and the two-million-slot budget. See the
 [validation record](validation.md#issue-47-8253-binary-mode-3-2026-10-23).
 
 PIT remains **partial**. Active mode-3 divisor rewrites without a new mode word,
-mode-0 continuation after terminal count, mode-specific behavior for 1/4/5,
+count-only mode-0 rewrites, mode-specific behavior for 1/4/5,
 external GATE/retriggering, BCD, divisor-1 behavior, comprehensive latch/access
 sequencing and fuller beeper timing remain outstanding. These shared counter
 subsets do not establish instruction-cycle accuracy, full audio or hardware

@@ -192,8 +192,8 @@ impl Counter {
                 if !self.enabled {
                     self.load_pending = true;
                 }
-            } else if self.mode == 3 {
-                // Initial programming transfers on a separate clock. Active
+            } else if matches!(self.mode, 0 | 3) {
+                // Initial programming transfers on a separate clock. Count-only
                 // rewrites without a new mode word remain outside this subset.
                 self.load_pending = true;
             } else {
@@ -231,6 +231,9 @@ impl Counter {
         if !self.enabled {
             return false;
         }
+        if self.mode == 0 {
+            return self.tick_mode0(ticks);
+        }
         if self.mode == 2 {
             return self.tick_mode2(ticks);
         }
@@ -238,19 +241,31 @@ impl Counter {
             return self.tick_mode3(ticks);
         }
         if ticks >= self.remaining {
-            if self.mode == 0 {
-                self.enabled = false;
-                self.remaining = 0;
-                self.output = true;
-            } else {
-                self.remaining = self.reload - (ticks - self.remaining) % self.reload;
-                self.output = !self.output;
-            }
+            self.remaining = self.reload - (ticks - self.remaining) % self.reload;
+            self.output = !self.output;
             true
         } else {
             self.remaining -= ticks;
             false
         }
+    }
+    fn tick_mode0(&mut self, mut ticks: u32) -> bool {
+        if ticks == 0 {
+            return false;
+        }
+        if self.load_pending {
+            self.load_pending = false;
+            self.remaining = self.reload;
+            ticks -= 1; // Loading consumes a clock without decrementing.
+        }
+        // Only the first terminal count raises OUT. Subsequent 16-bit wraps
+        // keep counting with OUT high and cannot request another interrupt.
+        let rising = !self.output && ticks >= self.remaining;
+        self.output |= rising;
+        if ticks != 0 {
+            self.remaining = self.remaining.wrapping_sub(ticks) & 0xffff;
+        }
+        rising
     }
     fn tick_mode2(&mut self, mut ticks: u32) -> bool {
         if ticks == 0 {
@@ -340,9 +355,9 @@ impl Pit {
                     c.write_hi = false;
                     c.read_hi = false;
                     c.load_pending = false;
-                    if matches!(c.mode, 2 | 3) {
+                    if matches!(c.mode, 0 | 2 | 3) {
                         c.enabled = false;
-                        c.output = true;
+                        c.output = c.mode != 0;
                         c.latch = None;
                         c.mode3_phase = 0;
                     }

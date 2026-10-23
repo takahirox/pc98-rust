@@ -1,0 +1,29 @@
+{
+  "source": "guest/pit_mode0.asm",
+  "license": "MIT; LICENSE and original assembly copied alongside image",
+  "assembly": "nasm -f bin guest/pit_mode0.asm -o pit_mode0.bin",
+  "source_sha256": "53d34a44601716fa9f0ff335863e310e1c7190a1b64fe88213a7b2a4f7d8b43e",
+  "boot_sha256": "aee6e791b383bae3fd930b31b496c72298339a849413959a223cfb61becfa6ff",
+  "image": "fixtures/pit_mode0/pit_mode0.hdm",
+  "image_sha256": "c7d4ca54421543ee77ab580310717201e865a95d9c88273f332a90a15136fddc",
+  "geometry": "77 cylinders, 2 heads, 8 sectors, 1024 bytes per sector",
+  "profiles": [
+    "VM",
+    "Ap real mode"
+  ],
+  "provenance": "Original source; no DOS, commercial ROM, guest binary or copied emulator implementation",
+  "contract": "Initialize PIC after lowering OUT to discard firmware/setup requests; arm binary mode 0 divisor 2000 with a fresh mode word twice; bounded 6000-iteration IRQ wait; exactly one hardware IRQ0 per arm with ISR=1, EOI, ISR=0 and IRET; two latched post-terminal counts >=60000, first <65535, separated by 500 LOOP instructions, delta 900..1100; remain unmasked for 40000 LOOP instructions (>65536 PIT clocks) per arm, reject additional entries and require IRR0=ISR0=0",
+  "host": "Boot, step and read only; no input, IRQ injection or result writes",
+  "result_address": "0x8000",
+  "result_length": 32,
+  "result_hex": "a5020101000001010101a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+  "guards": "All a5 bytes in result_hex must remain unchanged; guest and host compare all 32 bytes",
+  "result_layout": "8000 guard; 8001 total IRQ0 entries=2; 8002/8003 ISR entry=1/1; 8004/8005 post-EOI=0/0; 8006/8007 post-terminal advancing counts=1/1; 8008/8009 no extra IRQ across continued wrap=1/1; 800a..801f guards=a5",
+  "markers": [
+    "PIT MODE0 PASS",
+    "PIT MODE0 FAIL"
+  ],
+  "slot_budget": 2000000,
+  "reset": "Same image, results and budget before and after Machine reset",
+  "distribution": "Test only; excluded from web/"
+}

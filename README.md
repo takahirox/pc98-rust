@@ -93,6 +93,7 @@ python3 tools/prepare_pic_fixture.py
 python3 tools/prepare_pic_smm_fixture.py
 python3 tools/prepare_pit_mode2_fixture.py
 python3 tools/prepare_pit_mode3_fixture.py
+python3 tools/prepare_pit_mode0_fixture.py
 # Fetch checksum-pinned guest binaries AND matching complete source archives.
 # This makes a minimal GPL guest disk; it downloads no emulator code.
 python3 tools/prepare_freedos.py
@@ -127,6 +128,16 @@ trace `1,0,0,1,1,0`, guest-confirmed competing IRR bits, `PIC PASS`, exact resul
 and guards, no `FAIL` or host error, and unchanged disk bytes within two million
 slots per boot, before and after reset. Its offline preparation script verifies
 the checked-in [source/image/result manifest](fixtures/pic-manifest.json).
+
+The original MIT [mode-0 PIT probe](guest/pit_mode0.asm) arms a terminal-count
+IRQ0 twice using fresh mode words. Each arming verifies one hardware entry with
+EOI/IRET, advancing latched post-terminal counts and no additional IRQ during a
+continued full counter wrap. Guest waits are bounded. Native and release-Wasm
+tests boot the identical image on VM and Ap before/after reset at both browser
+roots, requiring exact results/guards, `PIT MODE0 PASS` without `FAIL` or errors,
+and unchanged disk bytes within two million slots per boot. The offline
+[manifest](fixtures/pit-mode0-manifest.json) pins source/image hashes, license and
+exact guest-owned results. See the [mode-0 contract](docs/hardware.md#8253-binary-mode-0-subset).
 
 The original MIT [mode-2 PIT probe](guest/pit_mode2.asm) latches a running
 60000-count period, rewrites its divisor to 2000, and verifies that the live count
