@@ -96,6 +96,7 @@ python3 tools/prepare_pit_mode3_fixture.py
 python3 tools/prepare_pit_mode0_fixture.py
 python3 tools/prepare_pit_mode0_rewrite_fixture.py
 python3 tools/prepare_pit_mode3_rewrite_fixture.py
+python3 tools/prepare_pit_counter_latch_fixture.py
 # Fetch checksum-pinned guest binaries AND matching complete source archives.
 # This makes a minimal GPL guest disk; it downloads no emulator code.
 python3 tools/prepare_freedos.py
@@ -106,6 +107,7 @@ python3 tools/prepare_hdd_fixture.py
 python3 tools/prepare_music_fixture.py
 python3 tools/prepare_device_fixture.py
 python3 tools/build_font.py --check
+cargo test --locked --test pit counter_latch_
 cargo test --locked --test pit mode3_rewrite_
 cargo test --locked --test pit mode0_rewrite_
 cargo test --locked --test pit
@@ -186,6 +188,18 @@ disk bytes and at most two million slots. The offline
 [manifest](fixtures/pit-mode3-rewrite-manifest.json) pins source/boot/image hashes,
 assembly command, license, expected results and budget; the preparation script
 retains source, license and manifest beside the image.
+
+The separate original MIT [counter-latch probe](guest/pit_counter_latch.asm)
+checks repeated ordinary commands before any read and between paired bytes,
+then recaptures the running count after each completed snapshot. Commands and
+reads cross the primary and mirrored banks. Native and production-release Wasm
+tests boot the same image on VM/Ap before and after reset, at both browser roots,
+requiring `PIT COUNTER LATCH PASS`, no FAIL/core/browser errors, exact raw result
+bytes/guards and unchanged disk bytes within two million slots. Its offline
+[manifest](fixtures/pit-counter-latch-manifest.json) pins assembly, license,
+source/boot/image hashes, expected bytes and budget. Prepare it with
+`python3 tools/prepare_pit_counter_latch_fixture.py`; run focused native coverage
+with `cargo test --locked --test pit counter_latch_`.
 
 The separate original MIT [special-mask probe](guest/pic_smm.asm) enters a
 keyboard handler with a confirmed timer request pending and IR0 lowest. It

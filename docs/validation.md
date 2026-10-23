@@ -2242,3 +2242,174 @@ paging and basic FPU remain required project goals. Limited probes and six-game
 reports do not establish full hardware accuracy or commercial compatibility.
 No commercial ROMs or guest software were acquired. No push, PR, comment or merge
 was performed. Issue #53 requires no post-merge verification.
+
+## Issue #55 ordinary counter-latch retention (2026-10-24)
+
+`Pit::write` now captures an ordinary counter latch only when that counter has
+no pending snapshot. Duplicate commands preserve both its value and `read_hi`.
+The existing read path releases single-byte snapshots after one read and paired
+snapshots after the high byte. Counting, reload, mode, OUT, unrelated counters,
+fresh-mode cancellation and Machine reset use their existing paths. See the
+[bounded contract](hardware.md#8253-ordinary-counter-latch-retention) for the
+Issue's shared 8253/8254 interpretation and excluded sequencing cases.
+
+### Baseline evidence and focused coverage
+
+The assigned upstream `689ceb50b2c3cfa871848e95d7236888a1ddab5b` has identical
+production PIT code and PIT tests to the Issue baseline
+`9156f727d928ceb938c7d20a1dc24425e416e618`. Added the two original reproduction
+tests first, with production code still unchanged, then ran:
+
+```sh
+cargo test --locked --test pit counter_latch_duplicate_ -- --nocapture
+```
+
+Both tests failed, exit 101. `counter_latch_duplicate_before_read_reproduction`
+read low `34h`, then high `11h` instead of `12h` after the second latch at 100h
+elapsed clocks. `counter_latch_duplicate_between_bytes_reproduction` read low
+`34h`, then got `33h` instead of the pending high `12h` after the second latch
+at 101h elapsed clocks. After the fix, both pass and verify fresh captures
+`1134h` and `1133h` respectively without further clock advancement.
+
+Nine original `counter_latch_` tests cover modes 0/2/3, aliases 6/7, all counters,
+LSB-only/MSB-only/paired formats, zero encoding, full and half-consumed snapshots,
+multiple ignored commands, release, fresh capture and restored live readback.
+Independent first-half arithmetic checks new counts; byte-distinct ordinary
+snapshots and changed current bytes expose replacement or sequence restart.
+Pending zero snapshots also survive count changes. Channel isolation mixes
+independently pending low/high bytes and recaptures one channel while another
+remains unread. Bus tests cover VM/Ap, each bank and both cross-bank directions.
+An otherwise identical control receives no latch commands: all three counters'
+count/reload/OUT/enabled state and final entire PIT state match through terminal
+counts, wraps and periods, as do IRQ delivery, IRR and ISR across masking and
+EOI/in-service intervals. Fresh mode combinations and Machine reset cancel full
+and partial snapshots, including aliases and both profiles/banks.
+
+While developing the new bus matrix, its initial five-cycle tick sometimes
+advanced two clocks because the reused bus retained fractional time. Replaced
+that test assumption with the existing exact cumulative 156/625 conversion;
+production scheduler behavior is unchanged. The guest's initial placeholder
+expected bytes also failed its final comparison after all behavioral checks;
+the final source and manifest pin its raw port observations below. Both test
+development failures were resolved before the complete acceptance runs.
+
+### Original guest probe and provenance
+
+The separate MIT [assembly](../guest/pit_counter_latch.asm) programs paired
+binary mode 0, count `1234h`, independently for each duplicate-command case.
+After 16 LOOPs it latches, waits 200 LOOPs, and issues multiple duplicate
+commands before any read or between the paired bytes. Commands and reads use
+both timer banks, including cross-bank consumption. Each retained snapshot has
+high byte `12h`; each complete read is followed by a fresh latch that must give
+a running count in `0E00h..10FFh`, at least `100h` below the snapshot. Guest code
+stores raw IN observations and compares all 32 results/guards before writing
+`PIT COUNTER LATCH PASS`; every mismatch reports FAIL. Hosts only load, step,
+reset and observe; they never write results or manufacture timer events.
+
+Offline reproduction with NASM:
+
+```sh
+nasm -f bin guest/pit_counter_latch.asm -o pit_counter_latch.bin
+python3 tools/prepare_pit_counter_latch_fixture.py
+cargo test --locked --test pit counter_latch_ -- --nocapture
+```
+
+The checked [manifest](../fixtures/pit-counter-latch-manifest.json) pins:
+
+| Artifact | SHA-256 or exact value |
+| --- | --- |
+| Original MIT assembly source | `066f2c9e9399a26a47fd7c2c9f250ad5f796d99b54468dc3919186b84abd220d` |
+| Assembled 1024-byte boot sector | `c42e9f6288f9d8a930d39ccc35eab2970b1bc067a3108a6711c208d1705e3d7f` |
+| 1,261,568-byte HDM image | `9801d5bc5c35e03d3b9d29a175552bd87ce3364289b7f5e65076696b28bb1bb0` |
+| Results at `8000h..801Fh` | `a50d1254100b125610a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5` |
+| Per-boot maximum | 2,000,000 slots |
+
+`8000h` and `8009h..801Fh` are A5 guards. Little-endian words at `8001h`,
+`8003h`, `8005h`, `8007h` are retained snapshot `120Dh`, fresh `1054h`, retained
+snapshot `120Bh`, fresh `1056h`. Preparation checks the complete manifest and
+copies source, MIT license and provenance beside the generated image outside
+`web/`. CI prepares it before native/browser suites. Existing fixture hashes,
+tests, assertions and budgets remain unchanged. All four native boots and eight
+browser boots (VM/Ap, before/after reset, both browser roots) pass at 1,000 slots
+each, with exact raw results/guards, explicit PASS, no FAIL/core/browser errors
+and unchanged disk bytes. Native and browser tests use the identical image.
+
+### Commands and actual outcomes
+
+All checks ran in the assigned macOS arm64 worktree. Existing legal guest
+fixtures were prepared before the complete suites. CPULEVEL and DEBUG each
+encountered primary HTTP 503, then passed via the existing checksum-pinned
+mirror with the same binaries and complete matching sources.
+
+| Command | Result |
+| --- | --- |
+| `python3 tools/prepare_dma_fixture.py` | Passed |
+| `python3 tools/prepare_gdtr_fixture.py` | Passed |
+| `python3 tools/prepare_idtr_fixture.py` | Passed |
+| `python3 tools/prepare_smsw_fixture.py` | Passed |
+| `python3 tools/prepare_pic_fixture.py` | Passed |
+| `python3 tools/prepare_pic_smm_fixture.py` | Passed |
+| `python3 tools/prepare_pit_mode2_fixture.py` | Passed |
+| `python3 tools/prepare_pit_mode3_fixture.py` | Passed |
+| `python3 tools/prepare_pit_mode0_fixture.py` | Passed |
+| `python3 tools/prepare_pit_mode0_rewrite_fixture.py` | Passed |
+| `python3 tools/prepare_pit_mode3_rewrite_fixture.py` | Passed |
+| `python3 tools/prepare_pit_counter_latch_fixture.py --update-manifest` | Created checked manifest from original source |
+| `python3 tools/prepare_pit_counter_latch_fixture.py` | Passed: reproduced source/boot/image/results manifest |
+| `python3 tools/prepare_freedos.py` | Passed: pinned legal guest binaries and matching sources |
+| `python3 tools/prepare_font_fixture.py` | Passed |
+| `python3 tools/prepare_dos_apps.py` | Passed |
+| `python3 tools/prepare_cpu_fixture.py` | Passed via pinned mirror after primary HTTP 503 |
+| `python3 tools/prepare_hdd_fixture.py` | Passed |
+| `python3 tools/prepare_music_fixture.py` | Passed |
+| `python3 tools/prepare_device_fixture.py` | Passed via pinned mirror after primary HTTP 503 |
+| `python3 tools/build_media.py --check` | Passed, included in npm build |
+| `python3 tools/build_font.py --check` | Passed, included in npm build |
+| `python3 -m unittest discover -s tools -p test_fixture_fetch.py` | Passed: seven tests |
+| `cargo fmt` | Formatted the new Rust tests |
+| `cargo test --locked --test pit counter_latch_ -- --nocapture` | Passed: nine tests; all four native probe boots at 1,000 slots |
+| `cargo test --locked --test pit counter_latch_` | Passed: nine tests on final files |
+| `cargo test --locked --test pit` | Passed: 65 tests |
+| `cargo test --locked` | Passed: 225 integration tests across 17 targets; no failures/ignored tests; unit/doc targets also passed |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `cargo fmt --check` | Passed |
+| `git diff --check` | Passed |
+| `npm ci` | Passed: zero vulnerabilities |
+| `npx playwright install chromium` | Passed |
+| `npm test -- --workers=2` | Release-Wasm build and ten-asset publication audit passed; browser server could not bind occupied port 8000, exit 1 before tests |
+| `npm test -- --config=.issue55-playwright.config.js --workers=2` | Passed: production release-Wasm build, ten-asset audit, all 86 browser tests, zero skipped, 2.6 minutes |
+
+The temporary browser configuration imports `playwright.config.js` and changes
+only local server port/base URL to `http://127.0.0.1:62086/` and project server
+port/base URL to `http://127.0.0.1:62087/pc98-rust/`. The local server command is
+`python3 -m http.server 62086 --bind 127.0.0.1 --directory web`. The project
+server is a temporary copy of `tests/browser/serve_project.py` with only its
+listening port 8001 replaced by 62087, preserving the `web/` symlink and root
+asset rejection. All projects, assertions, timeouts and budgets are retained.
+Two workers follow the prior recorded workaround for browser clock contention.
+No existing listener was stopped or reused; both temporary files were removed.
+Existing hardware, CPU-shadow, BIOS timer, DOS/application, VM and game checks
+pass without relaxed assertions, replaced fixtures or increased budgets.
+
+### Local review and limits
+
+Reviewed the complete production/test/guest/provenance/CI/documentation diff
+against the Issue and repository review guidelines. Confirmed duplicate commands
+are a complete no-op, single/paired consumption releases the snapshot, fresh
+mode/reset paths remain intact, each bank reaches shared state, the guest owns
+all raw results and checks every guard, generated fixtures stay outside `web/`,
+and existing tests/manifests are preserved. The test-development issues above
+are resolved. Relative documentation links, the validation anchor and whitespace
+were checked. No blocking findings remain from local review. Remote CI and
+independent review are not established by this execution.
+
+PIT remains **partial**. All 26 fixed inventory statuses/scopes and deferred
+work remain unchanged. Modes 1/4/5, external GATE/retriggering, BCD, mode-2/3
+divisor-1 policy, other access sequencing, non-mode-3 beeper behavior and audio
+sampling across scheduler batches remain outstanding. This change adds no
+8254 read-back command, arbitrary latch insertion into unfinished unlatched
+reads or new interleaved count-write semantics. Protected execution, paging and
+basic FPU remain required goals. Limited probes and six-game reports establish
+neither complete hardware accuracy nor commercial compatibility. No commercial
+ROMs or proprietary software were acquired. No push, PR, merge or comment was
+performed. Issue #55 requires no post-merge verification.
