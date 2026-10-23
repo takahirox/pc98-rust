@@ -59,12 +59,13 @@ multiply/divide, shifts/rotates, stack, near/far call/jump/return, conditionals,
 string operations and REP/REPE/REPNE, interrupt entry/IRET, byte/word IN/OUT,
 CLI/STI/HLT. Immediate push, PUSHA/POPA, ENTER/LEAVE and immediate shifts implement
 the 186-compatible forms available on V30. TEST1/CLR1/SET1/NOT1 implement V30
-single-bit operations. AAM/AAD consume but ignore the encoded radix, using decimal
-10 as on V30. See the [NEC V20/V30 user manual](https://www.dosdays.co.uk/media/nec/NEC-V20-V30-Users-Manual.pdf)
+single-bit operations. BOUND/CHKIND implements signed inclusive word bounds and
+next-instruction vector-5 return as [specified below](#v30-boundchkind). AAM/AAD
+consume but ignore the encoded radix, using decimal 10 as on V30. See the [NEC V20/V30 user manual](https://www.dosdays.co.uk/media/nec/NEC-V20-V30-Users-Manual.pdf)
 and [NEC V-Series data book](https://bitsavers.org/components/nec/_dataBooks/1990_NEC_16-bit_V-Series_Microprocessor_Data_Book.pdf).
 
 Unimplemented opcodes fail with CS:IP and opcode information. V30 8080 emulation
-mode, packed BCD string extensions, bit-field extensions, coprocessor/ESC, BOUND,
+mode, packed BCD string extensions, bit-field extensions, coprocessor/ESC,
 TF single-step traps, NMI, undocumented opcodes and later x86 extensions are not
 implemented in VM. LOCK has no bus-contention effect in this single-CPU machine.
 
@@ -84,6 +85,47 @@ retirement while clocks and IRQs continue. STI and MOV/POP SS inhibit delivery f
 the next instruction. A frame runs at most two slices of 16,667 slots; the core
 caps each call at 100,000 slots. There is no unbounded catch-up after a suspended
 tab. This bounds UI work even for infinite loops and maximum-length REP strings.
+
+## V30 BOUND/CHKIND
+
+VM implements `62 /r`, comparing a signed 16-bit register against two consecutive
+little-endian memory words, lower then upper, with inclusive endpoints. Valid
+checks preserve registers, flags and bounds. Existing ModR/M decoding supplies
+16-bit offset wrapping, default SS for BP addressing, segment overrides and Bus
+mapping. Register-only operands retain an explicit host diagnostic.
+
+An out-of-range VM value conditionally enters vector 5 regardless of IF. The
+fixed physical IVT entry at `00014h..00017h` supplies IP/CS. Existing interrupt
+entry pushes original FLAGS, CS and the decoded **next-instruction IP**, then
+clears IF/TF. Unmodified IRET continues after BOUND. Ap retains its existing
+16/32-bit signed comparison and restartable fault-5 behavior: its saved address
+identifies the first prefix. Ap operand/segment-limit and LOCK rejection paths
+are unchanged.
+
+Specification basis: NEC's [V-series Instruction Manual, printed pp. 52–53 and
+Appendix A.4, p. 185](https://www.ardent-tool.com/CPU/docs/NEC/V20-V30/v_series.pdf#page=63)
+defines the two-word operand, conditional BRK 5, vector and stack operations,
+and increments PC as instruction bytes are consumed. **Next-instruction return
+is the interpretation of those combined documented operations.** NEC's
+[V20/V30 User's Manual, Section 6](https://www.ceibo.com/eng/datasheets/NEC-V20-V30-Users-Manual.pdf)
+describes interrupt entry. Intel's [80386 BOUND specification](https://www.scs.stanford.edu/05au-cs240c/lab/i386/BOUND.htm)
+explicitly specifies signed inclusive comparisons and a restart address; that
+Ap fault rule must not be applied to VM.
+
+The original MIT [boot probe](../guest/v30_bound.asm) builds offline with
+`python3 tools/prepare_v30_bound_fixture.py`. Its checked
+[manifest](../fixtures/v30-bound-manifest.json) pins source/license, assembly,
+source/boot/image hashes, exact results/guards and a two-million-slot limit.
+The guest checks both vector-5 frames, IF/TF clearing, unmodified IRET and exactly
+two entries with forward progress. Native and production-release Wasm checks
+boot the identical VM image before/after reset, at both browser roots. See the
+[actual validation record](validation.md#issue-57-v30-boundchkind-2026-10-24).
+
+V30 remains **partial**: packed-BCD strings, bit-field extensions, TF single-step,
+NMI and broader instruction/fault acceptance remain outstanding, as do the other
+VM exclusions above. Protected execution, paging and basic x87 retain their
+fixed required scope. These bounded probes establish neither full hardware
+accuracy nor commercial compatibility.
 
 ## Ap real-mode SMSW
 

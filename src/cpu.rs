@@ -1112,9 +1112,6 @@ impl Cpu {
                 }
             }
             0x62 => {
-                if b.profile == crate::Profile::Pc9801Vm {
-                    return Err("unimplemented V30 BOUND".into());
-                }
                 let m = self.fetch(b)?;
                 let o = self.decode(b, m, ov)?;
                 if let Operand::Mem(seg, a) = o {
@@ -1127,9 +1124,18 @@ impl Cpu {
                         true,
                     );
                     if value < low || value > high {
-                        return Err(ExecError::Fault(5));
+                        if b.profile == crate::Profile::Pc9801Vm {
+                            // NEC CHKIND conditionally performs BRK 5 after
+                            // consuming the instruction. IRET resumes at next IP.
+                            self.deliver_interrupt(b, 5)?;
+                        } else {
+                            return Err(ExecError::Fault(5));
+                        }
                     }
                 } else {
+                    if b.profile == crate::Profile::Pc9801Vm {
+                        return Err("invalid V30 BOUND: memory operand required".into());
+                    }
                     return Err(ExecError::Fault(6));
                 }
             }

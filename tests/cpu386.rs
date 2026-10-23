@@ -2062,3 +2062,178 @@ fn smsw_original_boot_probe_before_and_after_machine_reset() {
         assert_eq!(m.bus.disks[0].as_ref().unwrap().bytes, image);
     }
 }
+
+#[test]
+fn bound_signed_word_dword_size_and_address_overrides() {
+    for wide in [false, true] {
+        for address32 in [false, true] {
+            let extremes = if wide {
+                (i32::MIN as i64, i32::MAX as i64)
+            } else {
+                (i16::MIN as i64, i16::MAX as i64)
+            };
+            for (low, high) in [(0, 10), (-10, -2), (-2, 2), extremes, (5, 5), (10, -10)] {
+                for value in [low - 1, low, low + (high - low) / 2, high, high + 1] {
+                    if value < extremes.0 || value > extremes.1 {
+                        continue;
+                    }
+                    let mut code = vec![0x26];
+                    if wide {
+                        code.push(0x66);
+                    }
+                    if address32 {
+                        code.push(0x67);
+                    }
+                    code.extend(if address32 {
+                        vec![0x62, 0x04, 0x8b]
+                    } else {
+                        vec![0x62, 0x06, 1, 0x30]
+                    });
+                    for reg in 0..8 {
+                        let mut code = code.clone();
+                        let modrm = code.iter().position(|byte| *byte == 0x62).unwrap() + 1;
+                        code[modrm] |= (reg as u8) << 3;
+                        let (mut c, mut b) = cpu(&code);
+                        c.s[ES] = 0x4000;
+                        c.set_reg32(BX, 0x3001);
+                        c.set_reg32(CX, 4);
+                        c.set_reg32(reg, value as u32);
+                        // Avoid an unrelated #SS from an odd stack wrapping inside a word.
+                        if reg == SP && [1, 3, 5].contains(&c.r[SP]) {
+                            continue;
+                        }
+                        // SIB source registers can themselves be the index operand.
+                        let off = if address32 {
+                            c.reg32(BX).wrapping_add(c.reg32(CX).wrapping_mul(4))
+                        } else {
+                            0x3001
+                        };
+                        if off > 0xfff8 {
+                            continue;
+                        }
+                        let width = if wide { 4 } else { 2 };
+                        let start = 0x40000 + off as usize;
+                        b.mem[start..start + width]
+                            .copy_from_slice(&(low as u32).to_le_bytes()[..width]);
+                        b.mem[start + width..start + 2 * width]
+                            .copy_from_slice(&(high as u32).to_le_bytes()[..width]);
+                        c.flags = 2 | CF | PF | AF | ZF | SF | DF | OF;
+                        let saved = c.clone();
+                        let memory = b.mem.clone();
+                        c.step(&mut b).unwrap();
+                        if value < low || value > high {
+                            assert_eq!((c.s[CS], c.ip), (0, 0x2050));
+                            let mut expected = memory;
+                            for (i, word) in [0x1000, 0, saved.flags].iter().enumerate() {
+                                let off = saved.r[SP].wrapping_sub(6).wrapping_add((i * 2) as u16)
+                                    as usize;
+                                assert_eq!(b.read16(off), *word);
+                                expected[off..off + 2].copy_from_slice(&word.to_le_bytes());
+                            }
+                            assert_eq!(b.mem, expected);
+                        } else {
+                            assert_eq!(c.ip, 0x1000 + code.len() as u32);
+                            for r in 0..8 {
+                                assert_eq!(c.reg32(r), saved.reg32(r));
+                            }
+                            assert_eq!(c.flags, saved.flags);
+                            assert_eq!(b.mem, memory);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn bound_first_prefix_fault_guest_repair_iret_retry() {
+    for wide in [false, true] {
+        // Nonzero CS and three prefixes prove restoration to the first prefix.
+        let code = if wide {
+            vec![0x26, 0x67, 0x66, 0x62, 0x05, 1, 0x30, 0, 0, 0x90]
+        } else {
+            vec![0x26, 0x67, 0x62, 0x05, 1, 0x30, 0, 0, 0x90]
+        };
+        let (mut c, mut b) = cpu(&[]);
+        c.s[CS] = 0x1000;
+        c.s[ES] = 0x4000;
+        c.set_reg32(AX, if wide { 0x80000000 } else { 0x8000 });
+        c.flags = 2 | CF | IF;
+        b.mem[0x11000..0x11000 + code.len()].copy_from_slice(&code);
+        let width = if wide { 4 } else { 2 };
+        b.mem[0x43001..0x43001 + width].copy_from_slice(&0u32.to_le_bytes()[..width]);
+        b.mem[0x43001 + width..0x43001 + 2 * width].copy_from_slice(&10u32.to_le_bytes()[..width]);
+        // Guest repairs the register, records invocation, IRET retries BOUND.
+        let handler = if wide {
+            vec![0x66, 0xb8, 5, 0, 0, 0, 0xfe, 0x06, 0, 0x60, 0xcf]
+        } else {
+            vec![0xb8, 5, 0, 0xfe, 0x06, 0, 0x60, 0xcf]
+        };
+        b.mem[0x2050..0x2050 + handler.len()].copy_from_slice(&handler);
+        c.step(&mut b).unwrap();
+        assert_eq!((c.s[CS], c.ip), (0, 0x2050));
+        assert_eq!(&b.mem[0x8ffa..0x9000], &[0, 0x10, 0, 0x10, 3, 2]);
+        steps(&mut c, &mut b, 3);
+        assert_eq!((c.s[CS], c.ip), (0x1000, 0x1000));
+        c.step(&mut b).unwrap();
+        assert_eq!(c.ip, 0x1000 + code.len() as u32 - 1);
+        c.step(&mut b).unwrap();
+        assert_eq!(c.ip, 0x1000 + code.len() as u32);
+        assert_eq!(b.mem[0x6000], 1);
+        assert_eq!(c.r[SP], 0x9000);
+        assert_eq!(c.flags, 2 | CF | IF);
+    }
+}
+
+#[test]
+fn bound_register_and_lock_rejection_restart_before_first_prefix() {
+    for code in [
+        vec![0x26, 0x62, 0xc0],
+        vec![0x66, 0x62, 0xff],
+        vec![0x26, 0xf0, 0x62, 0x06, 0, 0x30],
+        vec![0x67, 0x66, 0xf0, 0x62, 0x05, 0, 0x30, 0, 0],
+    ] {
+        let (mut c, mut b) = cpu(&code);
+        let memory = b.mem.clone();
+        c.step(&mut b).unwrap();
+        fault(&c, &b, 6, 0x1000);
+        assert_eq!(&b.mem[..0x8ffa], &memory[..0x8ffa]);
+        assert_eq!(&b.mem[0x9000..], &memory[0x9000..]);
+    }
+}
+
+#[test]
+fn bound_segment_limits_preflight_both_bounds_before_comparison() {
+    for wide in [false, true] {
+        for stack in [false, true] {
+            let width = if wide { 4 } else { 2 };
+            for off in [0x10000 - width * 2, 0x10001 - width * 2, 0xffff, 0x10000] {
+                let mut code = vec![if stack { 0x36 } else { 0x3e }, 0x67];
+                if wide {
+                    code.push(0x66);
+                }
+                code.extend([0x62, 0x05]);
+                code.extend((off as u32).to_le_bytes());
+                let (mut c, mut b) = cpu(&code);
+                c.s[SS] = 0x2000;
+                let base = if stack { 0x20000 } else { 0 };
+                b.mem[base + off..base + off + width * 2].fill(0);
+                c.r[AX] = 1; // outside, but segment fault must take precedence
+                c.step(&mut b).unwrap();
+                assert_eq!(
+                    c.ip,
+                    if off == 0x10000 - width * 2 {
+                        0x2050
+                    } else if stack {
+                        0x20c0
+                    } else {
+                        0x20d0
+                    }
+                );
+                assert_eq!(b.read16(0x28ffa), 0x1000);
+                assert_eq!(c.r[AX], 1);
+            }
+        }
+    }
+}
