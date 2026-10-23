@@ -750,7 +750,7 @@ impl Bus {
                 } else if self.fdc.cylinder[d] != c {
                     st0 |= 64;
                     st1 = 4;
-                } else if self.dma.mask & 4 != 0 {
+                } else if !self.dma.can_service(2) {
                     st0 |= 0x40;
                     st1 = 0x10;
                 } else {

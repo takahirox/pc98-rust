@@ -111,6 +111,62 @@ mov byte [cmd+4], 8
 mov al, 2
 out 0x15, al
 call transfer
+; Preserve the master-clear phase's final buffer check before reusing it.
+mov al, 0x4d
+mov di, 0x8000
+mov cx, 1024
+repe scasb
+jne fail
+; Controller-disable phase: keep channel 2 unmasked and retain programming.
+mov word [failure], disable_fail_text
+mov byte [cmd], 0x46
+mov byte [cmd+4], 2
+mov al, 0x56
+call program
+; Command writes must retain the high byte pointer and sticky TC.
+in al, 9
+mov al, 4
+out 0x11, al
+out 0x11, al
+in al, 9
+cmp al, 0x80
+jne fail
+in al, 0x11
+cmp al, 4
+jne fail
+in al, 0x11
+or al, al
+jnz fail
+mov al, 0xa5
+call fill
+call masked_transfer
+mov al, 0xa5
+mov di, 0x8000
+mov cx, 1024
+repe scasb
+jne fail
+in al, 0x11
+or al, al
+jnz fail
+xor al, al
+out 0x11, al
+out 0x11, al
+mov byte [pattern], 0x39
+call read_one
+; Disabled WRITE must not alter sector 7; host checks the complete image.
+mov byte [cmd], 0x45
+mov byte [cmd+4], 7
+mov al, 0x5a
+call program
+mov al, 0xd2
+call fill
+mov al, 4
+out 0x11, al
+call masked_transfer
+xor al, al
+out 0x11, al
+mov byte [cmd+4], 4
+call transfer
 mov si, pass_text
 jmp report
 master_clear:
@@ -266,7 +322,8 @@ irq_count: db 0
 failure: dw fail_text
 expected_st0: db 0
 expected_st1: db 0
-pass_text: db 'DMA AUTO INIT PASS / DMA MASTER CLEAR PASS', 0
+pass_text: db 'DMA AUTO INIT PASS / DMA MASTER CLEAR PASS / DMA DISABLE PASS', 0
+disable_fail_text: db 'DMA DISABLE FAIL', 0
 master_fail_text: db 'DMA MASTER CLEAR FAIL', 0
 fail_text: db 'DMA AUTO INIT FAIL', 0
 times 1024-($-$$) db 0

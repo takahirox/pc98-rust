@@ -92,7 +92,7 @@ this table is not a claim of complete chip emulation.
 | Ports (hex) | Device and supported behavior | IRQ / notes |
 | --- | --- | --- |
 | `00,02`; `08,0A` | Master/slave 8259: ICW vector/cascade initialization, masks, IRR/ISR, priority, specific/nonspecific EOI, auto EOI | Master IR7 cascades slave; masked/in-service IRQs cannot bypass priority |
-| `01–0F` odd, `11–1F` odd, `21,23,25,27` | 8237 address/count flip-flop, channel masks, direction/decrement, terminal count and auto-init reload, bank registers | FDC uses channel 2; count/address change with actual byte transfers |
+| `01–0F` odd, `11–1F` odd, `21,23,25,27` | 8237 address/count flip-flop, controller disable, channel masks, direction/decrement, terminal count and auto-init reload, master clear, bank registers | FDC uses channel 2; count/address change with actual byte transfers |
 | `31,33,35,37` | PPI startup inputs, output C, bit set/reset, active-low beep gate | Input straps are fixed VM-profile constants |
 | `41,43` | Keyboard byte FIFO, ready status, command acknowledgements, down/up scan bytes | IR1 / INT 09; firmware maintains BIOS ring, held-key bitmap and modifier state |
 | `60,62` | Master text GDC parameter/status and command/data readback | RESET, display enable, PITCH, CURS, CCHAR, PRAM start, CSRR |
@@ -169,7 +169,7 @@ register reload and previously latched status, then produces seven result bytes
 and the completion IRQ on both VM and Ap.
 
 Writing any byte to software master clear (`001Bh`) between device services
-clears the TC status latch and shared first/last byte pointer and masks all four
+clears the command register, TC status latch and shared first/last byte pointer and masks all four
 channels, leaving the modeled controller idle. Current and base address/count
 registers and mode bytes survive unchanged, including partial-byte programming;
 master clear does not reload bases. Unmasking allows the existing FDC consumer to
@@ -177,11 +177,31 @@ resume with retained programming. Intel's selective reset list (printed pp. 2
 and 9, Figure 6) excludes address/count/mode; their retention follows from that
 list. NEC [IEA-751](https://www.renesas.com/ja/document/apn/upd72070-application-note),
 §2.4, Table 2-10 (printed p. 15), maps master clear to `1Bh` and byte-pointer clear
-to `19h`. Command, Request and Temporary registers are unmodeled; their reset
-behavior is not claimed. Machine construction/reset is unchanged. The existing
+to `19h`. Request and Temporary registers are unmodeled; their reset behavior
+is not claimed. Machine construction/reset clears the command register. The existing
 policy of zeroing external PC-98 bank registers on master clear is preserved;
 board-level bank-reset wiring remains unverified. FDC retention tests use bank zero.
 See [master-clear evidence](validation.md#issue-31-dma-master-clear-retention).
+
+Writing command port `0011h` models only bit 2, the active-high controller
+disable bit, on both VM and Ap. Setting it blocks DMA service independently of
+channel masks; clearing it permits service only on an unmasked channel. Other
+command bits are ignored and remain unsupported. Repeated command writes retain
+current/base address/count programming, modes, banks, masks, TC status and the
+shared byte pointer. Programming remains available while disabled. Reading
+`0011h` returns and clears status, rather than reading back the command.
+
+The atomic FDC backend samples eligibility at its scheduled service boundary,
+including command writes after submission but before service. A valid data
+command with DMA disabled follows the masked-channel no-service path: no payload
+or DMA progress, abnormal ST0 and ST1 overrun bit 4, seven result bytes and a
+completion IRQ. Clearing disable afterward allows a fresh command to use retained
+programming; it does not replay the completed error. This is a bounded scheduling
+approximation, with no claim about physical timeout duration, DRQ/DACK waveforms
+or magnetic-media effects. Intel's register descriptions and Figure 6 (printed
+pp. 7–11) specify command/reset semantics; NEC IEA-751 Table 2-10 maps command to
+`11h`, and the [µPD765A/B Table 3](https://hxc2001.com/download/datasheet/floppy/thirdparty/FDC/NEC/UPD765_Datasheet_OCRed.pdf)
+(PDF p. 10) defines overrun. See [controller-disable evidence](validation.md#issue-33-dma-controller-disable).
 
 This bounded contract follows Intel's [8237A datasheet](https://read.seas.harvard.edu/~kohler/class/04f-aos/ref/hardware/8237A.pdf),
 printed pp. 5–10 (autoinitialize and register descriptions), and NEC's
@@ -192,11 +212,11 @@ the original MIT boot probe executes on native and production Wasm at both brows
 serving paths. See [execution evidence](validation.md#issue-29-dma-terminal-count-auto-init).
 
 DMA remains **partial**. External EOP injection, demand/block/single arbitration,
-software requests, command controls, verify transfers, memory-to-memory DMA,
+software requests, other command controls, verify transfers, memory-to-memory DMA,
 cascade/rotating priority, bank-reset fidelity and additional device interactions
 still require implementation or verification. Broader FDC commands and precise motor/rotation timing remain
 outside this contract. Passing these checks establishes terminal-count reload,
-software master clear and their existing FDC consumer, not complete hardware
+software master clear, controller disable and their existing FDC consumer, not complete hardware
 accuracy or commercial compatibility. Other hardware inventory requirements remain unchanged.
 
 ## Synthetic firmware and boot

@@ -614,3 +614,143 @@ priority, bank-reset fidelity and broader device interactions are incomplete or
 unverified. Limited probe success establishes neither full hardware accuracy nor
 commercial compatibility. No other inventory category changes scope or gains a
 verification claim. No post-merge verification is required by Issue #31.
+
+## Issue #33: DMA controller disable
+
+Implemented only 8237 command bit 2 at PC-98 write port `11h`, on VM and Ap.
+The existing FDC consumer samples controller enable and channel mask together at
+scheduled service time. An unserviced valid command completes through the existing
+masked-channel overrun path. Command writes retain programming, bases, modes,
+banks, masks, TC and the shared byte pointer. Machine reset and software master
+clear clear command state; master clear still retains address/count/modes and
+masks every channel. Other command controls remain unsupported. See the
+[bounded contract](hardware.md#dma-terminal-count-and-auto-initialization).
+
+Three added native tests extend the existing eight DMA tests:
+
+- All four channels, both pointer phases and address/count byte programming while
+  disabled; repeated disable/enable writes, status reads while disabled, unrelated
+  programming/masks/latched TC retention and subsequent auto-init base reload.
+- Raw READ/WRITE DATA on VM and Ap, auto-init on/off, disabled before submission
+  or after 159 of the 160 scheduled clocks. Unmasked disabled commands return
+  exactly `40 10 00 00 00 02 03`, with IRQ, seven bytes and readiness. Buffer and
+  guards, complete disk, all current registers/modes/banks/masks, unrelated TC,
+  disk write counter and FDC counters remain unchanged. Enabling does not replay
+  an error or bypass a channel mask. Clearing disable alone then permits a fresh
+  unmasked command with retained programming, exact payload, normal IRQ/result
+  and the correct TC, mask and auto-init behavior.
+- Machine reset and master clear clear disable on both profiles, without bypassing
+  masks; unmasking permits retained master-clear programming to transfer.
+
+The original MIT `guest/dma_autoinit.asm` remains a 1024-byte source-built boot
+sector. All earlier auto-init and master-clear assertions remain; the earlier
+final buffer check now runs in the guest before buffer reuse. The added phase
+checks repeated disable/enable writes, high-pointer and sticky-status retention,
+blocked unmasked read/write and successful fresh commands after enabling. A
+successful write adds `D2h` to sector 4; existing `69h`, `B6h` and `4Dh` write
+assertions at sectors 5, 6 and 8 remain, and sector 7 remains an untouched guard.
+Native tests check the complete resulting disk and exact counters (five reads,
+including IPL, and four writes). Browser tests compare the complete exported disk,
+final buffer and guards. No game assertion was changed.
+
+Success prints `DMA AUTO INIT PASS / DMA MASTER CLEAR PASS / DMA DISABLE PASS`;
+failures retain phase-specific FAIL markers. Result/IRQ polls remain bounded at
+`FFFFh` iterations, and native and production-Wasm runs retain a two-million-slot
+budget per profile/path. The exact same image passed on native VM/Ap and production
+Wasm VM/Ap at `/` and `/pc98-rust/`. It requires no DOS, commercial ROM, proprietary
+firmware or newly acquired game. The MIT source, copied license and generated
+image stay outside `web/`.
+
+The [manifest](../fixtures/dma-manifest.json), regenerated with
+`python3 tools/prepare_dma_fixture.py --update-manifest`, records:
+
+| Item | Value |
+| --- | --- |
+| Assembly | `nasm -f bin guest/dma_autoinit.asm -o autoinit.bin` |
+| License | MIT; repository `LICENSE` copied beside the image |
+| Source SHA-256 | `1119cbdcd8b32f1b3661eb4854a8e988041737866469f1bc50ac790f4afa1adc` |
+| Boot SHA-256 | `196d87f97f8be853700b90abde49ea3bc72d25423d890ff690c77d91cd5fdb83` |
+| Image SHA-256 | `464524cd5e8c7701a7a8cd264ee70c767c51ed269dc89979e4478e1920158fef` |
+
+Baseline-negative validation used an isolated temporary directory populated by
+`git archive 131086f8264026569d25f07c8e83e70ab02860ca`. Only the final
+`tests/dma.rs` and final generated `fixtures/dma/autoinit.hdm` were copied into
+that directory. Both baseline implementation files (`src/devices.rs`,
+`src/bus.rs`) were byte-compared with `git show` afterward and remained unchanged.
+From that isolated directory:
+
+| Command | Expected negative result |
+| --- | --- |
+| `cargo test --locked --test dma raw_fdc_controller_disable_samples_service_and_retains_programming -- --exact --nocapture` | Exit 101: disabled command incorrectly returns successful `00 00 00 00 00 02 03` instead of `40 10 00 00 00 02 03` |
+| `cargo test --locked --test dma original_boot_probe_runs_on_both_profiles -- --exact --nocapture` | Exit 101: guest prints `DMA DISABLE FAIL` in the new phase |
+
+The same tests and image pass with the implementation. No baseline source was
+substituted into this implementation worktree.
+
+Validation ran on Darwin 25.6.0 arm64, with Homebrew Rust/Cargo 1.94.0 for native
+checks, rustup Rust 1.99.0 and `wasm32-unknown-unknown` for the production Wasm
+build (the existing `build_web.py` compiler selection), NASM 3.02, Python 3.13.13,
+Node 24.12.0, npm 11.6.2 and pinned Playwright 1.56.1 Chromium.
+
+| Command | Result |
+| --- | --- |
+| `python3 tools/prepare_dma_fixture.py` | Passed; final source/image/manifest verified |
+| `python3 tools/prepare_freedos.py` | Passed; pinned binaries and complete matching source archives retained |
+| `python3 tools/prepare_font_fixture.py` | Passed |
+| `python3 tools/prepare_dos_apps.py` | Passed |
+| `python3 tools/prepare_cpu_fixture.py` | Passed after pinned mirror download below |
+| `python3 tools/prepare_hdd_fixture.py` | Passed |
+| `python3 tools/prepare_music_fixture.py` | Passed |
+| `python3 tools/prepare_device_fixture.py` | Passed after pinned mirror download below |
+| `cargo test --locked --test dma` | Passed: 11 tests, zero failed or ignored |
+| `cargo test --locked` | Passed: 111 native integration tests, zero failed or ignored; existing hardware, DOS/application/game coverage retained |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `cargo fmt --check` | Passed |
+| `python3 tools/build_media.py --check` | Passed; established firmware/demo images unchanged |
+| `python3 tools/build_font.py --check` | Passed; established font unchanged |
+| `npm ci` | Passed |
+| `npx playwright install chromium` | Passed |
+| `npm test` | Media/font, release Wasm and ten-asset site checks passed; browser server startup failed because port 8000 was occupied |
+| `npm test -- --config=playwright.issue33.config.js` | Passed: all 48 Chromium/Wasm tests in 24.5 seconds, including the four extended DMA cases and all existing game regressions |
+| `git diff --check` | Passed |
+
+CPULEVEL and DEBUG preparation initially received HTTP 503 from ibiblio. The
+following checksum-verifying mirror fetches populated only the ignored fixture
+cache, then the unchanged preparation commands above passed. No fixture,
+assertion, provenance requirement or checksum was skipped or weakened:
+
+```sh
+python3 - <<'PY'
+import sys
+sys.path.insert(0, 'tools')
+from prepare_dos_apps import fetch
+from prepare_cpu_fixture import ARCHIVE_SHA
+fetch('cpulevel2007.zip', 'https://mirror.math.princeton.edu/pub/freeDOS/files/util/system/cpulevel/cpulevel2007.zip', ARCHIVE_SHA)
+PY
+python3 - <<'PY'
+import sys
+sys.path.insert(0, 'tools')
+from prepare_dos_apps import fetch
+from prepare_device_fixture import HASH
+fetch('debug125.zip', 'https://ftp.gwdg.de/pub/misc/freedos/files/dos/debug/DEBUG125.zip', HASH)
+PY
+```
+
+The temporary browser config imported `playwright.config.js`, retained its test
+selection, projects, workers and assertions, and changed only server commands and
+URLs to free ports 18000/18001. The root command was
+`python3 -m http.server 18000 --bind 127.0.0.1 --directory web`; the project command
+was `python3 /tmp/issue33-serve-project.py`. That temporary server copied
+`tests/browser/serve_project.py`, setting `WEB` to this worktree's `web/` and port
+to 18001, preserving the project symlink and rejection of root asset URLs. The
+pre-existing port-8000 listener was left alone. Temporary configuration was
+removed after validation.
+
+DMA and integration remain **partial**. Other command controls, software requests,
+verify transfers, demand/block/single service and arbitration, rotating priority
+and cascade, external EOP, memory-to-memory transfers, bank-reset fidelity and
+broader device interactions remain unsupported or unverified. This adds no
+per-byte FDC scheduling or physical timeout/DRQ/DACK/media claim. Limited probes
+establish neither full hardware accuracy nor commercial compatibility. Other
+inventory statuses and required scopes, including protected mode, paging and
+basic FPU work, remain unchanged. No post-merge verification is required by #33.
