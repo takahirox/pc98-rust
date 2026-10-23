@@ -754,3 +754,144 @@ per-byte FDC scheduling or physical timeout/DRQ/DACK/media claim. Limited probes
 establish neither full hardware accuracy nor commercial compatibility. Other
 inventory statuses and required scopes, including protected mode, paging and
 basic FPU work, remain unchanged. No post-merge verification is required by #33.
+
+## Issue #35: Ap real-mode GDTR (2026-10-23)
+
+Implemented only LGDT/SGDT in the Ap decoder, with per-instance GDTR and the
+[documented reset policy, specification distinction and unsupported boundaries](hardware.md#ap-real-mode-gdtr).
+The instructions use the existing Bus and real-mode fault mechanism. The VM
+V30 decoder is unchanged. No existing test assertion was removed or weakened.
+
+The eight original `gdtr_` tests in `tests/cpu386.rs` cover the four operand/address
+size combinations, zero/maximal limits/bases, high-byte retention and clearing,
+SIB and default SS, all segment overrides including FS/GS, repeated overrides,
+unaligned operands, exact six-byte stores/guards, preserved registers/flags,
+independent CPUs and Machine reset. Boundary cases cross both operand sizes,
+both address sizes and DS/SS for loads and stores: `FFFAh` succeeds; `FFFBh`,
+`10000h` and `FFFFFFFFh` fault before partial effects. Initialized IVT/stack tests
+assert vector, saved first-prefix IP, FLAGS, unchanged GDTR/destination bytes,
+IRET/retry after address repair, repeated invalid-register/LOCK faults, A20 reads
+and writes, retained linear-base bits, and ROM protection.
+
+The original MIT `guest/gdtr.asm` assembles offline into a single boot sector,
+zero-padded to a 77×2×8×1024 floppy. Its handlers validate vector routing, saved
+CS and first-prefix IP, count faults with explicit bounds, repair DS/SS addresses
+and IRET to retry. Register/LOCK #UD handlers validate and advance past their
+invalid instructions. The guest checks exact readback, high-byte clearing,
+reset state, last legal operand and guards before emitting `GDTR PASS` or
+`GDTR FAIL`. The fixture includes source, license and manifest outside `web/`.
+
+| Fixture provenance | Value |
+| --- | --- |
+| Assembly | `nasm -f bin guest/gdtr.asm -o gdtr.bin` |
+| License | Original MIT; repository `LICENSE` copied beside image |
+| Source SHA-256 | `ceb4c144302af92c164f6eddae475b43c839bb3c6a8e8f76956711ff182d2f3e` |
+| Boot SHA-256 | `d4ed5c90c5d05495ac6ac82818ca42f8faabe3f43907518cf375f2c13dd9a8e5` |
+| Image SHA-256 | `69fccf73900116e3fe7143c9f275676c1b19ccdfc4c94d2c70f73021259758f2` |
+| Execution budget | At most 2,000,000 instruction slots per run, in 100,000-slot slices |
+
+The native boot test and actual production release-Wasm browser test execute
+that identical image on Ap, before and after reset. Both require PASS, absence
+of FAIL/errors, the entire exact 80-byte result/guard region at `8000h`, the
+seven bytes at `FFF9h–FFFFh`, and an unchanged disk. Browser execution covers
+both `/` and `/pc98-rust/`. Existing CPULEVEL, hardware, DOS/application, VM,
+DMA and game assertions remain in the full suites.
+
+Baseline-negative evidence used `git archive
+1c9dcf67d23827f7ed62609affdea6f9c33f5c10` in the isolated ignored directory
+`target/gdtr-baseline`. Only the final probe image and a test file containing the
+existing CPU helpers plus these two final tests were added:
+
+```sh
+mkdir -p target/gdtr-baseline
+git archive 1c9dcf67d23827f7ed62609affdea6f9c33f5c10 | tar -x -C target/gdtr-baseline
+python3 - <<'PY'
+from pathlib import Path
+import shutil
+source = Path('tests/cpu386.rs').read_text()
+helpers = source[:source.index('#[test]')]
+focused = source[source.index('#[test]\nfn gdtr_full_base_'):source.index('#[test]\nfn gdtr_sib_')]
+probe = source[source.index('#[test]\nfn gdtr_original_boot_probe_'):]
+root = Path('target/gdtr-baseline')
+(root / 'tests/gdtr_negative.rs').write_text(helpers + focused + probe)
+(root / 'fixtures/gdtr').mkdir(parents=True, exist_ok=True)
+shutil.copyfile('fixtures/gdtr/gdtr.hdm', root / 'fixtures/gdtr/gdtr.hdm')
+PY
+cargo test --locked --manifest-path target/gdtr-baseline/Cargo.toml --test gdtr_negative
+```
+
+The baseline compiled, then exited 101: both
+`gdtr_full_base_survives_both_stores_then_word_load_clears_high_byte` and
+`gdtr_original_boot_probe_before_and_after_machine_reset` failed with
+`unimplemented i486 opcode 0F 01`. Baseline `src/cpu.rs`, `src/bus.rs` and
+`src/lib.rs` were byte-compared against `git show` and remained unchanged.
+The same tests and image pass with the implementation.
+
+Validation ran on Darwin 25.6.0 arm64, Homebrew Rust/Cargo 1.94.0 natively,
+rustup Rust 1.99.0 with `wasm32-unknown-unknown` for production Wasm (the existing
+`build_web.py` compiler selection), NASM 3.02, Python 3.13.13, Node 24.12.0,
+npm 11.6.2 and pinned Playwright 1.56.1 Chromium.
+
+| Exact command | Outcome |
+| --- | --- |
+| `python3 tools/prepare_gdtr_fixture.py --update-manifest` | Created the audited original fixture manifest |
+| `python3 tools/prepare_gdtr_fixture.py` | Passed; source, boot/image hashes and manifest reproduced offline |
+| `python3 tools/prepare_dma_fixture.py` | Passed; existing fixture/hash unchanged |
+| `python3 tools/prepare_freedos.py` | Passed; pinned binaries and complete matching source archives retained |
+| `python3 tools/prepare_font_fixture.py` | Passed |
+| `python3 tools/prepare_dos_apps.py` | Passed |
+| `python3 tools/prepare_cpu_fixture.py` | Passed after checksum-pinned mirror fetch below |
+| `python3 tools/prepare_hdd_fixture.py` | Passed |
+| `python3 tools/prepare_music_fixture.py` | Passed |
+| `python3 tools/prepare_device_fixture.py` | Passed after checksum-pinned mirror fetch below |
+| `cargo test --locked --test cpu386 gdtr_` | Passed: 8 tests, zero failed/ignored |
+| `cargo test --locked` | Passed: 119 native integration tests, zero failed/ignored; existing regression assertions retained |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `cargo fmt --check` | Passed |
+| `python3 tools/build_media.py --check` | Passed; established firmware/demo images unchanged |
+| `python3 tools/build_font.py --check` | Passed; established font unchanged |
+| `npm ci` | Passed |
+| `npx playwright install chromium` | Passed |
+| `npm test` | Media/font, release Wasm and site checks passed; browser server startup failed because port 8000 was occupied |
+| `npx playwright test --config=.gitweave-playwright.config.js tests/browser/gdtr.spec.js` | Passed: 2 cases, before/after reset at both paths (5.7 seconds) |
+| `npm test -- --config=.gitweave-playwright.config.js` | Passed: release Wasm (446455 bytes), ten-asset publication audit, all 50 Chromium/Wasm tests (32.8 seconds), zero skipped |
+| `git diff --check` and local documentation-link checks | Passed |
+
+CPULEVEL and DEBUG initially returned HTTP 503 at their pinned ibiblio URLs.
+CPULEVEL also failed with an alternate query/hostname; the FTP hostname refused
+the connection. These exact mirror URLs supplied archives with the original
+pinned SHA-256 values. The DEBUG mirror path containing `vojta/1.25` returned
+404; its root DEBUG path below succeeded. Only ignored fixture caches were
+populated; the unchanged preparation scripts then verified full manifests.
+Equivalent checksum-verifying cache preparation is:
+
+```sh
+python3 - <<'PY'
+import sys
+sys.path.insert(0, 'tools')
+from prepare_dos_apps import fetch
+from prepare_cpu_fixture import ARCHIVE_SHA
+from prepare_device_fixture import HASH
+fetch('cpulevel2007.zip', 'https://mirror.math.princeton.edu/pub/freeDOS/files/util/system/cpulevel/cpulevel2007.zip', ARCHIVE_SHA)
+fetch('debug125.zip', 'https://mirror.math.princeton.edu/pub/freeDOS/files/dos/debug/DEBUG125.zip', HASH)
+PY
+python3 tools/prepare_cpu_fixture.py
+python3 tools/prepare_device_fixture.py
+```
+
+The temporary browser configuration imported `playwright.config.js` and changed
+only server commands/URLs to free ports 18000/18001. It preserved both projects,
+all tests, workers, assertions and budgets. Its root server command was
+`python3 -m http.server 18000 --bind 127.0.0.1 --directory web`; its project command
+was `python3 target/gdtr-serve-project.py`. The latter copied
+`tests/browser/serve_project.py`, setting `WEB` to this worktree's `web/` and
+port to 18001, retaining the project symlink and rejection of root asset URLs.
+The occupied listener was left alone; the temporary config was removed after
+validation. No guest assertion, hash or provenance check was skipped.
+
+All 26 inventory categories retain the Issue's supplied status and full scope.
+Protected mode remains unimplemented: CR0/PE transitions, descriptor lookup,
+caches/validation, CPL/privilege transitions, gates and task-state behavior remain
+outside this prerequisite. Paging and basic x87 remain separate work. These
+bounded probes establish neither full hardware accuracy nor commercial
+compatibility. Issue #35 requires no post-merge verification.
