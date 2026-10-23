@@ -233,7 +233,7 @@ this table is not a claim of complete chip emulation.
 
 | Ports (hex) | Device and supported behavior | IRQ / notes |
 | --- | --- | --- |
-| `00,02`; `08,0A` | Master/slave 8259: ICW vector/cascade initialization, masks, IRR/ISR, priority, specific/nonspecific EOI, auto EOI | Master IR7 cascades slave; masked/in-service IRQs cannot bypass priority |
+| `00,02`; `08,0A` | Master/slave 8259: existing ICW path, masks, IRR/ISR, OCW2 programmable/rotating priority, specific/nonspecific EOI, auto EOI and automatic rotation | Master IR7 cascades slave; each controller resolves its own priority and ISR blocking |
 | `01–0F` odd, `11–1F` odd, `21,23,25,27` | 8237 address/count flip-flop, controller disable, channel masks, direction/decrement, terminal count and auto-init reload, master clear, bank registers | FDC uses channel 2; count/address change with actual byte transfers |
 | `31,33,35,37` | PPI startup inputs, output C, bit set/reset, active-low beep gate | Input straps are fixed VM-profile constants |
 | `41,43` | Keyboard byte FIFO, ready status, command acknowledgements, down/up scan bytes | IR1 / INT 09; firmware maintains BIOS ring, held-key bitmap and modifier state |
@@ -248,6 +248,59 @@ this table is not a claim of complete chip emulation.
 | `BE` | Fixed 1 MB floppy interface selection | No alternate 640 KB controller at C8/CA |
 | `40,5C,5E,64,6E` | Fixed system/display inputs and deterministic clock status | See `Bus::input`; no RTC serial protocol |
 | `F0` | Private synthetic-firmware thunk ABI, accepted only from its ROM stubs | Not a guest DOS API or claim of a real VM hardware port |
+
+### 8259A OCW2 priority subset
+
+Both profiles implement independent priority order and automatic-rotation state
+for each PIC at the ports above. Lowest-priority line L gives highest-first order
+`(L+1) mod 8` through L. Arbitration chooses the first unmasked IRR bit above the
+highest-priority active ISR bit. Masking an in-service line does not remove its
+normal-mode blocking. Nonspecific EOI clears the highest-priority ISR bit under
+the current order; specific EOI clears the named bit.
+
+| OCW2 (hex; n = bits 2:0) | Effect |
+| --- | --- |
+| `00` | Disable rotation on automatic EOI, preserving the priority order |
+| `20` | Nonspecific EOI without rotation |
+| `40` | No operation |
+| `60+n` | Specific EOI without rotation |
+| `80` | Enable rotation on automatic EOI |
+| `A0` | Nonspecific EOI; completed line becomes lowest |
+| `C0+n` | Set line n lowest, without clearing ISR |
+| `E0+n` | Specific EOI; line n becomes lowest |
+
+With ICW4 AEOI enabled, successful acknowledgement clears the request without
+retaining ISR, and makes the acknowledged line lowest if automatic rotation is
+enabled. Requests, `pending()`, status reads and failed acknowledgements do not
+rotate. With AEOI disabled, the automatic-rotation enable has no effect on
+acknowledgement or ordinary EOI. Empty-ISR nonspecific EOI, including rotating EOI,
+does nothing. Specific rotation always sets the explicitly named line lowest.
+IRR and IMR are preserved by priority and EOI commands.
+
+Construction and Machine reset deterministically start with IR0 highest, IR7
+lowest and automatic rotation disabled. This is the emulator's initialization
+policy, rather than a model of uninitialized chip power-on state. ICW1 restores
+that priority/rotation state, clears AEOI pending ICW4, and selects IRR readback.
+The existing ICW sequencing and fixed master-IR7 cascade abstraction are retained.
+Slave delivery sets ISR independently on both controllers in normal EOI mode;
+each requires its own EOI, and pending requests survive deferral.
+
+The specification is Intel's [8259A datasheet, initialization and Figure 8,
+printed pp. 9–16](https://courses.cs.washington.edu/courses/cse451/25wi/documentation/8259A.pdf#page=9).
+Original [native coverage](../tests/pic.rs) checks all eight lowest-priority
+settings, all OCW2 families, masks, reordered nested ISR, AEOI, reset and cascade
+ports. The [MIT boot probe](../guest/pic.asm) uses only hardware PIT/keyboard IRQs,
+confirming both IRR bits before each STI; native and release-Wasm hosts compare
+its exact trace, readback, guards and disk bytes before and after reset. The
+[manifest](../fixtures/pic-manifest.json) pins source/image hashes, assembler
+command, result bytes and the 2,000,000-slot budget. See the
+[validation record](validation.md#issue-41-8259a-ocw2-priority-2026-10-23).
+
+PIC remains **partial**. Polling, special-mask mode, special fully nested mode,
+general ICW sequencing/configuration, alternate cascade wiring, edge/level
+electrical modeling and spurious-interrupt fidelity remain outside this subset.
+These bounded checks do not establish full hardware accuracy or commercial
+software compatibility.
 
 The hello source uses `OUT 3FDFh,AL`, an immediate-port encoding that truncates to
 `DFh`. That timer mirror is decoded too. Full PIT gate/readback/mode waveforms,
