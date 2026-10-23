@@ -350,8 +350,21 @@ samples starting at the load clock are `(4,L), (3,L), (2,L), (1,L), (0,H),
 continues. A new mode word starts an independent lifecycle, including transitions
 between modes 0, 2 and 3. Reset clears all programming and fractional state.
 
+Count-only replacement preserves the programmed mode and access format. A
+single-byte write lowers OUT immediately. The first byte of a paired write
+lowers OUT, stops counting indefinitely until the second byte, and cancels any
+older pending load. Completing a count schedules its transfer on the next PIT
+clock, without decrementing on that clock. The latest complete replacement
+before that clock wins. Each replacement starts a new terminal-rise lifecycle;
+later wraps keep OUT high. Existing completed latch snapshots survive count
+replacement, including a snapshot whose low byte has already been read.
+
 This follows Intel's [8253/8253-5 Counter Loading, Mode 0 and Read/Write
 Procedures](https://web.cecs.pdx.edu/~mpj/llp/references/8253.pdf).
+Immediate first-byte OUT lowering and the separate load clock are explicit in
+[Intel 8254 Mode 0, page 10](https://www.scs.stanford.edu/23wi-cs212/pintos/specs/8254.pdf#page=10),
+also corroborated by [NEC µPD71054 Table 5](https://www.meditronik.com.pl/doc/plus/upd71054c.pdf).
+These support the shared mode-0 timing; no 8254 read-back support is implied.
 Only the terminal rise of OUT0 requests IRQ0 through the existing PIC latch.
 Falling OUT, held-high OUT and further counter wraps do not request again;
 lowering OUT preserves an already latched request, following Intel's
@@ -367,8 +380,16 @@ exactly one hardware IRQ0 per fresh arming, observing another full wrap before
 rearming. Its [manifest](../fixtures/pit-mode0-manifest.json) records offline
 assembly, hashes, licensing, exact results/guards and a two-million-slot budget.
 See [actual validation](validation.md#issue-49-8253-binary-mode-0-2026-10-23).
-Count-only mode-0 rewrites, external GATE, BCD, comprehensive latch/access corner
-cases and mode-0 audio remain outside this verified contract.
+The separate original MIT [rewrite probe](../guest/pit_mode0_rewrite.asm)
+programs mode 0 once, interrupts an active countdown with a delayed pair and
+rearms after terminal with count writes alone. It checks no IRQ during either
+incomplete pair, exactly one hardware IRQ0 per completed replacement, ISR/EOI,
+post-terminal counting and no repeat across a full wrap. Its
+[manifest](../fixtures/pit-mode0-rewrite-manifest.json) pins source/image hashes,
+license and exact results/guards. See the
+[rewrite validation](validation.md#issue-51-mode-0-count-only-rewrites-and-irq0-rearming-2026-10-24).
+External GATE, BCD, comprehensive latch/access corner cases and mode-0 audio
+remain outside this verified contract.
 
 ### 8253 binary mode-2 subset
 
@@ -446,7 +467,7 @@ provenance, exact results/guards and the two-million-slot budget. See the
 [validation record](validation.md#issue-47-8253-binary-mode-3-2026-10-23).
 
 PIT remains **partial**. Active mode-3 divisor rewrites without a new mode word,
-count-only mode-0 rewrites, mode-specific behavior for 1/4/5,
+mode-specific behavior for 1/4/5,
 external GATE/retriggering, BCD, divisor-1 behavior, comprehensive latch/access
 sequencing and fuller beeper timing remain outstanding. These shared counter
 subsets do not establish instruction-cycle accuracy, full audio or hardware

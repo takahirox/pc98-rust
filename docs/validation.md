@@ -1892,3 +1892,164 @@ paging and basic FPU remain required goals. Limited probes and six-game reports
 do not establish full hardware accuracy or commercial compatibility. No
 commercial ROM or guest was acquired. No push, PR, comment or merge was performed.
 Issue #49 requires no post-merge verification.
+
+## Issue #51: mode-0 count-only rewrites and IRQ0 rearming (2026-10-24)
+
+Executor: the primary Codex agent running this GitWeave implementation node in
+the assigned macOS arm64 worktree. These are local execution results, not remote
+CI, independent review or physical-device evidence.
+
+The original Rust change in `Counter::write` lowers mode-0 OUT immediately,
+disables the old countdown and cancels any older pending load on a count write.
+A complete byte sequence re-enables the counter with a pending transfer. The
+existing next-clock load, once-per-clock decrement, terminal rise and continued
+16-bit wrapping handle the new lifecycle. No clock conversion, fractional
+remainder, batch arithmetic, unrelated mode, bus/PIC, CPU or mixer code changed.
+The [bounded hardware contract](hardware.md#8253-binary-mode-0-subset) now
+includes count-only replacement and preserved completed latch snapshots.
+
+The twelve new `mode0_rewrite_` tests in [tests/pit.rs](../tests/pit.rs) cover:
+
+- Both reported reproductions, including indefinitely withholding the second
+  byte across repeated `u32::MAX` scheduler advances.
+- All three counters, LSB/MSB/pair access forms, replacement values 1, 2, 65,535
+  and encoded zero wherever representable, plus MSB-only 256/512/65,280.
+  Replacements interrupt countdown, count 1, terminal and later wraps. Explicit
+  load/terminal/wrap count/OUT/edge samples and reads check format preservation.
+- Latest complete replacement before loading; a newer partial pair superseding
+  an older pending load; preserved completed and half-consumed latch snapshots;
+  active channel isolation; fresh mode-word cancellation; reset during partial
+  and pending replacements with latches, latched IRQ and fractional state.
+- Single clocks versus irregular batches spanning partial/load/terminal/wrap
+  states, zero advancement, fractional scheduler cycles, and split versus
+  unsplit `u32::MAX` advancement. Production advancement remains constant-time.
+- VM/Ap, both `71h..77h` and `3FD9h..3FDFh` banks, all channels/access forms:
+  no requests from incomplete pairs or falling/held OUT, preserved pending IRR
+  when OUT falls, masked terminal requests, acknowledgement, ISR blocking and
+  EOI, one terminal request per completed replacement, and no later-wrap repeats.
+  Separate CPU checks interrupt an active count and rearm after terminal, with
+  IF-clear/HLT, deferred delivery, EOI/IRET and resumed HLT on both banks/profiles.
+
+No undefined pre-load readback is asserted; the guest never reads the counter
+between write bytes. Existing PIT/PIC/BIOS interval/CPU-shadow, DOS/apps, VM and
+game regression assertions and budgets are unchanged.
+
+### Baseline negative controls
+
+Before editing production code, `git diff
+4ed55ebf16c806ccf8be5f6cfbd6e8de0d81feca -- src` was empty. The two reproductions
+and the new source-built guest ran against that unchanged baseline core:
+
+| Command | Actual outcome |
+| --- | --- |
+| `cargo test --locked --test pit mode0_rewrite_ -- --nocapture` (only the two reproductions existed at this point) | Expected exit 101: both failed. The partial-pair test observed an old-count terminal rise after four clocks (`unfinished replacement must suppress old terminal rise`); the post-terminal test observed high OUT immediately after count writes (`count-only rewrite must lower OUT`). |
+| `cargo test --locked --test pit mode0_rewrite_original_boot_probe -- --nocapture` | Expected exit 101: VM boot 0 printed `PIT MODE0 REWRITE FAIL` at 41,000 slots. Result byte `8001h` was 1, ISR entry/EOI bytes were 1/0, and delayed-pair proof `800Ah` remained A5: the old countdown interrupted during the deliberately incomplete replacement. |
+
+All three tests pass with the implementation. Production source was not swapped
+or modified to manufacture the negative controls.
+
+### Original boot probe and provenance
+
+The separate original MIT [guest/pit_mode0_rewrite.asm](../guest/pit_mode0_rewrite.asm)
+preserves the existing mode-0 probe unchanged. Offline reproduction:
+
+```sh
+nasm -f bin guest/pit_mode0_rewrite.asm -o pit_mode0_rewrite.bin
+python3 tools/prepare_pit_mode0_rewrite_fixture.py
+```
+
+The checked [manifest](../fixtures/pit-mode0-rewrite-manifest.json) pins assembly,
+license, source/boot/image hashes, exact results and guards, marker strings,
+profiles and a fixed **2,000,000-slot maximum per boot**. Preparation retains
+source, repository MIT license and manifest alongside the generated test-only
+image outside `web/`; CI prepares it before native/browser tests.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Original assembly | `c3b55af05db57a96d8ff201cf0d2ec0b286c90f289aaf44401b06a38bf03b809` |
+| 1024-byte boot sector | `77805cd28dd60babcf0313d8288b981ed86e6e578a60ba30365f0fef4497d735` |
+| 1,261,568-byte image | `c0a3c522ded04b30e345bf2a90f57f91b1467e80550f9eadb228abaf5f731952` |
+
+The guest programs paired binary mode 0 exactly once, lowers OUT and initializes
+the PIC to discard firmware/setup requests. It loads 60,000 and delays 500 LOOP
+instructions while that count is active. It interrupts that countdown with the
+LSB of replacement 2,000, enables interrupts and delays 40,000 LOOP instructions
+(over 65,536 PIT clocks). No old-count IRQ or pending IRR0/ISR0 may occur. It then
+completes the MSB, waits at most 6,000 iterations for exactly one hardware IRQ0,
+checks ISR=1, EOI, ISR=0 and IRET, and verifies advancing latched post-terminal
+counts. A further 40,000 LOOP instructions must produce no repeat or pending
+IRR0/ISR0. It then rearms after terminal with another deliberately delayed pair
+of count writes alone and repeats those checks.
+
+Guest and hosts require all 32 bytes at `8000h..801Fh`, including every A5 guard:
+`a50201010000010101010101a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5`.
+Hosts only load, step, reset and inspect the core (browser audio queues are
+cleared as in existing probes); no IRQ or result is injected.
+
+The identical image passed on VM and Ap before and after reset, natively and
+through production-release Wasm at `/` and `/pc98-rust/`: **all 12 boots completed
+in 165,000 slots each**. Every boot required exact manifest-pinned results/guards,
+`PIT MODE0 REWRITE PASS`, no `FAIL` or core/browser errors, unchanged disk bytes
+and the original slot maximum.
+
+### Commands actually executed
+
+| Command | Outcome |
+| --- | --- |
+| `python3 -m unittest discover -s tools -p test_fixture_fetch.py` | Passed: 7 tests |
+| `python3 tools/prepare_dma_fixture.py` | Passed |
+| `python3 tools/prepare_gdtr_fixture.py` | Passed |
+| `python3 tools/prepare_idtr_fixture.py` | Passed |
+| `python3 tools/prepare_smsw_fixture.py` | Passed |
+| `python3 tools/prepare_pic_fixture.py` | Passed |
+| `python3 tools/prepare_pic_smm_fixture.py` | Passed |
+| `python3 tools/prepare_pit_mode2_fixture.py` | Passed |
+| `python3 tools/prepare_pit_mode3_fixture.py` | Passed |
+| `python3 tools/prepare_pit_mode0_fixture.py` | Passed; existing source/image manifest unchanged |
+| `python3 tools/prepare_pit_mode0_rewrite_fixture.py --update-manifest` | Created manifest from original source |
+| `python3 tools/prepare_pit_mode0_rewrite_fixture.py` | Passed repeatedly: reproduced pinned source/boot/image/result manifest |
+| `python3 tools/prepare_freedos.py` | Passed: pinned legal binaries and complete matching sources retained |
+| `python3 tools/prepare_font_fixture.py` | Passed |
+| `python3 tools/prepare_dos_apps.py` | Passed |
+| `python3 tools/prepare_cpu_fixture.py` | Passed through existing checksum-pinned mirror after primary HTTP 503 |
+| `python3 tools/prepare_hdd_fixture.py` | Passed |
+| `python3 tools/prepare_music_fixture.py` | Passed |
+| `python3 tools/prepare_device_fixture.py` | Passed through existing checksum-pinned mirror after primary HTTP 503 |
+| `python3 tools/build_media.py --check` | Passed: existing media/firmware hashes unchanged |
+| `python3 tools/build_font.py --check` | Passed: CG hash unchanged |
+| `cargo fmt` | Applied formatting to new Rust tests |
+| `cargo test --locked --test pit mode0_rewrite_ -- --nocapture` | Passed: 12 focused tests; four native boots each 165,000 slots |
+| `cargo test --locked --test pit mode0_rewrite_` | Passed: final exact-command run, 12 tests |
+| `cargo test --locked --test pit` | Passed: 42 tests |
+| `cargo test --locked` | Passed: 202 integration tests across 17 targets, zero failed/ignored; unit/doc targets also passed |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `cargo fmt --check` | Passed |
+| `npm ci` | Passed: zero vulnerabilities |
+| `npx playwright install chromium` | Passed |
+| `npm test` | Release-Wasm build and ten-asset publication audit passed; browser server could not bind occupied port 8000, exit 1 before tests |
+| `npm test -- --config=.issue51-playwright.config.js --workers=2` | Passed: release-Wasm build, ten-asset audit, all 78 browser tests, zero skipped, 2.2 minutes |
+| `git diff --check` | Passed |
+
+The temporary browser config imports the normal config, changing only
+ports/base URLs to 62082/62083. Its project-path server copies the existing
+symlink server with the listening port changed to 62083, retaining rejection of
+root asset URLs. Two workers avoid the previously recorded browser clock setup
+contention. Every project, test, assertion, timeout and guest budget is retained;
+the existing listener was left alone. Both temporary files were removed after
+testing. No checks were skipped. Relative documentation links and the new
+validation anchor were checked locally. Remote CI and independent review remain
+unestablished.
+
+All 26 fixed category scopes and statuses remain unchanged: **partial** cpu-v30,
+cpu386, protected-mode, memory, pic, pit, dma, keyboard, mouse, fdc, gdc, egc,
+pegc, text-cg, display-timing, opn, opna, bios, lio, integration; **unimplemented**
+paging, fpu, rtc; **implemented, unverified** ide, grcg, pcm86. PIT remains partial.
+External GATE/retriggering, modes 1/4/5, active mode-3 rewrites, BCD,
+divisor-1 mode-2/3 behavior, fuller latch/access sequencing and broader beeper
+acceptance remain outstanding; mode-0 audio remains unverified. No 8254 read-back
+commands, broader PIC electrical fidelity or spurious-interrupt modeling were
+added. Protected execution, paging and basic FPU remain required project goals.
+Limited probes and six-game reports do not establish full hardware accuracy or
+commercial compatibility. No commercial ROM or guest software was acquired.
+No push, PR, comment or merge was performed. Issue #51 requires no post-merge
+verification.

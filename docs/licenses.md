@@ -84,6 +84,14 @@ NASM, without third-party guests or emulator code.
 source, repository license and manifest beside `fixtures/pit_mode0/pit_mode0.hdm`.
 The generated disk stays outside `web/`; no proprietary ROM or guest is acquired.
 
+The separate original MIT [mode-0 rewrite probe](../guest/pit_mode0_rewrite.asm)
+also builds offline with NASM. Run
+`python3 tools/prepare_pit_mode0_rewrite_fixture.py` to verify its checked
+[source/image/result manifest](../fixtures/pit-mode0-rewrite-manifest.json).
+Preparation copies the original assembly, repository MIT license and manifest
+beside `fixtures/pit_mode0_rewrite/pit_mode0_rewrite.hdm`. The image is test-only
+and excluded from `web/`; it contains no third-party guest or commercial ROM.
+
 ## HelloWorld-PC98
 
 Upstream: [TakedaHiromasa/HelloWorld-PC98](https://github.com/TakedaHiromasa/HelloWorld-PC98),

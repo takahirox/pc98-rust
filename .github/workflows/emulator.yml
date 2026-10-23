@@ -31,6 +31,7 @@ jobs:
       - run: python3 tools/prepare_pit_mode2_fixture.py
       - run: python3 tools/prepare_pit_mode3_fixture.py
       - run: python3 tools/prepare_pit_mode0_fixture.py
+      - run: python3 tools/prepare_pit_mode0_rewrite_fixture.py
       - run: python3 tools/prepare_freedos.py
       - run: python3 tools/prepare_font_fixture.py
       - run: python3 tools/prepare_dos_apps.py
