@@ -2237,3 +2237,87 @@ fn bound_segment_limits_preflight_both_bounds_before_comparison() {
         }
     }
 }
+
+#[test]
+fn fs_gs_string_overrides_preserve_repeat_operand_and_address_sizes() {
+    for segment in [0x64, 0x65] {
+        for width in [1u32, 2, 4] {
+            for address32 in [false, true] {
+                for repeat in [0, 0xf2, 0xf3] {
+                    let mut code = vec![segment];
+                    if width == 4 {
+                        code.push(0x66);
+                    }
+                    if address32 {
+                        code.push(0x67);
+                    }
+                    if repeat != 0 {
+                        code.push(repeat);
+                    }
+                    // MOVS tests copy/segment selection; CMPS distinguishes F2/F3.
+                    code.push(if repeat == 0 {
+                        if width == 1 {
+                            0xa4
+                        } else {
+                            0xa5
+                        }
+                    } else if width == 1 {
+                        0xa6
+                    } else {
+                        0xa7
+                    });
+                    let (mut c, mut b) = cpu(&code);
+                    c.s[DS] = 0x1000;
+                    c.s[ES] = 0x3000;
+                    c.extra_segments = [0x4000, 0x5000];
+                    let source = if segment == 0x64 { 0x44001 } else { 0x54001 };
+                    c.set_reg32(SI, if address32 { 0x4001 } else { 0xabcd4001 });
+                    c.set_reg32(DI, if address32 { 0x5001 } else { 0xbcde5001 });
+                    c.set_reg32(CX, 0x10002);
+                    c.flags = 2 | CF;
+                    b.mem[source..source + 8].fill(5);
+                    b.mem[0x35001..0x35009].fill(if repeat == 0xf2 { 6 } else { 5 });
+                    let initial = b.mem.clone();
+                    c.step(&mut b).unwrap();
+                    assert_eq!(
+                        c.reg32(SI),
+                        if address32 { 0x4001 } else { 0xabcd4001 } + width
+                    );
+                    assert_eq!(
+                        c.reg32(DI),
+                        if address32 { 0x5001 } else { 0xbcde5001 } + width
+                    );
+                    assert_eq!(c.reg32(CX), if repeat == 0 { 0x10002 } else { 0x10001 });
+                    assert_eq!(
+                        c.ip,
+                        if repeat == 0 {
+                            0x1000 + code.len() as u32
+                        } else {
+                            0x1000
+                        }
+                    );
+                    if repeat == 0 {
+                        assert_eq!(
+                            &b.mem[0x35001..0x35001 + width as usize],
+                            &vec![5; width as usize]
+                        );
+                        assert_eq!(c.flags, 2 | CF);
+                    } else {
+                        assert_eq!(c.flags & (CF | ZF), if repeat == 0xf2 { CF } else { ZF });
+                        // Opposite ZF stops either REP form with residual full ECX.
+                        b.mem[0x35001 + width as usize..0x35001 + 2 * width as usize]
+                            .fill(if repeat == 0xf2 { 5 } else { 6 });
+                        let operands = b.mem.clone();
+                        c.step(&mut b).unwrap();
+                        assert_eq!(c.reg32(CX), 0x10000);
+                        assert_eq!(c.ip, 0x1000 + code.len() as u32);
+                        assert_eq!(b.mem, operands);
+                    }
+                    assert_eq!(&b.mem[source..source + 8], &initial[source..source + 8]);
+                    assert_eq!(&b.mem[0x14001..0x14009], &initial[0x14001..0x14009]);
+                    assert_eq!(c.extra_segments, [0x4000, 0x5000]);
+                }
+            }
+        }
+    }
+}

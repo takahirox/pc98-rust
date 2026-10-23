@@ -2549,3 +2549,111 @@ statuses and fixed scopes remain unchanged. Protected execution, paging and basi
 x87 retain their fixed required scope. Limited probes establish neither full
 hardware accuracy nor commercial compatibility. No push, PR, merge or comment
 was performed; Issue #57 requires no post-merge verification.
+
+## Issue #59: V30 REPC/REPNC (2026-10-24)
+
+### Baseline reproduction and implementation
+
+Read the live open Issue #59 (no comments) and the repository development/review
+instructions. The selected worktree started at `0938a46`, with CPU source from
+baseline `feff5d3`. Added `v30_repc_minimal_reproduction` before production edits.
+`cargo test --locked --test core v30_repc_minimal_reproduction` failed with
+`unsupported opcode 65 at 0000:0100`. After implementation the same test passed:
+first step consumes one byte comparison and restarts at 0100h, second stops at
+0102h with CX=1, SI=4002h, DI=5002h and CF=ZF=0, then NOP reaches 0103h.
+
+The original Rust change extends the existing prefix decoder/string executor.
+VM carry-repeat comparisons use post-comparison CF, preserve comparison flags,
+and retain one element per scheduling slot and interrupt resumption at the first
+prefix. Zero CX suppresses comparison. Excluded non-compare/conflicting forms
+produce explicit emulator-limitation errors without guest exception delivery.
+Ap FS/GS decoding and ordinary F2/F3 repetition remain intact.
+
+Seven focused `v30_repc_` tests include the minimal reproduction, a 256-case
+prefix/opcode/incoming-CF/direction/count/termination matrix, all six defined
+comparison flags and preserved remaining flags, exact registers/IP, every RAM
+byte unchanged, zero/one/three/FFFFh counts, both full 65,535-element exhaustion
+runs, unaligned/wrapping words, SS overrides in both orders, and a PIC IRQ between
+elements with a guest handler, EOI and unmodified IRET. The new 36-case Ap matrix
+checks FS/GS strings, byte/word/dword operands, independent address sizes, F2/F3
+and residual counts; existing Ap strings and VM/Ap BOUND checks are retained.
+
+The original MIT `guest/v30_repc.asm` produces ten CX/SI/DI/defined-FLAGS records,
+checks its source, destination, all embedded guards and SP, then writes explicit
+PASS/FAIL through guest instructions. Its offline preparer reproduces the checked
+source/boot/image/result manifest. The identical 1,261,568-byte image is consumed
+by native and production release-Wasm tests; generated assets remain outside
+`web/`. Hosts only boot, step and read outputs: no results are patched and no
+instruction is bypassed. CI now prepares this fixture before existing suites.
+
+During test development, corrected two expected-flag mistakes: 8000h-1 has even
+low-byte parity, and the six arithmetic flags use mask 08D5h (0CD5h also includes
+DF). The guest initially emitted FAIL for the latter, then passed after correcting
+the guest/manifest mask. Production arithmetic did not require changes.
+
+### Reproduction and validation
+
+Ran all README fixture prerequisites: the seven fixture-fetch unit tests, offline
+DMA, GDTR, IDTR, SMSW, PIC, PIC SMM, PIT mode-2/mode-3/mode-0, PIT mode-0/mode-3
+rewrite, PIT counter-latch and V30 BOUND preparation, plus FreeDOS, fonts, DOS apps,
+CPULEVEL, HDD, music and device fixtures and the font consistency check. All
+passed. CPULEVEL and DEBUG used their existing checksum-pinned mirrors after
+primary HTTP 503 responses; binary/source provenance checks remained intact.
+The initial `cargo test --locked --test cpu386` run had four missing-fixture
+failures (GDTR, IDTR, SMSW, CPULEVEL), with 51 passing tests including the new
+FS/GS test. After preparation the entire target passed, 55/55, no ignored tests.
+
+| Check | Result |
+| --- | --- |
+| `python3 tools/prepare_v30_repc_fixture.py --update-manifest` | Created checked manifest from original MIT source |
+| `python3 tools/prepare_v30_repc_fixture.py` | Passed: identical source/boot/image/result manifest reproduced |
+| `cargo test --locked --test core v30_repc_ -- --nocapture` | Passed: seven tests; native boots before/after reset at 2,000 slots each |
+| `cargo test --locked --test cpu386` | Passed after fixture preparation: 55 tests, zero ignored |
+| `cargo test --locked` | Passed: 243 integration tests across 17 targets, zero failed/ignored; unit/doc targets passed |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `cargo fmt --check` | Passed |
+| `git diff --check` | Passed |
+| `npm ci` | Passed: zero vulnerabilities |
+| `npx playwright install chromium` | Passed |
+| `npm test -- --config=.issue59-playwright.config.js --workers=2` | Passed: production release-Wasm build, ten-asset publication audit, 90 tests, zero skipped, 2.5 minutes |
+
+Port 8000 was already occupied. The temporary browser configuration imports
+`playwright.config.js` and changes only the local server port/base URL to
+`http://127.0.0.1:62088/` and the project server port/base URL to
+`http://127.0.0.1:62089/pc98-rust/`. Its local server command is
+`python3 -m http.server 62088 --bind 127.0.0.1 --directory web`. A temporary copy
+of `tests/browser/serve_project.py` changes only listening port 8001 to 62089,
+retaining the `web/` symlink and root-asset rejection. No existing listener was
+stopped or reused. Projects, tests, assertions, timeouts and budgets are unchanged;
+two workers follow the prior recorded browser-clock workaround. Both temporary
+files were removed after the suite completed.
+
+Both native boots and all four production-Wasm boots (before/after reset at `/`
+and `/pc98-rust/`) pass at 2,000 slots each, below the 2,000,000-slot ceiling.
+Every run requires explicit `V30 REPC PASS`, exact guest-produced result/operand/
+guard bytes, no FAIL/core/browser errors and unchanged disk bytes. The prepared
+image SHA-256 is
+`3095714a1c809d4edaa4bd031c547a3b06cf04d190a2b571e8308a3142d1c0d3`;
+browser consumers verify it against the checked manifest. All existing native
+and browser regressions passed.
+
+### Review and remaining scope
+
+Locally reviewed the production, tests, guest, provenance, CI and documentation
+against the complete Issue. Confirmed zero-count suppression occurs before any
+comparison, arithmetic flags survive count/index maintenance, prefixes execute
+atomically with the opcode, and PIC resumption restarts from the first prefix.
+Ap decoding remains ahead of carry-prefix decoding. Newly added documentation
+links/anchors and whitespace were checked, including new untracked files.
+Existing hardware, DOS/application, VM and six-game assertions, fixtures and
+execution budgets are preserved. No proprietary firmware or commercial guest
+media was acquired. Remote CI and independent review are not established by this
+execution.
+
+All 26 inventory category scopes and statuses remain unchanged. V30 remains
+**partial**: packed-BCD strings, bit-field extensions, VM TF traps, NMI and broader
+instruction, prefix and fault acceptance remain outstanding. Protected execution,
+paging and basic x87 remain required project goals outside this Issue. These
+bounded probes do not establish full V30 accuracy or commercial compatibility.
+No push, PR, merge or comment was performed; Issue #59 requires no post-merge
+verification.

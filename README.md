@@ -98,6 +98,7 @@ python3 tools/prepare_pit_mode0_rewrite_fixture.py
 python3 tools/prepare_pit_mode3_rewrite_fixture.py
 python3 tools/prepare_pit_counter_latch_fixture.py
 python3 tools/prepare_v30_bound_fixture.py
+python3 tools/prepare_v30_repc_fixture.py
 # Fetch checksum-pinned guest binaries AND matching complete source archives.
 # This makes a minimal GPL guest disk; it downloads no emulator code.
 python3 tools/prepare_freedos.py
@@ -141,6 +142,18 @@ FAIL/core/browser errors within two million slots. The
 [manifest](fixtures/v30-bound-manifest.json) pins license, source/boot/image hashes,
 assembly and expected bytes. Generated fixtures stay outside `web/`. See the
 [profile-specific return contract and limits](docs/hardware.md#v30-boundchkind).
+
+The original MIT [V30 carry-repeat probe](guest/v30_repc.asm) exercises REPC and
+REPNC with CMPSB/W and SCASB/W, both segment-prefix orders, opposite incoming CF,
+direction, unaligned words, zero count, early stops and exhaustion. Prepare offline
+with `python3 tools/prepare_v30_repc_fixture.py`; run
+`cargo test --locked --test core v30_repc_` and `cargo test --locked --test cpu386`.
+Native and production-release Wasm tests at `/` and `/pc98-rust/` boot the same
+image before/after reset, require guest-produced `V30 REPC PASS`, exact results,
+operands and guards, unchanged disk bytes and no FAIL/core/browser errors within
+two million slots. The [manifest](fixtures/v30-repc-manifest.json) pins the MIT
+license, assembly command, source/boot/image hashes and expected bytes. Generated
+fixtures stay outside `web/`. See the [carry-repeat contract and limitations](docs/hardware.md#v30-repcrepnc).
 
 The original MIT [PIC boot probe](guest/pic.asm) checks programmed priority and
 rotating EOIs using guest-programmed PIT and keyboard hardware interrupts. Native

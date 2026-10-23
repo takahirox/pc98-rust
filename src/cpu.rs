@@ -955,7 +955,15 @@ impl Cpu {
                 }
                 0x66 if b.profile == crate::Profile::Pc9821ApDos => self.operand32 = true,
                 0x67 if b.profile == crate::Profile::Pc9821ApDos => self.address32 = true,
-                0xf2 | 0xf3 => rep = c,
+                0x64 | 0x65 | 0xf2 | 0xf3 => {
+                    if rep != 0 && rep != c && (matches!(rep, 0x64 | 0x65) || c < 0x66) {
+                        return Err(
+                            "unsupported V30 conflicting repeat prefixes (emulator limitation)"
+                                .into(),
+                        );
+                    }
+                    rep = c;
+                }
                 0xf0 => self.lock_prefix = b.profile == crate::Profile::Pc9821ApDos,
                 _ => break c,
             };
@@ -968,6 +976,11 @@ impl Cpu {
                 });
             }
         };
+        if matches!(rep, 0x64 | 0x65) && !matches!(op, 0xa6 | 0xa7 | 0xae | 0xaf) {
+            return Err(
+                "unsupported V30 carry-repeat with non-compare opcode (emulator limitation)".into(),
+            );
+        }
         self.retired += 1;
         if self.operand32 || self.address32 {
             self.extended_retired += 1;
@@ -1389,8 +1402,13 @@ impl Cpu {
                 if rep != 0 {
                     self.set_index(CX, self.index(CX).wrapping_sub(1));
                     let compare = matches!(op & 0xfe, 0xa6 | 0xae);
-                    if self.index(CX) != 0 && (!compare || (self.flags & ZF != 0) == (rep == 0xf3))
-                    {
+                    let repeat = match rep {
+                        // The first comparison is unconditional; only its resulting CF
+                        // controls the next element. ZF is irrelevant to REPC/REPNC.
+                        0x64 | 0x65 => (self.flags & CF != 0) == (rep == 0x65),
+                        _ => !compare || (self.flags & ZF != 0) == (rep == 0xf3),
+                    };
+                    if self.index(CX) != 0 && repeat {
                         self.ip = start;
                     }
                 }
