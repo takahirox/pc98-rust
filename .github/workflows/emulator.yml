@@ -25,6 +25,7 @@ jobs:
       - run: python3 tools/prepare_gdtr_fixture.py
       - run: python3 tools/prepare_idtr_fixture.py
       - run: python3 tools/prepare_smsw_fixture.py
+      - run: python3 tools/prepare_pic_fixture.py
       - run: python3 tools/prepare_freedos.py
       - run: python3 tools/prepare_font_fixture.py
       - run: python3 tools/prepare_dos_apps.py

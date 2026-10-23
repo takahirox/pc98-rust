@@ -88,6 +88,7 @@ python3 tools/prepare_dma_fixture.py
 python3 tools/prepare_gdtr_fixture.py
 python3 tools/prepare_idtr_fixture.py
 python3 tools/prepare_smsw_fixture.py
+python3 tools/prepare_pic_fixture.py
 # Fetch checksum-pinned guest binaries AND matching complete source archives.
 # This makes a minimal GPL guest disk; it downloads no emulator code.
 python3 tools/prepare_freedos.py
@@ -107,6 +108,14 @@ npm ci
 npx playwright install chromium
 npm test
 ```
+
+The original MIT [PIC boot probe](guest/pic.asm) checks programmed priority and
+rotating EOIs using guest-programmed PIT and keyboard hardware interrupts. Native
+and release-Wasm tests on VM and Ap at both URL roots require the exact delivery
+trace `1,0,0,1,1,0`, guest-confirmed competing IRR bits, `PIC PASS`, exact results
+and guards, no `FAIL` or host error, and unchanged disk bytes within two million
+slots per boot, before and after reset. Its offline preparation script verifies
+the checked-in [source/image/result manifest](fixtures/pic-manifest.json).
 
 The original MIT [SMSW boot probe](guest/smsw.asm) checks CPU-local reset status,
 register upper halves, exact two-byte stores, addressing and guest-handled

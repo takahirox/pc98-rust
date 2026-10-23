@@ -1181,3 +1181,154 @@ remain outside this change. General exception/restart coverage remains partial.
 ET readback and this bounded probe do not establish x87 support or commercial
 compatibility. No PR, CI success or merge is claimed. No post-merge checks are
 required by Issue #39.
+
+## Issue #41: 8259A OCW2 priority (2026-10-23)
+
+[Issue #41](https://github.com/takahirox/pc98-rust/issues/41) adds per-controller
+programmable priority and rotation to the existing PIC request/acknowledgement
+abstraction. Arbitration and nonspecific EOI now use the programmed order,
+including after reordering active nested ISR bits. Ordinary EOIs preserve order;
+rotating specific/nonspecific EOIs update the lowest line. ICW4 AEOI rotation
+occurs only at a successful acknowledgement. ICW1, construction and Machine reset
+restore IR0 highest and automatic rotation disabled. See the
+[hardware contract and remaining gaps](hardware.md#8259a-ocw2-priority-subset).
+The authoritative reference is [Intel 8259A, Figure 8 and initialization,
+priority/EOI sections, printed pp. 9–16](https://courses.cs.washington.edu/courses/cse451/25wi/documentation/8259A.pdf#page=9).
+
+Before editing `src/devices.rs`, the Issue's unchanged minimal reproduction was
+added as `tests/pic.rs::set_priority_minimal_reproduction` and executed:
+
+```sh
+cargo test --locked --test pic set_priority_minimal_reproduction
+```
+
+It failed (exit 101): actual `Some(8)`, expected `Some(9)`; one failed test.
+`git diff 5a2dbf1 HEAD -- src/devices.rs` was empty before the implementation
+commit, confirming the upstream PIC matched the Issue's evaluation baseline.
+The identical test passes with the implementation. No regression assertion or
+execution budget was weakened.
+
+The 13 original tests in [tests/pic.rs](../tests/pic.rs) cover every programmed
+lowest line and OCW2 family; wraparound and competing requests; masked retention;
+nested ISR blocking even when an ISR line is masked; reordered nonspecific EOI;
+specific/rotating EOI; no-op and empty ISR commands; ICW4 AEOI enable/disable,
+passive status reads and failed acknowledgement; controller/Machine isolation;
+ICW1 restoration and reset. Bus tests program master `00/02` and slave `08/0A`
+on both profiles, independently change priority/rotation, check cascade ISR,
+exercise both orders of separate EOIs, and require deferred delivery without
+lost requests.
+
+The original MIT [guest/pic.asm](../guest/pic.asm) boots directly through the
+synthetic IPL, without DOS or third-party guest software. The offline
+[preparation script](../tools/prepare_pic_fixture.py) assembles it with
+`nasm -f bin guest/pic.asm -o pic.bin`, verifies the checked-in
+[manifest](../fixtures/pic-manifest.json), and retains the source and MIT license
+alongside the generated image outside `web/`. CI prepares this fixture before
+native and browser tests. SHA-256 hashes:
+
+- Source: `d11ac742d361a5ce6ef0c711590906f9291b71b5383efab0cd968b05ab768d91`.
+- Boot sector: `43eb61fe159ffc87bf1f84a277cde693e95eb5823a6c3efc39a0fcbff534c4ae`.
+- Image: `3c74e3c28cdb5d7ba9909f7e4d2ed5a1d84c57ba435f4a031b7946a716b41db8`.
+
+The guest installs hardware timer/keyboard handlers, programs PIT channel 0 in
+one-shot mode, sets IR0 lowest, and publishes phases 1, 2, 3 at `8001h` with IF
+clear. The host uses only existing key input (Return down/up/down), never writes
+guest memory, and steps the real CPU. Before each STI, the guest confirms both
+IRR bits (`IRR & 3 == 3`) and records `03h` at `8010h..8012h`. The first keyboard
+handler sends rotating nonspecific EOI, making IR1 lowest. The second timer
+handler sends rotating specific EOI, making IR0 lowest. Other EOIs preserve order.
+The exact hardware delivery trace at `8008h` is `01 00 00 01 01 00`, and ISR
+snapshots at `8014h` are `02 01 01 02 02 01`. Keyboard bytes are `1C 9C 1C`.
+The guest compares the full result/guard block before writing `PIC PASS` to text
+VRAM; no software INT substitutes for hardware delivery.
+
+Both native and production release-Wasm tests boot the identical disk on VM and
+Ap before and after Machine reset; browser projects cover `/` and `/pc98-rust/`.
+Every boot requires `PIC PASS`, no `FAIL` or host error, unchanged disk bytes,
+all 32 result/guard bytes at `8000h`, and at most 2,000,000 scheduler slots:
+
+```text
+a50406a51c9c1ca5010000010100a5a5030303a5020101020201a5a5a5a5a5a5
+```
+
+Environment: Darwin 25.6.0 arm64, Homebrew Rust/Cargo 1.94.0, NASM 3.02,
+Python 3.13.13, Node 24.12.0, npm 11.6.2, locked Playwright 1.56.1 Chromium;
+production Wasm uses the repository's `build_web.py` rustup compiler selection.
+
+| Exact command | Outcome |
+| --- | --- |
+| `python3 tools/prepare_pic_fixture.py --update-manifest` | Created original provenance/result manifest |
+| `python3 tools/prepare_pic_fixture.py` | Passed; offline source/boot/image hashes and exact result contract reproduced |
+| `python3 tools/prepare_dma_fixture.py` | Passed; existing hash unchanged |
+| `python3 tools/prepare_gdtr_fixture.py` | Passed; existing hash unchanged |
+| `python3 tools/prepare_idtr_fixture.py` | Passed; existing hash unchanged |
+| `python3 tools/prepare_smsw_fixture.py` | Passed; existing hash unchanged |
+| `python3 tools/prepare_freedos.py` | Passed; pinned binaries and complete matching sources retained |
+| `python3 tools/prepare_font_fixture.py` | Passed |
+| `python3 tools/prepare_dos_apps.py` | Passed; existing manifests and licensed sources retained |
+| `python3 tools/prepare_cpu_fixture.py` | Initial HTTP 503; passed after checksum-verified mirror cache preparation below |
+| `python3 tools/prepare_hdd_fixture.py` | Passed |
+| `python3 tools/prepare_music_fixture.py` | Passed |
+| `python3 tools/prepare_device_fixture.py` | Initial HTTP 503; passed after checksum-verified mirror cache preparation below |
+| `cargo test --locked --test pic` | Passed: 13 tests, zero skipped, including four native probe boots |
+| `cargo test --locked` | Passed: all 153 native integration tests, zero skipped; unit/doc harnesses also passed |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `cargo fmt --check` | Passed |
+| `python3 tools/build_media.py --check` | Passed; firmware/media hashes unchanged |
+| `python3 tools/build_font.py --check` | Passed; CG hash unchanged |
+| `npm ci` | Passed; zero vulnerabilities |
+| `npx playwright install chromium` | Passed |
+| `npm run build` | Passed; release Wasm 448384 bytes and ten-asset site audit |
+| `npx playwright test tests/browser/pic.spec.js` | Server startup failed: default port 8000 occupied |
+| `npx playwright test --config=target/pic-validation/playwright.config.mjs tests/browser/pic.spec.js` | Passed: all four PIC browser cases (eight boots), zero skipped |
+| `npm test -- --config=target/pic-validation/playwright.config.mjs` | Passed: build/media/font checks, release Wasm/site audit and all 58 browser tests in 27.5 seconds, zero skipped |
+| `git diff --check` | Passed |
+
+An initial full native run reached CPU386 with 49 passes and one missing-fixture
+failure because CPULEVEL preparation had returned HTTP 503. Other unaffected
+fixture preparation continued. Alternate ibiblio hostnames returned 503 or
+connection refusal and the attempted GWDG paths returned 404; no unverified
+archive was used. The previously documented Princeton mirror provided the exact
+pinned archives; the original scripts then completed without changes:
+
+```sh
+python3 - <<'PY'
+import sys
+sys.path.insert(0, 'tools')
+from prepare_dos_apps import fetch
+from prepare_cpu_fixture import ARCHIVE_SHA
+from prepare_device_fixture import HASH
+fetch('cpulevel2007.zip', 'https://mirror.math.princeton.edu/pub/freeDOS/files/util/system/cpulevel/cpulevel2007.zip', ARCHIVE_SHA)
+fetch('debug125.zip', 'https://mirror.math.princeton.edu/pub/freeDOS/files/dos/debug/DEBUG125.zip', HASH)
+PY
+python3 tools/prepare_cpu_fixture.py
+python3 tools/prepare_device_fixture.py
+```
+
+The temporary alternate-port config imported `playwright.config.js`, retained
+both complete projects and every assertion/budget, and changed only server URLs,
+commands and working directories to this worktree and ports 18000/18001. Its
+`testDir` resolved to the original `tests/browser/`. Root used
+`python3 -m http.server 18000 --bind 127.0.0.1 --directory web`; Pages used
+`python3 target/pic-validation/serve_project.py`, a temporary copy of the original
+server with this worktree's `web/` path and port 18001, preserving its symlink and
+root-asset rejection. The first temporary config attempt served from the wrong
+working directory (404 during setup); it was stopped and corrected before tests
+ran. Existing listeners were left untouched. Temporary files/logs are ignored
+under `target/pic-validation/`; the normal checked-in config is unchanged.
+
+Local diff review covers implementation, native and guest assertions, legal
+provenance, identical native/Wasm image, reset, CI preparation and regression
+preservation. Remote CI and independent PR review were not run in this node;
+no push, PR, comment or merge was performed. No post-merge verification is
+required by Issue #41.
+
+All 26 inventory categories and their full required scopes retain their supplied
+statuses: **partial** cpu-v30, cpu386, protected-mode, memory, pic, pit, dma,
+keyboard, mouse, fdc, gdc, egc, pegc, text-cg, display-timing, opn, opna, bios, lio,
+integration; **unimplemented** paging, fpu, rtc; **implemented, unverified** ide,
+grcg, pcm86. PIC remains partial, including polling, special-mask mode, special
+fully nested mode, general ICW sequencing/configuration, alternate cascade
+wiring, edge/level electrical modeling and spurious-interrupt fidelity. Bounded
+probes and game reports do not establish full hardware accuracy or commercial
+compatibility.

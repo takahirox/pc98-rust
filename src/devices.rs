@@ -9,6 +9,8 @@ pub struct Pic {
     icw4: bool,
     read_isr: bool,
     pub auto_eoi: bool,
+    lowest_priority: u8,
+    rotate_auto_eoi: bool,
 }
 impl Pic {
     pub fn new(base: u8) -> Self {
@@ -21,6 +23,9 @@ impl Pic {
             icw4: false,
             read_isr: false,
             auto_eoi: false,
+            // Deterministic emulator power-on/reset policy: IR0 highest.
+            lowest_priority: 7,
+            rotate_auto_eoi: false,
         }
     }
     pub fn request(&mut self, n: u8) {
@@ -28,20 +33,28 @@ impl Pic {
     }
     pub fn pending(&self) -> Option<u8> {
         let available = self.irr & !self.mask;
-        let limit = if self.isr == 0 {
-            8
-        } else {
-            self.isr.trailing_zeros()
-        };
-        (0..limit)
-            .find(|i| available & (1 << i) != 0)
-            .map(|v| v as u8)
+        for n in self.priority_order() {
+            // Normal-mode ISR blocking is independent of the mask register.
+            if self.isr & (1 << n) != 0 {
+                break;
+            }
+            if available & (1 << n) != 0 {
+                return Some(n);
+            }
+        }
+        None
+    }
+    fn priority_order(&self) -> impl Iterator<Item = u8> {
+        let lowest = self.lowest_priority;
+        (1..=8).map(move |offset| (lowest + offset) & 7)
     }
     pub fn ack(&mut self) -> Option<u8> {
         let n = self.pending()?;
         self.irr &= !(1 << n);
         if !self.auto_eoi {
             self.isr |= 1 << n
+        } else if self.rotate_auto_eoi {
+            self.lowest_priority = n;
         }
         Some(self.base + n)
     }
@@ -79,18 +92,33 @@ impl Pic {
             self.isr = 0;
             self.irr = 0;
             self.mask = 0;
+            self.lowest_priority = 7;
+            self.rotate_auto_eoi = false;
+            self.auto_eoi = false;
+            self.read_isr = false;
         } else if v & 0x18 == 8 {
             if v & 2 != 0 {
                 self.read_isr = v & 1 != 0
             }
-        } else if v & 0x20 != 0 {
-            let n = if v & 0x40 != 0 {
-                v & 7
-            } else {
-                self.isr.trailing_zeros() as u8
-            };
-            if n < 8 {
-                self.isr &= !(1 << n)
+        } else {
+            match v & 0xe0 {
+                0x00 => self.rotate_auto_eoi = false,
+                0x80 => self.rotate_auto_eoi = true,
+                0x40 => {} // OCW2 no operation
+                0xc0 => self.lowest_priority = v & 7,
+                _ => {
+                    let n = if v & 0x40 != 0 {
+                        Some(v & 7)
+                    } else {
+                        self.priority_order().find(|n| self.isr & (1 << n) != 0)
+                    };
+                    if let Some(n) = n {
+                        self.isr &= !(1 << n);
+                        if v & 0x80 != 0 {
+                            self.lowest_priority = n;
+                        }
+                    }
+                }
             }
         }
     }
