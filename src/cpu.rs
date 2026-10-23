@@ -1040,8 +1040,10 @@ impl Cpu {
             0x07 | 0x17 | 0x1f => {
                 let r = (op >> 3) as usize;
                 self.s[r] = self.pop(b)? as u16;
-                if r == SS {
+                if b.profile == crate::Profile::Pc9801Vm || r == SS {
                     self.inhibit = 1;
+                }
+                if r == SS {
                     self.trap_suppressed = true;
                 }
             }
@@ -1261,9 +1263,16 @@ impl Cpu {
                     };
                     self.set_segment(s, value as u16);
                     if s == SS {
-                        self.inhibit = 1;
                         self.trap_suppressed = true;
                     }
+                }
+                // NEC V20/V30 User's Manual 6-4: documented segment MOVs
+                // in either direction protect the following instruction from INT.
+                // Leave undocumented MOV-to-CS and Ap non-SS timing unchanged.
+                if (b.profile == crate::Profile::Pc9801Vm && (op == 0x8c || s != CS))
+                    || (op == 0x8e && s == SS)
+                {
+                    self.inhibit = 1;
                 }
             }
             0x8d => {

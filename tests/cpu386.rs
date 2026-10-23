@@ -2345,3 +2345,67 @@ fn ap_v30_nibble_mem_retains_unimplemented_diagnostic_without_writes() {
         }
     }
 }
+
+#[test]
+fn ap_v30_segment_irq_non_ss_forms_remain_immediately_interruptible() {
+    let mut producers = vec![vec![0x07], vec![0x1f]];
+    for op in [0x8c, 0x8e] {
+        for seg in [ES, CS, SS, DS] {
+            if op == 0x8e && (seg == CS || seg == SS) {
+                continue;
+            }
+            for memory in [false, true] {
+                let mut code = vec![op, (seg as u8) << 3 | if memory { 6 } else { 0xc0 }];
+                if memory {
+                    code.extend_from_slice(&[1, 0x50]);
+                }
+                producers.push(code);
+            }
+        }
+    }
+    for producer in producers {
+        let code = [producer.as_slice(), &[0x43, 0x90]].concat();
+        let (mut c, mut b) = cpu(&code);
+        c.flags = 2 | IF | CF | DF | OF;
+        c.r[AX] = 0x1234;
+        b.write_seg(0, 0x5001, 0x1234, true);
+        b.write_seg(0, 0x9000, 0x1234, true);
+        relocated(&mut c, &mut b, &[9]);
+        b.mem[0x3400..0x3406].copy_from_slice(&[0x90, 0xb0, 0x20, 0xe6, 0, 0xcf]);
+        let flags = c.flags;
+        c.step(&mut b).unwrap();
+        assert_eq!(c.flags, flags);
+        let (resume, sp) = (c.ip, c.r[SP]);
+        b.pics[0].mask = 0xfd;
+        b.pics[0].request(1);
+        c.step(&mut b).unwrap();
+        assert_eq!(
+            (c.s[CS], c.ip, c.r[BX]),
+            (0x300, 0x401, 0),
+            "{producer:02x?}"
+        );
+        assert_eq!((b.pics[0].irr, b.pics[0].isr), (0, 2));
+        assert_eq!(
+            (
+                b.read16((sp - 6) as usize),
+                b.read16((sp - 4) as usize),
+                b.read16((sp - 2) as usize)
+            ),
+            (resume as u16, 0, flags)
+        );
+        steps(&mut c, &mut b, 3);
+        assert_eq!(
+            (c.ip, c.r[SP], c.flags, b.pics[0].isr),
+            (resume, sp, flags, 0)
+        );
+        c.step(&mut b).unwrap();
+        assert_eq!(c.r[BX], 1);
+        // Non-SS forms must also retain their own single-step trap.
+        let (mut c, mut b) = cpu(&code);
+        c.flags |= TF;
+        relocated(&mut c, &mut b, &[1]);
+        c.step(&mut b).unwrap();
+        assert_eq!((c.s[CS], c.ip), (0x300, 0x400));
+        assert_eq!(b.read16((c.r[SP]) as usize), 0x1000 + producer.len() as u16);
+    }
+}

@@ -101,6 +101,7 @@ python3 tools/prepare_pit_counter_latch_fixture.py
 python3 tools/prepare_v30_bound_fixture.py
 python3 tools/prepare_v30_repc_fixture.py
 python3 tools/prepare_v30_nibble_mem_fixture.py
+python3 tools/prepare_v30_segment_irq_fixture.py
 python3 tools/prepare_rtc_fixture.py
 python3 tools/prepare_opn_ch3_fixture.py
 # Fetch checksum-pinned guest binaries AND matching complete source archives.
@@ -186,6 +187,18 @@ operands and guards, unchanged disk bytes and no FAIL/core/browser errors within
 two million slots. The [manifest](fixtures/v30-repc-manifest.json) pins the MIT
 license, assembly command, source/boot/image hashes and expected bytes. Generated
 fixtures stay outside `web/`. See the [carry-repeat contract and limitations](docs/hardware.md#v30-repcrepnc).
+
+The original MIT [V30 segment interrupt probe](guest/v30_segment_irq.asm) checks
+PIT/PIC delivery after segment MOVs in both directions, POP and consecutive
+producers. Prepare offline with `python3 tools/prepare_v30_segment_irq_fixture.py`;
+run `cargo test --locked --test core v30_segment_irq_` and
+`cargo test --locked --test cpu386 ap_v30_segment_irq_`, then `npm test`.
+The [manifest](fixtures/v30-segment-irq-manifest.json) pins MIT provenance,
+assembly, source/boot/image/synthetic-firmware hashes, exact results and guards.
+Native and production release-Wasm tests boot the identical VM image at both URL
+roots before/after reset, requiring guest-produced `V30 SEGMENT IRQ PASS`, exact
+results/guards, unchanged media and no errors within 2,000,000 slots per boot.
+Generated assets stay outside `web/`. See the [bounded timing contract](docs/hardware.md#v30-segment-interrupt-inhibition).
 
 The original MIT [V30 memory nibble-rotation probe](guest/v30_nibble_mem.asm)
 checks `ROL4 mem8` and `ROR4 mem8`, including nondecimal nibbles, masked AL,

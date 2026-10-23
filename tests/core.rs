@@ -1721,3 +1721,333 @@ fn v30_nibble_mem_original_boot_probe_before_and_after_reset() {
         }
     }
 }
+
+// A real PIC request, never a direct Cpu::interrupt call.
+fn segment_irq_cpu(producer: &[u8], following: &[u8]) -> (Cpu, Bus) {
+    let mut c = Cpu {
+        s: [0x1100, 0x1000, 0x2200, 0x3300],
+        ip: 0x100,
+        flags: 0xf002 | IF | CF | DF | OF | AF | SF | PF | ZF,
+        ..Cpu::default()
+    };
+    c.r[AX] = 0x4400;
+    c.r[SP] = 0x8000;
+    c.r[BP] = 0x4001;
+    let mut b = Bus::default();
+    let code = [producer, following, &[0x41, 0x90]].concat(); // resumed INC CX
+    b.mem[0x10100..0x10100 + code.len()].copy_from_slice(&code);
+    b.write_seg(0, 9 * 4, 0x200, true);
+    b.write_seg(0, 9 * 4 + 2, 0, true);
+    // NOP; PUSH AX; INC byte CS:[6000]; MOV AL,20; OUT 0,AL; POP AX; IRET
+    b.mem[0x200..0x20d].copy_from_slice(&[
+        0x90, 0x50, 0x2e, 0xfe, 0x06, 0, 0x60, 0xb0, 0x20, 0xe6, 0, 0x58, 0xcf,
+    ]);
+    b.pics[0].mask = 0xfd;
+    (c, b)
+}
+
+fn segment_irq_pending(c: &mut Cpu, b: &mut Bus, resume: u32) {
+    b.pics[0].request(1);
+    c.step(b).unwrap();
+    assert_eq!((c.s[CS], c.ip), (0x1000, resume));
+    assert_eq!((b.pics[0].irr, b.pics[0].isr), (2, 0));
+    assert_ne!(c.flags & IF, 0);
+}
+
+fn segment_irq_deliver_and_resume(c: &mut Cpu, b: &mut Bus) {
+    let (resume, ss, sp, flags, ax) = (c.ip, c.s[SS], c.r[SP], c.flags, c.r[AX]);
+    let base = (ss as usize) << 4;
+    b.mem[base + sp as usize - 9] = 0xa5;
+    b.mem[base + sp as usize] = 0x5a;
+    c.step(b).unwrap(); // acknowledgement and handler NOP
+    assert_eq!((c.s[CS], c.ip, c.r[SP]), (0, 0x201, sp - 6));
+    assert_eq!(c.flags & IF, 0);
+    assert_eq!((b.pics[0].irr, b.pics[0].isr), (0, 2));
+    assert_eq!(b.read_seg(ss, sp - 6, true), resume as u16);
+    assert_eq!(b.read_seg(ss, sp - 4, true), 0x1000);
+    assert_eq!(b.read_seg(ss, sp - 2, true), flags);
+    for _ in 0..6 {
+        c.step(b).unwrap();
+    }
+    assert_eq!(
+        (c.s[CS], c.ip, c.r[SP], c.flags),
+        (0x1000, resume, sp, flags)
+    );
+    assert_eq!(c.r[AX], ax);
+    assert_eq!((b.pics[0].irr, b.pics[0].isr, b.mem[0x6000]), (0, 0, 1));
+    assert_eq!(
+        (b.mem[base + sp as usize - 9], b.mem[base + sp as usize]),
+        (0xa5, 0x5a)
+    );
+    c.step(b).unwrap();
+    assert_eq!(c.r[CX], 1);
+    assert_eq!(b.mem[0x6000], 1);
+}
+
+#[test]
+fn v30_segment_irq_minimal_mov_ds_reproduction() {
+    let (mut c, mut b) = segment_irq_cpu(&[0x8e, 0xd8], &[0x43]);
+    let flags = c.flags;
+    c.step(&mut b).unwrap();
+    assert_eq!((c.s[DS], c.flags), (0x4400, flags));
+    segment_irq_pending(&mut c, &mut b, 0x103);
+    assert_eq!(c.r[BX], 1);
+    segment_irq_deliver_and_resume(&mut c, &mut b);
+}
+
+#[test]
+fn v30_segment_irq_all_documented_mov_operands_and_pops() {
+    for op in [0x8c, 0x8e] {
+        for seg in [ES, CS, SS, DS] {
+            if op == 0x8e && seg == CS {
+                continue;
+            }
+            // register, default DS, default SS, overridden ES/DS/CS, odd addresses
+            for form in 0..6 {
+                let mut code = Vec::new();
+                if form >= 3 {
+                    code.push([0x26, 0x3e, 0x2e][form - 3]);
+                }
+                code.extend_from_slice(&[
+                    op,
+                    (seg as u8) << 3
+                        | if form == 0 {
+                            0xc0
+                        } else if form == 1 || form == 5 {
+                            6
+                        } else {
+                            0x46
+                        },
+                ]);
+                if form == 1 || form == 5 {
+                    code.extend_from_slice(&[1, 0x40]);
+                } else if form >= 2 {
+                    code.push(0);
+                }
+                let (mut c, mut b) = segment_irq_cpu(&code, &[0x26, 0x43]);
+                let old_segments = c.s;
+                let memory_segment = match form {
+                    2 => SS,
+                    3 => ES,
+                    5 => CS,
+                    _ => DS,
+                };
+                let address = ((c.s[memory_segment] as usize) << 4) + 0x4001;
+                b.mem[address - 1..address + 3].copy_from_slice(&[0xa5, 0, 0x44, 0x5a]);
+                let flags = c.flags;
+                c.step(&mut b).unwrap();
+                assert_eq!(c.flags, flags, "op={op:x} seg={seg} form={form}");
+                let transferred = if op == 0x8e {
+                    0x4400
+                } else {
+                    old_segments[seg]
+                };
+                if op == 0x8e {
+                    assert_eq!(c.s[seg], transferred);
+                    assert_eq!(c.r[AX], 0x4400);
+                } else if form == 0 {
+                    assert_eq!(c.r[AX], transferred);
+                    assert_eq!(c.s, old_segments);
+                } else {
+                    assert_eq!(b.read16(address), transferred);
+                    assert_eq!(c.s, old_segments);
+                }
+                let expected_memory = if op == 0x8c && form != 0 {
+                    transferred
+                } else {
+                    0x4400
+                };
+                assert_eq!(
+                    &b.mem[address - 1..address + 3],
+                    &[
+                        0xa5,
+                        expected_memory as u8,
+                        (expected_memory >> 8) as u8,
+                        0x5a
+                    ]
+                );
+                segment_irq_pending(&mut c, &mut b, 0x100 + code.len() as u32 + 2);
+                assert_eq!(c.r[BX], 1);
+                segment_irq_deliver_and_resume(&mut c, &mut b);
+            }
+        }
+    }
+    for seg in [ES, SS, DS] {
+        let (mut c, mut b) = segment_irq_cpu(&[0x07 | ((seg as u8) << 3)], &[0x43]);
+        b.mem[0x2a000 - 1..0x2a000 + 3].copy_from_slice(&[0xa5, 0, 0x44, 0x5a]);
+        let flags = c.flags;
+        c.step(&mut b).unwrap();
+        assert_eq!((c.s[seg], c.r[SP], c.flags), (0x4400, 0x8002, flags));
+        assert_eq!(&b.mem[0x29fff..0x2a003], &[0xa5, 0, 0x44, 0x5a]);
+        segment_irq_pending(&mut c, &mut b, 0x102);
+        assert_eq!(c.r[BX], 1);
+        segment_irq_deliver_and_resume(&mut c, &mut b);
+    }
+}
+
+#[test]
+fn v30_segment_irq_changed_ss_protects_stack_pointer_setup() {
+    for producer in [&[0x8e, 0xd0][..], &[0x17][..]] {
+        let (mut c, mut b) = segment_irq_cpu(producer, &[0xbc, 0, 0x70]);
+        b.write_seg(0x2200, 0x8000, 0x4400, true);
+        let flags = c.flags;
+        c.step(&mut b).unwrap();
+        segment_irq_pending(&mut c, &mut b, 0x100 + producer.len() as u32 + 3);
+        assert_eq!((c.s[SS], c.r[SP], c.flags), (0x4400, 0x7000, flags));
+        segment_irq_deliver_and_resume(&mut c, &mut b);
+    }
+}
+
+#[test]
+fn v30_segment_irq_consecutive_producers_renew_and_prefix_is_one_instruction() {
+    let code = [0x8e, 0xd8, 0x8e, 0xc0, 0x8c, 0xd8, 0x07];
+    let (mut c, mut b) = segment_irq_cpu(&code, &[0x26, 0x2e, 0x43]);
+    b.write_seg(0x2200, 0x8000, 0x4400, true);
+    let flags = c.flags;
+    c.step(&mut b).unwrap();
+    b.pics[0].request(1);
+    for ip in [0x104, 0x106, 0x107, 0x10a] {
+        c.step(&mut b).unwrap();
+        assert_eq!(
+            (c.s[CS], c.ip, b.pics[0].irr, b.pics[0].isr),
+            (0x1000, ip, 2, 0)
+        );
+        if ip != 0x10a {
+            assert_eq!(c.flags, flags);
+        }
+    }
+    assert_eq!(c.r[BX], 1);
+    segment_irq_deliver_and_resume(&mut c, &mut b);
+}
+
+#[test]
+fn v30_segment_irq_if_clear_masking_and_nonproducer_controls() {
+    for if_clear in [false, true] {
+        let (mut c, mut b) = segment_irq_cpu(&[0x8e, 0xd8], &[0x90, 0x90]);
+        if if_clear {
+            c.flags &= !IF;
+        } else {
+            b.pics[0].mask = 0xff;
+        }
+        c.step(&mut b).unwrap();
+        let flags = c.flags;
+        b.pics[0].request(1);
+        for _ in 0..2 {
+            c.step(&mut b).unwrap();
+        }
+        assert_eq!(
+            (c.ip, c.flags, b.pics[0].irr, b.pics[0].isr),
+            (0x104, flags, 2, 0)
+        );
+        c.flags |= IF;
+        b.pics[0].mask = 0xfd;
+        segment_irq_deliver_and_resume(&mut c, &mut b);
+    }
+    for code in [
+        vec![0x89, 0xc2],
+        vec![0xb8, 0, 0x44],
+        vec![0x06],
+        vec![0x0e],
+        vec![0x16],
+        vec![0x1e],
+    ] {
+        let (mut c, mut b) = segment_irq_cpu(&code, &[0x43]);
+        let flags = c.flags;
+        c.step(&mut b).unwrap();
+        assert_eq!(c.flags, flags);
+        b.pics[0].request(1);
+        c.step(&mut b).unwrap();
+        assert_eq!((c.s[CS], c.ip, c.r[BX]), (0, 0x201, 0));
+        assert_eq!(
+            b.read_seg(c.s[SS], c.r[SP], true),
+            0x100 + code.len() as u16
+        );
+        assert_eq!((b.pics[0].irr, b.pics[0].isr), (0, 2));
+    }
+}
+
+#[test]
+fn v30_segment_irq_reset_discards_pending_inhibition() {
+    let (mut c, mut b) = segment_irq_cpu(&[0x8e, 0xd8], &[0x43]);
+    c.step(&mut b).unwrap();
+    b.pics[0].request(1);
+    let mut m = Machine {
+        cpu: c,
+        bus: b,
+        ..Machine::default()
+    };
+    m.reset();
+    assert_eq!(m.cpu.inhibit, 0);
+    assert_eq!((m.bus.pics[0].irr, m.bus.pics[0].isr), (0, 0));
+    m.cpu.s = [0; 4];
+    m.cpu.ip = 0x100;
+    m.cpu.r[SP] = 0x8000;
+    m.cpu.flags |= IF;
+    m.bus.mem[0x100] = 0x43;
+    m.bus.write_seg(0, 9 * 4, 0x200, true);
+    m.bus.write_seg(0, 9 * 4 + 2, 0, true);
+    m.bus.mem[0x200] = 0x90;
+    m.bus.pics[0].mask = 0xfd;
+    m.bus.pics[0].request(1);
+    m.cpu.step(&mut m.bus).unwrap();
+    assert_eq!((m.cpu.ip, m.cpu.r[BX], m.bus.pics[0].isr), (0x201, 0, 2));
+    assert_eq!(m.bus.read16(0x7ffa), 0x100);
+}
+
+#[test]
+fn v30_segment_irq_original_boot_probe_before_and_after_reset() {
+    let image = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/fixtures/v30_segment_irq/v30_segment_irq.hdm"
+    ))
+    .expect("run python3 tools/prepare_v30_segment_irq_fixture.py");
+    let manifest = include_str!("../fixtures/v30-segment-irq-manifest.json");
+    let hex = manifest
+        .split_once("\"result_hex\": \"")
+        .unwrap()
+        .1
+        .split('"')
+        .next()
+        .unwrap();
+    let expected: Vec<u8> = hex
+        .as_bytes()
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+        .collect();
+    assert_eq!(expected.len(), 48);
+    for profile in [pc98_rust::Profile::Pc9801Vm] {
+        let mut m = Machine::new(profile);
+        m.insert(0, image.clone(), "v30_segment_irq.hdm").unwrap();
+        for run in 0..2 {
+            if run != 0 {
+                m.reset();
+            }
+            let mut slots = 0;
+            while slots < 2_000_000 {
+                slots += m.step(1000);
+                assert!(m.error.is_none(), "{:?}", m.error);
+                let text = m.bus.text();
+                assert!(
+                    !text.contains("FAIL"),
+                    "{profile:?} boot {run}: {slots} slots; {text}; {:02x?}",
+                    &m.bus.mem[0x8000..0x8030]
+                );
+                if text.contains("V30 SEGMENT IRQ PASS") {
+                    break;
+                }
+            }
+            assert!(slots <= 2_000_000);
+            assert!(
+                m.bus.text().contains("V30 SEGMENT IRQ PASS"),
+                "{}",
+                m.bus.text()
+            );
+            assert_eq!(&m.bus.mem[0x8000..0x8030], expected.as_slice());
+            assert_eq!(&m.bus.mem[0x9000..0x9004], &[0xa5, 0xc0, 0x1f, 0x5a]);
+            assert_eq!(m.bus.disks[0].as_ref().unwrap().bytes, image);
+            println!("{profile:?} boot {run}: {slots} slots");
+        }
+    }
+}

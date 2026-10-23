@@ -84,9 +84,46 @@ An instruction or one REP element consumes one 8-clock scheduling slot. This is 
 deterministic work/cycle model, **not instruction-cycle accuracy**. Firmware FDC
 transactions additionally advance the same device scheduler. HLT stops instruction
 retirement while clocks and IRQs continue. STI and MOV/POP SS inhibit delivery for
-the next instruction. A frame runs at most two slices of 16,667 slots; the core
-caps each call at 100,000 slots. There is no unbounded catch-up after a suspended
+the next instruction on both profiles; VM also inhibits after the other documented
+[segment MOV/POP forms](#v30-segment-interrupt-inhibition). A frame runs at most
+two slices of 16,667 slots; the core caps each call at 100,000 slots. There is no unbounded catch-up after a suspended
 tab. This bounds UI work even for infinite loops and maximum-length REP strings.
+
+## V30 segment interrupt inhibition
+
+VM delays maskable INT acknowledgement for the next instruction after documented
+segment MOVs in both directions and segment POPs. Destinations are ES/SS/DS for
+MOV-to-segment and POP, and sources are ES/CS/SS/DS for MOV-from-segment.
+MOV accepts register and memory operands. The existing interrupt inhibition counter protects
+one boundary; each consecutive qualifying instruction renews it. Prefixes belong
+to their instruction. IF, operand transfers and FLAGS are preserved; the PIC
+request remains pending until an eligible boundary. Updating SS protects the
+following stack-pointer setup, so delivery uses the new SS:SP.
+
+Specification: NEC's [V20/V30 User's Manual, Chapter 6, printed page 6-4,
+“Interrupt Disable Timing”](https://ftpmirror.your.org/pub/misc/bitsavers/pdf/nec/V20_V30_Users_Manual_Oct86.pdf#page=29).
+Ap retains its existing SS/STI interrupt shadows and TF behavior; its non-SS
+segment MOV/POP instructions gain no inhibition. Undocumented MOV-to-CS/POP-CS
+forms are outside this contract.
+
+The original MIT [probe](../guest/v30_segment_irq.asm) establishes pending PIT
+requests with IF clear, confirms PIC IRR through guest I/O, executes STI followed
+by the producers and an ordinary INC, then verifies ordering inside the handler.
+It checks exact return IP/CS, the six-byte frame and saved IF, one entry per case,
+ISR/IRR and EOI/IRET, full results and guards before reporting PASS. The checked
+[manifest](../fixtures/v30-segment-irq-manifest.json) pins offline provenance and
+hashes. Native and production release-Wasm tests boot the same image at `/` and
+`/pc98-rust/`, before and after reset, within 2,000,000 slots per boot. Hosts only
+insert, reset, step and read; no host-written results or injected interrupts
+supply guest acceptance. See the [validation record](validation.md#issue-69-v30-segment-interrupt-inhibition-2026-10-24).
+
+Acceptance is bounded to maskable interrupts and ordinary non-REP following
+instructions. Existing REP interruption regressions remain required, but do not
+verify all segment-shadow/REP interactions. V30 remains **partial**: packed-BCD
+strings, bit-field extensions, TF traps, NMI and broader instruction/prefix/fault
+acceptance remain outstanding. Protected execution, paging and basic x87 retain
+their required scope. No inventory category is completed and no full V30 accuracy
+or commercial compatibility is established.
 
 ## V30 memory nibble rotations
 
