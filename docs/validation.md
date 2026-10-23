@@ -2782,3 +2782,80 @@ outstanding work. Protected execution, paging and basic x87 remain required
 project work. These limited probes do not establish full hardware accuracy or
 commercial compatibility. No push, PR, merge or comment was performed; Issue #61
 requires no post-merge verification.
+
+## Issue #63 8259A OCW3 polling (2026-10-24)
+
+The minimal reproduction was added to `tests/pic.rs` and executed before any
+production edits with `cargo test --locked --test pic poll_minimal_reproduction`.
+It failed (exit 101): actual read `2` (`02h`), expected `129` (`81h`). After the
+implementation, that exact command passed. The final focused suite retains all
+previous OCW2, SMM, ordinary IRQ, AEOI and cascade assertions and adds eight tests
+for polling, including the minimal reproduction and the boot probe.
+
+The [polling contract](hardware.md#8259a-ocw3-normal-eoi-polling) documents frozen
+selection, one-read consumption, local levels, deterministic zero bits, combined
+OCW3 precedence, normal EOI and independent cascade acknowledgement. Native tests
+cover all levels and priority origins, masks/ISR blocking and SMM transitions,
+later higher-priority requests (also initially empty polls), a later request at
+the selected level, separate controller/instance state, ICW1/reset cancellation,
+both EOI orders, and draining without phantom cascade delivery. A slave request
+arriving above the frozen selection also produces a fresh INT transition after
+acknowledgement, preserving it across the master EOI.
+
+The original MIT [assembly](../guest/pic_poll.asm) uses CLI and real IN/OUT to
+program one-shot PIT IRQ0 and FDC READ ID IRQ11, poll master IR0 then master IR7
+and slave IR3 separately, read ISR snapshots and send each EOI. Empty polls
+follow draining. It then programs another PIT one-shot, enables IF and checks
+ordinary IRQ0 entry/ISR/EOI. Guest code checks every result and guard before
+printing `PIC POLL PASS`; the hosts only insert/reset/step/read/export and never
+patch requests or results. Native and release-Wasm browser acceptance require
+PASS, no FAIL/core/browser errors, all 32 exact bytes, unchanged disk bytes and
+completion within 2,000,000 slots per boot in both VM and Ap before/after reset.
+Browser acceptance covers both `/` and `/pc98-rust/`.
+
+The [checked manifest](../fixtures/pic-poll-manifest.json) records the original
+source and MIT license, NASM command, source/boot/image hashes, exact results and
+guards, and budget. Image SHA-256 is
+`ae89a87921ae7b8bd25a05e2316c3dc2da3a5a7c9c2a1a8193438dc603d1b2a2`;
+complete result hex at `0000:8000` is
+`a58001008700808308800000000001010000000000000103a5a5a5a5a5a5a5a5`.
+`python3 tools/prepare_pic_poll_fixture.py` builds offline and verifies the
+manifest; acceptance CI prepares it before native/browser execution. Generated
+images, copied sources/notices and Wasm remain excluded from Git/publication.
+
+Validation in the assigned macOS arm64 worktree:
+
+| Command | Actual outcome |
+| --- | --- |
+| `python3 -m unittest discover -s tools -p test_fixture_fetch.py` | Passed, 7 tests |
+| All existing `python3 tools/prepare_*` prerequisites listed in README | Passed, including all original hardware probes and pinned FreeDOS/font/DOS-app/CPU/HDD/music/device fixtures; CPULEVEL and DEBUG primary mirrors returned HTTP 503, then the existing checksum-pinned fallbacks succeeded |
+| `python3 tools/prepare_pic_poll_fixture.py` | Passed offline against the checked manifest |
+| `python3 tools/build_font.py --check` | Passed, existing font hash unchanged |
+| `cargo test --locked --test pic` | Passed, 28 tests |
+| `cargo test --locked` | Passed, all 263 native integration tests; unit and doc-test targets also passed |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `cargo fmt --check` | Passed |
+| `git diff --check` | Passed |
+| `npm ci` and `npx playwright install chromium` | Passed |
+| `npm test` | Build/publication checks passed; browser server could not bind port 8000, occupied by a different worktree; no tests executed in this attempt |
+| `npm test -- --config=.issue63-playwright.config.js` | Passed, 96 browser tests (1.7m), including all four new profile/root combinations and reset boots; production release Wasm and publication checks passed |
+
+The temporary browser configuration imports the checked Playwright configuration
+and changes only server ports to 18000/18001, retaining the same production
+release-Wasm build, test set, profiles, roots, assertions and budgets. The project
+server is a temporary copy with its web directory fixed to this worktree and its
+port changed; the other worktree's server was untouched. These temporary files
+are removed after validation. Existing hardware/CPU-shadow, DOS/application, VM
+and six-game assertions and budgets are preserved. The complete implementation,
+probe, tests, CI preparation and documentation diff was reviewed against #63.
+No push, PR, merge or GitHub comment was performed.
+
+PIC remains partial: AEOI/automatic-rotation polling and concurrent CPU
+acknowledgement while armed are outside the verified polling scope. General ICW
+sequencing/SNGL/ICW3 configuration, alternate cascade routing, SFNM, broader
+level-trigger behavior and spurious-interrupt fidelity remain outstanding.
+Protected execution, paging and basic x87 remain required. All 26 inventory
+categories and full scopes remain retained with their existing status (22 partial,
+IDE/GRCG implemented_unverified, paging/FPU unimplemented); this bounded acceptance
+upgrades no category and makes no commercial compatibility claim. No required
+post-merge verification was specified.

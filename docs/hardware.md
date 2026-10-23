@@ -375,7 +375,7 @@ this table is not a claim of complete chip emulation.
 
 | Ports (hex) | Device and supported behavior | IRQ / notes |
 | --- | --- | --- |
-| `00,02`; `08,0A` | Master/slave 8259: existing ICW path, masks, IRR/ISR, OCW2 programmable/rotating priority, specific/nonspecific EOI, auto EOI, automatic rotation and OCW3 special-mask mode | Master IR7 cascades slave; each controller resolves its own priority and ISR blocking |
+| `00,02`; `08,0A` | Master/slave 8259: existing ICW path, masks, IRR/ISR, OCW2 programmable/rotating priority, specific/nonspecific EOI, auto EOI, automatic rotation, OCW3 special-mask mode and normal-EOI polling | Master IR7 cascades slave; each controller resolves its own priority and ISR blocking |
 | `01–0F` odd, `11–1F` odd, `21,23,25,27` | 8237 address/count flip-flop, controller disable, channel masks, direction/decrement, terminal count and auto-init reload, master clear, bank registers | FDC uses channel 2; count/address change with actual byte transfers |
 | `31,33,35,37` | PPI startup inputs, output C, bit set/reset, active-low beep gate | Input straps are fixed VM-profile constants; Ap RTC DATA OUT replaces bit 0 of 33h |
 | `41,43` | Keyboard byte FIFO, ready status, command acknowledgements, down/up scan bytes | IR1 / INT 09; firmware maintains BIOS ring, held-key bitmap and modifier state |
@@ -472,8 +472,49 @@ includes both URL roots. The [manifest](../fixtures/pic-smm-manifest.json) pins
 offline preparation, source/image hashes and exact bytes. See the
 [validation record](validation.md#issue-43-8259a-ocw3-special-mask-mode-2026-10-23).
 
-PIC remains **partial**. Polling, special fully nested mode,
-general ICW sequencing/configuration, alternate cascade wiring, edge/level
+### 8259A OCW3 normal-EOI polling
+
+With ICW4.AEOI=0, OCW3.P (`0Ch`) arms one read acknowledgement at the
+controller's existing ports. A successful read returns `80h | local_level`,
+clears that IRR bit and sets its ISR bit; the vector base does not enter the
+result. Empty polls change no service bits. Unspecified result bits read zero
+as a deterministic emulator policy. The selection (including an empty result)
+is frozen at the poll write, using the current masks, priority origin and ISR
+blocking, including special-mask mode. Later requests remain pending for later
+service; repeated requests coalesce in the existing IRR latch.
+
+The next controller read consumes the transaction, including a data-port read.
+Polling overrides combined P/RR/RIS status commands; RR/RIS still selects the
+ordinary status register for subsequent reads. A fresh poll command is required
+for each acknowledgement. Without an armed poll, status and IMR reads remain
+passive. ICW1 cancels a transaction; construction and Machine reset clear it.
+Polling leaves INT arbitration active: software must disable CPU interrupts.
+The reference is [Intel 8259A, Figure 8, Poll Command, Reading Status and Figure 9,
+printed pp. 13–17](https://courses.cs.washington.edu/courses/cse451/25wi/documentation/8259A.pdf#page=13).
+
+In the fixed PC-98 cascade, rising slave INT transitions latch master IR7 during
+bus ticking and PIC port operations, independently of CPU IF. An asserted slave
+INT is not repeatedly latched while software performs the two reads. Master
+polling acknowledges only master IR7; the guest must separately poll the slave
+for its local level and separately EOI both controllers. Pending slave work
+survives either EOI order; a new eligible slave transition can latch IR7 while
+the master is still in service, for delivery after its EOI. Regular CPU cascade
+acknowledgement still acknowledges both controllers, including existing AEOI
+operation.
+
+The original MIT [polling probe](../guest/pic_poll.asm) programs one-shot PIT IRQ0
+and FDC READ ID under CLI, checks poll responses and ISR/EOI snapshots, performs
+empty final polls, then uses STI to demonstrate ordinary PIT delivery. The guest
+checks all 32 result/guard bytes before reporting `PIC POLL PASS`. Native and
+production release-Wasm browser tests use the identical image in VM and Ap,
+before/after reset, at both browser roots, with unchanged disk bytes and a
+2,000,000-slot budget per boot. The [manifest](../fixtures/pic-poll-manifest.json)
+pins source/license, assembler command, source/boot/image hashes, exact results
+and guards. See [validation evidence](validation.md#issue-63-8259a-ocw3-polling-2026-10-24).
+
+PIC remains **partial**. Polling with AEOI/automatic rotation, concurrent CPU
+acknowledgement while a poll is armed, special fully nested mode,
+general ICW sequencing/SNGL/ICW3 configuration, alternate cascade wiring, edge/level
 electrical modeling and spurious-interrupt fidelity remain outside this subset.
 These bounded checks do not establish full hardware accuracy or commercial
 software compatibility.
