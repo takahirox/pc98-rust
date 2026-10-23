@@ -110,7 +110,10 @@ The original MIT [DMA auto-init boot probe](guest/dma_autoinit.asm) builds into
 `cargo test --test dma` and production-Wasm browser tests boot it on VM and Ap,
 with a two-million-slot budget at each serving path. It programs raw 8237/FDC
 ports, reuses the DMA buffer for two reads and two writes, and checks register
-reload, exact bytes, guards, result phase and completion IRQ. The
+reload, exact bytes, guards, result phase and completion IRQ. A subsequent
+master-clear phase checks retained readback, masked no-transfer commands, and
+successful raw FDC read/write after unmasking without DMA reprogramming. It emits
+an explicit `DMA MASTER CLEAR PASS` or `DMA MASTER CLEAR FAIL` result. The
 [manifest](fixtures/dma-manifest.json) records the assembly command, license and
 source/image hashes. No DOS, proprietary ROM or game is required. See the
 [bounded DMA contract](docs/hardware.md#dma-terminal-count-and-auto-initialization).

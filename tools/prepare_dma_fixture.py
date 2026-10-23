@@ -29,8 +29,8 @@ def build(update=False):
         'image': 'fixtures/dma/autoinit.hdm',
         'image_sha256': sha(image),
         'geometry': '77 cylinders, 2 heads, 8 sectors, 1024 bytes per sector',
-        'contract': 'Two raw READ DATA and two raw WRITE DATA commands; one DMA setup per direction; register reload, buffer patterns, guards, result bytes and IRQ; bounded waits',
-        'markers': ['DMA AUTO INIT PASS', 'DMA AUTO INIT FAIL'],
+        'contract': 'Two auto-init READ DATA and two WRITE DATA commands, plus master-clear retained read/write with masked no-transfer commands before unmasking; register readback/reload, buffer patterns, guards, result bytes and IRQ; bounded waits',
+        'markers': ['DMA AUTO INIT PASS', 'DMA AUTO INIT FAIL', 'DMA MASTER CLEAR PASS', 'DMA MASTER CLEAR FAIL'],
         'slot_budget': 2_000_000,
         'distribution': 'Test only; no proprietary software or firmware; excluded from web/',
     }

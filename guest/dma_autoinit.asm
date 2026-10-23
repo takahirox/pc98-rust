@@ -71,8 +71,65 @@ in al, 0x11
 and al, 4
 cmp al, 4
 jne fail
+; Preserve the original final auto-init buffer assertion before reusing it.
+mov al, 0xb6
+mov di, 0x8000
+mov cx, 1024
+repe scasb
+jne fail
+; Focused software master-clear phase; retain all preceding auto-init checks.
+mov word [failure], master_fail_text
+mov byte [cmd], 0x46
+mov byte [cmd+4], 2
+mov al, 0x56
+call program
+mov al, 0xa5
+call fill
+call master_clear
+call masked_transfer
+; Masked read must leave every buffer byte untouched.
+mov al, 0xa5
+mov di, 0x8000
+mov cx, 1024
+repe scasb
+jne fail
+mov al, 2
+out 0x15, al
+mov byte [pattern], 0x39
+call read_one
+; Set up WRITE once; no reprogramming after master clear.
+mov byte [cmd], 0x45
+mov byte [cmd+4], 7
+mov al, 0x5a
+call program
+mov al, 0x4d
+call fill
+call master_clear
+call masked_transfer
+; Sector 7 must remain unchanged (host checks the complete disk).
+mov byte [cmd+4], 8
+mov al, 2
+out 0x15, al
+call transfer
 mov si, pass_text
 jmp report
+master_clear:
+; Start with the shared pointer high. The first subsequent access is readback.
+in al, 9
+mov al, 0x55
+out 0x1b, al
+call registers
+in al, 0x11
+or al, al
+jnz fail
+ret
+masked_transfer:
+mov byte [expected_st0], 0x40
+mov byte [expected_st1], 0x10
+call transfer
+mov byte [expected_st0], 0
+mov byte [expected_st1], 0
+ret
 read_one:
 mov al, 0xa5
 call fill
@@ -131,11 +188,11 @@ loop .wait_irq
 jmp fail
 .got_irq:
 in al, 0x92
-and al, 0xc0
-jnz fail
+cmp al, [expected_st0]
+jne fail
 in al, 0x92
-or al, al
-jnz fail
+cmp al, [expected_st1]
+jne fail
 in al, 0x92
 or al, al
 jnz fail
@@ -156,6 +213,7 @@ jne fail
 ; Current address/count must already be reloaded, and guards untouched.
 xor al, al
 out 0x19, al
+registers:
 in al, 9
 or al, al
 jnz fail
@@ -186,7 +244,7 @@ pop ds
 pop ax
 iret
 fail:
-mov si, fail_text
+mov si, [failure]
 report:
 cli
 mov ax, 0xa000
@@ -205,6 +263,10 @@ jmp .done
 cmd: db 0x46, 0, 0, 0, 2, 3, 8, 0x1b, 0xff
 pattern: db 0
 irq_count: db 0
-pass_text: db 'DMA AUTO INIT PASS', 0
+failure: dw fail_text
+expected_st0: db 0
+expected_st1: db 0
+pass_text: db 'DMA AUTO INIT PASS / DMA MASTER CLEAR PASS', 0
+master_fail_text: db 'DMA MASTER CLEAR FAIL', 0
 fail_text: db 'DMA AUTO INIT FAIL', 0
 times 1024-($-$$) db 0

@@ -296,8 +296,13 @@ impl Dma {
             0x17 => self.mode[(v & 3) as usize] = v,
             0x19 => self.high = false,
             0x1b => {
-                *self = Self::default();
-                self.mask = 15
+                // 8237 software reset retains current/base programming and modes.
+                self.status = 0;
+                self.high = false;
+                self.mask = 15;
+                // Preserve the existing external PC-98 bank-reset policy. Its
+                // board-level reset wiring is outside the modeled core contract.
+                self.page = [0; 4]
             }
             0x1d => self.mask = 0,
             0x1f => self.mask = v & 15,
