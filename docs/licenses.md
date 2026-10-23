@@ -48,6 +48,12 @@ and image hashes. Keep the complete FreeDOS output folder, its matching GPL
 sources/notices and the preparation script when redistributing these images.
 They contain no PIPOO data, proprietary ROM or font and remain outside `web/`.
 
+The original MIT `guest/gdtr.asm` is a source-built Ap boot probe. Its
+[manifest](../fixtures/gdtr-manifest.json) pins the original source, assembly
+command and boot/image hashes. `prepare_gdtr_fixture.py` retains source, license
+and manifest alongside the generated image in `fixtures/gdtr/`, outside `web/`.
+It requires no DOS, proprietary ROM, commercial guest or third-party emulator.
+
 ## HelloWorld-PC98
 
 Upstream: [TakedaHiromasa/HelloWorld-PC98](https://github.com/TakedaHiromasa/HelloWorld-PC98),

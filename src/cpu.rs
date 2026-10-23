@@ -29,6 +29,10 @@ pub struct Cpu {
     /// Upper words of EAX through EDI; byte/word writes preserve these.
     pub upper: [u16; 8],
     pub extra_segments: [u16; 2], // FS, GS
+    /// Emulator reset policy: zero limit/base (hardware power-up GDTR is undefined).
+    pub gdtr_limit: u16,
+    /// Linear metadata; never masked by A20 or validated against installed RAM.
+    pub gdtr_base: u32,
     pub ip: u32,
     pub flags_upper: u16,
     // Decoder state resets each instruction. Public to retain native struct-update
@@ -61,6 +65,8 @@ impl Default for Cpu {
             s: [0, 0xffff, 0, 0],
             upper: [0; 8],
             extra_segments: [0; 2],
+            gdtr_limit: 0,
+            gdtr_base: 0,
             flags_upper: 0,
             operand32: false,
             address32: false,
@@ -605,6 +611,40 @@ impl Cpu {
             return Err(ExecError::Fault(6));
         }
         match op {
+            0x01 => {
+                let m = self.fetch(b)?;
+                let kind = (m >> 3) & 7;
+                if !matches!(kind, 0 | 2) {
+                    return Err(ExecError::Unsupported(format!(
+                        "unimplemented i486 opcode 0F 01 /{kind}"
+                    )));
+                }
+                let Operand::Mem(s, off) = self.decode(b, m, ov)? else {
+                    return Err(ExecError::Fault(6));
+                };
+                // i486 real-address contract for these six-byte operands is #GP,
+                // including SS. Preflight before any GDTR change or bus write.
+                if off > 0xfffa {
+                    return Err(ExecError::Fault(13));
+                }
+                let address = self.segment(s) as usize * 16 + off as usize;
+                if kind == 2 {
+                    let limit = b.read16(address);
+                    let mut base = 0;
+                    for i in 0..if self.operand32 { 4 } else { 3 } {
+                        base |= (b.read(address + 2 + i) as u32) << (8 * i);
+                    }
+                    self.gdtr_limit = limit;
+                    self.gdtr_base = base;
+                } else {
+                    // Full base with either operand size: Intel SDM SGDT operation.
+                    let limit = self.gdtr_limit.to_le_bytes();
+                    let base = self.gdtr_base.to_le_bytes();
+                    for (i, value) in limit.into_iter().chain(base).enumerate() {
+                        b.write(address + i, value);
+                    }
+                }
+            }
             0x80..=0x8f => {
                 let d = self.immediate(b, true)?;
                 if self.cond(op & 15) {

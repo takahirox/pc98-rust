@@ -73,6 +73,7 @@ addresses, SIB, FS/GS and selected 386/486 real-mode integer instructions. It ch
 64 KiB segment limits and delivers guest exceptions; it does not provide protected
 mode, DPMI or an FPU. See the [exact Ap CPU coverage and independent DOS diagnostic](dos-compatibility.md#issue-9-cpu-coverage-and-independent-guest-evidence).
 VM retains the V30 behavior described above.
+Ap also provides the [real-mode GDTR prerequisite](#ap-real-mode-gdtr) below.
 
 An instruction or one REP element consumes one 8-clock scheduling slot. This is a
 deterministic work/cycle model, **not instruction-cycle accuracy**. Firmware FDC
@@ -81,6 +82,49 @@ retirement while clocks and IRQs continue. STI and MOV/POP SS inhibit delivery f
 the next instruction. A frame runs at most two slices of 16,667 slots; the core
 caps each call at 100,000 slots. There is no unbounded catch-up after a suspended
 tab. This bounds UI work even for infinite loops and maximum-length REP strings.
+
+## Ap real-mode GDTR
+
+Ap implements `0F 01 /2` LGDT and `0F 01 /0` SGDT with memory operands.
+LGDT reads a little-endian 16-bit limit and a 24-bit base by default (clearing
+bits 31–24), or a 32-bit base with `66h`. SGDT always writes exactly six bytes:
+the limit and **full 32-bit base**, with either operand size. Operand and address
+sizes are independent; existing ModR/M/SIB and segment overrides apply. Flags,
+general registers and segment registers are preserved on success.
+
+GDTR belongs to each CPU instance. Construction and Machine reset choose
+limit **0**, base **0** for deterministic emulation. This is emulator policy,
+not a hardware reset guarantee: Intel486 PRM §10.1 leaves power-up GDTR undefined.
+The base is linear metadata, independent of RAM capacity and A20; LGDT never
+accesses the referenced table. Operand accesses still use the Bus, including
+A20 mapping and firmware write protection.
+
+Both instructions preflight the complete six-byte operand. `FFFAh` is the last
+legal starting offset; `FFFBh` or any address32 offset beyond `FFFFh` raises
+restartable exception 13, **including SS-selected operands**. Register operands
+and LOCK raise exception 6. Fault frames save the first prefix IP through the
+existing real-mode IVT mechanism, before any GDTR change or destination write.
+
+This follows the [Intel486 Programmer’s Reference Manual](https://manuals.plus/m/d86207aaebd9b10464f2058efc61559e6141d3b072db100e89bfe17c8187e143),
+pp. 26-193–194 and 26-261. Its LGDT discussion explicitly specifies full-base
+SGDT stores, while its older SGDT description/compatibility notes conflict.
+We choose the explicit full-base store operation in the
+[Intel SDM SGDT entry](https://cdrdv2-public.intel.com/835757/325383-sdm-vol-2abcd.pdf),
+not the older truncated-base interpretation. The real-address exception contract
+also agrees with the [SDM SGDT exception table](https://cdrdv2-public.intel.com/782151/253667-sdm-vol-2b.pdf).
+
+Other `0F 01` operations remain explicit unsupported errors. VM keeps its V30
+decoder. This prerequisite adds no LIDT/SIDT, CR0/PE transitions, descriptor
+lookup/validation or caches, privilege changes, paging, task switching, FPU or
+Windows support. Protected mode remains unimplemented; CPU386 and integration
+remain partial.
+
+The original MIT [boot probe](../guest/gdtr.asm) builds offline with
+`python3 tools/prepare_gdtr_fixture.py`. Its [manifest](../fixtures/gdtr-manifest.json)
+records assembly, license, hashes and the two-million-slot budget. Native
+`cargo test --locked --test cpu386 gdtr_` and release-Wasm browser tests require
+`GDTR PASS`, no `FAIL` or host error, exact result/guard bytes, and an unchanged
+disk on Ap before and after reset. Fixtures stay outside `web/`.
 
 ## Device ports and interrupts
 

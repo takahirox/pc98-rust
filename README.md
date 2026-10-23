@@ -83,8 +83,9 @@ Japanese CG glyphs. FEP input is not implemented.
 ## Reproduce the checks
 
 ```sh
-# Build the independent MIT DMA boot probe offline.
+# Build the independent MIT boot probes offline.
 python3 tools/prepare_dma_fixture.py
+python3 tools/prepare_gdtr_fixture.py
 # Fetch checksum-pinned guest binaries AND matching complete source archives.
 # This makes a minimal GPL guest disk; it downloads no emulator code.
 python3 tools/prepare_freedos.py
@@ -104,6 +105,15 @@ npm ci
 npx playwright install chromium
 npm test
 ```
+
+The original MIT [GDTR boot probe](guest/gdtr.asm) checks Ap real-mode
+LGDT/SGDT, exact load/store bytes and guards, reset readback and restartable
+faults. Native `cargo test --locked --test cpu386 gdtr_` and production-Wasm
+browser tests run the same image before and after reset, at both serving paths,
+within two million slots per run. Its [manifest](fixtures/gdtr-manifest.json)
+records source/license, assembly and hashes. This adds only a
+[GDTR prerequisite](docs/hardware.md#ap-real-mode-gdtr); protected mode remains
+unimplemented. Generated test fixtures stay outside `web/`.
 
 The original MIT [DMA auto-init boot probe](guest/dma_autoinit.asm) builds into
 `fixtures/dma/autoinit.hdm`, separate from all existing disks and publication assets.

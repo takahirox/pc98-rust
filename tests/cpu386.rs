@@ -631,3 +631,384 @@ fn short_branches_use_operand_size_and_loop_uses_address_size_for_count() {
     assert_eq!(c.reg32(CX), 0x10000);
     assert_eq!(c.ip, 0x1002);
 }
+
+// Original Issue #35 GDTR acceptance. No descriptor table is dereferenced.
+fn gdtr_bytes(limit: u16, base: u32) -> [u8; 6] {
+    let mut bytes = [0; 6];
+    bytes[..2].copy_from_slice(&limit.to_le_bytes());
+    bytes[2..].copy_from_slice(&base.to_le_bytes());
+    bytes
+}
+
+#[test]
+fn gdtr_operand_and_address_sizes_preserve_state_and_exact_store_width() {
+    for operand32 in [false, true] {
+        for address32 in [false, true] {
+            for (limit, base) in [
+                (0, 0),
+                (0xffff, u32::MAX),
+                (0xffff, 0xfedcba98),
+                (0x1234, 0x12345678),
+            ] {
+                let mut code = vec![];
+                if operand32 {
+                    code.push(0x66);
+                }
+                if address32 {
+                    code.push(0x67);
+                }
+                code.extend_from_slice(&[
+                    0x0f,
+                    0x01,
+                    if address32 { 0x15 } else { 0x16 },
+                    0x01,
+                    0x40,
+                ]);
+                if address32 {
+                    code.extend_from_slice(&[0, 0]);
+                }
+                let store_start = code.len();
+                if operand32 {
+                    code.push(0x66);
+                }
+                if address32 {
+                    code.push(0x67);
+                }
+                code.extend_from_slice(&[
+                    0x0f,
+                    0x01,
+                    if address32 { 0x05 } else { 0x06 },
+                    0x11,
+                    0x40,
+                ]);
+                if address32 {
+                    code.extend_from_slice(&[0, 0]);
+                }
+                let (mut c, mut b) = cpu(&code);
+                for r in 0..8 {
+                    c.set_reg32(r, 0xabc00000 + r as u32);
+                }
+                c.r[SP] = 0x9000;
+                c.s[DS] = 0x3000;
+                c.s[ES] = 0x4000;
+                c.extra_segments = [0x5000, 0x6000];
+                c.flags = 2 | CF | PF | AF | ZF | SF | IF | DF | OF;
+                c.flags_upper = 4;
+                let saved = c.clone();
+                b.mem[0x34001..0x34007].copy_from_slice(&gdtr_bytes(limit, base));
+                b.mem[0x34010..0x34018].fill(0xa5);
+                c.step(&mut b).unwrap();
+                assert_eq!(c.r, saved.r);
+                assert_eq!(c.upper, saved.upper);
+                assert_eq!(c.s, saved.s);
+                assert_eq!(c.extra_segments, saved.extra_segments);
+                assert_eq!((c.flags, c.flags_upper), (saved.flags, saved.flags_upper));
+                assert_eq!(c.ip, 0x1000 + store_start as u32);
+                c.step(&mut b).unwrap();
+                assert_eq!(c.ip, 0x1000 + code.len() as u32);
+                let expected_base = if operand32 { base } else { base & 0xffffff };
+                assert_eq!(&b.mem[0x34011..0x34017], &gdtr_bytes(limit, expected_base));
+                assert_eq!((b.mem[0x34010], b.mem[0x34017]), (0xa5, 0xa5));
+                assert_eq!(c.r, saved.r);
+                assert_eq!(c.upper, saved.upper);
+                assert_eq!(c.s, saved.s);
+                assert_eq!(c.extra_segments, saved.extra_segments);
+                assert_eq!((c.flags, c.flags_upper), (saved.flags, saved.flags_upper));
+            }
+        }
+    }
+}
+
+#[test]
+fn gdtr_full_base_survives_both_stores_then_word_load_clears_high_byte() {
+    let (mut c, mut b) = cpu(&[
+        0x66, 0x0f, 0x01, 0x16, 0, 0x40, // lgdt dword [4000]
+        0x0f, 0x01, 0x06, 0x10, 0x40, // sgdt word [4010]
+        0x66, 0x0f, 0x01, 0x06, 0x20, 0x40, // sgdt dword [4020]
+        0x0f, 0x01, 0x16, 0, 0x40, // lgdt word [4000]
+        0x0f, 0x01, 0x06, 0x30, 0x40,
+    ]);
+    let source = [0x34, 0x12, 0x78, 0x56, 0x34, 0x12];
+    b.mem[0x4000..0x4006].copy_from_slice(&source);
+    steps(&mut c, &mut b, 5);
+    assert_eq!(&b.mem[0x4010..0x4016], &source);
+    assert_eq!(&b.mem[0x4020..0x4026], &source);
+    assert_eq!(&b.mem[0x4030..0x4036], &[0x34, 0x12, 0x78, 0x56, 0x34, 0]);
+}
+
+#[test]
+fn gdtr_sib_default_ss_and_all_segment_overrides_with_repeated_prefixes() {
+    // Prefixes plus ModR/M+SIB/displacement; last segment override wins.
+    let cases: &[(&[u8], &[u8], usize, usize)] = &[
+        (&[], &[0x54, 0x8b, 1], DS, 0x4022), // [ebx+ecx*4+1]
+        (&[], &[0x54, 0x25, 0], SS, 0x4101), // [ebp]
+        (&[], &[0x14, 0x24], SS, 0x9000),    // [esp]
+        (&[0x26], &[0x13], ES, 0x4001),
+        (&[0x2e], &[0x13], CS, 0x4001),
+        (&[0x36], &[0x13], SS, 0x4001),
+        (&[0x3e], &[0x54, 0x25, 0], DS, 0x4101),
+        (&[0x64], &[0x13], 4, 0x4001),
+        (&[0x65], &[0x13], 5, 0x4001),
+        (&[0x26, 0x64, 0x65], &[0x13], 5, 0x4001),
+    ];
+    for &(prefixes, encoding, segment, offset) in cases {
+        for address32 in [false, true] {
+            // SIB encodings apply to address32; word case [bx] covers the overrides.
+            let mut code = prefixes.to_vec();
+            code.extend_from_slice(&[0x66, 0x66]);
+            if address32 {
+                code.extend_from_slice(&[0x67, 0x67]);
+            }
+            code.extend_from_slice(&[0x0f, 0x01]);
+            code.extend_from_slice(if address32 { encoding } else { &[0x17] });
+            let (mut c, mut b) = cpu(&code);
+            c.s[DS] = 0x3000;
+            c.s[ES] = 0x4000;
+            c.s[SS] = 0x5000;
+            c.extra_segments = [0x6000, 0x7000];
+            c.set_reg32(BX, 0x4001);
+            c.set_reg32(BP, 0x4101);
+            c.set_reg32(CX, 8);
+            let s = if !address32 && prefixes.is_empty() {
+                DS
+            } else {
+                segment
+            };
+            let off = if address32 { offset } else { 0x4001 };
+            let seg = if s < 4 {
+                c.s[s]
+            } else {
+                c.extra_segments[s - 4]
+            };
+            let a = seg as usize * 16 + off;
+            b.mem[a..a + 6].copy_from_slice(&[1, 2, 3, 4, 5, 6]);
+            c.step(&mut b).unwrap();
+            assert_eq!(
+                (c.gdtr_limit, c.gdtr_base),
+                (0x201, 0x6050403),
+                "{code:02x?}"
+            );
+            // Exercise the identical addressing expression for SGDT.
+            c.ip = 0x1000;
+            let modrm = 0x1000 + prefixes.len() + 2 + if address32 { 2 } else { 0 } + 2;
+            b.mem[modrm] &= !0x38;
+            b.mem[a - 1..a + 7].fill(0xa5);
+            c.step(&mut b).unwrap();
+            assert_eq!(&b.mem[a..a + 6], &[1, 2, 3, 4, 5, 6]);
+            assert_eq!((b.mem[a - 1], b.mem[a + 6]), (0xa5, 0xa5));
+        }
+    }
+}
+
+#[test]
+fn gdtr_six_byte_limit_faults_are_atomic_gp_even_for_ss_and_restart() {
+    for operand32 in [false, true] {
+        for load in [false, true] {
+            for stack in [false, true] {
+                for address32 in [false, true] {
+                    for offset in [0xfffa, 0xfffb, 0x10000, u32::MAX] {
+                        if !address32 && offset > 0xffff {
+                            continue;
+                        }
+                        let mut code = vec![];
+                        if operand32 {
+                            code.push(0x66);
+                        }
+                        if address32 {
+                            code.push(0x67);
+                        }
+                        code.extend_from_slice(&[
+                            0x0f,
+                            0x01,
+                            (if stack { 0x46 } else { 0x47 }) | if load { 0x10 } else { 0 },
+                            0,
+                        ]);
+                        // 32-bit rm=5 is EBP; 16-bit rm=6 is BP.
+                        if address32 {
+                            let m = code.len() - 2;
+                            code[m] = (code[m] & !7) | if stack { 5 } else { 3 };
+                        }
+                        let (mut c, mut b) = cpu(&code);
+                        c.set_reg32(if stack { BP } else { BX }, offset);
+                        c.gdtr_limit = 0x1234;
+                        c.gdtr_base = 0x98765432;
+                        b.mem[0xfff9..0x10008].fill(0xa5);
+                        if offset == 0xfffa {
+                            c.step(&mut b).unwrap();
+                            if load {
+                                assert_eq!(
+                                    (c.gdtr_limit, c.gdtr_base),
+                                    (0xa5a5, if operand32 { 0xa5a5a5a5 } else { 0x00a5a5a5 })
+                                );
+                            } else {
+                                assert_eq!(
+                                    &b.mem[0xfffa..0x10000],
+                                    &gdtr_bytes(0x1234, 0x98765432)
+                                );
+                            }
+                            assert_eq!((b.mem[0xfff9], b.mem[0x10000]), (0xa5, 0xa5));
+                            continue;
+                        }
+                        let before = b.mem[0xfff9..0x10008].to_vec();
+                        c.flags = 2 | CF | DF | OF;
+                        c.step(&mut b).unwrap();
+                        fault(&c, &b, 13, 0x1000);
+                        assert_eq!(b.read16(0x8ffe), 2 | CF | DF | OF);
+                        assert_eq!((c.gdtr_limit, c.gdtr_base), (0x1234, 0x98765432));
+                        assert_eq!(&b.mem[0xfff9..0x10008], &before);
+                        // Handler returns to the full prefixed instruction. Repair EA,
+                        // IRET, and retry without changing the saved instruction IP.
+                        b.mem[c.ip as usize] = 0xcf;
+                        c.set_reg32(if stack { BP } else { BX }, 0x4000);
+                        b.mem[0x3fff..0x4007].fill(0xa5);
+                        c.step(&mut b).unwrap();
+                        assert_eq!(c.ip, 0x1000);
+                        assert_eq!(c.r[SP], 0x9000);
+                        c.step(&mut b).unwrap();
+                        assert_eq!(c.ip, 0x1000 + code.len() as u32);
+                        if load {
+                            assert_eq!(
+                                (c.gdtr_limit, c.gdtr_base),
+                                (0xa5a5, if operand32 { 0xa5a5a5a5 } else { 0x00a5a5a5 })
+                            );
+                        } else {
+                            assert_eq!(&b.mem[0x4000..0x4006], &gdtr_bytes(0x1234, 0x98765432));
+                        }
+                        assert_eq!((b.mem[0x3fff], b.mem[0x4006]), (0xa5, 0xa5));
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn gdtr_invalid_register_and_lock_forms_fault_at_first_prefix() {
+    for code in [
+        vec![0x66, 0x67, 0x0f, 0x01, 0xc0],
+        vec![0x65, 0x66, 0x0f, 0x01, 0xd7],
+        vec![0x64, 0xf0, 0x0f, 0x01, 0x16, 0, 0x40],
+        vec![0x66, 0xf0, 0x0f, 0x01, 0x06, 0, 0x40],
+    ] {
+        let (mut c, mut b) = cpu(&code);
+        c.gdtr_limit = 0x1234;
+        c.gdtr_base = 0x87654321;
+        b.mem[0x3fff..0x4007].fill(0xa5);
+        c.step(&mut b).unwrap();
+        fault(&c, &b, 6, 0x1000);
+        assert_eq!((c.gdtr_limit, c.gdtr_base), (0x1234, 0x87654321));
+        assert_eq!(&b.mem[0x3fff..0x4007], &[0xa5; 8]);
+        // A plain IRET retries and faults again, rather than executing past it.
+        b.mem[c.ip as usize] = 0xcf;
+        c.step(&mut b).unwrap();
+        c.step(&mut b).unwrap();
+        fault(&c, &b, 6, 0x1000);
+    }
+}
+
+#[test]
+fn gdtr_bus_mapping_a20_rom_and_independent_reset_state() {
+    let (mut c, mut b) = cpu(&[
+        0x64, 0x66, 0x0f, 0x01, 0x16, 0x10, 0, 0x65, 0x0f, 0x01, 0x06, 0x10, 0, 0x64, 0x0f, 0x01,
+        0x06, 0x20, 0,
+    ]);
+    c.extra_segments = [0xffff, 0xf000];
+    b.mem[..6].copy_from_slice(&gdtr_bytes(0, 0xfedcba98));
+    b.mem[0x100000..0x100006].copy_from_slice(&gdtr_bytes(0xffff, 0x87654321));
+    c.step(&mut b).unwrap();
+    assert_eq!((c.gdtr_limit, c.gdtr_base), (0, 0xfedcba98));
+    b.output(0xf2, 0);
+    c.ip = 0x1000;
+    c.step(&mut b).unwrap();
+    assert_eq!((c.gdtr_limit, c.gdtr_base), (0xffff, 0x87654321));
+    b.output(0xf6, 3); // A20 disabling cannot mask stored linear metadata.
+    b.mem[0xf000f..0xf0017].fill(0xa5);
+    c.step(&mut b).unwrap();
+    assert_eq!(&b.mem[0xf000f..0xf0017], &[0xa5; 8]);
+    assert_eq!(c.gdtr_base, 0x87654321);
+    assert!(!b.a20);
+    b.mem[0x0f..0x17].fill(0xa5);
+    b.mem[0x10000f..0x100017].fill(0xa5);
+    let store_ip = c.ip;
+    c.step(&mut b).unwrap();
+    assert_eq!(&b.mem[0x10..0x16], &gdtr_bytes(0xffff, 0x87654321));
+    assert_eq!((b.mem[0x0f], b.mem[0x16]), (0xa5, 0xa5));
+    assert_eq!(&b.mem[0x10000f..0x100017], &[0xa5; 8]);
+    b.output(0xf2, 0);
+    c.ip = store_ip;
+    c.step(&mut b).unwrap();
+    assert_eq!(&b.mem[0x100010..0x100016], &gdtr_bytes(0xffff, 0x87654321));
+    assert_eq!((b.mem[0x10000f], b.mem[0x100016]), (0xa5, 0xa5));
+    let (mut other, mut other_bus) = cpu(&[0x0f, 0x01, 0x16, 0, 0x40]);
+    assert_eq!((other.gdtr_limit, other.gdtr_base), (0, 0));
+    other_bus.mem[0x4000..0x4006].copy_from_slice(&gdtr_bytes(0x1111, 0x22222222));
+    other.step(&mut other_bus).unwrap();
+    assert_eq!((other.gdtr_limit, other.gdtr_base), (0x1111, 0x00222222));
+    assert_eq!((c.gdtr_limit, c.gdtr_base), (0xffff, 0x87654321));
+    let mut m = Machine::new(Profile::Pc9821ApDos);
+    m.cpu = c;
+    m.reset();
+    assert_eq!((m.cpu.gdtr_limit, m.cpu.gdtr_base), (0, 0));
+    // Reset is observable via the guest instruction, not just public fields.
+    m.cpu.s = [0; 4];
+    m.cpu.ip = 0x1000;
+    m.bus.mem[0x1000..0x1005].copy_from_slice(&[0x0f, 0x01, 0x06, 0, 0x40]);
+    m.cpu.step(&mut m.bus).unwrap();
+    assert_eq!(&m.bus.mem[0x4000..0x4006], &[0; 6]);
+}
+
+#[test]
+fn gdtr_other_group_operations_and_vm_remain_explicitly_unsupported() {
+    for kind in [1, 3, 4, 5, 6, 7] {
+        let (mut c, mut b) = cpu(&[0x0f, 0x01, (kind << 3) | 6, 0, 0x40]);
+        assert!(c
+            .step(&mut b)
+            .unwrap_err()
+            .contains("unimplemented i486 opcode 0F 01"));
+    }
+    let (mut c, mut b) = cpu(&[0x0f, 0x01, 0x16, 0, 0x40]);
+    b.profile = Profile::Pc9801Vm;
+    assert!(c
+        .step(&mut b)
+        .unwrap_err()
+        .contains("unsupported V30 opcode 0F 01"));
+}
+
+#[test]
+fn gdtr_original_boot_probe_before_and_after_machine_reset() {
+    let image = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/fixtures/gdtr/gdtr.hdm"
+    ))
+    .expect("run python3 tools/prepare_gdtr_fixture.py");
+    let mut m = Machine::new(Profile::Pc9821ApDos);
+    m.insert(0, image.clone(), "gdtr.hdm").unwrap();
+    for run in 0..2 {
+        if run == 1 {
+            m.reset();
+        }
+        let mut slots = 0;
+        for _ in 0..20 {
+            slots += m.step(100_000);
+            assert!(m.error.is_none(), "{:?}", m.error);
+            if m.bus.text().contains("GDTR PASS") || m.bus.text().contains("GDTR FAIL") {
+                break;
+            }
+        }
+        assert!(m.bus.text().contains("GDTR PASS"), "{}", m.bus.text());
+        assert!(!m.bus.text().contains("FAIL"));
+        assert!(slots <= 2_000_000);
+        let full = [0x34, 0x12, 0x78, 0x56, 0x34, 0x12];
+        let mut expected = [0xa5; 80];
+        for offset in [1, 9, 25, 33, 41, 57, 65] {
+            expected[offset..offset + 6].copy_from_slice(&full);
+        }
+        expected[17..23].copy_from_slice(&[0x34, 0x12, 0x78, 0x56, 0x34, 0]);
+        expected[49..55].fill(0);
+        expected[73] = 4;
+        assert_eq!(&m.bus.mem[0x8000..0x8050], &expected);
+        assert_eq!(m.bus.mem[0xfff9], 0xa5);
+        assert_eq!(&m.bus.mem[0xfffa..0x10000], &full);
+        assert_eq!(m.bus.disks[0].as_ref().unwrap().bytes, image);
+    }
+}
