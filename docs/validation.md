@@ -3223,3 +3223,129 @@ hardware documentation. Focused Rust tests were rerun successfully after the
 reset-test initializer style correction. No existing assertion or instruction
 budget was removed or weakened. No remote CI run, push, pull request, merge or
 GitHub comment was performed.
+
+## Issue #71 IDE READ VERIFY (2026-10-24)
+
+Implemented the selected legacy READ VERIFY contract for the existing Ap bank-zero
+master, both `40h` and `41h`, in CHS and LBA modes. Success returns the last verified
+sector/count zero; failure returns the first failing sector and inclusive residual.
+The command checks the valid prefix before IDNF at capacity, preserves device/head
+control bits, transfers no data, never asserts DRQ, completes with BSY clear and
+retains completion IRQ/status acknowledgement. The implementation uses bounded
+arithmetic on validated HDI geometry, with no PIO read/write behavior change.
+See the [contract and limitations](hardware.md#ap-ide-read-verify).
+
+Read Issue #71 directly through the GitHub connector. The issue supplies the
+explicit Fujitsu legacy behavior (READ VERIFY, printed page 5-22); the linked
+ManualsLib page returned a cache miss in this run. Retrieved T13/1321D revision 3
+from the supplied Seagate link. Its later non-data command description leaves
+normal address/count outputs unspecified. The selected legacy outputs are not
+claimed as a universal ATA requirement or physical-media integrity checking.
+
+### Baseline failures and native coverage
+
+Added both regressions before modifying `src/hdd.rs`, then ran:
+
+- `cargo test --locked --test hdd ide_verify_success_completion_regression`:
+  failed with `[3,7,0,0,e0,0,50]` instead of `[0,9,0,0,e0,0,50]` (hex bytes).
+- `cargo test --locked --test hdd ide_verify_cross_capacity_regression`:
+  failed with `[4,fe,1,0,e0,10,51]` instead of `[2,0,2,0,e0,10,51]`.
+
+The byte order is count, sector, cylinder low/high, device/head, error, status.
+Both exact expectations remain unchanged after implementation and now pass.
+
+Six original `ide_verify_` tests use in-memory synthetic HDIs or the original boot
+probe. The synthetic matrix covers both opcodes/modes, all four device/head control
+combinations, counts 1/2/255/zero, CHS head/cylinder transitions, LBA byte carry,
+completion exactly at the final physical sector, invalid CHS sector/head/cylinder
+and LBA addresses, and crossing capacity including zero-count valid prefixes.
+Test-side address arithmetic uses fixed independent geometry; guest tables use
+literal task-file bytes. Assertions check exact residual/address/error/status,
+BSY/DRQ/ERR, no data transfers, unchanged HDI bytes/write counters, recovery through
+a valid VERIFY and subsequent IDENTIFY/read/write/readback operations.
+
+IRQ tests cover success and failure for both opcodes. Alternate status preserves
+the device latch; primary status clears it without removing an already latched
+slave PIC IR1 request. PIC acknowledgement/EOI then prevents retrigger. With nIEN,
+the device latch persists but no new PIC request appears; enabling exposes it.
+
+### Original guest, oracle and provenance
+
+`python3 tools/prepare_ide_verify_fixture.py` assembles the original MIT
+`guest/ide_verify.asm` offline and verifies the checked
+`fixtures/ide-verify-manifest.json`. This pins source, assembly command, boot/image
+and synthetic-firmware source/binary SHA-256 values, license, exact result/guard
+bytes, geometry and a fixed **500,000-slot per-boot budget**. The HDI has 4 cylinders,
+4 heads, 32 sectors/track, 512-byte sectors and a 4096-byte header. Image SHA-256:
+`70b3d6162eb76d71f652608608526000b402479d29fc0ec246be05b6fe7f893a`.
+Generated image, source, synthetic-firmware source, manifest and license copies
+stay in ignored `fixtures/ide_verify/`, outside `web/`. No acquired guest software,
+commercial media, proprietary firmware or third-party emulator code is used.
+Preparation is wired into acceptance CI and README reproduction prerequisites.
+
+The synthetic IPL loads sector zero; the guest loads its remaining 15 sectors
+through INT 1B, then programs the real task-file ports. It compares 46 literal
+VERIFY result records before PASS, including both commands/modes, counts,
+transitions, final-sector success, invalid starts, capacity crossings and recovery.
+A separate guest PIC-poll sequence distinguishes retained device IRQ from latched
+PIC IR1, primary/alternate status and nIEN. The guest also checks IDENTIFY geometry,
+all words of an untouched synthetic sector through READ, exact stack balance and
+every guard byte. Host-side expected bytes come from a separate Python arithmetic
+oracle, not from the guest result table or emulator execution.
+
+Hosts only mount, reset, step and read outputs; they never write guest results or
+inject IRQs. Each boot requires `IDE VERIFY PASS`, no FAIL/emulator/browser errors,
+all **1024 result/guard bytes at 8000h–83FFh**, byte-identical exported HDI and zero
+writes. Exactly 17 PIO sector reads are expected: 16 boot sectors plus one recovery
+read; VERIFY adds none. Native pre/post-reset boots each passed in **11,000 slots**.
+Production release-Wasm runs the identical checked HDI at `/` and `/pc98-rust/`,
+before and after reset, with the same oracle and budget.
+
+### Commands and results
+
+Validation was executed by this implementation node in the assigned macOS arm64
+worktree. Final command outcomes are recorded below; remote CI and independent
+review evidence are not implied.
+
+| Exact command | Actual outcome |
+| --- | --- |
+| `python3 -m unittest discover -s tools -p test_fixture_fetch.py` | Passed, 7 tests |
+| All README fixture preparation commands | Passed, including the new offline probe and all existing FreeDOS/font/apps/CPU/HDD/music/device prerequisites. CPULEVEL and DEBUG primary URLs returned HTTP 503; existing pinned mirror fallbacks succeeded with unchanged checksums and provenance |
+| `python3 tools/prepare_ide_verify_fixture.py --update-manifest`, then `python3 tools/prepare_ide_verify_fixture.py` | Manifest created and verified; original MIT image hash above |
+| `python3 tools/build_media.py --check` / `python3 tools/build_font.py --check` | Passed, existing firmware/media/font hashes unchanged |
+| `cargo test --locked --test hdd ide_verify_` | Passed, all 6 tests; both native guest boots 11,000 slots |
+| `cargo test --locked --test hdd` | Passed, all 10 tests |
+| `cargo test --locked --test ap opn_ch3_` | Passed, 9 tests |
+| `cargo test --locked --test rtc` / `cargo test --locked --test timer` | Passed, 12 / 8 tests |
+| `cargo test --locked --test pit counter_latch_` | Passed, 9 tests |
+| `cargo test --locked --test pit mode3_rewrite_` / `cargo test --locked --test pit mode0_rewrite_` | Passed, 14 / 12 tests |
+| `cargo test --locked --test pit` | Passed, 65 tests |
+| `cargo test --locked` | Passed, all 294 native integration tests across 18 targets; zero failed/ignored; unit/doc targets also passed |
+| `cargo clippy --all-targets -- -D warnings` | Passed, including after the final media-preservation assertions |
+| `cargo fmt --check` / `git diff --check` | Passed |
+| `npm ci` / `npx playwright install chromium` | Passed; zero npm vulnerabilities |
+| `npm test` | Release-Wasm build and ten-asset publication check passed; browser startup failed because port 8000 is occupied; no browser tests ran |
+| `npm test -- --config=.issue71-playwright.config.js` (first run) | Existing 102 tests passed; the 2 new tests failed because string `selectOption('2')` matched the floppy label “2” instead of the IDE value. Corrected to `selectOption({ value: '2' })` |
+| `npm test -- --config=.issue71-playwright.config.js` (second run) | 103 passed, including both new IDE tests and all four 11,000-slot guest boots; one existing DOS timer test failed during Playwright clock setup with “Cannot fast-forward to the past,” before guest boot |
+| `npm test -- --config=.issue71-playwright.config.js` (final run, after native completion) | Passed: production release-Wasm build (454,640 bytes), ten-asset publication check and all 104 browser tests, zero skipped, 1.8m; all four IDE boots 11,000 slots |
+
+The temporary browser configuration imports the checked Playwright configuration,
+changes only the local server ports/base URLs from 8000/8001 to 18000/18001, and
+uses a temporary copy of `tests/browser/serve_project.py` with only its listening
+port changed. It retains this worktree's `web/`, the `/` and `/pc98-rust/` paths,
+root-asset rejection, all tests, assertions, workers and budgets. Existing
+listeners are untouched. Temporary configuration/server files are removed after
+validation. The command history above distinguishes the environment startup
+failure and corrected test selector from the final acceptance results.
+
+All 26 inventory scopes and statuses remain unchanged:
+**partial** cpu-v30, cpu386, protected-mode, memory, pic, pit, dma, rtc, keyboard,
+mouse, fdc, ide, gdc, egc, pegc, text-cg, display-timing, opn, opna, pcm86, bios,
+lio, integration; **implemented_unverified** grcg; **unimplemented** paging, fpu.
+IDE remains partial: completed 256-sector PIO transfers, READ/WRITE final-address
+and error-residual contracts, and fuller reset, nIEN and device/error interactions
+remain outstanding. Protected execution, paging and basic FPU remain required.
+Existing hardware, DOS/application, VM, audio and six-game assertions/budgets are
+preserved. These limited probes and prior game reports do not establish complete
+hardware accuracy or commercial compatibility. No post-merge verification is
+specified. No push, pull request, merge or GitHub comment was performed.
