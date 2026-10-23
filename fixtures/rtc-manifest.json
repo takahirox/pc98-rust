@@ -1,0 +1,29 @@
+{
+  "source": "guest/rtc.asm",
+  "license": "MIT; LICENSE; original pc98-rust contributors",
+  "provenance": "Original source-built probe; no commercial ROM, DOS or guest software",
+  "assembler": "nasm -f bin guest/rtc.asm -o rtc.bin",
+  "source_sha256": "72f04e639242d636f4c7745227843f9697e7a4464670cb757edc67eddc1b2599",
+  "boot_sha256": "58b5645b6c28de450f51236ca4faa22850072e272a4a424bc2db8e2fa19c1536",
+  "image_sha256": "e6b362b066dbc3cfa81ed1646c90298b6220f026fd4db384123ce8292b16edca",
+  "geometry": "77 cylinders, 2 heads, 8 sectors, 1024 bytes per sector",
+  "profiles": [
+    "Ap"
+  ],
+  "initialization": "Cold Machine::new: 2026-01-01 Thursday 00:00:00; no host time; reset preserves RTC and fractional clocks",
+  "host": "Insert identical image, step and read only; no result patches, clock injection or bypassed guest instructions",
+  "contract": "40-bit parallel capture, 52-bit serial capture including command nibble, coherent BIOS INT/IRET, guest polling observes next second with IF clear, all date bytes/guards and port bits checked before PASS",
+  "result_address": "0x8000",
+  "result_length": 64,
+  "result_hex": "a500000001140000000114260126140100000001000001142614010000015aa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+  "reset_result_hex": "a501000001140100000114260126140100000102000001142614010000025aa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+  "result_layout": "8000 guard; 8001..8005 parallel; 8006..800c extended (command nibble=1); 800d..8012 BIOS; 8013..8017 next parallel; 8018..801d next BIOS; 801e status=5a; 801f..803f guards=a5",
+  "guards": "8000 and 801f..803f remain a5; guest and hosts assert all 64 result bytes",
+  "markers": [
+    "RTC CALENDAR PASS",
+    "RTC CALENDAR FAIL"
+  ],
+  "slot_budget": 2000000,
+  "reset": "Same disk and budget on both boots; exact seconds 00->01 cold and 01->02 after reset",
+  "distribution": "Test only; generated fixtures/rtc excluded from web/"
+}

@@ -404,9 +404,13 @@ pub fn service(c: &mut Cpu, b: &mut Bus) -> Result<(), String> {
         0x1c => {
             match ah {
                 0 => {
-                    // Deterministic RTC: 2026-01-01 Thu, 00:00:00. PC-98 packed BCD.
-                    for (i, v) in [0x26, 0x14, 0x01, 0, 0, 0].into_iter().enumerate() {
-                        b.write_seg(c.s[ES], c.r[BX].wrapping_add(i as u16), v, false)
+                    let snapshot = if b.profile == crate::Profile::Pc9821ApDos {
+                        b.rtc.snapshot()
+                    } else {
+                        [0x26, 0x14, 0x01, 0, 0, 0]
+                    };
+                    for (i, v) in snapshot.into_iter().enumerate() {
+                        b.write_seg(c.s[ES], c.r[BX].wrapping_add(i as u16), v.into(), false)
                     }
                 }
                 2 => {

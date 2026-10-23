@@ -300,6 +300,72 @@ descriptor lookup/caches, privilege transitions, LDTR/TR, task switching, paging
 x87, NMI, DPMI, and Windows compatibility remain outstanding. These probes do
 not establish full protected-mode accuracy or commercial software compatibility.
 
+## Ap calendar read path
+
+Ap implements the bounded µPD4990A read protocol at `20h` and `33h`, based on
+NEC's [PC-9800 Technical Data Book HARDWARE, printed pp.127 and 137](https://vtda.org/docs/computing/NEC/PC-9800TechnicalDataBookHARDWARE%2BOCR_1993.pdf#page=140)
+and [µPD4990A IC-1755 datasheet, printed pp.4–8 and Figures 2–5](https://www.renesas.com/en/document/dst/upd4990a-data-sheet).
+Port `20h` has C0–C2 in bits 0–2, STB in bit 3, CLK in bit 4 and DATA IN in bit 5.
+Port `33h` retains its existing `38h` inputs and adds DATA OUT in bit 0.
+
+STB rising latches parallel `000` Hold, `001` Shift or `011` Time Read. With
+C0–C2 continuously `111`, CLK rising shifts DATA IN into the independent four-bit
+command register, least significant bit first; STB rising accepts serial `0000`,
+`0001` or `0011` for those same functions. Repeated unchanged control writes have
+no edge and no effect. Electrical setup/delay tolerances are not simulated.
+
+Time Read captures the running counter into a held shift register. Hold freezes
+that register; neither command stops the calendar. Shift immediately exposes the
+initial LSB, then CLK rising shifts to the next bit, which is stable at CLK's
+trailing edge for CPU sampling (Figures 4–5). Parallel transfers have 40 calendar
+bits; serial transfers have 48 calendar bits followed by four command bits.
+In serial mode the command register shifts on every CLK rising, even during
+Hold/Time Read. During Shift its old LSB feeds the top of the 48-bit calendar
+register, with DATA IN entering the command register. The command tail therefore
+contains the command bits present when shifting began, unless subsequently
+replaced by further shifting. In parallel mode DATA IN feeds bit 39 directly.
+
+Calendar bytes are seconds, minutes, hours, day, month/weekday, then year in
+extended transfers. Bytes are BCD except hexadecimal month in the high nibble;
+weekday occupies the low nibble, Sunday=0. For example, seed year=86, November 25,
+weekday=6, 02:23:49 yields `49 23 02 25 B6` in compatibility mode and
+`49 23 02 25 B6 86` plus command nibble `1` after serial Shift framing. All bits
+are least significant first. A new Time Read replaces a partial snapshot; elapsed
+seconds never alter an already captured snapshot.
+
+The counter uses 24-hour time, month lengths and weekday rollover. Parallel
+commands disable year counting and automatic leap days: February normally has
+28 days, while an explicitly seeded February 29 rolls to March 1. Serial commands
+enable the two-digit year (99→00) and leap years divisible by four, including 00.
+This follows the chip's two-digit rule, without Gregorian century correction.
+Cold construction starts in compatibility Hold at 2026-01-01 Thursday 00:00:00.
+`Rtc::new(Calendar::new(year, month, day, weekday, hour, minute, second)?)` supplies
+an explicit validated binary seed for native tests; it is not a guest setting
+service. Each Bus owns its own RTC.
+
+Every 8,000,000 scheduler clocks advances one second. Fractional clocks survive
+all tick batch sizes, including `u32::MAX`, and advancement continues with IF
+clear or HLT. Hold/Time Read DATA OUT is a 1 Hz, 50% duty waveform, deterministically
+low for the first half-second and high for the second; commands do not reset its
+phase. Host wall time and browser animation timing do not initialize or advance
+the counter. `Machine::reset` retains the entire battery-backed RTC: calendar,
+fraction, active mode/width, control levels, captured data and command register.
+A partial transfer can continue across reset; a rebooting guest should frame a
+fresh command/capture itself.
+
+Ap INT `1Ch/AH=00` copies one coherent snapshot to ES:BX as year, month/weekday,
+day, hour, minute, second. It retains the existing 16-bit destination-offset
+wrapping and caller register/flag behavior. VM retains its fixed BIOS date and
+port inputs. AH=02 remains the independent interval callback service.
+
+RTC is **partial**. Time Set/Counter Hold, BIOS setting services, TP selection,
+interval/IRQ controls, test mode and the VM's older µPD1990-family behavior remain
+outstanding. Unsupported RTC commands currently leave the implemented register
+mode unchanged. General 8255 emulation and host synchronization are absent.
+The [original MIT guest](../guest/rtc.asm), [checked manifest](../fixtures/rtc-manifest.json)
+and [validation record](validation.md#issue-61-ap-calendar-reads-2026-10-24) cover
+this bounded read behavior, without establishing whole-category accuracy.
+
 ## Device ports and interrupts
 
 Port facts are traced to the individual chapters of
@@ -311,7 +377,7 @@ this table is not a claim of complete chip emulation.
 | --- | --- | --- |
 | `00,02`; `08,0A` | Master/slave 8259: existing ICW path, masks, IRR/ISR, OCW2 programmable/rotating priority, specific/nonspecific EOI, auto EOI, automatic rotation and OCW3 special-mask mode | Master IR7 cascades slave; each controller resolves its own priority and ISR blocking |
 | `01–0F` odd, `11–1F` odd, `21,23,25,27` | 8237 address/count flip-flop, controller disable, channel masks, direction/decrement, terminal count and auto-init reload, master clear, bank registers | FDC uses channel 2; count/address change with actual byte transfers |
-| `31,33,35,37` | PPI startup inputs, output C, bit set/reset, active-low beep gate | Input straps are fixed VM-profile constants |
+| `31,33,35,37` | PPI startup inputs, output C, bit set/reset, active-low beep gate | Input straps are fixed VM-profile constants; Ap RTC DATA OUT replaces bit 0 of 33h |
 | `41,43` | Keyboard byte FIFO, ready status, command acknowledgements, down/up scan bytes | IR1 / INT 09; firmware maintains BIOS ring, held-key bitmap and modifier state |
 | `60,62` | Master text GDC parameter/status and command/data readback | RESET, display enable, PITCH, CURS, CCHAR, PRAM start, CSRR |
 | `A0,A2` | Slave bitmap GDC command/parameter/status/readback | Same register subset; 640×400 direct VRAM path |
@@ -322,7 +388,7 @@ this table is not a claim of complete chip emulation.
 | `71,73,75,77`; `3FD9–3FDF` odd | 8253 channels, control/access modes, low/high writes, counter latches | Channel 0 IR0 / INT 08; channel 1 beep; VM input clock 1,996,800 Hz |
 | `90,92,94` | 2HD FDC status/FIFO/control, SPECIFY, sense status/interrupt, recalibrate, seek, read ID, READ/WRITE DATA through DMA, motor/DMA-enable gating | IR11 / INT 13; delayed command completion and seven-byte transfer results |
 | `BE` | Fixed 1 MB floppy interface selection | No alternate 640 KB controller at C8/CA |
-| `40,5C,5E,64,6E` | Fixed system/display inputs and deterministic clock status | See `Bus::input`; no RTC serial protocol |
+| `40,5C,5E,64,6E` | Fixed system/display inputs and deterministic clock status | See `Bus::input`; VM has no RTC serial protocol |
 | `F0` | Private synthetic-firmware thunk ABI, accepted only from its ROM stubs | Not a guest DOS API or claim of a real VM hardware port |
 
 ### 8259A OCW2 priority subset
@@ -739,7 +805,7 @@ command/result FIFO, seek, DMA and scheduler paths as guest-issued I/O.
 | INT 18 AH=4A (Ap only) | Flash/flashless drawing timing selection; see contract below |
 | INT 1B low AH=0,3,4,7,A | Reset/recalibrate, sense and read ID; unavailable drive reports carry/error |
 | INT 1B low AH=1,5,6 | Verify/read, write, read; CHRN and ES:BP/BX byte-count contract; uses controller/DMA |
-| INT 1C AH=0,2 | Fixed deterministic BCD RTC query (2026-01-01) and one-shot interval callback (see below) |
+| INT 1C AH=0,2 | VM fixed BCD date; Ap [guest-clocked calendar snapshot](#ap-calendar-read-path); separate one-shot interval callback (see below) |
 | INT 1F | Unsupported extended memory, returns carry set |
 | Guest-registered F990h ROM entry | Graph LIO GINIT; other directory entries fail explicitly (see below) |
 
