@@ -238,7 +238,10 @@ fn pic_masks_priority_eoi_and_cascade() {
 #[test]
 fn pit_keyboard_and_beeper() {
     let mut b = Bus::default();
+    b.output(2, 0xfe);
     b.output(0x77, 0x36);
+    assert_eq!(b.irq(), Some(8)); // programming-induced rise, separate from periods
+    b.output(0, 0x20);
     b.output(0x71, 0xe8);
     b.output(0x71, 3);
     b.tick(4000);
@@ -247,7 +250,9 @@ fn pit_keyboard_and_beeper() {
     let lo = b.input(0x71);
     b.tick(500);
     let hi = b.input(0x71);
-    assert_eq!(u16::from_le_bytes([lo, hi]), 2);
+    // 998 PIT clocks: load, 500 high clocks, then 497 low decrements by two.
+    // Intel mode 3 therefore exposes count 6; the latch survives the next rise.
+    assert_eq!(u16::from_le_bytes([lo, hi]), 6);
     assert_ne!(b.pics[0].irr & 1, 0);
     b.output(0x3fdf, 0x76);
     b.output(0x3fdb, 0xcd);

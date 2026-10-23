@@ -69,6 +69,14 @@ without external guests. `tools/prepare_pit_mode2_fixture.py` verifies the
 assembly, license and manifest beside `fixtures/pit_mode2/pit_mode2.hdm`, outside
 `web/`. No proprietary ROM or guest binary is acquired.
 
+The original MIT [mode-3 PIT probe](../guest/pit_mode3.asm) also builds offline.
+`tools/prepare_pit_mode3_fixture.py` checks its
+[source/image/result manifest](../fixtures/pit-mode3-manifest.json) and retains
+the assembly, repository license and manifest beside
+`fixtures/pit_mode3/pit_mode3.hdm`, outside `web/`. It contains original guest
+counter checks and hardware IRQ0 handlers; no external guest, proprietary ROM
+or third-party emulator implementation is acquired.
+
 ## HelloWorld-PC98
 
 Upstream: [TakedaHiromasa/HelloWorld-PC98](https://github.com/TakedaHiromasa/HelloWorld-PC98),

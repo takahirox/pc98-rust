@@ -326,7 +326,7 @@ impl Bus {
                 let counter = &self.pit.c[1];
                 let beep = if !self.beep || !counter.enabled {
                     0.0
-                } else if counter.remaining > counter.reload / 2 {
+                } else if counter.beep_high() {
                     0.15
                 } else {
                     -0.15
