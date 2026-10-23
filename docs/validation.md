@@ -492,3 +492,125 @@ interactions are still excluded or unverified. Broader FDC commands and physical
 timing are unchanged. These results establish this contract, not full hardware
 accuracy or commercial compatibility. No push, PR, merge or comment was made;
 no post-merge verification is required by the Issue.
+
+
+## Issue #31: DMA master-clear retention
+
+Local macOS arm64 validation on 2026-10-23 covers the
+[bounded software master-clear contract](hardware.md#dma-terminal-count-and-auto-initialization).
+Any byte written to `001Bh` clears status and the shared byte pointer, sets all
+four masks and leaves the modeled controller idle. Current/base address/count
+and modes survive; master clear neither zeroes programming nor reloads bases.
+Construction/reset and the existing policy of zeroing external PC-98 banks are
+unchanged. The bank policy is preserved behavior, not verified board wiring.
+Command/Request/Temporary state remains unmodeled.
+
+Three new native regressions extend the existing five DMA tests:
+
+- All four channels × increment/decrement × auto-init on/off × both initial
+  byte-pointer phases × data `00h`, `55h`, `FFh`. All TC bits are latched first,
+  every current address/count differs from its base, and masks start mixed.
+  Repeated clears check immediate low/high readback without an intervening `19h`,
+  cleared status, all masks and retained modes. Subsequent service after unmasking
+  checks intermediate progress and TC; auto-init reload proves saved bases survive.
+- Low/high partial programming of address/count on each channel after service,
+  followed by master clear, current readback and eventual base reload.
+- VM and Ap raw-port FDC READ/WRITE DATA in bank zero: master clear, a masked
+  command with exact error result `40 10 00 00 00 02 03`, then unmasking alone and
+  successful transfer with exact normal results. Each command checks its new
+  completion IRQ, seven result bytes and readiness. Masked commands leave the
+  full buffer/guards and disk unchanged and do not increment transfer counters;
+  successful commands check exact data, guards and the complete disk image.
+
+The existing original MIT [boot probe](../guest/dma_autoinit.asm) retains its
+consecutive auto-init reads/writes, sticky-status, reload, guard, result and IRQ
+checks. The original final `B6h` buffer assertion now runs inside the guest before
+the master-clear phase reuses that buffer. The added phase programs DMA once per
+direction, enters master clear with the pointer high, immediately reads retained
+address/count and checks cleared status, issues a masked command, then unmasks
+without rewriting address/count/mode. A retained read verifies every payload byte;
+a retained write changes sector 8 to `4Dh`, while the masked write's sector 7 and
+all other media guards stay unchanged. Host tests compare the entire disk and
+final buffer. IRQ/result waits remain bounded by `FFFFh` iterations each. Success
+prints `DMA AUTO INIT PASS / DMA MASTER CLEAR PASS`; failures identify either
+`DMA AUTO INIT FAIL` or `DMA MASTER CLEAR FAIL`.
+
+Build with `python3 tools/prepare_dma_fixture.py`; the exact assembly command is
+`nasm -f bin guest/dma_autoinit.asm -o autoinit.bin`. Only the affected
+[DMA fixture manifest](../fixtures/dma-manifest.json) was intentionally regenerated
+(`--update-manifest`); all other fixture manifests and publication assets are
+unchanged. The generated image, source, manifest and MIT LICENSE stay together in
+the ignored `fixtures/dma/` directory, outside `web/`. No commercial ROM or guest
+software is required. Final SHA-256 values:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `guest/dma_autoinit.asm` | `38c31d31bc8770c6f0b0e977881c8a59c786715f8db4e6244e653799cef4e322` |
+| Assembled 1024-byte boot sector | `ee46f6fb831b86d93d7f1b6b0f7ccfac2da0f5f38d80d3f68e0800c752590d78` |
+| `fixtures/dma/autoinit.hdm` | `f1d2ab1af43621615cf0af8636b72bd7069441bac870d246004538e2fe98258c` |
+
+Native `Machine` and production release Wasm execute that same image on both VM
+and Ap, with a budget of 20 calls of 100,000 instruction slots (two million total)
+per execution. All four browser cases cover both profiles at `/` and
+`/pc98-rust/`. Existing auto-init and stale-status regressions remain enabled.
+
+Regression sensitivity was checked in an isolated `git archive` export of
+baseline `beb4c7d3a5286738a2c29c11855773881e70dc14` under
+`target/issue31-baseline`, copying the final `tests/dma.rs` and generated image.
+The following commands each exited 101 there, while they pass with the fix:
+
+```sh
+cargo test --locked --test dma master_clear_retains_programming_matrix -- --exact
+cargo test --locked --test dma original_boot_probe_runs_on_both_profiles -- --exact
+```
+
+The matrix failed on the very first retained byte: `00h` instead of `41h`.
+The guest passed its preceding auto-init checks and printed
+`DMA MASTER CLEAR FAIL` in the focused phase. Baseline implementation files were
+not changed; both runs used the final source-built probe image above.
+
+| Command | Result |
+| --- | --- |
+| `python3 tools/prepare_dma_fixture.py` | Passed; final manifest and image verified |
+| `python3 tools/prepare_freedos.py` | Passed; pinned binaries and complete source archives retained |
+| `python3 tools/prepare_font_fixture.py` | Passed |
+| `python3 tools/prepare_dos_apps.py` | Passed |
+| `python3 tools/prepare_cpu_fixture.py` | Passed after pinned mirror download described below |
+| `python3 tools/prepare_hdd_fixture.py` | Passed |
+| `python3 tools/prepare_music_fixture.py` | Passed |
+| `python3 tools/prepare_device_fixture.py` | Passed after pinned mirror download described below |
+| `cargo test --locked --test dma` | Passed: 8 tests, zero failures or ignored tests |
+| `cargo test --locked` | Passed: 108 native integration tests, zero failures or ignored tests |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `cargo fmt --check` | Passed |
+| `python3 tools/build_media.py --check` | Passed; established firmware and demo disks unchanged |
+| `python3 tools/build_font.py --check` | Passed; existing font unchanged |
+| `npm ci` | Passed; zero reported vulnerabilities |
+| `npx playwright install chromium` | Passed |
+| `npm test` | Media/font, production Wasm and ten-asset publication checks passed; browser server startup failed because port 8000 was occupied |
+| `npm test -- --config=playwright.issue31.config.js` | Passed: all 48 Chromium/Wasm tests in 26.2 seconds, including the four extended DMA cases |
+| `git diff --check` | Passed |
+
+CPULEVEL and DEBUG preparation initially failed with HTTP 503 from ibiblio; no
+fixtures or tests were skipped. The exact pinned archives were downloaded from
+[Princeton CPULEVEL mirror](https://mirror.math.princeton.edu/pub/freeDOS/files/util/system/cpulevel/cpulevel2007.zip)
+and [GWDG DEBUG mirror](https://ftp.gwdg.de/pub/misc/freedos/files/dos/debug/DEBUG125.zip),
+verified against the unchanged script hashes before writing into
+`fixtures/dos-apps/`, then their original preparation commands passed. No
+checksum, license/source requirement or test assertion was weakened.
+
+The temporary browser config imported `playwright.config.js`, preserving all
+projects, tests, workers and assertions; it changed only the two base URLs and
+server commands to ports 18000/18001. The root server command was
+`python3 -m http.server 18000 --bind 127.0.0.1 --directory web`. The project server
+was a temporary copy of `tests/browser/serve_project.py` with `WEB` set to this
+worktree's `web/` and port 8001 changed to 18001; its temporary `pc98-rust` symlink
+and rejection of root asset URLs were preserved. The pre-existing port-8000
+listener was left alone. The temporary config was removed after validation.
+
+DMA remains **partial**: software requests, command controls, verify transfers,
+demand/block/single arbitration, external EOP, memory-to-memory, cascade/rotating
+priority, bank-reset fidelity and broader device interactions are incomplete or
+unverified. Limited probe success establishes neither full hardware accuracy nor
+commercial compatibility. No other inventory category changes scope or gains a
+verification claim. No post-merge verification is required by Issue #31.

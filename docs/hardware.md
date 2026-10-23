@@ -168,6 +168,21 @@ FDC READ/WRITE DATA consumes the event from that byte transfer, independently of
 register reload and previously latched status, then produces seven result bytes
 and the completion IRQ on both VM and Ap.
 
+Writing any byte to software master clear (`001Bh`) between device services
+clears the TC status latch and shared first/last byte pointer and masks all four
+channels, leaving the modeled controller idle. Current and base address/count
+registers and mode bytes survive unchanged, including partial-byte programming;
+master clear does not reload bases. Unmasking allows the existing FDC consumer to
+resume with retained programming. Intel's selective reset list (printed pp. 2
+and 9, Figure 6) excludes address/count/mode; their retention follows from that
+list. NEC [IEA-751](https://www.renesas.com/ja/document/apn/upd72070-application-note),
+§2.4, Table 2-10 (printed p. 15), maps master clear to `1Bh` and byte-pointer clear
+to `19h`. Command, Request and Temporary registers are unmodeled; their reset
+behavior is not claimed. Machine construction/reset is unchanged. The existing
+policy of zeroing external PC-98 bank registers on master clear is preserved;
+board-level bank-reset wiring remains unverified. FDC retention tests use bank zero.
+See [master-clear evidence](validation.md#issue-31-dma-master-clear-retention).
+
 This bounded contract follows Intel's [8237A datasheet](https://read.seas.harvard.edu/~kohler/class/04f-aos/ref/hardware/8237A.pdf),
 printed pp. 5–10 (autoinitialize and register descriptions), and NEC's
 [µPD765A datasheet](https://hxc2001.com/download/datasheet/floppy/thirdparty/FDC/NEC/uPD765A.pdf)
@@ -177,12 +192,12 @@ the original MIT boot probe executes on native and production Wasm at both brows
 serving paths. See [execution evidence](validation.md#issue-29-dma-terminal-count-auto-init).
 
 DMA remains **partial**. External EOP injection, demand/block/single arbitration,
-software requests, verify transfers, memory-to-memory DMA, cascade/rotating
-priority and additional device interactions still require implementation or
-verification. Broader FDC commands and precise motor/rotation timing remain
-outside this contract. Passing these checks establishes terminal-count reload
-and its existing FDC consumer, not complete hardware accuracy or commercial
-compatibility. Other hardware inventory requirements remain unchanged.
+software requests, command controls, verify transfers, memory-to-memory DMA,
+cascade/rotating priority, bank-reset fidelity and additional device interactions
+still require implementation or verification. Broader FDC commands and precise motor/rotation timing remain
+outside this contract. Passing these checks establishes terminal-count reload,
+software master clear and their existing FDC consumer, not complete hardware
+accuracy or commercial compatibility. Other hardware inventory requirements remain unchanged.
 
 ## Synthetic firmware and boot
 
