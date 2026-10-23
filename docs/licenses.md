@@ -63,6 +63,12 @@ beside the generated images in `fixtures/pic/` and `fixtures/pic_smm/`, outside
 assembly commands and exact result contracts. No proprietary firmware, guest
 software or third-party emulator implementation is acquired for either probe.
 
+The original MIT [mode-2 PIT probe](../guest/pit_mode2.asm) also assembles offline
+without external guests. `tools/prepare_pit_mode2_fixture.py` verifies the
+[source/image/result manifest](../fixtures/pit-mode2-manifest.json) and retains
+assembly, license and manifest beside `fixtures/pit_mode2/pit_mode2.hdm`, outside
+`web/`. No proprietary ROM or guest binary is acquired.
+
 ## HelloWorld-PC98
 
 Upstream: [TakedaHiromasa/HelloWorld-PC98](https://github.com/TakedaHiromasa/HelloWorld-PC98),

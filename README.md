@@ -91,6 +91,7 @@ python3 tools/prepare_idtr_fixture.py
 python3 tools/prepare_smsw_fixture.py
 python3 tools/prepare_pic_fixture.py
 python3 tools/prepare_pic_smm_fixture.py
+python3 tools/prepare_pit_mode2_fixture.py
 # Fetch checksum-pinned guest binaries AND matching complete source archives.
 # This makes a minimal GPL guest disk; it downloads no emulator code.
 python3 tools/prepare_freedos.py
@@ -101,6 +102,7 @@ python3 tools/prepare_hdd_fixture.py
 python3 tools/prepare_music_fixture.py
 python3 tools/prepare_device_fixture.py
 python3 tools/build_font.py --check
+cargo test --locked --test pit
 cargo test --locked
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
@@ -124,6 +126,16 @@ trace `1,0,0,1,1,0`, guest-confirmed competing IRR bits, `PIC PASS`, exact resul
 and guards, no `FAIL` or host error, and unchanged disk bytes within two million
 slots per boot, before and after reset. Its offline preparation script verifies
 the checked-in [source/image/result manifest](fixtures/pic-manifest.json).
+
+The original MIT [mode-2 PIT probe](guest/pit_mode2.asm) latches a running
+60000-count period, rewrites its divisor to 2000, and verifies that the live count
+continues the old period. It discards setup transitions by reinitializing the PIC,
+then services two periodic hardware IRQ0 entries with EOI/IRET and confirms the
+new period's count. Native and production-release Wasm tests run the identical
+image on VM and Ap before/after reset, at both browser roots. Each boot requires
+`PIT MODE2 PASS`, exact guest-owned results/guards, unchanged disk bytes and no
+error or `FAIL` within two million slots. Its offline
+[manifest](fixtures/pit-mode2-manifest.json) pins hashes, license and result layout.
 
 The separate original MIT [special-mask probe](guest/pic_smm.asm) enters a
 keyboard handler with a confirmed timer request pending and IR0 lowest. It

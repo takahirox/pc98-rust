@@ -135,7 +135,7 @@ impl Pic {
         }
     }
 }
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Counter {
     pub reload: u32,
     pub remaining: u32,
@@ -145,6 +145,7 @@ pub struct Counter {
     read_hi: bool,
     low: u8,
     latch: Option<u16>,
+    load_pending: bool,
     pub enabled: bool,
     pub output: bool,
 }
@@ -159,6 +160,7 @@ impl Default for Counter {
             read_hi: false,
             low: 0,
             latch: None,
+            load_pending: false,
             enabled: false,
             output: false,
         }
@@ -182,7 +184,15 @@ impl Counter {
         };
         if let Some(v) = value {
             self.reload = if v == 0 { 65536 } else { v as u32 };
-            self.remaining = self.reload;
+            if self.mode == 2 {
+                // The first count transfers on the next clock. Later complete
+                // writes replace only the reload register, until period end.
+                if !self.enabled {
+                    self.load_pending = true;
+                }
+            } else {
+                self.remaining = self.reload;
+            }
             self.enabled = true;
         }
     }
@@ -215,6 +225,9 @@ impl Counter {
         if !self.enabled {
             return false;
         }
+        if self.mode == 2 {
+            return self.tick_mode2(ticks);
+        }
         if ticks >= self.remaining {
             if self.mode == 0 {
                 self.enabled = false;
@@ -230,8 +243,29 @@ impl Counter {
             false
         }
     }
+    fn tick_mode2(&mut self, mut ticks: u32) -> bool {
+        if ticks == 0 {
+            return false;
+        }
+        if self.load_pending {
+            self.load_pending = false;
+            self.remaining = self.reload;
+            ticks -= 1; // Loading does not also decrement the counter.
+        }
+        if ticks < self.remaining {
+            self.remaining -= ticks;
+            self.output = self.remaining != 1;
+            return false;
+        }
+        // Count 1 is the single low clock; its successor reloads and rises.
+        // Finish the old period first, then skip whole new periods in O(1).
+        ticks -= self.remaining;
+        self.remaining = self.reload - ticks % self.reload;
+        self.output = self.remaining != 1;
+        true // At least one rising edge, even if the final output is low.
+    }
 }
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct Pit {
     pub c: [Counter; 3],
     fraction: u64,
@@ -253,6 +287,12 @@ impl Pit {
                     }
                     c.write_hi = false;
                     c.read_hi = false;
+                    c.load_pending = false;
+                    if c.mode == 2 {
+                        c.enabled = false;
+                        c.output = true;
+                        c.latch = None;
+                    }
                 }
             }
         } else {

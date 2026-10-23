@@ -336,8 +336,47 @@ electrical modeling and spurious-interrupt fidelity remain outside this subset.
 These bounded checks do not establish full hardware accuracy or commercial
 software compatibility.
 
+### 8253 binary mode-2 subset
+
+Both profiles and both timer port banks support mode encodings `010` and `110`
+as binary mode 2, with GATE held high. Zero encodes 65,536. Programming this mode
+sets OUT high and stops counting until a complete byte sequence is written.
+The first subsequent PIT clock loads the count without decrementing it. For
+N >= 2, OUT stays high for N−1 clocks, goes low at count 1 for one clock, then
+reloads and rises. A completed count rewrite changes only the programmed reload;
+the current period finishes before the new divisor loads. Multiple completed
+rewrites use the latest value. LSB, MSB and LSB/MSB writes and ordinary count
+latches use this state; latching/reading does not stop the counter.
+
+This follows Intel's [8253/8253-5 datasheet, Counter Loading and Mode 2](https://web.cecs.pdx.edu/~mpj/llp/references/8253.pdf).
+Channel 0 feeds actual rising OUT transitions into the existing PIC request latch,
+including a programming-induced rise from low. A held-high OUT does not retrigger,
+as specified for edge triggering in Intel's [8259A datasheet, IR inputs and Edge
+and Level Triggered Modes](https://courses.cs.washington.edu/courses/cse451/25wi/documentation/8259A.pdf#page=17).
+A batch reports whether any rise occurred, including a complete low pulse between
+high endpoints, and leaves the same count/OUT and fractional clock remainder as
+single-clock advancement. Whole periods are skipped with bounded arithmetic;
+multiple elapsed rises latch one request without an interrupt backlog. Clock
+conversion remains 1,996,800 Hz from the 8 MHz guest scheduler on both profiles.
+
+Original [PIT tests](../tests/pit.rs) provide independent count/OUT traces,
+rewrite/read/batch checks and PIC/CPU integration. The separate MIT
+[boot probe](../guest/pit_mode2.asm) verifies deferred reload with guest counter
+reads and services two periodic IRQ0 entries with EOI/IRET. Its
+[manifest](../fixtures/pit-mode2-manifest.json) records source/image hashes,
+result/guard layout, offline preparation and the two-million-slot boot budget.
+See [actual validation evidence](validation.md#issue-45-8253-binary-mode-2-2026-10-23).
+
+PIT remains **partial**. External GATE wiring/retriggering, BCD, divisor-1
+accuracy, other mode-specific corrections, comprehensive latch/read-write
+sequencing and mode-accurate beeper mixing remain outstanding. The shared
+counter supports mode 2 on all channels; this does not establish channel-1 audio
+fidelity, instruction-cycle accuracy, full hardware accuracy or commercial
+compatibility. All 26 fixed inventory categories, scopes and statuses are
+unchanged; the existing six-game reports retain their original limits.
+
 The hello source uses `OUT 3FDFh,AL`, an immediate-port encoding that truncates to
-`DFh`. That timer mirror is decoded too. Full PIT gate/readback/mode waveforms,
+`DFh`. That timer mirror is decoded too. PIT behavior beyond the subset above,
 DMA arbitration and request modes, precise FDC motor/rotation timing, FDC programmed
 I/O transfers, formatter/scanner commands, GDC vector/area drawing and all GDC
 raster partitions are outside the tested subset. Unsupported FDC commands return
