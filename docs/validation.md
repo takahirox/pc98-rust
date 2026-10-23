@@ -1480,3 +1480,56 @@ grcg, pcm86. PIC remains partial: polling, special fully nested mode, general
 ICW3 configuration, alternate cascade wiring, trigger/electrical behavior and
 spurious interrupts remain missing or incomplete. Bounded probes and game reports
 do not establish full hardware accuracy or commercial compatibility.
+
+
+## Issue #43 review revision: automatic fixture mirrors (2026-10-23)
+
+The blocking review finding identified acceptance CI stopping at CPULEVEL's
+ibiblio HTTP 503 before any native/browser checks. DEBUG had the same failure.
+Both preparation scripts now automatically try the previously validated FreeDOS
+mirrors. CPULEVEL uses Princeton; DEBUG uses Princeton then GWDG. Each download
+must match the original SHA-256 and 8 MiB size limit before it enters the cache.
+A valid cache works offline; a corrupt cache still fails without replacement.
+No source, license, canonical provenance URL, pinned hash or audited fixture
+manifest was changed. CI also runs seven offline downloader regression tests
+before fixture preparation, covering HTTP 503 recovery, checksum/size rejection,
+exhausted mirrors, primary success and valid/corrupt caches.
+
+A fresh worktree had neither downloaded archive cached. The ordinary preparation
+commands below each received HTTP 503 from ibiblio, fetched the exact archive
+from Princeton automatically and reproduced the existing image manifest. No
+manual mirror fetch or cache preparation was used.
+
+Environment: Darwin arm64, Python 3.13.13, Cargo 1.94.0, Node 24.12.0, NASM 3.02
+and locked Playwright 1.56.1 Chromium. The complete CI preparation sequence ran
+locally, followed by its acceptance checks:
+
+| Exact command | Actual outcome |
+| --- | --- |
+| `python3 -m unittest discover -s tools -p test_fixture_fetch.py -v` | Passed: seven offline tests |
+| `cargo test --locked` | Passed: all 160 native integration tests, zero skipped, including 20 PIC tests; unit/doc harnesses passed |
+| `python3 tools/build_media.py --check` | Passed; existing media/firmware hashes reproduced |
+| `python3 tools/prepare_dma_fixture.py`, `python3 tools/prepare_gdtr_fixture.py`, `python3 tools/prepare_idtr_fixture.py`, `python3 tools/prepare_smsw_fixture.py`, `python3 tools/prepare_pic_fixture.py`, `python3 tools/prepare_pic_smm_fixture.py` | All passed; existing source/image/result manifests reproduced |
+| `python3 tools/prepare_freedos.py`, `python3 tools/prepare_font_fixture.py`, `python3 tools/prepare_dos_apps.py` | All passed with established pinned sources/licenses |
+| `python3 tools/prepare_cpu_fixture.py` | Passed automatically after primary HTTP 503; image `b6d8381fa5fda6489d6ef53be81fb27b6b04cf64af24c2d24fd1cf94804a61a5` |
+| `python3 tools/prepare_hdd_fixture.py`, `python3 tools/prepare_music_fixture.py` | Both passed |
+| `python3 tools/prepare_device_fixture.py` | Passed automatically after primary HTTP 503; image `dff11e9e5acc3d8a98a26c0429f6aac69c7824441a4d055a8e1eb8dcfe90f51d` |
+| `python3 tools/build_font.py --check` | Passed; existing CG hash reproduced |
+| `cargo fmt --check` | Passed |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `npm ci` | Passed; zero vulnerabilities |
+| `npx playwright install chromium` | Passed |
+| `npm test -- --config=target/fixture-fallback-validation/playwright.config.mjs` | Passed: all 62 browser tests, zero skipped, in 36.4 seconds; release Wasm and ten-asset site audit passed |
+| `git diff --check` | Passed |
+
+Port 8000 was already occupied, so the temporary browser config imports the
+checked-in config and changes only worktree paths/server working directories and
+ports to 18000/18001, preserving both URL roots, all tests and budgets. Its first
+attempt timed out because the temporary config resolved the server working
+directory under `target/`; setting explicit worktree working directories fixed
+that local harness error. The project-path server copies the existing symlink
+server with only its web path and port changed. These temporary files are ignored
+under `target/fixture-fallback-validation/`.
+
+Remote GitHub Actions has not run against this revision: this node does not push
+or merge. Publication and remote CI verification remain downstream work.

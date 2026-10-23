@@ -15,11 +15,15 @@ from prepare_freedos import extract_fat_file, image_with_files
 from prepare_music_fixture import run
 
 URL = 'https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/dos/debug/vojta/1.25/DEBUG125.zip'
+FALLBACK_URLS = (
+    'https://mirror.math.princeton.edu/pub/freeDOS/files/dos/debug/DEBUG125.zip',
+    'https://ftp.gwdg.de/pub/misc/freedos/files/dos/debug/DEBUG125.zip',
+)
 HASH = '988360f4ddc02c3d7fbfa223c11d244c03bd54fc2435df4851ca9f6bdc0ed78c'
 
 
 def build():
-    data = fetch('debug125.zip', URL, HASH)
+    data = fetch('debug125.zip', URL, HASH, fallback_urls=FALLBACK_URLS)
     archive = zipfile.ZipFile(io.BytesIO(data))
     directory = DEST / 'debug-build'
     directory.mkdir(exist_ok=True)
