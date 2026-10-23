@@ -245,6 +245,7 @@ pub struct Dma {
     pub mode: [u8; 4],
     pub mask: u8,
     pub status: u8,
+    pub(crate) command: u8,
     pub(crate) high: bool,
 }
 impl Dma {
@@ -285,6 +286,9 @@ impl Dma {
                 }
                 self.high = !self.high;
             }
+            // Only bit 2 (controller disable) is modeled. Other command
+            // controls remain unsupported; writes do not disturb programming.
+            0x11 => self.command = v & 4,
             0x15 => {
                 let bit = 1 << (v & 3);
                 if v & 4 != 0 {
@@ -298,6 +302,7 @@ impl Dma {
             0x1b => {
                 // 8237 software reset retains current/base programming and modes.
                 self.status = 0;
+                self.command = 0;
                 self.high = false;
                 self.mask = 15;
                 // Preserve the existing external PC-98 bank-reset policy. Its
@@ -319,6 +324,10 @@ impl Dma {
     }
     pub fn address(&self, n: usize) -> usize {
         ((self.page[n] as usize) << 16) | self.addr[n] as usize
+    }
+    /// Consumers sample controller disable and channel masking at service time.
+    pub fn can_service(&self, n: usize) -> bool {
+        self.command & 4 == 0 && self.mask & (1 << n) == 0
     }
     /// Advance one serviced byte and report this transfer's terminal-count pulse.
     /// The pulse is independent of the sticky status and auto-init readback.

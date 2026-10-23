@@ -349,6 +349,14 @@ fn program_fdc_dma(m: &mut Machine, len: usize, write: bool) {
     m.bus.output(0x15, 2);
 }
 fn raw_command(m: &mut Machine, write: bool, sector: u8) -> Vec<u8> {
+    raw_command_at_service(m, write, sector, |_| {})
+}
+fn raw_command_at_service(
+    m: &mut Machine,
+    write: bool,
+    sector: u8,
+    before_service: impl FnOnce(&mut pc98_rust::bus::Bus),
+) -> Vec<u8> {
     let b = &mut m.bus;
     assert_eq!(b.input(0x90), 0x80);
     assert_eq!(b.irq(), None);
@@ -368,6 +376,7 @@ fn raw_command(m: &mut Machine, write: bool, sector: u8) -> Vec<u8> {
     b.tick(159);
     assert_eq!(b.irq(), None);
     assert_eq!(b.input(0x90), 0x90);
+    before_service(b);
     b.tick(1);
     assert_eq!(b.irq(), Some(0x13));
     b.output(8, 0x20);
@@ -514,7 +523,7 @@ fn original_boot_probe_runs_on_both_profiles() {
         for _ in 0..20 {
             m.step(100_000);
             assert!(m.error.is_none(), "{:?}", m.error);
-            if m.bus.text().contains("DMA MASTER CLEAR PASS") {
+            if m.bus.text().contains("DMA DISABLE PASS") {
                 break;
             }
         }
@@ -524,18 +533,240 @@ fn original_boot_probe_runs_on_both_profiles() {
             m.bus.text()
         );
         assert!(m.bus.text().contains("DMA MASTER CLEAR PASS"));
+        assert!(
+            m.bus.text().contains("DMA DISABLE PASS"),
+            "{}",
+            m.bus.text()
+        );
         assert!(!m.bus.text().contains("FAIL"));
-        assert_eq!(m.bus.fdc.reads, 4); // IPL, two auto-init reads, retained read
-        assert_eq!(m.bus.fdc.writes, 3);
+        assert_eq!(m.bus.fdc.reads, 5); // IPL, auto-init, retained and enabled reads
+        assert_eq!(m.bus.fdc.writes, 4);
         let disk = &m.bus.disks[0].as_ref().unwrap().bytes;
         assert_eq!(&disk[4 * 1024..5 * 1024], &vec![0x69; 1024]);
         assert_eq!(&disk[5 * 1024..6 * 1024], &vec![0xb6; 1024]);
-        assert_eq!(&disk[..4 * 1024], &image[..4 * 1024]);
+        assert_eq!(&disk[..3 * 1024], &image[..3 * 1024]);
+        assert_eq!(&disk[3 * 1024..4 * 1024], &[0xd2; 1024]);
         assert_eq!(&disk[6 * 1024..7 * 1024], &image[6 * 1024..7 * 1024]);
         assert_eq!(&disk[7 * 1024..8 * 1024], &[0x4d; 1024]);
         assert_eq!(&disk[8 * 1024..], &image[8 * 1024..]);
-        assert_eq!(&m.bus.mem[0x8000..0x8400], &[0x4d; 1024]);
+        assert_eq!(&m.bus.mem[0x8000..0x8400], &[0xd2; 1024]);
         assert_eq!(m.bus.mem[0x7fff], 0xa5);
         assert_eq!(m.bus.mem[0x8400], 0xa5);
+    }
+}
+
+#[test]
+fn command_writes_preserve_programming_pointer_and_tc() {
+    for channel in 0..4 {
+        for address in [false, true] {
+            for high in [false, true] {
+                let mut d = Dma::default();
+                for n in 0..4 {
+                    assert!(d.advance(n)); // latch TC independently of programming
+                    write_word(&mut d, 1 + n as u16 * 4, 0x12ff + n as u16 * 0x100);
+                    write_word(&mut d, 3 + n as u16 * 4, 0x0200 + n as u16);
+                    d.write(0x17, 0x50 | n as u8);
+                    d.write([0x27, 0x21, 0x23, 0x25][n], n as u8 + 1);
+                    assert!(!d.advance(n)); // current and base now differ
+                }
+                d.write(0x1f, 0b1010);
+                let (addresses, counts, modes, pages) = (d.addr, d.count, d.mode, d.page);
+                let port = 1 + channel as u16 * 4 + if address { 0 } else { 2 };
+                if high {
+                    d.read(port);
+                }
+                for value in [4, 4, 0, 0, 0xff, 0xfb, 4] {
+                    d.write(0x11, value);
+                    assert_eq!(d.addr, addresses);
+                    assert_eq!(d.count, counts);
+                    assert_eq!(d.mode, modes);
+                    assert_eq!(d.page, pages);
+                    assert_eq!(d.mask, 0b1010);
+                    assert_eq!(d.status, 15);
+                }
+                // Status, not command readback; neither read changes the pointer.
+                assert_eq!(d.read(0x11), 15);
+                assert_eq!(d.read(0x11), 0);
+                d.write(port, 3); // programming remains possible while disabled
+                let replace = |word: u16| {
+                    if high {
+                        (word & 255) | 0x0300
+                    } else {
+                        (word & 0xff00) | 3
+                    }
+                };
+                let current_addr = if address {
+                    replace(addresses[channel])
+                } else {
+                    addresses[channel]
+                };
+                let current_count = if address {
+                    counts[channel]
+                } else {
+                    replace(counts[channel])
+                };
+                assert_eq!(read_word(&mut d, 1 + channel as u16 * 4), current_addr);
+                assert_eq!(read_word(&mut d, 3 + channel as u16 * 4), current_count);
+                // Enable, then service to TC: retained bases must still reload.
+                d.write(0x11, 0);
+                for remaining in (0..=current_count).rev() {
+                    assert_eq!(d.advance(channel), remaining == 0);
+                }
+                let base_addr = 0x12ff + channel as u16 * 0x100;
+                let base_count = 0x0200 + channel as u16;
+                assert_eq!(
+                    d.addr[channel],
+                    if address {
+                        replace(base_addr)
+                    } else {
+                        base_addr
+                    }
+                );
+                assert_eq!(
+                    d.count[channel],
+                    if address {
+                        base_count
+                    } else {
+                        replace(base_count)
+                    }
+                );
+                assert_eq!(d.mask, 0b1010);
+                assert_eq!(d.read(0x11), 1 << channel);
+            }
+        }
+    }
+}
+
+#[test]
+fn raw_fdc_controller_disable_samples_service_and_retains_programming() {
+    let image: Vec<u8> = (0..1_261_568)
+        .map(|i| (i * 13 + i / 1024 * 37) as u8)
+        .collect();
+    for profile in [Profile::Pc9801Vm, Profile::Pc9821ApDos] {
+        for write in [false, true] {
+            for auto in [false, true] {
+                for late_disable in [false, true] {
+                    let mut m = Machine::new(profile);
+                    m.insert(0, image.clone(), "disable.hdm").unwrap();
+                    m.bus.output(2, 0x7f);
+                    m.bus.output(10, 0xf7);
+                    m.bus.output(0x94, 0x18);
+                    m.bus.mem[0x1fe0..0x2420].fill(0xcc);
+                    let payload: Vec<u8> = (0..1024).map(|i| (i * 19 + 41) as u8).collect();
+                    m.bus.mem[0x2000..0x2400].copy_from_slice(&payload);
+                    // Keep an unrelated TC latch and mask through all commands.
+                    assert!(m.bus.dma.advance(0));
+                    program_fdc_dma(&mut m, 1024, write);
+                    m.bus.output(
+                        0x17,
+                        if write { 0x4a } else { 0x46 } | if auto { 0x10 } else { 0 },
+                    );
+                    let before = m.bus.mem[0x1fe0..0x2420].to_vec();
+                    let (addresses, counts, modes, pages, mask) = (
+                        m.bus.dma.addr,
+                        m.bus.dma.count,
+                        m.bus.dma.mode,
+                        m.bus.dma.page,
+                        m.bus.dma.mask,
+                    );
+                    if !late_disable {
+                        m.bus.output(0x11, 4);
+                    }
+                    assert_eq!(
+                        raw_command_at_service(&mut m, write, 2, |b| {
+                            if late_disable {
+                                b.output(0x11, 4);
+                            }
+                        }),
+                        [0x40, 0x10, 0, 0, 0, 2, 3]
+                    );
+                    // Clearing disable cannot replay the completed command.
+                    m.bus.output(0x11, 0);
+                    m.bus.tick(1000);
+                    assert_eq!(m.bus.irq(), None);
+                    assert_eq!(m.bus.input(0x90), 0x80);
+                    // Re-enabling must also respect a channel mask.
+                    m.bus.output(0x15, 6);
+                    m.bus.output(0x11, 4);
+                    m.bus.output(0x11, 0);
+                    assert_eq!(raw_command(&mut m, write, 2), [0x40, 0x10, 0, 0, 0, 2, 3]);
+                    m.bus.output(0x15, 2);
+                    assert_eq!(&m.bus.mem[0x1fe0..0x2420], &before);
+                    assert_eq!(m.bus.disks[0].as_ref().unwrap().bytes, image);
+                    assert_eq!(m.bus.disks[0].as_ref().unwrap().writes, 0);
+                    assert_eq!((m.bus.fdc.reads, m.bus.fdc.writes), (0, 0));
+                    assert_eq!(m.bus.dma.addr, addresses);
+                    assert_eq!(m.bus.dma.count, counts);
+                    assert_eq!(m.bus.dma.mode, modes);
+                    assert_eq!(m.bus.dma.page, pages);
+                    assert_eq!(m.bus.dma.mask, mask);
+                    assert_eq!(m.bus.dma.status, 1);
+                    // Disable and fail again, then clear ONLY disable before a
+                    // fresh command, without any address/count/mode/mask writes.
+                    m.bus.output(0x11, 4);
+                    assert_eq!(raw_command(&mut m, write, 2), [0x40, 0x10, 0, 0, 0, 2, 3]);
+                    m.bus.output(0x11, 0);
+                    assert_eq!(raw_command(&mut m, write, 2), [0, 0, 0, 0, 0, 2, 3]);
+                    let mut expected_disk = image.clone();
+                    if write {
+                        expected_disk[1024..2048].copy_from_slice(&payload);
+                    }
+                    assert_eq!(m.bus.disks[0].as_ref().unwrap().bytes, expected_disk);
+                    assert_eq!(m.bus.disks[0].as_ref().unwrap().writes, u64::from(write));
+                    assert_eq!(
+                        &m.bus.mem[0x2000..0x2400],
+                        if write { &payload } else { &image[1024..2048] }
+                    );
+                    assert_eq!(&m.bus.mem[0x1fe0..0x2000], &[0xcc; 32]);
+                    assert_eq!(&m.bus.mem[0x2400..0x2420], &[0xcc; 32]);
+                    assert_eq!(
+                        (m.bus.fdc.reads, m.bus.fdc.writes),
+                        if write { (0, 1) } else { (1, 0) }
+                    );
+                    assert_eq!(
+                        read_word(&mut m.bus.dma, 9),
+                        if auto { 0x2000 } else { 0x2400 }
+                    );
+                    assert_eq!(
+                        read_word(&mut m.bus.dma, 11),
+                        if auto { 1023 } else { 0xffff }
+                    );
+                    assert_eq!(m.bus.dma.mask, if auto { mask } else { mask | 4 });
+                    assert_eq!(m.bus.input(0x11), 5);
+                    assert_eq!(m.bus.input(0x11), 0);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn machine_reset_and_master_clear_enable_controller_without_bypassing_masks() {
+    for profile in [Profile::Pc9801Vm, Profile::Pc9821ApDos] {
+        for master_clear in [false, true] {
+            let mut m = Machine::new(profile);
+            m.insert(0, vec![0x39; 1_261_568], "reset.hdm").unwrap();
+            program_fdc_dma(&mut m, 1024, false);
+            m.bus.output(0x11, 4);
+            if master_clear {
+                m.bus.output(0x1b, 0xff);
+                assert_eq!(m.bus.dma.mask, 15);
+            } else {
+                m.reset();
+                assert_eq!(m.bus.dma.addr, [0; 4]);
+                assert_eq!(m.bus.dma.count, [0; 4]);
+                assert_eq!(m.bus.dma.mode, [0; 4]);
+                assert_eq!(m.bus.dma.status, 0);
+                program_fdc_dma(&mut m, 1024, false);
+                m.bus.output(0x15, 6);
+            }
+            m.bus.output(2, 0x7f);
+            m.bus.output(10, 0xf7);
+            m.bus.output(0x94, 0x18);
+            assert_eq!(raw_command(&mut m, false, 2), [0x40, 0x10, 0, 0, 0, 2, 3]);
+            m.bus.output(0x15, 2); // no command-register write after reset
+            command(&mut m, false, 2, 1024);
+            assert_eq!(&m.bus.mem[0x2000..0x2400], &[0x39; 1024]);
+        }
     }
 }

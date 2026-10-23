@@ -2,17 +2,19 @@
   "source": "guest/dma_autoinit.asm",
   "license": "MIT; LICENSE copied alongside the generated image",
   "assembly": "nasm -f bin guest/dma_autoinit.asm -o autoinit.bin",
-  "source_sha256": "38c31d31bc8770c6f0b0e977881c8a59c786715f8db4e6244e653799cef4e322",
-  "boot_sha256": "ee46f6fb831b86d93d7f1b6b0f7ccfac2da0f5f38d80d3f68e0800c752590d78",
+  "source_sha256": "1119cbdcd8b32f1b3661eb4854a8e988041737866469f1bc50ac790f4afa1adc",
+  "boot_sha256": "196d87f97f8be853700b90abde49ea3bc72d25423d890ff690c77d91cd5fdb83",
   "image": "fixtures/dma/autoinit.hdm",
-  "image_sha256": "f1d2ab1af43621615cf0af8636b72bd7069441bac870d246004538e2fe98258c",
+  "image_sha256": "464524cd5e8c7701a7a8cd264ee70c767c51ed269dc89979e4478e1920158fef",
   "geometry": "77 cylinders, 2 heads, 8 sectors, 1024 bytes per sector",
-  "contract": "Two auto-init READ DATA and two WRITE DATA commands, plus master-clear retained read/write with masked no-transfer commands before unmasking; register readback/reload, buffer patterns, guards, result bytes and IRQ; bounded waits",
+  "contract": "Two auto-init READ DATA and two WRITE DATA commands, plus master-clear retained read/write with masked no-transfer commands before unmasking, plus controller-disabled no-transfer read/write and fresh commands after enabling; register readback/reload, buffer patterns, guards, result bytes and IRQ; bounded waits",
   "markers": [
     "DMA AUTO INIT PASS",
     "DMA AUTO INIT FAIL",
     "DMA MASTER CLEAR PASS",
-    "DMA MASTER CLEAR FAIL"
+    "DMA MASTER CLEAR FAIL",
+    "DMA DISABLE PASS",
+    "DMA DISABLE FAIL"
   ],
   "slot_budget": 2000000,
   "distribution": "Test only; no proprietary software or firmware; excluded from web/"

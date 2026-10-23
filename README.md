@@ -114,6 +114,10 @@ reload, exact bytes, guards, result phase and completion IRQ. A subsequent
 master-clear phase checks retained readback, masked no-transfer commands, and
 successful raw FDC read/write after unmasking without DMA reprogramming. It emits
 an explicit `DMA MASTER CLEAR PASS` or `DMA MASTER CLEAR FAIL` result. The
+controller-disable phase then blocks unmasked raw reads and writes, checks
+retained programming, status and guards, and enables fresh transfers without DMA
+reprogramming. It adds `DMA DISABLE PASS` / `DMA DISABLE FAIL` markers while
+preserving the earlier phases and their assertions. The
 [manifest](fixtures/dma-manifest.json) records the assembly command, license and
 source/image hashes. No DOS, proprietary ROM or game is required. See the
 [bounded DMA contract](docs/hardware.md#dma-terminal-count-and-auto-initialization).
