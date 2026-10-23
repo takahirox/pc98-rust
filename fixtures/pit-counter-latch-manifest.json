@@ -1,0 +1,29 @@
+{
+  "source": "guest/pit_counter_latch.asm",
+  "license": "MIT; LICENSE and original assembly copied alongside image",
+  "assembly": "nasm -f bin guest/pit_counter_latch.asm -o pit_counter_latch.bin",
+  "source_sha256": "066f2c9e9399a26a47fd7c2c9f250ad5f796d99b54468dc3919186b84abd220d",
+  "boot_sha256": "c42e9f6288f9d8a930d39ccc35eab2970b1bc067a3108a6711c208d1705e3d7f",
+  "image": "fixtures/pit_counter_latch/pit_counter_latch.hdm",
+  "image_sha256": "9801d5bc5c35e03d3b9d29a175552bd87ce3364289b7f5e65076696b28bb1bb0",
+  "geometry": "77 cylinders, 2 heads, 8 sectors, 1024 bytes per sector",
+  "profiles": [
+    "VM",
+    "Ap real mode"
+  ],
+  "provenance": "Original source; no DOS, commercial ROM, guest binary or copied emulator implementation",
+  "contract": "Program paired binary mode 0 count 1234h separately for each case; after 16 LOOPs latch, delay 200 LOOPs, issue multiple duplicates before any read or between bytes; use both port banks for commands and reads; require retained 12xxh snapshot, then recapture a current 0e00h..10ffh count at least 100h lower; guest compares all raw bytes and guards before PASS",
+  "host": "Boot, step and read only; no input, IRQ injection or result writes",
+  "result_address": "0x8000",
+  "result_length": 32,
+  "result_hex": "a50d1254100b125610a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+  "guards": "All a5 bytes in result_hex must remain unchanged; guest and host compare all 32 bytes",
+  "result_layout": "8000 guard; 8001/8002 retained low/high before any read; 8003/8004 recapture low/high; 8005/8006 retained low/high with duplicate between bytes; 8007/8008 recapture low/high; 8009..801f guards=a5",
+  "markers": [
+    "PIT COUNTER LATCH PASS",
+    "PIT COUNTER LATCH FAIL"
+  ],
+  "slot_budget": 2000000,
+  "reset": "Same image, results and budget before and after Machine reset",
+  "distribution": "Test only; excluded from web/"
+}

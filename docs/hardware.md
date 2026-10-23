@@ -336,6 +336,41 @@ electrical modeling and spurious-interrupt fidelity remain outside this subset.
 These bounded checks do not establish full hardware accuracy or commercial
 software compatibility.
 
+### 8253 ordinary counter-latch retention
+
+For counters 0, 1 and 2, an ordinary control word with D5:D4=`00` captures the
+current count only when no snapshot is pending. Further latch commands leave
+both the snapshot and its next unread byte unchanged, including after the low
+byte of a paired read. LSB-only or MSB-only reads release the snapshot after one
+byte; paired reads release it after the high byte. A subsequent latch captures
+the current running count. Counting, mode, reload, OUT, IRQ progression and other
+counters continue independently. Both VM/Ap port banks (`71h..77h` and
+`3FD9h..3FDFh`, odd ports) address the same counter state, so commands and reads
+can cross banks. Fresh supported-mode programming and Machine reset retain their
+existing cancellation behavior.
+
+This is the Issue #55 shared-behavior interpretation of Intel's
+[8253/8253-5 Read Operations and Reading While Counting](https://web.cecs.pdx.edu/~mpj/llp/references/8253.pdf)
+and the [8254 datasheet, printed pages 7–8](https://www.scs.stanford.edu/23wi-cs212/pintos/specs/8254.pdf#page=7),
+which explicitly ignores duplicate ordinary latch commands until the programmed
+read completes and identifies the 8254 as an 8253 superset on page 1. It adds no
+8254 read-back command. Coverage is bounded to existing binary modes 0/2/3 and
+aliases 6/7; unfinished unlatched read insertion and new interleaved count-write
+semantics are outside this change.
+
+Original `counter_latch_` [Rust tests](../tests/pit.rs) cover formats, zero,
+channels, multiple duplicates, recapture, cross-bank access, count/OUT/IRQ
+comparison with a control, fresh modes and reset. The separate original MIT
+[guest probe](../guest/pit_counter_latch.asm) exercises both duplicate-command
+cases and recapture through guest I/O. Its checked
+[manifest](../fixtures/pit-counter-latch-manifest.json) records provenance,
+offline assembly, hashes, raw results/guards and a two-million-slot budget.
+Native and release-Wasm tests require the same bytes and image before/after
+reset on VM/Ap at both browser roots. See the
+[validation record](validation.md#issue-55-ordinary-counter-latch-retention-2026-10-24).
+PIT remains **partial**; all fixed inventory scopes and deferred work below
+remain unchanged.
+
 ### 8253 binary mode-0 subset
 
 All three counters on VM/Ap and both primary/mirrored timer banks support a

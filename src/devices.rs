@@ -373,8 +373,12 @@ impl Pit {
             if n < 3 {
                 let c = &mut self.c[n];
                 if v & 0x30 == 0 {
-                    c.latch = Some(c.remaining as u16);
-                    c.read_hi = false;
+                    // Ignore duplicates until the programmed read completes,
+                    // including the high byte of a half-consumed paired latch.
+                    if c.latch.is_none() {
+                        c.latch = Some(c.remaining as u16);
+                        c.read_hi = false;
+                    }
                 } else {
                     c.access = (v >> 4) & 3;
                     c.mode = (v >> 1) & 7;
