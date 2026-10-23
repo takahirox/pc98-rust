@@ -170,6 +170,14 @@ impl Default for Counter {
 }
 impl Counter {
     fn write(&mut self, v: u8) {
+        if self.mode == 0 {
+            // A count write starts a new mode-0 lifecycle immediately. The
+            // first byte of a pair also stops the old count and cancels any
+            // earlier complete value still waiting for its load clock.
+            self.output = false;
+            self.enabled = false;
+            self.load_pending = false;
+        }
         let value = match self.access {
             1 => Some(v as u16),
             2 => Some((v as u16) << 8),
@@ -193,8 +201,8 @@ impl Counter {
                     self.load_pending = true;
                 }
             } else if matches!(self.mode, 0 | 3) {
-                // Initial programming transfers on a separate clock. Count-only
-                // rewrites without a new mode word remain outside this subset.
+                // Mode 0 also transfers each replacement on a separate clock.
+                // Active mode-3 rewrites remain outside this subset.
                 self.load_pending = true;
             } else {
                 self.remaining = self.reload;
