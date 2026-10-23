@@ -9,6 +9,9 @@ pub struct Pic {
     icw4: bool,
     read_isr: bool,
     special_mask: bool,
+    // Outer None: no transaction; Some(None): frozen empty poll.
+    poll: Option<Option<u8>>,
+    poll_retrigger: bool,
     pub auto_eoi: bool,
     lowest_priority: u8,
     rotate_auto_eoi: bool,
@@ -24,6 +27,8 @@ impl Pic {
             icw4: false,
             read_isr: false,
             special_mask: false,
+            poll: None,
+            poll_retrigger: false,
             auto_eoi: false,
             // Deterministic emulator power-on/reset policy: IR0 highest.
             lowest_priority: 7,
@@ -32,6 +37,9 @@ impl Pic {
     }
     pub fn request(&mut self, n: u8) {
         self.irr |= 1 << n;
+        if self.poll == Some(Some(n)) {
+            self.poll_retrigger = true;
+        }
     }
     pub fn pending(&self) -> Option<u8> {
         let available = self.irr & !self.mask;
@@ -57,15 +65,35 @@ impl Pic {
     }
     pub fn ack(&mut self) -> Option<u8> {
         let n = self.pending()?;
+        self.ack_level(n);
+        Some(self.base + n)
+    }
+    fn ack_level(&mut self, n: u8) {
         self.irr &= !(1 << n);
         if !self.auto_eoi {
             self.isr |= 1 << n
         } else if self.rotate_auto_eoi {
             self.lowest_priority = n;
         }
-        Some(self.base + n)
     }
-    pub fn read(&self, data: bool) -> u8 {
+    pub(crate) fn poll_armed(&self) -> bool {
+        self.poll.is_some()
+    }
+    pub fn read(&mut self, data: bool) -> u8 {
+        // The next controller RD acknowledges, including an A0=1 read.
+        // Poll overrides RR/RIS; unspecified result bits deterministically read 0.
+        if let Some(selected) = self.poll.take() {
+            return if let Some(n) = selected {
+                self.ack_level(n);
+                if self.poll_retrigger {
+                    self.irr |= 1 << n;
+                }
+                self.poll_retrigger = false;
+                0x80 | n
+            } else {
+                0
+            };
+        }
         if data {
             self.mask
         } else if self.read_isr {
@@ -104,12 +132,18 @@ impl Pic {
             self.auto_eoi = false;
             self.read_isr = false;
             self.special_mask = false;
+            self.poll = None;
+            self.poll_retrigger = false;
         } else if v & 0x18 == 8 {
             if v & 0x40 != 0 {
                 self.special_mask = v & 0x20 != 0;
             }
             if v & 2 != 0 {
                 self.read_isr = v & 1 != 0
+            }
+            if v & 4 != 0 {
+                self.poll = Some(self.pending());
+                self.poll_retrigger = false;
             }
         } else {
             match v & 0xe0 {

@@ -11,6 +11,7 @@ pub struct Bus {
     pub mem: Vec<u8>,
     pub graphics: Vec<u8>,
     pub pics: [Pic; 2],
+    slave_int: bool,
     pub pit: Pit,
     pub rtc: crate::rtc::Rtc,
     pub opn: crate::sound::Opn,
@@ -88,6 +89,7 @@ impl Bus {
                 }
             ],
             pics: [Pic::new(8), Pic::new(0x10)],
+            slave_int: false,
             pit: Pit::default(),
             rtc: crate::rtc::Rtc::default(),
             opn: crate::sound::Opn::default(),
@@ -354,14 +356,26 @@ impl Bus {
                 }
             }
         }
+        self.sync_cascade();
+    }
+    // Fixed PC-98 wiring: latch rising slave INT edges even with CPU IF clear.
+    // A master poll leaves slave acknowledgement to a separate port read.
+    fn sync_cascade(&mut self) {
+        let asserted = self.pics[1].pending().is_some();
+        if asserted && !self.slave_int {
+            self.pics[0].request(7);
+        }
+        self.slave_int = asserted;
     }
     pub fn irq(&mut self) -> Option<u8> {
-        if self.pics[1].pending().is_some() {
-            self.pics[0].request(7)
-        }
+        self.sync_cascade();
         let n = self.pics[0].ack()?;
         if n == self.pics[0].base + 7 {
-            self.pics[1].ack()
+            let vector = self.pics[1].ack();
+            // INTA drops slave INT, including when AEOI leaves more work.
+            self.slave_int = false;
+            self.sync_cascade();
+            vector
         } else {
             Some(n)
         }
@@ -371,6 +385,18 @@ impl Bus {
         self.pics[0].request(1)
     }
     pub fn input(&mut self, p: u16) -> u8 {
+        if matches!(p, 0 | 2 | 8 | 10) {
+            self.sync_cascade();
+            let slave_poll = p >= 8 && self.pics[1].poll_armed();
+            let value = self.pics[usize::from(p >= 8)].read(p & 2 != 0);
+            if slave_poll && value & 0x80 != 0 {
+                // Poll acknowledgement also drops INT. A higher-priority
+                // arrival during the freeze may immediately assert it again.
+                self.slave_int = false;
+            }
+            self.sync_cascade();
+            return value;
+        }
         match p {
             0x7fd9 | 0x7fdb | 0x7fdd | 0xbfdb => {
                 self.mouse.input(p, self.profile == Profile::Pc9821ApDos)
@@ -391,8 +417,6 @@ impl Bus {
             {
                 self.ide.input(p)
             }
-            0 | 2 => self.pics[0].read(p == 2),
-            8 | 10 => self.pics[1].read(p == 10),
             1..=0x11 if p & 1 != 0 => self.dma.read(p),
             0x31 => 0x7b,
             0x33 => {
@@ -514,6 +538,12 @@ impl Bus {
         }
     }
     pub fn output(&mut self, p: u16, v: u8) {
+        if matches!(p, 0 | 2 | 8 | 10) {
+            self.sync_cascade();
+            self.pics[usize::from(p >= 8)].write(p & 2 != 0, v);
+            self.sync_cascade();
+            return;
+        }
         match p {
             0x20 if self.profile == Profile::Pc9821ApDos => self.rtc.write(v),
             0x7fd9 | 0x7fdb | 0x7fdd | 0x7fdf | 0xbfdb => self.mouse.output(p, v),
@@ -532,8 +562,6 @@ impl Bus {
             {
                 self.ide.output(p, v)
             }
-            0 | 2 => self.pics[0].write(p == 2, v),
-            8 | 10 => self.pics[1].write(p == 10, v),
             1..=0x29 if p & 1 != 0 => self.dma.write(p, v),
             0x35 => {
                 self.system_c = v;

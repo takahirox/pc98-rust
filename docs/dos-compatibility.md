@@ -5,6 +5,11 @@ See the [current Ap device contracts, fixtures and acceptance evidence](ap-devic
 Ap also supports bounded [real-mode SMSW readback](hardware.md#ap-real-mode-smsw),
 including reset MSW 0010h and restartable faults. ET readback does not imply x87
 support; protected execution and status writers remain unimplemented.
+Both profiles support bounded [8259A normal-EOI software polling](hardware.md#8259a-ocw3-normal-eoi-polling),
+including two separate reads and EOIs for the fixed cascade while IF is clear.
+The original PIT/FDC boot probe is hardware acceptance evidence, not an expanded
+DOS/application or commercial compatibility claim. PIC remains partial; protected
+execution, paging and basic x87 remain required project work.
 Physical hardware fidelity remains bounded by the documented unsupported subsets.
 Historical PR #8/#10 validation records below describe their earlier checkpoints.
 

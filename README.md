@@ -91,6 +91,7 @@ python3 tools/prepare_idtr_fixture.py
 python3 tools/prepare_smsw_fixture.py
 python3 tools/prepare_pic_fixture.py
 python3 tools/prepare_pic_smm_fixture.py
+python3 tools/prepare_pic_poll_fixture.py
 python3 tools/prepare_pit_mode2_fixture.py
 python3 tools/prepare_pit_mode3_fixture.py
 python3 tools/prepare_pit_mode0_fixture.py
@@ -241,6 +242,18 @@ bytes/guards and unchanged disk bytes within two million slots. Its offline
 source/boot/image hashes, expected bytes and budget. Prepare it with
 `python3 tools/prepare_pit_counter_latch_fixture.py`; run focused native coverage
 with `cargo test --locked --test pit counter_latch_`.
+
+The original MIT [polling probe](guest/pic_poll.asm) uses CLI and real port
+instructions to acknowledge guest-programmed PIT and FDC READ ID requests,
+checks separate master/slave ISR and EOI results and empty polls, then verifies
+ordinary PIT IRQ delivery after STI. Prepare it offline with
+`python3 tools/prepare_pic_poll_fixture.py`; run `cargo test --locked --test pic`
+and `npm test`. Native and release-Wasm browser checks require `PIC POLL PASS`,
+all 32 exact result/guard bytes and unchanged disk bytes within 2,000,000 slots,
+in VM and Ap before/after reset and at both browser roots. The
+[manifest](fixtures/pic-poll-manifest.json) pins provenance and source/boot/image
+hashes. This verifies the bounded [normal-EOI polling contract](docs/hardware.md#8259a-ocw3-normal-eoi-polling);
+PIC remains partial.
 
 The separate original MIT [special-mask probe](guest/pic_smm.asm) enters a
 keyboard handler with a confirmed timer request pending and IR0 lowest. It

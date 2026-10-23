@@ -741,3 +741,278 @@ fn failed_aeoi_acknowledgements_do_not_rotate_or_discard_masked_requests() {
     assert_eq!(p.ack(), Some(9));
     status(&mut p, 0, 0, 0);
 }
+
+#[test]
+fn poll_minimal_reproduction() {
+    let mut p = Pic::new(8);
+    p.write(true, 0);
+    p.request(1);
+    p.write(false, 0x0c);
+    assert_eq!(p.read(false), 0x81);
+    assert_eq!((p.irr, p.isr), (0, 2));
+}
+
+fn poll(p: &mut Pic) -> u8 {
+    p.write(false, 0x0c);
+    p.read(false)
+}
+
+#[test]
+fn polling_every_level_and_priority_origin_with_exact_eoi_effects() {
+    for base in [8, 0x70] {
+        for lowest in 0..8 {
+            let mut p = pic(false);
+            p.base = base;
+            p.write(false, 0xc0 | lowest);
+            for n in 0..8 {
+                p.request(n);
+            }
+            let mut irr = 255;
+            for offset in 1..=8 {
+                let n = (lowest + offset) & 7;
+                assert_eq!(poll(&mut p), 0x80 | n);
+                irr &= !(1 << n);
+                status(&mut p, irr, 1 << n, 0);
+                assert_eq!(poll(&mut p), 0); // ISR blocks every lower request
+                status(&mut p, irr, 1 << n, 0);
+                p.write(false, if offset & 1 == 0 { 0x60 | n } else { 0x20 });
+                status(&mut p, irr, 0, 0);
+            }
+            assert_eq!(poll(&mut p), 0);
+            status(&mut p, 0, 0, 0);
+        }
+    }
+}
+
+#[test]
+fn polling_masks_smm_and_combined_commands_preserve_passive_status() {
+    for lowest in 0..8 {
+        let a = (lowest + 1) & 7;
+        let b = (lowest + 2) & 7;
+        let mut p = pic(false);
+        p.write(false, 0xc0 | lowest);
+        p.request(a);
+        p.write(true, 1 << a);
+        assert_eq!(poll(&mut p), 0);
+        status(&mut p, 1 << a, 0, 1 << a);
+        p.write(true, 0);
+        assert_eq!(poll(&mut p), 0x80 | a);
+        p.request(b);
+        p.write(true, 1 << a);
+        assert_eq!(poll(&mut p), 0); // normal mode masked ISR still blocks
+        p.write(false, 0x6f); // SMM + P + RR + RIS
+        assert_eq!(p.read(false), 0x80 | b);
+        for _ in 0..3 {
+            assert_eq!(p.read(false), (1 << a) | (1 << b));
+            assert_eq!(p.read(true), 1 << a);
+        }
+        p.write(false, 0x20); // SMM skips masked ISR a
+        status(&mut p, 0, 1 << a, 1 << a);
+        p.request(b);
+        p.write(false, 0x4e); // disable SMM, poll IRR: frozen empty
+        assert_eq!(p.read(false), 0);
+        assert_eq!(p.read(false), 1 << b);
+        p.write(false, 0x6e); // enable SMM, combined IRR poll
+        assert_eq!(p.read(false), 0x80 | b);
+        assert_eq!(p.read(false), 0);
+        p.write(false, 0x20);
+        p.write(false, 0x60 | a);
+        status(&mut p, 0, 0, 1 << a);
+    }
+}
+
+#[test]
+fn polling_freezes_selection_and_empty_transactions_retaining_later_requests() {
+    for command in [0x0c, 0x0e, 0x0f] {
+        for data_read in [false, true] {
+            let mut p = pic(false);
+            p.request(5);
+            p.write(false, command);
+            p.request(0);
+            assert_eq!(p.pending(), Some(0)); // poll does not suppress INT
+            assert_eq!((p.irr, p.isr), (0x21, 0));
+            assert_eq!(p.read(data_read), 0x85);
+            status(&mut p, 1, 0x20, 0);
+            assert_eq!(poll(&mut p), 0x80);
+            p.write(false, 0x20);
+            p.write(false, 0x20);
+            p.write(false, command); // initially empty
+            p.request(1);
+            assert_eq!(p.read(data_read), 0);
+            status(&mut p, 2, 0, 0);
+            assert_eq!(poll(&mut p), 0x81);
+            p.write(false, 0x20);
+            p.request(2);
+            p.write(false, command);
+            p.request(2); // a later request at the frozen level is retained too
+            assert_eq!(p.read(data_read), 0x82);
+            status(&mut p, 4, 4, 0);
+            assert_eq!(poll(&mut p), 0);
+            p.write(false, 0x20);
+            assert_eq!(poll(&mut p), 0x82);
+        }
+    }
+}
+
+#[test]
+fn polling_isolation_initialization_and_machine_reset_cancel_transactions() {
+    for icw1 in [0x10, 0x11] {
+        let mut p = pic(false);
+        p.request(1);
+        p.write(false, 0x0f);
+        p.write(false, icw1);
+        p.request(2);
+        assert_eq!(p.read(false), 4); // reset selects IRR, cancels acknowledgement
+        assert_eq!(p.isr, 0);
+    }
+    for profile in PROFILES {
+        let mut m = Machine::new(profile);
+        let mut other = Machine::new(profile);
+        for p in &mut m.bus.pics {
+            p.write(true, 0);
+            p.request(2);
+            p.write(false, 0x0c);
+        }
+        for p in &mut other.bus.pics {
+            p.request(3);
+            assert_eq!(p.read(false), 8);
+            assert_eq!(p.isr, 0);
+        }
+        assert_eq!(m.bus.pics[0].read(false), 0x82);
+        assert_eq!(m.bus.pics[1].isr, 0);
+        m.bus.pics[0].write(false, 0x0c); // frozen empty also canceled
+        m.reset();
+        for p in &mut m.bus.pics {
+            p.request(4);
+            assert_eq!(p.read(false), 16);
+            assert_eq!(p.isr, 0);
+        }
+    }
+}
+
+fn bus_poll(b: &mut Bus, port: u16) -> u8 {
+    b.output(port, 0x0c);
+    b.input(port)
+}
+
+#[test]
+fn polling_cascade_with_if_clear_separate_acknowledgements_and_both_eoi_orders() {
+    for profile in PROFILES {
+        for slave_first in [false, true] {
+            let mut m = Machine::new(profile);
+            m.cpu.flags &= !0x200;
+            let b = &mut m.bus;
+            b.output(2, 0x7f);
+            b.output(10, 0);
+            b.pics[1].request(3);
+            b.pics[1].request(4);
+            b.tick(1); // no CPU acknowledgement
+            assert_eq!(b.pics[0].irr, 0x80);
+            assert_eq!(bus_poll(b, 0), 0x87);
+            assert_eq!((b.pics[1].irr, b.pics[1].isr), (0x18, 0));
+            for _ in 0..3 {
+                b.tick(1);
+            }
+            assert_eq!(b.pics[0].irr, 0); // no repeated edge before slave read
+            assert_eq!(bus_poll(b, 8), 0x83);
+            assert_eq!((b.pics[0].isr, b.pics[1].isr), (0x80, 8));
+            assert_eq!(bus_poll(b, 0), 0);
+            assert_eq!(bus_poll(b, 8), 0);
+            let first = if slave_first { 8 } else { 0 };
+            let second = 8 - first;
+            b.output(first, 0x20);
+            assert_eq!(bus_poll(b, 0), 0);
+            // The deferred slave request survives either EOI ordering.
+            b.output(second, 0x20);
+            assert_eq!(bus_poll(b, 0), 0x87);
+            assert_eq!(b.pics[1].isr, 0);
+            assert_eq!(bus_poll(b, 8), 0x84);
+            b.output(first, 0x20);
+            b.output(second, 0x20);
+            for _ in 0..4 {
+                b.tick(100);
+                assert_eq!(bus_poll(b, 0), 0);
+                assert_eq!(bus_poll(b, 8), 0);
+                assert_eq!(b.irq(), None);
+                assert_eq!(
+                    (b.pics[0].irr, b.pics[0].isr, b.pics[1].irr, b.pics[1].isr),
+                    (0, 0, 0, 0)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn polling_hardware_boot_probe_before_and_after_reset_in_both_profiles() {
+    let image = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/fixtures/pic_poll/pic_poll.hdm"
+    ))
+    .expect("run python3 tools/prepare_pic_poll_fixture.py");
+    let expected = [
+        0xa5, 0x80, 1, 0, 0x87, 0, 0x80, 0x83, 8, 0x80, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 3,
+        0xa5, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5,
+    ];
+    for profile in PROFILES {
+        let mut m = Machine::new(profile);
+        m.insert(0, image.clone(), "pic_poll.hdm").unwrap();
+        for run in 0..2 {
+            if run != 0 {
+                m.reset();
+            }
+            let mut slots = 0;
+            while slots < 2_000_000 {
+                slots += m.step(1000);
+                assert!(m.error.is_none(), "{:?}", m.error);
+                let text = m.bus.text();
+                assert!(
+                    !text.contains("FAIL"),
+                    "{text}; results={:02x?}",
+                    &m.bus.mem[0x8000..0x8020]
+                );
+                if text.contains("PIC POLL PASS") {
+                    break;
+                }
+            }
+            assert!(slots <= 2_000_000);
+            assert!(
+                m.bus.text().contains("PIC POLL PASS"),
+                "ip={:x} results={:02x?}",
+                m.cpu.ip,
+                &m.bus.mem[0x8000..0x8020]
+            );
+            assert_eq!(&m.bus.mem[0x8000..0x8020], &expected);
+            assert_eq!(m.bus.disks[0].as_ref().unwrap().bytes, image);
+        }
+    }
+}
+
+#[test]
+fn polling_slave_freeze_retains_later_higher_priority_cascade_work() {
+    for profile in PROFILES {
+        let mut b = Bus::new(profile);
+        b.output(2, 0x7f);
+        b.output(10, 0);
+        b.pics[1].request(5);
+        b.tick(1);
+        assert_eq!(bus_poll(&mut b, 0), 0x87);
+        b.output(8, 0x0c); // freeze slave5
+        b.pics[1].request(0); // higher priority, after OUT and before IN
+        b.tick(1);
+        assert_eq!(b.input(8), 0x85);
+        assert_eq!((b.pics[1].irr, b.pics[1].isr), (1, 0x20));
+        assert_eq!(b.pics[0].irr, 0x80); // new INT after slave acknowledgement
+        assert_eq!(bus_poll(&mut b, 0), 0); // master ISR7 still blocks
+        b.output(0, 0x20);
+        assert_eq!(bus_poll(&mut b, 0), 0x87);
+        assert_eq!(bus_poll(&mut b, 8), 0x80);
+        b.output(8, 0x20);
+        b.output(8, 0x20);
+        b.output(0, 0x20);
+        b.tick(1);
+        assert_eq!(bus_poll(&mut b, 0), 0);
+        assert_eq!(bus_poll(&mut b, 8), 0);
+        assert_eq!(b.irq(), None);
+    }
+}
