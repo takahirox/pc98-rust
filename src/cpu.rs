@@ -29,6 +29,9 @@ pub struct Cpu {
     /// Upper words of EAX through EDI; byte/word writes preserve these.
     pub upper: [u16; 8],
     pub extra_segments: [u16; 2], // FS, GS
+    /// CR0 low word for SMSW only. Reset: ET set, other/reserved bits zero.
+    /// Guest status writers and protected execution are not implemented.
+    pub machine_status: u16,
     /// Emulator reset policy: zero limit/base (hardware power-up GDTR is undefined).
     pub gdtr_limit: u16,
     /// Linear metadata; never masked by A20 or validated against installed RAM.
@@ -71,6 +74,7 @@ impl Default for Cpu {
             s: [0, 0xffff, 0, 0],
             upper: [0; 8],
             extra_segments: [0; 2],
+            machine_status: 0x0010,
             gdtr_limit: 0,
             gdtr_base: 0,
             idtr_limit: 0x03ff,
@@ -663,6 +667,28 @@ impl Cpu {
             0x01 => {
                 let m = self.fetch(b)?;
                 let kind = (m >> 3) & 7;
+                if kind == 4 {
+                    match self.decode(b, m, ov)? {
+                        // Undefined upper bits in operand32 register form are
+                        // preserved as a deterministic emulator policy.
+                        Operand::Reg(r) => self.r[r] = self.machine_status,
+                        Operand::Mem(s, off) => {
+                            // Intel486 real-address SMSW table: #GP even for SS.
+                            // Preflight both bytes before any bus write. The modern
+                            // SDM instead specifies #SS for SS overruns.
+                            if off > 0xfffe {
+                                return Err(ExecError::Fault(13));
+                            }
+                            let address = self.segment(s) as usize * 16 + off as usize;
+                            for (i, value) in
+                                self.machine_status.to_le_bytes().into_iter().enumerate()
+                            {
+                                b.write(address + i, value);
+                            }
+                        }
+                    }
+                    return Ok(());
+                }
                 if !matches!(kind, 0..=3) {
                     return Err(ExecError::Unsupported(format!(
                         "unimplemented i486 opcode 0F 01 /{kind}"

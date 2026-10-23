@@ -87,6 +87,7 @@ Japanese CG glyphs. FEP input is not implemented.
 python3 tools/prepare_dma_fixture.py
 python3 tools/prepare_gdtr_fixture.py
 python3 tools/prepare_idtr_fixture.py
+python3 tools/prepare_smsw_fixture.py
 # Fetch checksum-pinned guest binaries AND matching complete source archives.
 # This makes a minimal GPL guest disk; it downloads no emulator code.
 python3 tools/prepare_freedos.py
@@ -106,6 +107,14 @@ npm ci
 npx playwright install chromium
 npm test
 ```
+
+The original MIT [SMSW boot probe](guest/smsw.asm) checks CPU-local reset status,
+register upper halves, exact two-byte stores, addressing and guest-handled
+restartable faults. Native and production-Wasm tests at both URL roots require
+`SMSW PASS`, exact results and guards, no `FAIL` or host error, and unchanged disk
+bytes within two million scheduler slots, before and after reset. Its
+[manifest](fixtures/smsw-manifest.json) pins source/image hashes and provenance.
+See the [bounded SMSW contract](docs/hardware.md#ap-real-mode-smsw).
 
 The original MIT [IDTR boot probe](guest/idtr.asm) checks Ap LIDT/SIDT,
 relocated real-mode vectors, restartable operand faults, inclusive table limits

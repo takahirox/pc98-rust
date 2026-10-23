@@ -1052,3 +1052,132 @@ NMI and general nested-fault/invalid-stack behavior remain outside this change.
 Probe success does not establish full protected-mode accuracy or commercial
 compatibility. No PR/CI-success or merge is claimed; Issue #37 requires no
 post-merge verification.
+
+## Issue #39: Ap real-mode SMSW readback (2026-10-23)
+
+Implemented `0F 01 /4` from a CPU-local low-word status representation, reset to
+0010h by construction and Machine reset. Memory stores preflight exactly two
+bytes and use the Bus; register stores preserve upper halves with either operand
+size. The operand32 upper-half choice and reserved low-word zeros are deterministic
+emulator policies. Intel486 PRM §10.1 Figure 10-2 supplies the reset bit choices;
+its SMSW real-address table (printed p. 26-268) supplies exception 13 even for SS
+operands. The modern SDM instead lists exception 12 for SS overruns. The tables
+disagree; [the hardware contract](hardware.md#ap-real-mode-smsw) documents this
+choice and the SDM operand-width/LOCK rules. General memory faults are unchanged.
+
+Seven original `smsw_` tests cover all eight registers with nonzero upper halves,
+all operand/address-size combinations, repeated overrides, ModR/M/SIB, default SS,
+all segment overrides, unaligned stores, exact width/guards, flags and unrelated
+state. Boundary cases cover FFFE, FFFF, address32 10000 and FFFFFFFF for DS and SS.
+Fault checks compare all RAM against the original bytes plus only the six-byte
+frame, verify first-prefix IP/CS/FLAGS, then repair the effective address and
+IRET/retry. LOCK register/memory cases also fault again when unrepaired, then
+succeed after prefix repair. Bus/A20, ROM write protection, CPU isolation and
+reset readback have direct tests. The full CPU386 run preserves GDTR/IDTR and
+general #SS acceptance, plus VM rejection of LGDT and both SMSW forms.
+
+The original MIT [boot probe](../guest/smsw.asm) is assembled offline by
+`tools/prepare_smsw_fixture.py`; it uses no downloaded guest code, DOS or
+proprietary ROM. [The checked-in manifest](../fixtures/smsw-manifest.json) records
+the NASM command, source/boot/image hashes, expected 80-byte result region, final
+boundary operand, guards, license and execution budget. Image SHA-256:
+`f8cfb119774c110bb947b9dd5fa06ac2d2feb9e5067f07df038a00cddd4bbd1a`.
+The same source-built image runs natively and in production release Wasm at `/`
+and `/pc98-rust/`, before and after Machine reset. Each boot requires explicit
+`SMSW PASS`, no `FAIL` or host error, exact result/guard bytes, unchanged disk
+bytes and at most 2,000,000 scheduler slots. The guest handles DS/SS #GP and LOCK
+register/memory #UD, checking six-byte first-prefix frames and repairing/retrying.
+CI prepares this fixture; generated image/source/license copies remain ignored
+under `fixtures/smsw/`, outside `web/`.
+
+Baseline evidence: before editing production code, the original
+`smsw_minimal_register_reproduction` failed with
+`unimplemented i486 opcode 0F 01 /4`. The upstream worktree had no differences
+from `dbd65302d2dea6fe6cc22d5dcd356bd3a292b2df`. For an independent check, Python
+`tarfile` extracted `git archive dbd65302d2dea6fe6cc22d5dcd356bd3a292b2df` into
+ignored `target/smsw-baseline/`. The unchanged `cpu()` helper and exact new minimal
+test were copied to `tests/smsw_baseline.rs` there, with only the needed imports.
+The baseline's `src/cpu.rs`, `src/bus.rs` and `src/lib.rs` were byte-compared
+against `git show dbd65302:<path>`. No implementation was substituted and no
+assertion was weakened. This exact command exited 101 with the same `/4` error:
+
+```sh
+cargo test --locked --manifest-path target/smsw-baseline/Cargo.toml --test smsw_baseline smsw_minimal_register_reproduction
+```
+
+The unchanged test passes on the implementation. It executes `0F 01 E0`, starting
+with EAX=ABCDFFFFh and nontrivial flags, requires EAX=ABCD0010h and unchanged flags,
+and executes the following NOP to verify continued execution.
+
+Environment: Darwin 25.6.0 arm64; Homebrew native Rust/Cargo 1.94.0;
+rustup Rust 1.99.0 with `wasm32-unknown-unknown`, selected by the repository's
+production `build_web.py`; NASM 3.02; Python 3.13.13; Node 24.12.0; npm 11.6.2;
+locked Playwright 1.56.1 Chromium.
+
+| Exact command | Outcome |
+| --- | --- |
+| `python3 tools/prepare_smsw_fixture.py --update-manifest` | Created the original fixture manifest |
+| `python3 tools/prepare_smsw_fixture.py` | Passed; offline source/boot/image and result contract reproduced |
+| `python3 tools/prepare_dma_fixture.py` | Passed; existing hash unchanged |
+| `python3 tools/prepare_gdtr_fixture.py` | Passed; existing hash unchanged |
+| `python3 tools/prepare_idtr_fixture.py` | Passed; existing hash unchanged |
+| `python3 tools/prepare_freedos.py` | Passed; pinned binaries and complete matching GPL source archives retained |
+| `python3 tools/prepare_font_fixture.py` | Passed |
+| `python3 tools/prepare_dos_apps.py` | Passed; original manifest and licensed applications/sources retained |
+| `python3 tools/prepare_cpu_fixture.py` | Initial URL returned HTTP 503; passed after checksum-verified mirror cache preparation below |
+| `python3 tools/prepare_hdd_fixture.py` | Passed |
+| `python3 tools/prepare_music_fixture.py` | Passed; pinned sources and source-built guest assembler retained |
+| `python3 tools/prepare_device_fixture.py` | Passed using checksum-verified mirror cache below |
+| `cargo test --locked --test cpu386 smsw_` | Passed: 7 tests, zero skipped |
+| `cargo test --locked --test cpu386` | Passed: 50 tests, zero skipped |
+| `cargo test --locked` | Passed: all 140 native integration tests, zero skipped; unit/doc harnesses also passed |
+| `cargo clippy --all-targets -- -D warnings` | Passed after factoring a local test tuple type alias |
+| `cargo fmt --check` | Passed |
+| `python3 tools/build_media.py --check` | Passed; firmware/media hashes unchanged |
+| `python3 tools/build_font.py --check` | Passed; CG hash unchanged |
+| `npm ci` | Passed; locked dependencies installed |
+| `npx playwright install chromium` | Passed |
+| `npm test` | Media/font checks, release Wasm and ten-asset site audit passed; server startup failed because port 8000 was already occupied |
+| `npm test -- --config=.gitweave-playwright.config.js` | Passed: release Wasm (447626 bytes), ten-asset site audit and all 54 browser tests in 26.5 seconds, zero skipped |
+| `git diff --check` | Passed |
+
+The CPULEVEL fallback and DEBUG mirror cache used the original pinned hashes;
+no download checks, license/source requirements or test assertions were relaxed:
+
+```sh
+python3 - <<'PY'
+import sys
+sys.path.insert(0, 'tools')
+from prepare_dos_apps import fetch
+from prepare_cpu_fixture import ARCHIVE_SHA
+from prepare_device_fixture import HASH
+fetch('cpulevel2007.zip', 'https://mirror.math.princeton.edu/pub/freeDOS/files/util/system/cpulevel/cpulevel2007.zip', ARCHIVE_SHA)
+fetch('debug125.zip', 'https://mirror.math.princeton.edu/pub/freeDOS/files/dos/debug/DEBUG125.zip', HASH)
+PY
+python3 tools/prepare_cpu_fixture.py
+python3 tools/prepare_device_fixture.py
+```
+
+The temporary `.gitweave-playwright.config.js` imported the existing config and
+changed only server commands/base URLs to free ports 18000/18001. Both projects,
+all tests, workers, assertions and budgets were preserved. The root server command
+was `python3 -m http.server 18000 --bind 127.0.0.1 --directory web`; the project
+server command was `python3 target/smsw-serve-project.py`. That temporary copy of
+`tests/browser/serve_project.py` used this worktree's `web/` path and port 18001,
+retaining the temporary project symlink and root-asset rejection. The existing
+port-8000 listener was left alone. The temporary config was removed after checks.
+
+Local review checked the complete diff against Issue #39: CPU-local/reset status,
+widths, atomicity, fault vector/frame/retry, mapping, VM isolation, source/license
+provenance, identical native/Wasm image, CI and regression preservation. All 26
+inventory categories retain their supplied statuses and full required scopes:
+**partial** cpu-v30, cpu386, protected-mode, memory, pic, pit, dma, keyboard, mouse,
+fdc, gdc, egc, pegc, text-cg, display-timing, opn, opna, bios, lio, integration;
+**unimplemented** paging, fpu, rtc; **implemented, unverified** ide, grcg, pcm86.
+Guest status writers, MOV control-register instructions, LMSW, CLTS, CR0/PE entry
+and exit, descriptor lookup/caches/validation, CPL/privilege transitions, protected
+gates, LDTR/TR, task-state behavior, protected execution, paging and x87 execution
+remain outside this change. General exception/restart coverage remains partial.
+ET readback and this bounded probe do not establish x87 support or commercial
+compatibility. No PR, CI success or merge is claimed. No post-merge checks are
+required by Issue #39.

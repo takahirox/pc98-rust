@@ -2,6 +2,9 @@
 
 Issue #11 adds DOS device workflows to the CPU work merged by PR #10.
 See the [current Ap device contracts, fixtures and acceptance evidence](ap-devices.md).
+Ap also supports bounded [real-mode SMSW readback](hardware.md#ap-real-mode-smsw),
+including reset MSW 0010h and restartable faults. ET readback does not imply x87
+support; protected execution and status writers remain unimplemented.
 Physical hardware fidelity remains bounded by the documented unsupported subsets.
 Historical PR #8/#10 validation records below describe their earlier checkpoints.
 
