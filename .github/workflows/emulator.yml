@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   native-and-browser:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -31,6 +31,7 @@ jobs:
       - run: python3 tools/prepare_pit_mode2_fixture.py
       - run: python3 tools/prepare_pit_mode3_fixture.py
       - run: python3 tools/prepare_pit_mode0_fixture.py
+      - run: python3 tools/prepare_pit_mode0_rewrite_fixture.py
       - run: python3 tools/prepare_freedos.py
       - run: python3 tools/prepare_font_fixture.py
       - run: python3 tools/prepare_dos_apps.py

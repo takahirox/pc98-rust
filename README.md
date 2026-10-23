@@ -94,6 +94,7 @@ python3 tools/prepare_pic_smm_fixture.py
 python3 tools/prepare_pit_mode2_fixture.py
 python3 tools/prepare_pit_mode3_fixture.py
 python3 tools/prepare_pit_mode0_fixture.py
+python3 tools/prepare_pit_mode0_rewrite_fixture.py
 # Fetch checksum-pinned guest binaries AND matching complete source archives.
 # This makes a minimal GPL guest disk; it downloads no emulator code.
 python3 tools/prepare_freedos.py
@@ -104,10 +105,12 @@ python3 tools/prepare_hdd_fixture.py
 python3 tools/prepare_music_fixture.py
 python3 tools/prepare_device_fixture.py
 python3 tools/build_font.py --check
+cargo test --locked --test pit mode0_rewrite_
 cargo test --locked --test pit
 cargo test --locked
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
+git diff --check
 
 # Build/check the publication tree and run Chromium at / and /pc98-rust/.
 npm ci
@@ -138,6 +141,17 @@ roots, requiring exact results/guards, `PIT MODE0 PASS` without `FAIL` or errors
 and unchanged disk bytes within two million slots per boot. The offline
 [manifest](fixtures/pit-mode0-manifest.json) pins source/image hashes, license and
 exact guest-owned results. See the [mode-0 contract](docs/hardware.md#8253-binary-mode-0-subset).
+
+The separate original MIT [mode-0 rewrite probe](guest/pit_mode0_rewrite.asm)
+programs the mode once, interrupts an active count with a delayed paired write,
+then rearms after terminal using count writes alone. Each delayed pair must
+suppress IRQ0 for over a full counter wrap; each completed replacement must
+deliver exactly one IRQ0 with ISR/EOI/IRET and no repeats across later wraps.
+Native and production-release Wasm tests use the identical image on VM/Ap before
+and after reset, at both browser roots, with the same two-million-slot maximum,
+exact results/guards, PASS without FAIL or errors, and unchanged disk bytes.
+The offline [manifest](fixtures/pit-mode0-rewrite-manifest.json) pins source,
+image, license and results; preparation retains all provenance beside the image.
 
 The original MIT [mode-2 PIT probe](guest/pit_mode2.asm) latches a running
 60000-count period, rewrites its divisor to 2000, and verifies that the live count
