@@ -903,6 +903,52 @@ outside this contract. Passing these checks establishes terminal-count reload,
 software master clear, controller disable and their existing FDC consumer, not complete hardware
 accuracy or commercial compatibility. Other hardware inventory requirements remain unchanged.
 
+## Ap IDE READ VERIFY
+
+The existing bank-zero master accepts both `40h` and `41h` in CHS and LBA modes.
+Input count zero means 256 sectors; other values request 1–255. Successful
+completion leaves count zero and the address of the last verified sector.
+An invalid starting address returns IDNF (`10h`) with the original address/count.
+A request crossing capacity completes its valid prefix, then returns the first
+failing address and the remaining count including that sector. Residual 256 is
+encoded as zero. Device/head control bits are preserved. Completion has BSY and
+DRQ clear, ERR clear on success and set on failure, and the usual completion IRQ.
+
+This is the explicit legacy task-file contract from
+[Fujitsu's READ VERIFY description, printed page 5-22](https://www.manualslib.com/manual/54913/Fujitsu-Mhc2032at.html?page=93),
+selected for this emulator. The later
+[T13/1321D revision 3, section 8.28](https://www.seagate.com/support/disc/manuals/ata/d1153r17.pdf#page=169)
+defines the non-data command, count-zero convention and IDNF behavior but leaves
+normal address/count outputs unspecified. Last-sector success outputs are
+therefore not presented as a universal ATA requirement.
+
+VERIFY completes synchronously with bounded arithmetic over the HDI geometry.
+It never loads a PIO buffer, transfers host data, asserts DRQ or writes media.
+Validated HDIs have no modeled ECC failures; this checks addressability and does
+not claim physical-media integrity checking. Alternate-status reads preserve the
+device IRQ latch; primary-status reads clear it. nIEN suppresses delivery while
+retaining the latch. An already latched slave PIC IR1 request survives device
+acknowledgement and requires its own PIC acknowledgement/EOI.
+
+Original [Rust tests](../tests/hdd.rs) cover both opcodes/modes, counts 1/2/255/256,
+CHS transitions, LBA carry, final-sector success, invalid addresses, inclusive
+residuals, recovery, IRQ/nIEN, byte-identical media and subsequent IDENTIFY/read/write.
+The MIT [guest probe](../guest/ide_verify.asm) independently checks 46 literal
+result records, IRQ observations, recovery and guards before PASS. Its
+[manifest](../fixtures/ide-verify-manifest.json) pins offline assembly, source,
+boot/image/synthetic-firmware hashes, geometry, exact oracle bytes and a
+500,000-slot budget. Native and production release-Wasm tests boot the identical
+HDI before/after reset at both browser roots; see
+[validation evidence](validation.md#issue-71-ide-read-verify-2026-10-24).
+
+IDE remains **partial**. Completed 256-sector PIO transfers, READ/WRITE final
+addresses and error residuals, and fuller reset, nIEN and device/error interactions
+remain outstanding. No DMA/ATAPI/SCSI/SASI, defective-sector infrastructure,
+mechanical timing or BIOS redesign is added. All 26 inventory categories, scopes
+and statuses remain unchanged. Protected execution, paging and basic FPU remain
+required. Existing limited probes and game reports do not establish complete
+hardware accuracy or commercial compatibility.
+
 ## OPN/OPNA channel-3 frequency selection
 
 The shared `Opn` core selects the following **bank-zero** pairs when register

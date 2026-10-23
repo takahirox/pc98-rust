@@ -102,6 +102,7 @@ python3 tools/prepare_v30_bound_fixture.py
 python3 tools/prepare_v30_repc_fixture.py
 python3 tools/prepare_v30_nibble_mem_fixture.py
 python3 tools/prepare_v30_segment_irq_fixture.py
+python3 tools/prepare_ide_verify_fixture.py
 python3 tools/prepare_rtc_fixture.py
 python3 tools/prepare_opn_ch3_fixture.py
 # Fetch checksum-pinned guest binaries AND matching complete source archives.
@@ -162,6 +163,17 @@ before and after reset. Each boot must report `RTC CALENDAR PASS`, match all
 64 result/guard bytes and preserve disk bytes within 2,000,000 slots. Cold
 construction uses 2026-01-01 Thursday; reset preserves the RTC and fractional
 guest clocks. See the [hardware contract and remaining scope](docs/hardware.md#ap-calendar-read-path).
+
+The original MIT [IDE READ VERIFY probe](guest/ide_verify.asm) checks 40h/41h
+completion and first-error task-file results in CHS and LBA modes on Ap. Prepare
+offline with `python3 tools/prepare_ide_verify_fixture.py`; run
+`cargo test --locked --test hdd ide_verify_`, `cargo test --locked --test hdd`,
+and `npm test`. Native and production-release Wasm tests boot the identical HDI
+before and after reset, at both browser roots, requiring guest PASS, exact
+results/guards, unchanged media and zero writes within 500,000 slots per boot.
+The [checked manifest](fixtures/ide-verify-manifest.json) pins the original MIT
+source, synthetic firmware, image, geometry and independently calculated results.
+See the [selected legacy contract and remaining IDE gaps](docs/hardware.md#ap-ide-read-verify).
 
 The original MIT [V30 BOUND/CHKIND probe](guest/v30_bound.asm) checks signed
 inclusive bounds and guest vector-5 entry with next-instruction return. It checks

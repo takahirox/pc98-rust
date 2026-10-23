@@ -297,6 +297,37 @@ impl Ide {
         } else {
             self.count as usize
         };
+        if command & 0xf0 == 0x40 {
+            // Selected legacy READ VERIFY contract: retain the last successful
+            // address, or the first failing address with its inclusive residual.
+            // No PIO load/advance: this command never transfers data or sets DRQ.
+            let Some(lba) = lba else {
+                self.fail(0x10);
+                return;
+            };
+            let verified = count.min(d.sector_count().saturating_sub(lba));
+            self.count = (count - verified) as u8;
+            if verified != 0 {
+                let address = lba + verified - usize::from(verified == count);
+                if self.head & 64 != 0 {
+                    self.sector = address as u8;
+                    self.cylinder = (address >> 8) as u16;
+                    self.head = (self.head & 0xf0) | ((address >> 24) as u8 & 15);
+                } else {
+                    self.sector = (address % d.sectors as usize + 1) as u8;
+                    self.head = (self.head & 0xf0)
+                        | ((address / d.sectors as usize) % d.heads as usize) as u8;
+                    self.cylinder = (address / (d.sectors as usize * d.heads as usize)) as u16;
+                }
+            }
+            if verified != count {
+                self.fail(0x10);
+            } else {
+                self.status = 0x50;
+                self.irq = true;
+            }
+            return;
+        }
         let Some(lba) = lba.filter(|&l| l + count <= d.sector_count()) else {
             self.fail(0x10);
             return;
@@ -304,11 +335,7 @@ impl Ide {
         self.lba = lba;
         self.remaining = count as u16;
         self.writing = command & 0xf0 == 0x30;
-        if command & 0xf0 == 0x40 {
-            self.status = 0x50;
-            self.remaining = 0;
-            self.irq = true;
-        } else if self.writing {
+        if self.writing {
             self.status = 0x58;
         } else {
             self.load();

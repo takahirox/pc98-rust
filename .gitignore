@@ -26,3 +26,4 @@ __pycache__/
 /fixtures/v30_nibble_mem/
 /fixtures/opn_ch3/
 /fixtures/v30_segment_irq/
+/fixtures/ide_verify/
