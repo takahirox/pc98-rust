@@ -99,6 +99,7 @@ python3 tools/prepare_pit_mode3_rewrite_fixture.py
 python3 tools/prepare_pit_counter_latch_fixture.py
 python3 tools/prepare_v30_bound_fixture.py
 python3 tools/prepare_v30_repc_fixture.py
+python3 tools/prepare_rtc_fixture.py
 # Fetch checksum-pinned guest binaries AND matching complete source archives.
 # This makes a minimal GPL guest disk; it downloads no emulator code.
 python3 tools/prepare_freedos.py
@@ -109,6 +110,8 @@ python3 tools/prepare_hdd_fixture.py
 python3 tools/prepare_music_fixture.py
 python3 tools/prepare_device_fixture.py
 python3 tools/build_font.py --check
+cargo test --locked --test rtc
+cargo test --locked --test timer
 cargo test --locked --test pit counter_latch_
 cargo test --locked --test pit mode3_rewrite_
 cargo test --locked --test pit mode0_rewrite_
@@ -129,6 +132,17 @@ the primary download fails. Every source uses the original SHA-256 and size
 checks before caching; existing cached archives are verified for offline reuse.
 The canonical provenance URLs, source archives and audited image manifests remain
 the same.
+
+The original MIT [RTC probe](guest/rtc.asm) exercises Ap parallel 40-bit and
+serial 52-bit calendar reads, BIOS agreement and advancement with IF clear.
+`python3 tools/prepare_rtc_fixture.py` builds it offline and verifies the checked
+[source/boot/image/result manifest](fixtures/rtc-manifest.json). Run
+`cargo test --locked --test rtc` and `cargo test --locked --test timer`; `npm test`
+boots the identical disk in production release Wasm at both serving roots,
+before and after reset. Each boot must report `RTC CALENDAR PASS`, match all
+64 result/guard bytes and preserve disk bytes within 2,000,000 slots. Cold
+construction uses 2026-01-01 Thursday; reset preserves the RTC and fractional
+guest clocks. See the [hardware contract and remaining scope](docs/hardware.md#ap-calendar-read-path).
 
 The original MIT [V30 BOUND/CHKIND probe](guest/v30_bound.asm) checks signed
 inclusive bounds and guest vector-5 entry with next-instruction return. It checks

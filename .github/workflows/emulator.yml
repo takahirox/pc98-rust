@@ -36,6 +36,7 @@ jobs:
       - run: python3 tools/prepare_pit_counter_latch_fixture.py
       - run: python3 tools/prepare_v30_bound_fixture.py
       - run: python3 tools/prepare_v30_repc_fixture.py
+      - run: python3 tools/prepare_rtc_fixture.py
       - run: python3 tools/prepare_freedos.py
       - run: python3 tools/prepare_font_fixture.py
       - run: python3 tools/prepare_dos_apps.py

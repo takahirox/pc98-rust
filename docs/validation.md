@@ -2657,3 +2657,128 @@ paging and basic x87 remain required project goals outside this Issue. These
 bounded probes do not establish full V30 accuracy or commercial compatibility.
 No push, PR, merge or comment was performed; Issue #59 requires no post-merge
 verification.
+
+## Issue #61 Ap calendar reads (2026-10-24)
+
+Coordinator execution evidence, collected by this GitWeave implementation node
+in the assigned worktree. This records local native and production release-Wasm
+execution; remote CI and independent review are not established by this run.
+The implementation follows the [Ap RTC contract](hardware.md#ap-calendar-read-path).
+
+### Baseline reproduction and implementation
+
+Before any production changes, added the original
+`tests/rtc.rs::original_parallel_port_reproduction`: advance exactly 8,000,000
+guest clocks, strobe parallel Time Read and Shift, then sample 40 bits from
+port 33h while clocking port 20h. On the selected baseline,
+`cargo test --locked --test rtc` failed with exit 101, 0 passed/1 failed:
+actual stream `0`, expected `0x1401000001` (decimal 85916123137). The same test
+passes after implementation; no production source was changed before recording
+that failure. The original stub's constant 38h inputs explain the all-zero stream.
+
+The new CPU-local Bus RTC supplies both Ap serial I/O and BIOS AH=00 snapshots.
+It retains fractional 8 MHz clocks and the complete RTC serial state across soft
+reset. Parallel mode freezes the year and omits automatic February 29; extended
+mode counts two-digit years and leap years divisible by four. Hold and Time Read
+have the 1 Hz DATA OUT waveform. Time Read captures once; subsequent advancement
+does not change a partial transfer. The serial command register shifts even while
+calendar data is held. VM port/date behavior and AH=02 remain separate.
+
+Twelve original Rust tests cover exact 40-/52-bit streams and command tail,
+command framing, unchanged CLK/STB writes, initial LSB and trailing-edge sampling,
+DATA IN, partial transfers, abort/recapture, capture across rollover, independent
+command shifting during Hold/Time Read, unrelated port inputs, second/minute/hour/
+day/month/weekday boundaries, 30-/31-day months, February and leap/year wrap,
+compatibility-mode differences, instance isolation, fractional clock boundaries,
+individual 8-clock slots, irregular batches and `u32::MAX` ticks. Reset coverage
+continues a partial transfer and crosses a second with one remaining clock.
+BIOS tests execute guest INT/ROM OUT/IRET and assert all six bytes, destination
+guards, ES:BX wrapping, caller registers/segments/FLAGS and serial agreement.
+Scheduler tests advance with IF clear and HLT; no host time drives these checks.
+
+### Original guest fixture and results
+
+The MIT [RTC guest](../guest/rtc.asm) builds offline with
+`python3 tools/prepare_rtc_fixture.py`. Its
+[checked manifest](../fixtures/rtc-manifest.json) records the assembler command,
+source/license, source/boot/image hashes, deterministic initialization, result
+layout, exact cold/reset result hex, guards and a maximum 2,000,000-slot budget.
+The 1,261,568-byte image SHA-256 is
+`e6b362b066dbc3cfa81ed1646c90298b6220f026fd4db384123ce8292b16edca`.
+Generated image/source/license copies stay under ignored `fixtures/rtc/` and
+outside publication assets. Acceptance CI prepares this fixture before tests.
+
+The guest performs real parallel 40-bit and serial 52-bit I/O, checks the command
+nibble and other port bits, invokes BIOS AH=00 via INT/IRET and compares its date
+with serial observations. It polls real ports with IF clear until the next second,
+checks another BIOS snapshot and all guards, then emits `RTC CALENDAR PASS` or
+`RTC CALENDAR FAIL` through guest instructions. Hosts only insert, step and read;
+they do not patch outputs, inject elapsed time or bypass guest instructions.
+Native cold/reset boots both pass at 1,001,000 slots. Each host asserts all 64
+result bytes at 8000h..803Fh, including status 5Ah at 801Eh, guard A5h at 8000h and
+801Fh..803Fh, seconds 00→01 cold and 01→02 after reset, and unchanged disk bytes.
+
+### Validation commands
+
+All README fixture prerequisites passed: seven fixture-fetch unit tests,
+reproducible media, offline DMA, GDTR, IDTR, SMSW, PIC, PIC SMM, PIT mode-2/-3/-0,
+PIT mode-0/-3 rewrite, PIT counter-latch, V30 BOUND and carry-repeat probes, the new
+RTC probe, plus pinned FreeDOS/source, fonts, DOS applications, CPULEVEL, HDD,
+music and device preparation, and the font consistency check. `npm ci` passed
+with zero vulnerabilities and `npx playwright install chromium` passed.
+
+The existing port 8000 was occupied. A temporary browser config imported
+`playwright.config.js` and changed only the two server ports/base URLs to
+`http://127.0.0.1:62088/` and `http://127.0.0.1:62089/pc98-rust/`. The local server
+used `python3 -m http.server 62088 --bind 127.0.0.1 --directory web`; a temporary
+copy of `tests/browser/serve_project.py` changed only port 8001 to 62089,
+preserving the project-path symlink and root-asset rejection. Tests, assertions,
+timeouts and budgets were unchanged. Two workers follow the existing validation
+convention for browser clock tests. No existing listener was stopped or reused.
+Both temporary files were removed after the suite completed.
+
+| Check | Result |
+| --- | --- |
+| `python3 tools/prepare_rtc_fixture.py --update-manifest` | Created checked manifest from original MIT source |
+| `python3 tools/prepare_rtc_fixture.py` | Passed; identical source/boot/image/result manifest reproduced |
+| `cargo test --locked --test rtc` | Passed: all 12 focused tests; final rerun after test refinements also passed, zero ignored |
+| `cargo test --locked --test timer` | Passed: all eight AH=02 tests |
+| `cargo test --locked` | Passed: 255 integration tests across 18 targets; zero failed/ignored; unit/doc targets passed |
+| `cargo clippy --all-targets -- -D warnings` | Passed on final Rust sources |
+| `cargo fmt --check` | Passed |
+| `git diff --check` | Passed |
+| `npm test -- --config=.issue61-playwright.config.js --workers=2` | Passed: media/font checks, release Wasm build, exact ten-asset publication audit and all 92 browser tests, zero skipped, 2.9 minutes |
+
+All four RTC browser boots (cold/reset at `/` and `/pc98-rust/`) pass at
+1,001,000 slots each, matching native. Every boot requires PASS, no FAIL/core/
+browser error, the exact specified result/guard bytes and unchanged disk bytes.
+The production release Wasm artifact was 451,870 bytes; publication still
+contains only the ten approved assets and no generated RTC or DOS fixtures.
+
+During test refinement, an added partial-recapture assertion initially expected
+seconds 03h after a sequence ending at 02h. Corrected that literal expectation;
+production behavior required no change. The final focused RTC rerun also covers
+the added DATA IN and abort/recapture cases and individual 8-clock versus
+irregular-batch fractional checks, added during review of the full-suite run.
+
+### Review and remaining scope
+
+Locally reviewed the complete production, test, assembly, provenance, CI and
+documentation diff against Issue #61, including newly added files and local
+links/anchors. Confirmed single-capture BIOS/serial coherence, independent command
+shifting, rising CLK/STB effects and trailing-edge sampling, bounded calendar
+advancement, per-instance state and reset preservation. Existing hardware,
+DOS/application, VM, CPU and six-game regression assertions and budgets were
+preserved and passed. No commercial ROM or guest software was acquired.
+
+All 26 inventory categories and full required scopes remain retained. RTC moves
+from unimplemented to **partial**. The partial categories are cpu-v30, cpu386,
+protected-mode, memory, pic, pit, dma, keyboard, mouse, fdc, gdc, egc, pegc,
+text-cg, display-timing, opn, opna, pcm86, bios, lio, integration and rtc.
+IDE and GRCG remain **implemented, unverified**; paging and fpu remain
+**unimplemented**. RTC Time Set/Counter Hold, BIOS setting services, TP selection,
+interval/IRQ controls, test mode and VM µPD1990-family behavior remain required
+outstanding work. Protected execution, paging and basic x87 remain required
+project work. These limited probes do not establish full hardware accuracy or
+commercial compatibility. No push, PR, merge or comment was performed; Issue #61
+requires no post-merge verification.

@@ -12,6 +12,7 @@ pub struct Bus {
     pub graphics: Vec<u8>,
     pub pics: [Pic; 2],
     pub pit: Pit,
+    pub rtc: crate::rtc::Rtc,
     pub opn: crate::sound::Opn,
     pub pcm: crate::pcm::Pcm86,
     pub dma: Dma,
@@ -88,6 +89,7 @@ impl Bus {
             ],
             pics: [Pic::new(8), Pic::new(0x10)],
             pit: Pit::default(),
+            rtc: crate::rtc::Rtc::default(),
             opn: crate::sound::Opn::default(),
             pcm: crate::pcm::Pcm86::default(),
             dma: Dma {
@@ -285,6 +287,9 @@ impl Bus {
         let old_frame = self.cycles / 133_333;
         let old_cycles = self.cycles;
         self.cycles += cycles as u64;
+        if self.profile == Profile::Pc9821ApDos {
+            self.rtc.tick(cycles);
+        }
         if self
             .interval
             .as_ref()
@@ -390,7 +395,13 @@ impl Bus {
             8 | 10 => self.pics[1].read(p == 10),
             1..=0x11 if p & 1 != 0 => self.dma.read(p),
             0x31 => 0x7b,
-            0x33 => 0x38,
+            0x33 => {
+                0x38 | if self.profile == Profile::Pc9821ApDos {
+                    self.rtc.data_out()
+                } else {
+                    0
+                }
+            }
             0x35 => self.system_c,
             0x41 => self.keyboard.receive(),
             0x43 => {
@@ -504,6 +515,7 @@ impl Bus {
     }
     pub fn output(&mut self, p: u16, v: u8) {
         match p {
+            0x20 if self.profile == Profile::Pc9821ApDos => self.rtc.write(v),
             0x7fd9 | 0x7fdb | 0x7fdd | 0x7fdf | 0xbfdb => self.mouse.output(p, v),
             0x430
             | 0x432

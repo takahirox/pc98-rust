@@ -11,6 +11,7 @@ mod lio;
 pub mod mouse;
 pub mod pcm;
 pub mod profile;
+pub mod rtc;
 pub mod sound;
 use bus::Bus;
 use cpu::Cpu;
@@ -65,11 +66,13 @@ impl Machine {
         let disks = std::mem::take(&mut self.bus.disks);
         let hdd = self.bus.ide.disk.take();
         let boot_hdd = self.bus.boot_hdd;
+        let rtc = std::mem::take(&mut self.bus.rtc);
         self.cpu = Cpu::default();
         if self.bus.profile == Profile::Pc9821ApDos {
             self.cpu.flags = 2;
         }
         self.bus = Bus::new(self.bus.profile);
+        self.bus.rtc = rtc;
         self.bus.disks = disks;
         self.bus.ide.disk = hdd;
         self.bus.boot_hdd = boot_hdd;
