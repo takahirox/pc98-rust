@@ -33,6 +33,12 @@ pub struct Cpu {
     pub gdtr_limit: u16,
     /// Linear metadata; never masked by A20 or validated against installed RAM.
     pub gdtr_base: u32,
+    /// Real-mode interrupt table; reset matches i486 architectural state.
+    pub idtr_limit: u16,
+    /// Unmasked linear metadata, independent of installed memory and A20.
+    pub idtr_base: u32,
+    /// Terminal IDT-limit shutdown; only reset resumes execution.
+    pub shutdown: bool,
     pub ip: u32,
     pub flags_upper: u16,
     // Decoder state resets each instruction. Public to retain native struct-update
@@ -67,6 +73,9 @@ impl Default for Cpu {
             extra_segments: [0; 2],
             gdtr_limit: 0,
             gdtr_base: 0,
+            idtr_limit: 0x03ff,
+            idtr_base: 0,
+            shutdown: false,
             flags_upper: 0,
             operand32: false,
             address32: false,
@@ -242,6 +251,24 @@ impl Cpu {
         self.pop_width(b, self.bytes(true))
     }
     fn deliver_interrupt(&mut self, b: &mut Bus, n: u8) -> ExecResult<()> {
+        if self.shutdown {
+            return Ok(());
+        }
+        let entry = n as u32 * 4;
+        let base = if b.profile == crate::Profile::Pc9821ApDos {
+            // Check the complete entry before touching the stack or reading a vector.
+            if entry + 3 > self.idtr_limit as u32 {
+                return Err(ExecError::Fault(8));
+            }
+            self.idtr_base
+        } else {
+            0 // V30 keeps its fixed IVT, irrespective of the public IDTR fields.
+        };
+        // Wrap each linear byte address at 32 bits before Bus mapping, on both
+        // native and Wasm hosts (usize has different widths on those targets).
+        let vector: [u8; 4] = std::array::from_fn(|i| {
+            b.read(base.wrapping_add(entry).wrapping_add(i as u32) as usize)
+        });
         // Real-mode entry always saves FLAGS, CS and IP as words, even for 66 INT.
         let bytes = 2;
         // Preflight each push: the 16-bit stack pointer may wrap between words.
@@ -259,14 +286,30 @@ impl Cpu {
         self.flags &= !(IF | TF);
         self.flags_upper &= !4; // Real-mode interrupt/exception entry clears AC.
         self.trap_suppressed = true;
-        self.ip = b.read16(n as usize * 4) as u32;
-        self.s[CS] = b.read16(n as usize * 4 + 2);
+        self.ip = u16::from_le_bytes([vector[0], vector[1]]) as u32;
+        self.s[CS] = u16::from_le_bytes([vector[2], vector[3]]);
         self.halted = false;
         Ok(())
     }
+    // Events outside instruction execution keep their current resume IP. Software
+    // INT uses deliver_interrupt directly so step restores the faulting prefix IP
+    // before attempting #DF. This is a bounded IDT-limit path, not nested-fault emulation.
+    fn deliver_event(&mut self, b: &mut Bus, n: u8) -> ExecResult<()> {
+        match self.deliver_interrupt(b, n) {
+            Err(ExecError::Fault(8)) => match self.deliver_interrupt(b, 8) {
+                Err(ExecError::Fault(8)) => {
+                    self.shutdown = true;
+                    self.trap_suppressed = true;
+                    Ok(())
+                }
+                result => result,
+            },
+            result => result,
+        }
+    }
     /// Inject a real-mode interrupt with a six-byte frame from a native caller.
     pub fn interrupt(&mut self, b: &mut Bus, n: u8) -> Result<(), String> {
-        self.deliver_interrupt(b, n)
+        self.deliver_event(b, n)
             .map_err(|_| "invalid real-mode interrupt stack".to_string())
     }
     fn flag(&mut self, f: u16, on: bool) {
@@ -568,11 +611,17 @@ impl Cpu {
         }
     }
     pub fn step(&mut self, b: &mut Bus) -> Result<(), String> {
+        if self.shutdown {
+            return Ok(());
+        }
         if self.flags & IF != 0 && self.inhibit == 0 {
             if let Some(n) = b.irq() {
-                self.deliver_interrupt(b, n)
+                self.deliver_event(b, n)
                     .map_err(|_| "invalid real-mode interrupt stack".to_string())?;
             }
+        }
+        if self.shutdown {
+            return Ok(());
         }
         if self.inhibit > 0 {
             self.inhibit -= 1;
@@ -585,7 +634,7 @@ impl Cpu {
                     && saved.flags & TF != 0
                     && !self.trap_suppressed
                 {
-                    self.deliver_interrupt(b, 1)
+                    self.deliver_event(b, 1)
                         .map_err(|_| "invalid single-step interrupt stack".to_string())?;
                 }
                 Ok(())
@@ -599,7 +648,7 @@ impl Cpu {
                     ExecError::Unsupported(message) => return Err(message),
                 };
                 *self = saved;
-                self.deliver_interrupt(b, vector)
+                self.deliver_event(b, vector)
                     .map_err(|_| "fault while delivering real-mode exception".to_string())
             }
         }
@@ -614,7 +663,7 @@ impl Cpu {
             0x01 => {
                 let m = self.fetch(b)?;
                 let kind = (m >> 3) & 7;
-                if !matches!(kind, 0 | 2) {
+                if !matches!(kind, 0..=3) {
                     return Err(ExecError::Unsupported(format!(
                         "unimplemented i486 opcode 0F 01 /{kind}"
                     )));
@@ -623,23 +672,34 @@ impl Cpu {
                     return Err(ExecError::Fault(6));
                 };
                 // i486 real-address contract for these six-byte operands is #GP,
-                // including SS. Preflight before any GDTR change or bus write.
+                // including SS. Preflight before any table-register change or bus write.
                 if off > 0xfffa {
                     return Err(ExecError::Fault(13));
                 }
                 let address = self.segment(s) as usize * 16 + off as usize;
-                if kind == 2 {
+                if kind >= 2 {
                     let limit = b.read16(address);
                     let mut base = 0;
                     for i in 0..if self.operand32 { 4 } else { 3 } {
                         base |= (b.read(address + 2 + i) as u32) << (8 * i);
                     }
-                    self.gdtr_limit = limit;
-                    self.gdtr_base = base;
+                    if kind == 2 {
+                        self.gdtr_limit = limit;
+                        self.gdtr_base = base;
+                    } else {
+                        self.idtr_limit = limit;
+                        self.idtr_base = base;
+                    }
                 } else {
-                    // Full base with either operand size: Intel SDM SGDT operation.
-                    let limit = self.gdtr_limit.to_le_bytes();
-                    let base = self.gdtr_base.to_le_bytes();
+                    // Full base with either operand size: explicit SDM SGDT/SIDT
+                    // operation, despite older compatibility text (docs/hardware.md).
+                    let (limit, base) = if kind == 0 {
+                        (self.gdtr_limit, self.gdtr_base)
+                    } else {
+                        (self.idtr_limit, self.idtr_base)
+                    };
+                    let limit = limit.to_le_bytes();
+                    let base = base.to_le_bytes();
                     for (i, value) in limit.into_iter().chain(base).enumerate() {
                         b.write(address + i, value);
                     }
