@@ -233,7 +233,7 @@ this table is not a claim of complete chip emulation.
 
 | Ports (hex) | Device and supported behavior | IRQ / notes |
 | --- | --- | --- |
-| `00,02`; `08,0A` | Master/slave 8259: existing ICW path, masks, IRR/ISR, OCW2 programmable/rotating priority, specific/nonspecific EOI, auto EOI and automatic rotation | Master IR7 cascades slave; each controller resolves its own priority and ISR blocking |
+| `00,02`; `08,0A` | Master/slave 8259: existing ICW path, masks, IRR/ISR, OCW2 programmable/rotating priority, specific/nonspecific EOI, auto EOI, automatic rotation and OCW3 special-mask mode | Master IR7 cascades slave; each controller resolves its own priority and ISR blocking |
 | `01–0F` odd, `11–1F` odd, `21,23,25,27` | 8237 address/count flip-flop, controller disable, channel masks, direction/decrement, terminal count and auto-init reload, master clear, bank registers | FDC uses channel 2; count/address change with actual byte transfers |
 | `31,33,35,37` | PPI startup inputs, output C, bit set/reset, active-low beep gate | Input straps are fixed VM-profile constants |
 | `41,43` | Keyboard byte FIFO, ready status, command acknowledgements, down/up scan bytes | IR1 / INT 09; firmware maintains BIOS ring, held-key bitmap and modifier state |
@@ -296,7 +296,41 @@ its exact trace, readback, guards and disk bytes before and after reset. The
 command, result bytes and the 2,000,000-slot budget. See the
 [validation record](validation.md#issue-41-8259a-ocw2-priority-2026-10-23).
 
-PIC remains **partial**. Polling, special-mask mode, special fully nested mode,
+### 8259A OCW3 special-mask subset
+
+Each controller independently latches OCW3 SMM (bit 5) only when ESMM (bit 6)
+is set: `68h` enables special-mask mode and `48h` disables it. With ESMM clear,
+the mode is preserved. RR/RIS status selection operates independently, including
+combined commands `6Ah`, `6Bh`, `4Ah` and `4Bh`; repeated reads are passive.
+
+In special-mask mode, masked ISR bits do not block arbitration. Unmasked ISR bits
+still block equal/lower priorities under the programmed order. IMR continues to
+inhibit requests without clearing IRR. Nonspecific EOI selects the highest-priority
+unmasked ISR bit; rotating nonspecific EOI uses the same eligible set and makes
+the selected line lowest. With no eligible ISR bit, neither operation changes ISR
+or priority. Specific EOI can clear a masked ISR bit, and specific rotation keeps
+its existing explicit-line behavior. Mode changes preserve IRR, ISR, IMR, priority
+and AEOI/automatic-rotation state. ICW1 clears special-mask mode; construction and
+Machine reset also disable it as deterministic emulator policy.
+
+The reference is [Intel 8259A, Figure 8, OCW3/EOI and special-mask operation,
+printed pp. 13–16](https://courses.cs.washington.edu/courses/cse451/25wi/documentation/8259A.pdf#page=13).
+[Native coverage](../tests/pic.rs) exercises all eight priority origins, mode/mask
+transitions, EOI selection, initialization, reset, instance isolation and both
+controllers' ports, including explicit master EOIs for slave delivery. The
+separate original MIT [nesting probe](../guest/pic_smm.asm) uses physical keyboard
+input and a guest-programmed one-shot timer. It confirms both pending requests,
+observes normal-mode blocking with IF set, then enables special-mask nesting.
+Native and production-Wasm tests require trace `01 00 01`, ISR snapshots
+`02 03 02`, timer counts zero before enabling and one afterward, exact results
+and guards, unchanged disk bytes and `PIC SMM PASS` within 2,000,000 slots per
+boot. The nested timer uses nonspecific EOI; the outer keyboard handler finishes
+with specific EOI. Both profiles run before and after reset; browser coverage
+includes both URL roots. The [manifest](../fixtures/pic-smm-manifest.json) pins
+offline preparation, source/image hashes and exact bytes. See the
+[validation record](validation.md#issue-43-8259a-ocw3-special-mask-mode-2026-10-23).
+
+PIC remains **partial**. Polling, special fully nested mode,
 general ICW sequencing/configuration, alternate cascade wiring, edge/level
 electrical modeling and spurious-interrupt fidelity remain outside this subset.
 These bounded checks do not establish full hardware accuracy or commercial

@@ -89,6 +89,7 @@ python3 tools/prepare_gdtr_fixture.py
 python3 tools/prepare_idtr_fixture.py
 python3 tools/prepare_smsw_fixture.py
 python3 tools/prepare_pic_fixture.py
+python3 tools/prepare_pic_smm_fixture.py
 # Fetch checksum-pinned guest binaries AND matching complete source archives.
 # This makes a minimal GPL guest disk; it downloads no emulator code.
 python3 tools/prepare_freedos.py
@@ -116,6 +117,16 @@ trace `1,0,0,1,1,0`, guest-confirmed competing IRR bits, `PIC PASS`, exact resul
 and guards, no `FAIL` or host error, and unchanged disk bytes within two million
 slots per boot, before and after reset. Its offline preparation script verifies
 the checked-in [source/image/result manifest](fixtures/pic-manifest.json).
+
+The separate original MIT [special-mask probe](guest/pic_smm.asm) enters a
+keyboard handler with a confirmed timer request pending and IR0 lowest. It
+demonstrates normal-mode blocking while IF is set, then enables OCW3 special-mask
+mode to nest the timer. Both profiles run the identical image natively and in
+release Wasm at both URL roots, before and after reset. Each boot requires
+`PIC SMM PASS`, trace `01 00 01`, ISR snapshots `02 03 02`, timer counts zero
+before enabling and one afterward, exact guards, unchanged disk bytes, no error
+or `FAIL`, and completion within two million slots. Its offline
+[manifest](fixtures/pic-smm-manifest.json) pins provenance, hashes and results.
 
 The original MIT [SMSW boot probe](guest/smsw.asm) checks CPU-local reset status,
 register upper halves, exact two-byte stores, addressing and guest-handled
