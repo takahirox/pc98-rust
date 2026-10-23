@@ -2053,3 +2053,192 @@ Limited probes and six-game reports do not establish full hardware accuracy or
 commercial compatibility. No commercial ROM or guest software was acquired.
 No push, PR, comment or merge was performed. Issue #51 requires no post-merge
 verification.
+
+## Issue #53: mode-3 count-only rewrites at half-cycle boundaries (2026-10-24)
+
+Implemented [Issue #53](https://github.com/takahirox/pc98-rust/issues/53) against
+production baseline `e4f90a325dff690e962c5a952dccee865c5861a7` (the assigned
+worktree includes GitWeave metadata commits after that baseline). The source
+Issue was read from GitHub; its open state and acceptance scope matched the
+supplied snapshot. No upstream technical diagnosis was supplied beyond the Issue.
+
+`Counter` now retains the active mode-3 divisor separately from the latest
+completed reload register. Complete count writes leave count, OUT and phase
+intact. At the old half-cycle's terminal boundary, the counter toggles OUT and
+loads the latest completed replacement without a separate load clock. The
+ordinary initial load still consumes one clock. An unfinished paired write
+leaves the established count running; it cannot erase an earlier completed
+replacement. Mode programming and Machine reset cancel replacement state.
+Production advancement handles at most one old half-cycle boundary before
+skipping new periods arithmetically, with no loop per elapsed PIT clock.
+Scheduler conversion, PIC request latching and audio timing/queue limits are
+unchanged. See the [bounded contract and Intel references](hardware.md#8253-binary-mode-3-subset).
+
+### Reproduction and focused coverage
+
+Before changing production code, added two explicit traces and ran
+`cargo test --locked --test pit mode3_rewrite_`. Expected exit 101: both failed.
+The high-half reproduction observed `(6,H)` instead of `(2,H)` on the first
+clock after replacing 8 with 6. The independently specified low-half trace
+observed `(4,H)` instead of `(2,L)` after replacing a running 7 with 4. Thus the
+baseline prematurely reloaded and also raised OUT during a low-half rewrite.
+Both traces passed immediately after the production change.
+
+Fourteen focused `mode3_rewrite_` tests in [tests/pit.rs](../tests/pit.rs) cover:
+
+- Replacements in both halves, immediately before and after both terminal
+  boundaries, even-to-odd and odd-to-even changes, repeated completed writes,
+  restoring the active divisor and an incomplete pair spanning multiple toggles.
+- All channels, encodings 3/7, LSB/MSB/paired formats, representable values 2, 3,
+  65,535 and encoded zero, live reads, retained access format and a half-consumed
+  ordinary latch snapshot held across replacement. No initial pre-load count
+  readback is asserted.
+- Initial completion before the load clock, active channel isolation, fresh
+  mode cancellation including transitions to mode 0/2, and Machine reset with
+  deferred complete writes, another partial pair, latches and fractional state.
+- Single-clock versus irregular batches through the old half, replacement
+  boundary and later periods; final complete PIT state including fraction,
+  aggregated rises and future behavior. Zero advancement and split/unsplit
+  `u32::MAX` scheduler cycles start with deferred replacements pending.
+- Both profiles and port banks through Bus, all channels/access forms/encodings,
+  write-only output stability, falling boundaries without IRQ0, natural rising
+  requests held by masks or ISR until unmask/EOI, and IF-clear/HLT deferral followed
+  by handler delivery, EOI and IRET. Channel-1 beeper samples retain polarity
+  until each deferred boundary and retain enable/amplitude/queue behavior.
+
+Two intermediate expanded-suite runs exited 101 on the same two test-expectation
+errors: a one-clock low half for divisor 3 exposes the full divisor rather than
+2, and the latch test advanced 130 instead of 129 clocks to the boundary. Those
+expectations were corrected against the explicit 8253 sequences; production code
+needed no further change. All fourteen final focused tests pass.
+
+### Original offline guest and provenance
+
+The separate original MIT [guest/pit_mode3_rewrite.asm](../guest/pit_mode3_rewrite.asm)
+retains the earlier mode-3 and mode-0 probes unchanged. It programs paired binary
+mode 3 once with divisor 60000, checks two latched old counts and their
+subtract-two delta, then writes divisor 2000 without another mode word. After
+500 LOOP instructions a new count latch must still be 52000..56000, rejecting
+immediate restart (which would read at most 2000). It initializes the PIC to
+discard setup transitions, enables IRQ0, and waits in a bounded 20000-iteration
+loop for exactly two natural entries. Both handlers verify ISR=1, an even new
+count 2..2000, EOI, ISR=0 and return with IRET; the second masks further delivery.
+There are no counter reads between paired write bytes. The guest and hosts
+compare every result byte and guard. Hosts load, step, reset and inspect; they
+never inject interrupts or results.
+
+Offline reproduction (NASM required):
+
+```sh
+nasm -f bin guest/pit_mode3_rewrite.asm -o pit_mode3_rewrite.bin
+python3 tools/prepare_pit_mode3_rewrite_fixture.py
+cargo test --locked --test pit mode3_rewrite_ -- --nocapture
+```
+
+The checked [manifest](../fixtures/pit-mode3-rewrite-manifest.json) pins:
+
+| Artifact | SHA-256 or exact value |
+| --- | --- |
+| Original assembly source | `e8e101fd6aa43995297638c3974615a6829de657b1be5bd9fcd5995c02a446f8` |
+| Assembled 1024-byte boot sector | `2e540026dd112bdb348db5c8e606b002dbe64745b2770ccb37381b116e2301aa` |
+| 1,261,568-byte HDM image | `74494bd83d8c29d9c362ce7cd43c8c538b271e40bc61431139688a2406603cbf` |
+| Results at `8000h..801Fh` | `a50102010100000101a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5` |
+| Per-boot maximum | 2,000,000 slots |
+
+`8000h` and `8009h..801Fh` remain A5 guards. Other bytes prove old count delta,
+two IRQ entries, ISR snapshots 1/1, post-EOI snapshots 0/0, new divisor count and
+deferred old-half count. Preparation verifies source/boot/image hashes offline
+and retains assembly, MIT license and manifest beside the generated image outside
+`web/`. CI prepares this probe before native and browser acceptance. Existing
+fixture manifests, assertions, budgets and publication assets are preserved.
+Native VM and Ap boots before/after reset each pass at 17,000 slots with exact
+results/guards, no FAIL/core errors and unchanged disk bytes.
+
+### Commands and actual results
+
+All commands below ran in the assigned worktree. Existing legal fixtures were
+prepared before the complete acceptance suites; no commercial ROM or software
+was acquired. CPULEVEL and DEBUG preparation each encountered primary HTTP 503
+and then passed through the repository's existing checksum-pinned mirror.
+
+| Command | Result |
+| --- | --- |
+| `python3 tools/prepare_dma_fixture.py` | Passed |
+| `python3 tools/prepare_gdtr_fixture.py` | Passed |
+| `python3 tools/prepare_idtr_fixture.py` | Passed |
+| `python3 tools/prepare_smsw_fixture.py` | Passed |
+| `python3 tools/prepare_pic_fixture.py` | Passed |
+| `python3 tools/prepare_pic_smm_fixture.py` | Passed |
+| `python3 tools/prepare_pit_mode2_fixture.py` | Passed |
+| `python3 tools/prepare_pit_mode3_fixture.py` | Passed |
+| `python3 tools/prepare_pit_mode0_fixture.py` | Passed |
+| `python3 tools/prepare_pit_mode0_rewrite_fixture.py` | Passed |
+| `python3 tools/prepare_pit_mode3_rewrite_fixture.py --update-manifest` | Created checked manifest from original source |
+| `python3 tools/prepare_pit_mode3_rewrite_fixture.py` | Passed: reproduced source/boot/image/results manifest |
+| `python3 tools/prepare_freedos.py` | Passed with pinned legal binaries and complete matching sources |
+| `python3 tools/prepare_font_fixture.py` | Passed |
+| `python3 tools/prepare_dos_apps.py` | Passed with existing provenance/manifests |
+| `python3 tools/prepare_cpu_fixture.py` | Passed through existing pinned mirror after primary HTTP 503 |
+| `python3 tools/prepare_hdd_fixture.py` | Passed |
+| `python3 tools/prepare_music_fixture.py` | Passed |
+| `python3 tools/prepare_device_fixture.py` | Passed through existing pinned mirror after primary HTTP 503 |
+| `python3 tools/build_font.py --check` | Passed |
+| `python3 tools/build_media.py --check` | Passed |
+| `python3 -m unittest discover -s tools -p test_fixture_fetch.py` | Passed: seven tests |
+| `cargo fmt` | Applied formatting to new Rust tests |
+| `cargo test --locked --test pit mode3_rewrite_ -- --nocapture` | Passed: 14 tests, four native probe boots each 17,000 slots |
+| `cargo test --locked --test pit mode3_rewrite_` | Passed: 14 tests |
+| `cargo test --locked --test pit` | Passed: 56 tests |
+| `cargo test --locked` | Passed: 216 integration tests across 17 targets, zero failed/ignored; unit/doc targets also passed |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `cargo fmt --check` | Passed |
+| `npm ci` | Passed: zero vulnerabilities |
+| `npx playwright install chromium` | Passed |
+| `npm test` | Release-Wasm build and ten-asset publication audit passed; server could not bind occupied port 8000, exit 1 before browser tests |
+| `npm test -- --config=.issue53-playwright.config.js --workers=2` | Passed: production release-Wasm build, ten-asset audit and all 82 browser tests, zero skipped, 2.5 minutes |
+| `git diff --check` | Passed |
+
+The temporary browser config imports `playwright.config.js` and overrides only
+the local port/base URL to `http://127.0.0.1:62084/` and project port/base URL to
+`http://127.0.0.1:62085/pc98-rust/`. Its local server command is
+`python3 -m http.server 62084 --bind 127.0.0.1 --directory web`. The project server
+is a temporary copy of `tests/browser/serve_project.py` with only listening port
+8001 replaced by 62085, preserving its `web/` symlink and rejection of root asset
+URLs. Both complete projects, test assertions, timeouts and budgets are retained.
+Two workers follow the prior recorded workaround for browser clock contention;
+no existing listener was stopped or reused. Both temporary files were removed
+after execution. All eight new browser probe boots (VM/Ap, two roots, before/after
+reset) pass at 17,000 slots each with exact manifest results/guards, PASS without
+FAIL/core/browser errors and unchanged disk bytes. Existing PIT/PIC/BIOS timer,
+CPU-shadow, DOS/application, VM and game checks pass without relaxing assertions
+or budgets. No acceptance checks were skipped.
+
+### Local pre-merge review and boundaries
+
+Performed a final local review against every Issue criterion and
+[review-guidelines.md](review-guidelines.md), reading the full production/test/
+fixture/CI/documentation diff and validation results. Checked initial load versus
+active replacement, paired byte completion, both toggle directions, 8253 odd
+readback, bounded batch arithmetic, reset, IRQ masks/ISR/EOI, guest-owned result
+writes and natural interrupt service. Confirmed that original probes/manifests
+and all existing tests remain unchanged, only the new fixture is added to CI,
+and no other PIT mode or audio scheduling behavior was refactored. The two
+incorrect test expectations described above are resolved. Review also removed
+an obsolete comment about a pre-mode-3 baseline from the new guest; offline
+preparation reconfirmed identical boot/image bytes after this comment-only edit.
+Relative documentation targets and the new validation anchor were checked.
+No blocking findings remain from this local review. Remote CI and independent
+review are not established by this execution.
+
+All 26 fixed category scopes and statuses remain unchanged: **partial** cpu-v30,
+cpu386, protected-mode, memory, pic, pit, dma, keyboard, mouse, fdc, gdc, egc,
+pegc, text-cg, display-timing, opn, opna, bios, lio, integration; **unimplemented**
+paging, fpu, rtc; **implemented, unverified** ide, grcg, pcm86. PIT remains partial.
+Modes 1/4/5, external GATE/retriggering, BCD, mode-2/3 divisor-1 behavior, fuller
+latch/access sequencing, non-mode-3 beeper behavior and audio sampling across
+large scheduler batches remain outstanding. No 8254 read-back command or fuller
+PIC electrical/spurious-interrupt modeling is implied. Protected execution,
+paging and basic FPU remain required project goals. Limited probes and six-game
+reports do not establish full hardware accuracy or commercial compatibility.
+No commercial ROMs or guest software were acquired. No push, PR, comment or merge
+was performed. Issue #53 requires no post-merge verification.
