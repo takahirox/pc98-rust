@@ -443,6 +443,24 @@ durations of ceil(N/2) and floor(N/2) clocks. Starting at the load clock:
 | 4 | (4,H), (2,H), (4,L), (2,L), (4,H) |
 | 5 | (5,H), (4,H), (2,H), (5,L), (2,L), (5,H) |
 
+A completed count-only replacement preserves the active count and OUT sequence
+until the current half-cycle's terminal boundary. OUT toggles at that boundary
+and the latest completed divisor loads for the next half-cycle, without an extra
+initial-load clock. Paired writes complete only on the MSB; an unfinished pair
+does not stop counting or replace the last completed divisor. Access format and
+ordinary completed latch snapshots remain intact. Fresh mode words and Machine
+reset cancel deferred replacements. This reload timing follows the explicit
+half-cycle replacement rule in Intel's [8254 datasheet, Mode 3, printed pp.
+12–13](https://www.scs.stanford.edu/23wi-cs212/pintos/specs/8254.pdf#page=12), while
+retaining the 8253 odd-count readback above rather than 8254 readback semantics.
+
+For example, load 8 with control `16h`, advance two decrement clocks to `(4,H)`,
+then write 6 without a mode word. The next clocks are `(2,H)`, `(6,L)`, `(4,L)`,
+`(2,L)`, `(6,H)`; only the last transition requests IRQ0. Independently, load 7,
+advance four high clocks and one low decrement to `(4,L)`, then replace with 4:
+`(2,L)`, `(4,H)`, `(2,H)`, `(4,L)`, `(2,L)`, `(4,H)`.
+Run `cargo test --locked --test pit mode3_rewrite_` after preparing the probe.
+
 Ordinary reads and count latches expose this sequence while counting continues.
 OUT0 rising transitions, including mode-programming rises, feed the existing PIC
 latch as in mode 2. Falling transitions and held-high output do not request IRQ0,
@@ -466,8 +484,13 @@ through guest latches and services periodic hardware IRQ0 with EOI/IRET. Its
 provenance, exact results/guards and the two-million-slot budget. See the
 [validation record](validation.md#issue-47-8253-binary-mode-3-2026-10-23).
 
-PIT remains **partial**. Active mode-3 divisor rewrites without a new mode word,
-mode-specific behavior for 1/4/5,
+The separate MIT [count-only rewrite probe](../guest/pit_mode3_rewrite.asm)
+rejects premature restart using count latches and checks natural IRQ0 service
+with ISR/EOI/IRET. Its [manifest](../fixtures/pit-mode3-rewrite-manifest.json) pins
+offline source, boot and image hashes, results/guards and the same per-boot budget.
+See [rewrite validation](validation.md#issue-53-mode-3-count-only-rewrites-at-half-cycle-boundaries-2026-10-24).
+
+PIT remains **partial**. Mode-specific behavior for 1/4/5,
 external GATE/retriggering, BCD, divisor-1 behavior, comprehensive latch/access
 sequencing and fuller beeper timing remain outstanding. These shared counter
 subsets do not establish instruction-cycle accuracy, full audio or hardware

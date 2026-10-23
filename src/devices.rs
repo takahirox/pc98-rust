@@ -147,6 +147,7 @@ pub struct Counter {
     latch: Option<u16>,
     load_pending: bool,
     mode3_phase: u32,
+    mode3_reload: u32, // Active half-cycle divisor; reload may already differ.
     pub enabled: bool,
     pub output: bool,
 }
@@ -163,6 +164,7 @@ impl Default for Counter {
             latch: None,
             load_pending: false,
             mode3_phase: 0,
+            mode3_reload: 65536,
             enabled: false,
             output: false,
         }
@@ -194,15 +196,15 @@ impl Counter {
         };
         if let Some(v) = value {
             self.reload = if v == 0 { 65536 } else { v as u32 };
-            if self.mode == 2 {
+            if matches!(self.mode, 2 | 3) {
                 // The first count transfers on the next clock. Later complete
-                // writes replace only the reload register, until period end.
+                // writes replace only the reload register, until period end
+                // (mode 2) or the next half-cycle boundary (mode 3).
                 if !self.enabled {
                     self.load_pending = true;
                 }
-            } else if matches!(self.mode, 0 | 3) {
-                // Mode 0 also transfers each replacement on a separate clock.
-                // Active mode-3 rewrites remain outside this subset.
+            } else if self.mode == 0 {
+                // Mode 0 transfers each replacement on a separate clock.
                 self.load_pending = true;
             } else {
                 self.remaining = self.reload;
@@ -303,13 +305,36 @@ impl Counter {
         if self.load_pending {
             self.load_pending = false;
             self.mode3_phase = 0;
+            self.mode3_reload = self.reload;
             ticks -= 1;
         }
+        let mut rising = false;
+        if self.mode3_reload != self.reload {
+            // Finish the active half with its original divisor. A complete
+            // replacement transfers at the toggle, without another load clock.
+            let boundary = if self.output {
+                self.mode3_reload.div_ceil(2)
+            } else {
+                self.mode3_reload
+            };
+            let until_boundary = boundary - self.mode3_phase;
+            if ticks >= until_boundary {
+                ticks -= until_boundary;
+                rising = !self.output;
+                self.mode3_reload = self.reload;
+                self.mode3_phase = if self.output {
+                    self.mode3_reload.div_ceil(2)
+                } else {
+                    0
+                };
+            }
+        }
+        let n = self.mode3_reload;
         // A full period ends with the low-to-high transition. Detect it before
         // reducing modulo N, so even hidden transitions reach the PIC latch.
-        let rising = ticks >= self.reload - self.mode3_phase;
-        self.mode3_phase = (self.mode3_phase + ticks) % self.reload;
-        let high_clocks = self.reload.div_ceil(2);
+        rising |= ticks >= n - self.mode3_phase;
+        self.mode3_phase = (self.mode3_phase + ticks) % n;
+        let high_clocks = n.div_ceil(2);
         self.output = self.mode3_phase < high_clocks;
         let elapsed = if self.output {
             self.mode3_phase
@@ -317,17 +342,13 @@ impl Counter {
             self.mode3_phase - high_clocks
         };
         self.remaining = if elapsed == 0 {
-            self.reload
-        } else if self.reload & 1 == 0 {
-            self.reload - 2 * elapsed
+            n
+        } else if n & 1 == 0 {
+            n - 2 * elapsed
         } else {
             // Odd counts subtract one on the first high clock, three on the
             // first low clock, then two on every subsequent clock (Intel 8253).
-            let adjusted = if self.output {
-                self.reload + 1
-            } else {
-                self.reload - 1
-            };
+            let adjusted = if self.output { n + 1 } else { n - 1 };
             adjusted - 2 * elapsed
         };
         rising
@@ -368,6 +389,7 @@ impl Pit {
                         c.output = c.mode != 0;
                         c.latch = None;
                         c.mode3_phase = 0;
+                        c.mode3_reload = 65536;
                     }
                 }
             }

@@ -95,6 +95,7 @@ python3 tools/prepare_pit_mode2_fixture.py
 python3 tools/prepare_pit_mode3_fixture.py
 python3 tools/prepare_pit_mode0_fixture.py
 python3 tools/prepare_pit_mode0_rewrite_fixture.py
+python3 tools/prepare_pit_mode3_rewrite_fixture.py
 # Fetch checksum-pinned guest binaries AND matching complete source archives.
 # This makes a minimal GPL guest disk; it downloads no emulator code.
 python3 tools/prepare_freedos.py
@@ -105,6 +106,7 @@ python3 tools/prepare_hdd_fixture.py
 python3 tools/prepare_music_fixture.py
 python3 tools/prepare_device_fixture.py
 python3 tools/build_font.py --check
+cargo test --locked --test pit mode3_rewrite_
 cargo test --locked --test pit mode0_rewrite_
 cargo test --locked --test pit
 cargo test --locked
@@ -172,6 +174,18 @@ on VM and Ap before/after reset, at both browser roots, requiring exact results
 and guards, `PIT MODE3 PASS` without `FAIL` or errors, and unchanged disk bytes
 within two million slots. Its offline
 [manifest](fixtures/pit-mode3-manifest.json) pins hashes, provenance and results.
+
+The separate original MIT [mode-3 rewrite probe](guest/pit_mode3_rewrite.asm)
+programs the mode once, then replaces 60000 with 2000 using count bytes alone.
+A subsequent latch must still show the old half-cycle counting down, which
+rejects an immediate restart. Two natural IRQ0 entries check the new count,
+ISR, EOI and IRET. Native and production-release Wasm tests use the identical
+image on VM/Ap before and after reset, at both browser roots. Each boot requires
+exact results/guards, `PIT MODE3 REWRITE PASS` without FAIL or errors, unchanged
+disk bytes and at most two million slots. The offline
+[manifest](fixtures/pit-mode3-rewrite-manifest.json) pins source/boot/image hashes,
+assembly command, license, expected results and budget; the preparation script
+retains source, license and manifest beside the image.
 
 The separate original MIT [special-mask probe](guest/pic_smm.asm) enters a
 keyboard handler with a confirmed timer request pending and IR0 lowest. It
