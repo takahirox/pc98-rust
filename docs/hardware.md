@@ -56,7 +56,8 @@ addresses wrap at 20 bits; segment offsets and register/stack operations wrap at
 For the default VM profile, `src/cpu.rs` implements 8/16-bit registers, segment
 overrides, all 8086 ModR/M effective-address combinations, ALU and flag logic, decimal adjustment,
 multiply/divide, shifts/rotates, stack, near/far call/jump/return, conditionals,
-string operations and REP/REPE/REPNE, interrupt entry/IRET, byte/word IN/OUT,
+string operations and REP/REPE/REPNE, plus [REPC/REPNC comparisons](#v30-repcrepnc),
+interrupt entry/IRET, byte/word IN/OUT,
 CLI/STI/HLT. Immediate push, PUSHA/POPA, ENTER/LEAVE and immediate shifts implement
 the 186-compatible forms available on V30. TEST1/CLR1/SET1/NOT1 implement V30
 single-bit operations. BOUND/CHKIND implements signed inclusive word bounds and
@@ -85,6 +86,39 @@ retirement while clocks and IRQs continue. STI and MOV/POP SS inhibit delivery f
 the next instruction. A frame runs at most two slices of 16,667 slots; the core
 caps each call at 100,000 slots. There is no unbounded catch-up after a suspended
 tab. This bounds UI work even for infinite loops and maximum-length REP strings.
+
+## V30 REPC/REPNC
+
+On VM, `65h` is REPC and `64h` is REPNC for CMPSB, CMPSW, SCASB and SCASW.
+CX zero skips comparison, leaving flags and indices unchanged. Otherwise each
+step compares one element, adjusts SI/DI according to width and DF and decrements
+CX without changing comparison flags. CMPS subtracts destination from source;
+SCAS subtracts destination from AL/AX. The source uses DS or its segment override;
+the destination always uses ES. VM word accesses and indices wrap at 16-bit
+offsets. Incoming CF never suppresses the first comparison. Subsequent elements
+require nonzero CX and resulting CF set for REPC or clear for REPNC; ZF does not
+control repetition. These semantics follow NEC's
+[V-Series instruction manual, printed pp.126–127](https://www.ardent-tool.com/CPU/docs/NEC/V20-V30/v_series.pdf#page=137),
+with CMPBK/CMPM on printed pp.61–64 corresponding to CMPS/SCAS.
+
+Prefixes and opcode decode in the same step. A continuing iteration restores IP
+to the first prefix, so a PIC interrupt between elements saves that restart IP;
+guest IRET resumes with the remaining CX and updated indices. Scheduling remains
+one element per slot, without instruction-cycle accuracy changes. Native tests
+cover full FFFFh exhaustion, flags, guards, offset wrapping and PIC/IRET resumption.
+The [original MIT probe](../guest/v30_repc.asm) and
+[manifest](../fixtures/v30-repc-manifest.json) establish bounded native/release-Wasm
+boot and reset evidence. Hosts only boot, step and read results.
+
+Carry-repeat with non-compare opcodes or conflicting repeat prefixes produces an
+explicit unsupported emulator-limitation diagnostic. This describes emulator scope
+and does not claim hardware exception semantics for those excluded encodings.
+Ap continues to decode `64h`/`65h` as FS/GS overrides, including with ordinary
+F2/F3 repetition and operand/address-size overrides. V30 remains partial:
+packed-BCD strings, bit-field extensions, VM TF traps, NMI and broader instruction,
+prefix and fault acceptance remain outstanding. Protected execution, paging and
+x87 remain required project goals outside this Issue. These probes do not establish
+full V30 accuracy or commercial compatibility.
 
 ## V30 BOUND/CHKIND
 

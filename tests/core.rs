@@ -101,6 +101,36 @@ fn strings_are_budgeted_and_directional() {
     assert_eq!(b.read16(0x1fff), 0x1234);
 }
 #[test]
+fn v30_repc_minimal_reproduction() {
+    let mut c = Cpu {
+        s: [0; 4],
+        ip: 0x100,
+        flags: 2,
+        ..Cpu::default()
+    };
+    let mut b = Bus::default();
+    b.mem[0x100..0x103].copy_from_slice(&[0x65, 0xa6, 0x90]);
+    b.mem[0x4000..0x4003].copy_from_slice(&[1, 5, 0]);
+    b.mem[0x5000..0x5003].copy_from_slice(&[2, 4, 0]);
+    c.r[SI] = 0x4000;
+    c.r[DI] = 0x5000;
+    c.r[CX] = 3;
+    c.step(&mut b).unwrap();
+    assert_eq!(
+        (c.ip, c.r[CX], c.r[SI], c.r[DI]),
+        (0x100, 2, 0x4001, 0x5001)
+    );
+    assert_ne!(c.flags & CF, 0);
+    c.step(&mut b).unwrap();
+    assert_eq!(
+        (c.ip, c.r[CX], c.r[SI], c.r[DI]),
+        (0x102, 1, 0x4002, 0x5002)
+    );
+    assert_eq!(c.flags & (CF | ZF), 0);
+    c.step(&mut b).unwrap();
+    assert_eq!(c.ip, 0x103);
+}
+#[test]
 fn stack_call_ret_interrupt_iret() {
     let (c, _) = execute(&[0xb8, 1, 0, 0xe8, 2, 0, 0xf4, 0x90, 0x40, 0xc3], 5);
     assert_eq!(c.r[AX], 2);
@@ -1011,6 +1041,365 @@ fn v30_bound_original_boot_probe_before_and_after_reset() {
             assert!(slots <= 2_000_000);
             assert!(m.bus.text().contains("V30 BOUND PASS"), "{}", m.bus.text());
             assert_eq!(&m.bus.mem[0x8000..0x8020], expected.as_slice());
+            assert_eq!(m.bus.disks[0].as_ref().unwrap().bytes, image);
+            println!("{profile:?} boot {run}: {slots} slots");
+        }
+    }
+}
+
+fn v30_repc_cpu(code: &[u8]) -> (Cpu, Bus) {
+    let mut c = Cpu {
+        s: [0x3000, 0, 0x2000, 0x1000],
+        ip: 0x100,
+        ..Cpu::default()
+    };
+    c.r = [5, 0, 0x1234, 0x5678, 0x8000, 0x4321, 0x4005, 0x5005];
+    let mut b = Bus::default();
+    b.mem[0x100..0x100 + code.len()].copy_from_slice(code);
+    (c, b)
+}
+
+#[test]
+fn v30_repc_prefix_opcode_count_flags_and_direction_matrix() {
+    // 5-6 => -1 (CF/PF/AF/SF); 5-4 => 1; 5-5 => 0 (PF/ZF).
+    // Equality continues REPNC, while inequality continues REPC: ZF cannot
+    // accidentally be used as the repeat condition. All arithmetic flags defined.
+    for prefix in [0x64, 0x65] {
+        for op in [0xa6, 0xa7, 0xae, 0xaf] {
+            for incoming_cf in [0, CF] {
+                for backward in [false, true] {
+                    for count in [0, 1, 3, 0xffff] {
+                        for early in [false, true] {
+                            let (mut c, mut b) = v30_repc_cpu(&[prefix, op, 0x90]);
+                            c.r[CX] = count;
+                            c.flags = 0xf002
+                                | IF
+                                | TF
+                                | PF
+                                | AF
+                                | ZF
+                                | SF
+                                | OF
+                                | incoming_cf
+                                | if backward { DF } else { 0 };
+                            let initial = c.clone();
+                            let word = op & 1 != 0;
+                            let delta = if word { 2u16 } else { 1 };
+                            let delta = if backward {
+                                0u16.wrapping_sub(delta)
+                            } else {
+                                delta
+                            };
+                            let dest = match (prefix, early) {
+                                (0x65, true) => [6, 4, 5],
+                                (0x64, true) => [5, 4, 6],
+                                (0x65, false) => [6; 3],
+                                _ => [5; 3],
+                            };
+                            for i in 0..3u16 {
+                                b.write_seg(
+                                    c.s[DS],
+                                    c.r[SI].wrapping_add(delta.wrapping_mul(i)),
+                                    5,
+                                    word,
+                                );
+                                b.write_seg(
+                                    c.s[ES],
+                                    c.r[DI].wrapping_add(delta.wrapping_mul(i)),
+                                    dest[i as usize],
+                                    word,
+                                );
+                            }
+                            let memory = b.mem.clone();
+                            let limit = if early && prefix == 0x65 { 2 } else { 3 };
+                            let steps = usize::from(count).min(limit).max(1);
+                            for i in 0..steps {
+                                c.step(&mut b).unwrap();
+                                let done = if count == 0 { 0 } else { i as u16 + 1 };
+                                let rhs = dest[done.saturating_sub(1) as usize];
+                                let arithmetic = match rhs {
+                                    6 => CF | PF | AF | SF,
+                                    5 => ZF | PF,
+                                    _ => 0,
+                                };
+                                let expected_flags = if count == 0 {
+                                    initial.flags
+                                } else {
+                                    (initial.flags & !(CF | PF | AF | ZF | SF | OF)) | arithmetic
+                                };
+                                assert_eq!(
+                                    c.flags, expected_flags,
+                                    "{prefix:02x} {op:02x} count={count} step={i}"
+                                );
+                                let mut registers = initial.r;
+                                registers[CX] -= done;
+                                if op < 0xae {
+                                    registers[SI] =
+                                        registers[SI].wrapping_add(delta.wrapping_mul(done));
+                                }
+                                registers[DI] =
+                                    registers[DI].wrapping_add(delta.wrapping_mul(done));
+                                assert_eq!(c.r, registers);
+                                assert_eq!(c.s, initial.s);
+                                let continues = done < count && (rhs == 6) == (prefix == 0x65);
+                                assert_eq!(c.ip, if continues { 0x100 } else { 0x102 });
+                            }
+                            assert_eq!(b.mem, memory, "operands and every guard remain unchanged");
+                            if c.ip == 0x102 {
+                                c.step(&mut b).unwrap();
+                                assert_eq!(c.ip, 0x103);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn v30_repc_word_overflow_flags_and_offset_wrapping_with_segment_orders() {
+    for prefix in [0x64, 0x65] {
+        for op in [0xa6, 0xa7, 0xae, 0xaf] {
+            for segment_first in [false, true] {
+                for backward in [false, true] {
+                    let code = if segment_first {
+                        [0x36, prefix, op, 0x90]
+                    } else {
+                        [prefix, 0x36, op, 0x90]
+                    };
+                    let (mut c, mut b) = v30_repc_cpu(&code);
+                    let word = op & 1 != 0;
+                    let left = if word { 0x8000 } else { 0x80 };
+                    c.r[AX] = left;
+                    c.r[CX] = 2;
+                    c.r[SI] = if backward { 0 } else { 0xffff };
+                    c.r[DI] = c.r[SI];
+                    c.flags = 0xf002 | IF | if backward { DF } else { 0 };
+                    let initial = c.clone();
+                    let stride = if word { 2u16 } else { 1 };
+                    let stride = if backward {
+                        0u16.wrapping_sub(stride)
+                    } else {
+                        stride
+                    };
+                    for i in 0..2u16 {
+                        let offset = c.r[SI].wrapping_add(stride.wrapping_mul(i));
+                        b.write_seg(c.s[SS], offset, left, word); // SS override must select source
+                        b.write_seg(c.s[ES], offset, 1, word); // destination always ES
+                    }
+                    let memory = b.mem.clone();
+                    c.step(&mut b).unwrap();
+                    assert_eq!(c.flags, initial.flags | OF | AF | if word { PF } else { 0 });
+                    assert_eq!(c.r[CX], 1);
+                    assert_eq!(c.r[DI], initial.r[DI].wrapping_add(stride));
+                    assert_eq!(
+                        c.r[SI],
+                        initial.r[SI].wrapping_add(if op < 0xae { stride } else { 0 })
+                    );
+                    assert_eq!(c.ip, if prefix == 0x64 { 0x100 } else { 0x103 });
+                    if prefix == 0x64 {
+                        c.step(&mut b).unwrap();
+                        assert_eq!(c.r[CX], 0);
+                        assert_eq!(c.ip, 0x103);
+                        assert_eq!(c.flags, initial.flags | OF | AF | if word { PF } else { 0 });
+                        assert_eq!(c.r[DI], initial.r[DI].wrapping_add(stride.wrapping_mul(2)));
+                    }
+                    assert_eq!(c.r[AX], left);
+                    assert_eq!(c.s, initial.s);
+                    assert_eq!(b.mem, memory);
+                    c.step(&mut b).unwrap();
+                    assert_eq!(c.ip, 0x104);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn v30_repc_full_count_exhaustion_is_budgeted() {
+    for prefix in [0x64, 0x65] {
+        let (mut c, mut b) = v30_repc_cpu(&[prefix, 0xa6, 0x90]);
+        c.r[SI] = 0;
+        c.r[DI] = 0;
+        c.r[CX] = 0xffff;
+        b.mem[0x10000..0x20000].fill(0);
+        b.mem[0x30000..0x40000].fill(if prefix == 0x65 { 1 } else { 0 });
+        let memory = b.mem.clone();
+        for done in 1..=0xffffu16 {
+            c.step(&mut b).unwrap();
+            assert_eq!((c.r[SI], c.r[DI], c.r[CX]), (done, done, 0xffff - done));
+            assert_eq!(c.ip, if done == 0xffff { 0x102 } else { 0x100 });
+            assert_eq!(
+                c.flags & (CF | PF | AF | ZF | SF | OF),
+                if prefix == 0x65 {
+                    CF | PF | AF | SF
+                } else {
+                    ZF | PF
+                }
+            );
+        }
+        assert_eq!(b.mem, memory);
+    }
+}
+
+#[test]
+fn v30_repc_pic_irq_between_elements_and_guest_iret() {
+    for prefix in [0x64, 0x65] {
+        // Two segment/repeat prefix orders restart at the first prefix.
+        for code in [[0x36, prefix, 0xa6, 0x90], [prefix, 0x36, 0xa6, 0x90]] {
+            let (mut c, mut b) = v30_repc_cpu(&code);
+            c.flags = 0xf002 | IF;
+            c.r[CX] = 3;
+            b.mem[0x24005..0x24008].copy_from_slice(&[1, 2, 3]);
+            b.mem[0x35005..0x35008].copy_from_slice(if prefix == 0x65 {
+                &[2, 3, 3]
+            } else {
+                &[1, 2, 4]
+            });
+            b.write_seg(0, 9 * 4, 0x200, true);
+            b.write_seg(0, 9 * 4 + 2, 0, true);
+            // Guest handler preserves AX and FLAGS, counts entry, sends EOI, IRET.
+            b.mem[0x200..0x20c].copy_from_slice(&[
+                0x50, 0xfe, 0x06, 0x00, 0x60, 0xb0, 0x20, 0xe6, 0, 0x58, 0xcf, 0x90,
+            ]);
+            b.pics[0].mask = 0xfd;
+            c.step(&mut b).unwrap();
+            assert_eq!(
+                (c.ip, c.r[CX], c.r[SI], c.r[DI]),
+                (0x100, 2, 0x4006, 0x5006)
+            );
+            let flags = c.flags;
+            b.pics[0].request(1);
+            c.step(&mut b).unwrap(); // interrupt delivery + PUSH AX, no second comparison
+            assert_eq!(c.ip, 0x201);
+            assert_eq!(c.r[CX], 2);
+            assert_eq!(b.read_seg(0x2000, 0x7ffa, true), 0x100);
+            assert_eq!(b.read_seg(0x2000, 0x7ffc, true), 0);
+            assert_eq!(b.read_seg(0x2000, 0x7ffe, true), flags);
+            for _ in 0..5 {
+                c.step(&mut b).unwrap();
+            }
+            assert_eq!(c.ip, 0x100);
+            assert_eq!(c.flags, flags);
+            assert_eq!(c.r[SP], 0x8000);
+            assert_eq!(b.mem[0x16000], 1); // DS counter, exactly one entry
+            assert_eq!(b.pics[0].isr, 0);
+            c.step(&mut b).unwrap();
+            assert_eq!(
+                (c.ip, c.r[CX], c.r[SI], c.r[DI]),
+                (0x100, 1, 0x4007, 0x5007)
+            );
+            c.step(&mut b).unwrap();
+            assert_eq!(
+                (c.ip, c.r[CX], c.r[SI], c.r[DI]),
+                (0x103, 0, 0x4008, 0x5008)
+            );
+            assert_eq!(c.flags & (CF | ZF), if prefix == 0x65 { ZF } else { CF });
+            c.step(&mut b).unwrap();
+            assert_eq!(c.ip, 0x104);
+            assert_eq!(&b.mem[0x24005..0x24008], &[1, 2, 3]);
+            assert_eq!(
+                &b.mem[0x35005..0x35008],
+                if prefix == 0x65 {
+                    &[2, 3, 3]
+                } else {
+                    &[1, 2, 4]
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn v30_repc_excluded_forms_are_emulator_diagnostics() {
+    for code in [
+        vec![0x64, 0xa4],
+        vec![0x65, 0xaa],
+        vec![0x65, 0x90],
+        vec![0x64, 0x65, 0xa6],
+        vec![0xf3, 0x64, 0xa6],
+        vec![0x65, 0xf2, 0xaf],
+        vec![0xf2, 0x65, 0xa7],
+        vec![0x64, 0xf3, 0xae],
+    ] {
+        let (mut c, mut b) = v30_repc_cpu(&code);
+        let registers = c.r;
+        let flags = c.flags;
+        let memory = b.mem.clone();
+        let error = c.step(&mut b).unwrap_err();
+        assert!(
+            error.contains("unsupported V30") && error.contains("emulator limitation"),
+            "{error}"
+        );
+        assert_eq!(c.r, registers);
+        assert_eq!(c.flags, flags);
+        assert_eq!(b.mem, memory); // no invented guest exception or stack write
+    }
+}
+
+#[test]
+fn v30_repc_original_boot_probe_before_and_after_reset() {
+    let image = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/fixtures/v30_repc/v30_repc.hdm"
+    ))
+    .expect("run python3 tools/prepare_v30_repc_fixture.py");
+    let manifest = include_str!("../fixtures/v30-repc-manifest.json");
+    let hex = manifest
+        .split_once("\"result_hex\": \"")
+        .unwrap()
+        .1
+        .split('"')
+        .next()
+        .unwrap();
+    let expected: Vec<u8> = hex
+        .as_bytes()
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+        .collect();
+    assert_eq!(expected.len(), 96);
+    for profile in [pc98_rust::Profile::Pc9801Vm] {
+        let mut m = Machine::new(profile);
+        m.insert(0, image.clone(), "v30_repc.hdm").unwrap();
+        for run in 0..2 {
+            if run != 0 {
+                m.reset();
+            }
+            let mut slots = 0;
+            while slots < 2_000_000 {
+                slots += m.step(1000);
+                assert!(m.error.is_none(), "{:?}", m.error);
+                let text = m.bus.text();
+                assert!(
+                    !text.contains("FAIL"),
+                    "{profile:?} boot {run}: {slots} slots; {text}; {:02x?}",
+                    &m.bus.mem[0x8000..0x8060]
+                );
+                if text.contains("V30 REPC PASS") {
+                    break;
+                }
+            }
+            assert!(slots <= 2_000_000);
+            assert!(m.bus.text().contains("V30 REPC PASS"), "{}", m.bus.text());
+            assert_eq!(&m.bus.mem[0x8000..0x8060], expected.as_slice());
+            for (key, address) in [("source_hex", 0x1ff00), ("destination_hex", 0x9000)] {
+                let marker = format!("\"{key}\": \"");
+                let hex = manifest
+                    .split_once(&marker)
+                    .unwrap()
+                    .1
+                    .split('"')
+                    .next()
+                    .unwrap();
+                let bytes: Vec<u8> = (0..hex.len())
+                    .step_by(2)
+                    .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+                    .collect();
+                assert_eq!(&m.bus.mem[address..address + bytes.len()], bytes.as_slice());
+            }
             assert_eq!(m.bus.disks[0].as_ref().unwrap().bytes, image);
             println!("{profile:?} boot {run}: {slots} slots");
         }
