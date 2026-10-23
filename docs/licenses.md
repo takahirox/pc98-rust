@@ -99,6 +99,14 @@ repository license and manifest beside `fixtures/v30_bound/v30_bound.hdm`.
 The image contains only original boot code and zero padding, stays outside
 `web/`, and requires no external guest, proprietary ROM or emulator code.
 
+The original MIT [V30 memory nibble-rotation probe](../guest/v30_nibble_mem.asm)
+also assembles offline without external media. Its preparation script verifies the
+[checked manifest](../fixtures/v30-nibble-mem-manifest.json) and retains the
+assembly, repository MIT license and manifest beside
+`fixtures/v30_nibble_mem/v30_nibble_mem.hdm`. No commercial media, proprietary
+ROM or copied emulator implementation is used. Generated test media stays outside
+`web/` and is not published.
+
 ## HelloWorld-PC98
 
 Upstream: [TakedaHiromasa/HelloWorld-PC98](https://github.com/TakedaHiromasa/HelloWorld-PC98),

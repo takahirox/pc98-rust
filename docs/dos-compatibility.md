@@ -137,7 +137,13 @@ and Yamaha's YM2203 datasheet. Sound synthesis is newly written mathematical
 operator/phase/envelope code; no emulation library, implementation or chip table
 was consulted/copied. The sine calculation and envelopes are approximations,
 not measured chip output. The existing VM profile retains its original map,
-three planes, Latin font, beeper and V30 behavior.
+three planes, Latin font, beeper and V30 behavior. VM also implements
+[memory-only V30 ROL4/ROR4](hardware.md#v30-memory-nibble-rotations), with unchanged
+FLAGS/AH and a separately documented AL upper-nibble preservation policy.
+Ap retains its unimplemented-opcode diagnostic for these bytes; this is not a
+claim about i486 hardware exceptions. Register nibble rotations and other V30
+extensions remain incomplete; this bounded addition establishes no commercial
+application compatibility.
 
 ## Acceptance evidence and remaining work
 

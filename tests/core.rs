@@ -1405,3 +1405,319 @@ fn v30_repc_original_boot_probe_before_and_after_reset() {
         }
     }
 }
+
+fn v30_nibble_mem_reproduction(ext: u8, memory: u8, al: u16) {
+    let mut c = Cpu {
+        s: [0; 4],
+        ip: 0x100,
+        flags: 0xffd7,
+        ..Cpu::default()
+    };
+    c.r[AX] = 0x5a83;
+    let mut b = Bus::default();
+    b.mem[0x100..0x106].copy_from_slice(&[0x0f, ext, 6, 0, 0x20, 0x90]);
+    b.mem[0x2000] = 0x12;
+    c.step(&mut b).unwrap();
+    assert_eq!(b.read(0x2000), memory);
+    assert_eq!(c.r[AX], 0x5a00 | al);
+    assert_eq!(c.flags, 0xffd7);
+    assert_eq!(c.ip, 0x105);
+    c.step(&mut b).unwrap();
+    assert_eq!(c.ip, 0x106);
+}
+
+#[test]
+fn v30_nibble_mem_minimal_reproduction_rol4() {
+    v30_nibble_mem_reproduction(0x28, 0x23, 0x81);
+}
+#[test]
+fn v30_nibble_mem_minimal_reproduction_ror4() {
+    v30_nibble_mem_reproduction(0x2a, 0x31, 0x82);
+}
+
+// Independent oracle: rotate the three hexadecimal digits [memory high,
+// memory low, AL low] as digits, rather than repeating production bit formulas.
+fn v30_nibble_mem_digits(ext: u8, d: u8, al: u8) -> (u8, u8) {
+    let digits = [d / 16, d % 16, al % 16];
+    let out = if ext == 0x28 {
+        [digits[1], digits[2], digits[0]]
+    } else {
+        [digits[2], digits[0], digits[1]]
+    };
+    (out[0] * 16 + out[1], out[2])
+}
+
+#[test]
+fn v30_nibble_mem_exhaustive_digits_and_upper_nibble_policy() {
+    let mut b = Bus::default();
+    b.mem[0x100..0x106].copy_from_slice(&[0x0f, 0x28, 6, 0, 0x20, 0x90]);
+    for ext in [0x28, 0x2a] {
+        b.mem[0x101] = ext;
+        for d in 0..=255u8 {
+            for low in 0..16 {
+                for high in [0, 0x30, 0x80, 0xf0] {
+                    let al = high | low;
+                    let mut c = Cpu {
+                        s: [0; 4],
+                        ip: 0x100,
+                        r: [
+                            0x5a00 | al as u16,
+                            0x1234,
+                            0x2345,
+                            0x3456,
+                            0x4567,
+                            0x5678,
+                            0x6789,
+                            0x789a,
+                        ],
+                        upper: [0x9876; 8],
+                        flags: if d & 1 == 0 { 0xf002 } else { 0xffd7 },
+                        ..Cpu::default()
+                    };
+                    let before = c.clone();
+                    b.mem[0x1fff..0x2002].copy_from_slice(&[0xa5, d, 0x5a]);
+                    let (memory, accumulator) = v30_nibble_mem_digits(ext, d, al);
+                    c.step(&mut b).unwrap();
+                    assert_eq!(b.read(0x2000), memory);
+                    assert_eq!(c.byte(AX) & 15, accumulator); // Hardware-defined.
+                    assert_eq!(c.byte(AX) & 0xf0, high); // Emulator policy only.
+                    assert_eq!(c.byte(4), 0x5a);
+                    assert_eq!(&c.r[1..], &before.r[1..]);
+                    assert_eq!(c.upper, before.upper);
+                    assert_eq!(c.s, before.s);
+                    assert_eq!(c.flags, before.flags);
+                    assert_eq!(b.read(0x1fff), 0xa5);
+                    assert_eq!(b.read(0x2001), 0x5a);
+                    assert_eq!(c.ip, 0x105);
+                    c.step(&mut b).unwrap();
+                    assert_eq!(c.ip, 0x106);
+                }
+            }
+        }
+    }
+}
+
+fn v30_nibble_mem_address_case(
+    ext: u8,
+    modrm: u8,
+    displacement: &[u8],
+    prefix: Option<u8>,
+    segments: [u16; 4],
+    offset: u16,
+    segment: usize,
+) {
+    let mut c = Cpu {
+        s: segments,
+        ip: 0x100,
+        r: [0x5a8d, 0x1234, 0x2345, 0xfff0, 0x8000, 0x3000, 0x30, 0x50],
+        upper: [0x9876; 8],
+        flags: 0xffd7,
+        ..Cpu::default()
+    };
+    let mut code = Vec::new();
+    code.extend(prefix);
+    code.extend([0x0f, ext, modrm]);
+    code.extend(displacement);
+    let mut b = Bus::default();
+    let pc = segments[CS] as usize * 16 + 0x100;
+    b.mem[pc..pc + code.len()].copy_from_slice(&code);
+    b.mem[pc + code.len()] = 0x90;
+    let address = (segments[segment] as usize * 16 + offset as usize) & 0xfffff;
+    b.mem[(address + 0xfffff) & 0xfffff] = 0xa5;
+    b.mem[address] = 0x12;
+    b.mem[(address + 1) & 0xfffff] = 0x5a;
+    // Whole backing RAM comparison detects writes anywhere outside the operand.
+    let mut expected_ram = b.mem.clone();
+    let (memory, low) = v30_nibble_mem_digits(ext, 0x12, 0x8d);
+    expected_ram[address] = memory;
+    let before = c.clone();
+    c.step(&mut b).unwrap();
+    assert_eq!(b.mem, expected_ram);
+    assert_eq!(c.r[AX], 0x5a80 | low as u16);
+    assert_eq!(&c.r[1..], &before.r[1..]);
+    assert_eq!(c.upper, before.upper);
+    assert_eq!(c.s, before.s);
+    assert_eq!(c.flags, before.flags);
+    assert_eq!(c.ip, 0x100 + code.len() as u32);
+    c.step(&mut b).unwrap();
+    assert_eq!(c.ip, 0x101 + code.len() as u32);
+}
+
+#[test]
+fn v30_nibble_mem_addressing_segments_and_wraps() {
+    let segments = [0x1000, 0x2000, 0x3000, 0x4000];
+    // Expected effective offsets from the explicit register values above.
+    let bases = [0x20u16, 0x40, 0x3030, 0x3050, 0x30, 0x50, 0x3000, 0xfff0];
+    for ext in [0x28, 0x2a] {
+        for mode in 0..3u8 {
+            for rm in 0..8u8 {
+                let (disp, offset) = match mode {
+                    0 if rm == 6 => (vec![0xff, 0xff], 0xffff),
+                    0 => (vec![], bases[rm as usize]),
+                    1 => (vec![0x80], bases[rm as usize].wrapping_sub(128)),
+                    _ => (vec![0x34, 0xf0], bases[rm as usize].wrapping_add(0xf034)),
+                };
+                let default = if rm == 2 || rm == 3 || (rm == 6 && mode != 0) {
+                    SS
+                } else {
+                    DS
+                };
+                for (prefix, segment) in [
+                    (None, default),
+                    (Some(0x26), ES),
+                    (Some(0x2e), CS),
+                    (Some(0x36), SS),
+                    (Some(0x3e), DS),
+                ] {
+                    v30_nibble_mem_address_case(
+                        ext,
+                        mode * 64 + rm,
+                        &disp,
+                        prefix,
+                        segments,
+                        offset,
+                        segment,
+                    );
+                }
+            }
+        }
+        // FFFF:0020 wraps the VM 20-bit physical address to 00010h.
+        v30_nibble_mem_address_case(
+            ext,
+            6,
+            &[0x20, 0],
+            None,
+            [0x1000, 0x2000, 0x3000, 0xffff],
+            0x20,
+            DS,
+        );
+    }
+}
+
+#[test]
+fn v30_nibble_mem_bus_rom_and_planar_vram() {
+    for ext in [0x28, 0x2a] {
+        for (seg, address, writable) in [(0xf000, 0xf0123, false), (0xa800, 0xa8123, true)] {
+            let mut c = Cpu {
+                s: [0, 0, 0, seg],
+                ip: 0x100,
+                flags: 0xffd7,
+                ..Cpu::default()
+            };
+            c.r[AX] = 0x5a83;
+            let mut b = Bus::default();
+            b.mem[0x100..0x106].copy_from_slice(&[0x0f, ext, 6, 0x23, 1, 0x90]);
+            assert_eq!(b.grcg_mode, 0);
+            // VRAM backing RAM deliberately differs from the Bus-visible plane.
+            b.mem[address] = if writable { 0x96 } else { 0x12 };
+            if writable {
+                b.write(address - 1, 0xa5);
+                b.write(address, 0x12);
+                b.write(address + 1, 0x5a);
+            }
+            let ram = b.mem.clone();
+            let mut graphics = b.graphics.clone();
+            let (memory, low) = v30_nibble_mem_digits(ext, 0x12, 3);
+            if writable {
+                graphics[0x123] = memory;
+            }
+            c.step(&mut b).unwrap();
+            assert_eq!(b.read(address), if writable { memory } else { 0x12 });
+            assert_eq!(b.mem, ram);
+            assert_eq!(b.graphics, graphics);
+            assert_eq!(c.r[AX], 0x5a80 | low as u16);
+            assert_eq!(c.flags, 0xffd7);
+            assert_eq!(c.ip, 0x105);
+            c.step(&mut b).unwrap();
+            assert_eq!(c.ip, 0x106);
+        }
+    }
+}
+
+#[test]
+fn v30_nibble_mem_excluded_encodings_are_unsupported_without_writes() {
+    let mut b = Bus::default();
+    for ext in [0x28, 0x2a] {
+        for modrm in 0..=255u8 {
+            if modrm < 0xc0 && modrm & 0x38 == 0 {
+                continue;
+            }
+            let mut c = Cpu {
+                s: [0; 4],
+                ip: 0x100,
+                r: [0x2000; 8],
+                flags: 0xffd7,
+                ..Cpu::default()
+            };
+            b.mem[0x100..0x105].copy_from_slice(&[0x0f, ext, modrm, 0, 0x20]);
+            let ram = b.mem.clone();
+            let before = c.clone();
+            let error = c.step(&mut b).unwrap_err();
+            assert!(error.contains("unsupported V30 nibble rotation"), "{error}");
+            assert!(error.contains("emulator limitation"));
+            assert_eq!(c.r, before.r);
+            assert_eq!(c.upper, before.upper);
+            assert_eq!(c.s, before.s);
+            assert_eq!(c.flags, before.flags);
+            assert_eq!(b.mem, ram);
+        }
+    }
+}
+
+#[test]
+fn v30_nibble_mem_original_boot_probe_before_and_after_reset() {
+    let image = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/fixtures/v30_nibble_mem/v30_nibble_mem.hdm"
+    ))
+    .expect("run python3 tools/prepare_v30_nibble_mem_fixture.py");
+    let manifest = include_str!("../fixtures/v30-nibble-mem-manifest.json");
+    let hex = manifest
+        .split_once("\"result_hex\": \"")
+        .unwrap()
+        .1
+        .split('"')
+        .next()
+        .unwrap();
+    let expected: Vec<u8> = hex
+        .as_bytes()
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+        .collect();
+    assert_eq!(expected.len(), 36);
+    for profile in [pc98_rust::Profile::Pc9801Vm] {
+        let mut m = Machine::new(profile);
+        m.insert(0, image.clone(), "v30_nibble_mem.hdm").unwrap();
+        for run in 0..2 {
+            if run != 0 {
+                m.reset();
+            }
+            let mut slots = 0;
+            while slots < 2_000_000 {
+                slots += m.step(1000);
+                assert!(m.error.is_none(), "{:?}", m.error);
+                let text = m.bus.text();
+                assert!(
+                    !text.contains("FAIL"),
+                    "{profile:?} boot {run}: {slots} slots; {text}; {:02x?}",
+                    &m.bus.mem[0x8000..0x8024]
+                );
+                if text.contains("V30 NIBBLE MEM PASS") {
+                    break;
+                }
+            }
+            assert!(slots <= 2_000_000);
+            assert!(
+                m.bus.text().contains("V30 NIBBLE MEM PASS"),
+                "{}",
+                m.bus.text()
+            );
+            assert_eq!(&m.bus.mem[0x8000..0x8024], expected.as_slice());
+            assert_eq!(&m.bus.mem[0x9000..0x9003], &[0xa5, 0xea, 0x5a]);
+            assert_eq!(m.bus.disks[0].as_ref().unwrap().bytes, image);
+            println!("{profile:?} boot {run}: {slots} slots");
+        }
+    }
+}

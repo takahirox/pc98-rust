@@ -60,7 +60,8 @@ string operations and REP/REPE/REPNE, plus [REPC/REPNC comparisons](#v30-repcrep
 interrupt entry/IRET, byte/word IN/OUT,
 CLI/STI/HLT. Immediate push, PUSHA/POPA, ENTER/LEAVE and immediate shifts implement
 the 186-compatible forms available on V30. TEST1/CLR1/SET1/NOT1 implement V30
-single-bit operations. BOUND/CHKIND implements signed inclusive word bounds and
+single-bit operations; [memory nibble rotations](#v30-memory-nibble-rotations)
+implement `ROL4 mem8` and `ROR4 mem8`. BOUND/CHKIND implements signed inclusive word bounds and
 next-instruction vector-5 return as [specified below](#v30-boundchkind). AAM/AAD
 consume but ignore the encoded radix, using decimal 10 as on V30. See the [NEC V20/V30 user manual](https://www.dosdays.co.uk/media/nec/NEC-V20-V30-Users-Manual.pdf)
 and [NEC V-Series data book](https://bitsavers.org/components/nec/_dataBooks/1990_NEC_16-bit_V-Series_Microprocessor_Data_Book.pdf).
@@ -86,6 +87,43 @@ retirement while clocks and IRQs continue. STI and MOV/POP SS inhibit delivery f
 the next instruction. A frame runs at most two slices of 16,667 slots; the core
 caps each call at 100,000 slots. There is no unbounded catch-up after a suspended
 tab. This bounds UI work even for infinite loops and maximum-length REP strings.
+
+## V30 memory nibble rotations
+
+VM supports memory-only `ROL4 mem8` (`0F 28 /0`) and `ROR4 mem8` (`0F 2A /0`),
+without an immediate operand. With initial memory byte `d` and `a = AL & 0Fh`:
+
+| Instruction | New memory byte | New AL low nibble |
+| --- | --- | --- |
+| ROL4 | `((d << 4) & F0h) \| a` | `d >> 4` |
+| ROR4 | `(a << 4) \| (d >> 4)` | `d & 0Fh` |
+
+Both inputs are read before either output changes. Exactly one byte goes through
+the existing effective-address, segment and Bus paths, including ROM protection,
+planar VRAM, 16-bit effective-offset wrapping and VM 20-bit physical wrapping.
+FLAGS, AH and other registers remain unchanged. NEC leaves AL's upper nibble
+unspecified; **preserving it is a deterministic emulator policy**, separately
+tested from the hardware-defined nibble mapping.
+
+Specification: NEC's [V-series Instruction Manual, printed pp.136 and 141](https://www.ardent-tool.com/CPU/docs/NEC/V20-V30/v_series.pdf#page=147)
+and [V20/V30 User's Manual, Section 12, printed pp.12-45–12-46](https://www.dosdays.co.uk/media/nec/NEC-V20-V30-Users-Manual.pdf).
+Register destinations (including AL overlap) and nonzero ModR/M.reg encodings
+retain explicit unsupported emulator-limitation diagnostics without operand
+writes. Ap retains its existing `unimplemented i486 opcode` diagnostic for these
+bytes. These diagnostics are scope boundaries, not hardware exception claims.
+This change adds no LOCK/REP behavior or instruction-cycle accuracy.
+
+The original MIT [probe](../guest/v30_nibble_mem.asm) and checked
+[manifest](../fixtures/v30-nibble-mem-manifest.json) provide offline provenance,
+hashes, exact masked-AL/AH/FLAGS/results/guards and a 2,000,000-slot boot budget.
+Native and production release-Wasm tests boot the same VM disk before/after reset
+at both browser roots. Hosts only insert, reset, step and read. See the
+[validation record](validation.md#issue-65-v30-memory-nibble-rotations-2026-10-24).
+V30 remains **partial**: register-operand nibble rotations, packed-BCD strings,
+bit-field extensions, TF traps, NMI and broader instruction/prefix/fault acceptance
+remain outstanding. Protected execution, paging and basic x87 retain their fixed
+required scope. No inventory category becomes verified; bounded probes do not
+establish full hardware accuracy or commercial compatibility.
 
 ## V30 REPC/REPNC
 

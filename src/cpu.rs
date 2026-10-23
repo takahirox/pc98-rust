@@ -1738,7 +1738,7 @@ impl Cpu {
                     _ => return Err(ExecError::Fault(6)),
                 }
             }
-            // V30 TEST1/CLR1/SET1/NOT1, register bit index (10..17) or immediate (18..1f).
+            // V30 bit operations and memory-only nibble rotations.
             0x0f => {
                 if b.profile == crate::Profile::Pc9821ApDos {
                     return self.extended(b, ov);
@@ -1767,6 +1767,25 @@ impl Cpu {
                     if ext & 6 != 0 {
                         self.put(b, o, out, w)?
                     }
+                } else if matches!(ext, 0x28 | 0x2a) {
+                    let m = self.fetch(b)?;
+                    if m >> 6 == 3 || m & 0x38 != 0 {
+                        return Err(ExecError::Unsupported(format!(
+                            "unsupported V30 nibble rotation 0F {ext:02x} ModR/M {m:02x} (emulator limitation: memory /0 required)"
+                        )));
+                    }
+                    let o = self.decode(b, m, ov)?;
+                    // Snapshot both inputs before writing either output. AL's upper
+                    // nibble is hardware-undefined; preserving it is emulator policy.
+                    let d = self.get(b, o, false)? as u8;
+                    let al = self.byte(AX);
+                    let (memory, low) = if ext == 0x28 {
+                        ((d << 4) | (al & 0x0f), d >> 4)
+                    } else {
+                        ((al << 4) | (d >> 4), d & 0x0f)
+                    };
+                    self.put(b, o, memory as u32, false)?;
+                    self.set_byte(AX, (al & 0xf0) | low);
                 } else {
                     return Err(ExecError::Unsupported(format!(
                         "unsupported V30 opcode 0F {ext:02x}"
