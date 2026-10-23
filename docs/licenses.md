@@ -77,6 +77,13 @@ the assembly, repository license and manifest beside
 counter checks and hardware IRQ0 handlers; no external guest, proprietary ROM
 or third-party emulator implementation is acquired.
 
+The original MIT [mode-0 PIT probe](../guest/pit_mode0.asm) builds offline with
+NASM, without third-party guests or emulator code.
+`tools/prepare_pit_mode0_fixture.py` verifies its
+[source/image/result manifest](../fixtures/pit-mode0-manifest.json) and retains
+source, repository license and manifest beside `fixtures/pit_mode0/pit_mode0.hdm`.
+The generated disk stays outside `web/`; no proprietary ROM or guest is acquired.
+
 ## HelloWorld-PC98
 
 Upstream: [TakedaHiromasa/HelloWorld-PC98](https://github.com/TakedaHiromasa/HelloWorld-PC98),

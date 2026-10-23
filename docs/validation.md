@@ -1771,3 +1771,124 @@ remain required goals. Limited probes and six-game reports do not establish full
 accuracy or commercial compatibility. No commercial ROM or guest was acquired.
 No push, PR, comment or merge was performed. Issue #47 requires no post-merge
 verification.
+
+## Issue #49: 8253 binary mode 0 (2026-10-23)
+
+Implemented the bounded binary mode-0 lifecycle in original Rust for all three
+counters on VM/Ap, with GATE held high. A fresh mode word lowers OUT and clears
+active/partial/latch state. Complete initial programming schedules a separate
+load clock. Counting decrements to zero, raises OUT once, then continues modulo
+65,536 with OUT high. Constant-time batch arithmetic preserves the existing
+clock conversion and fractional remainder. The existing bus/PIC rise latch is
+unchanged; no beeper mixer or resampler code changed.
+
+The eight added [PIT tests](../tests/pit.rs) cover the reported `36h,30h,04h,00h`
+reproduction; explicit count/OUT/edge traces for 1/2/4; 65,535 and encoded-zero
+boundaries; all channels and supported LSB/MSB/pair forms; incomplete pairs and
+load clocks; ordinary snapshot reads across terminal count and wraps; fresh
+mode-word transitions; channel isolation; reset during partial, pending-load and
+post-terminal states; single-clock versus irregular batches, zero advancement,
+fractional cycles and split/unsplit `u32::MAX` advances. Both port banks on both
+profiles check masking, retained setup and terminal IRR across falling OUT,
+acknowledgement, ISR/EOI, rearming, no repeated requests across wraps, and CPU
+IF-clear/HLT followed by delivery, EOI and IRET. Existing mode-2/3 programming
+rises are accounted for separately. Undefined pre-load counts are not asserted.
+
+Negative controls temporarily used exactly
+`69e60a951c1a659ab67bf535a8e4bb5b97c43383:src/devices.rs`, restored in a Python
+`finally` block before building the fixed native/Wasm core:
+
+| Baseline command | Actual result |
+| --- | --- |
+| `cargo test --locked --test pit issue49_mode0_initial_load_reproduction -- --nocapture` | Expected failure, exit 101: actual `(3, true)`, required `(4, false)` |
+| `cargo test --locked --test pit original_mode0_boot_probe_before_and_after_reset_in_both_profiles -- --nocapture` | Expected failure, exit 101: `PIT MODE0 FAIL`, one entry handled but post-terminal advancing-count proof unset |
+
+Both pass with the fixed implementation. No other production source needed
+replacement: the existing bus/PIC code is unchanged from that baseline.
+
+The original MIT [guest probe](../guest/pit_mode0.asm) assembles offline with
+`nasm -f bin guest/pit_mode0.asm -o pit_mode0.bin`. Its checked
+[manifest](../fixtures/pit-mode0-manifest.json) pins the source, boot/image hashes,
+license, exact results/guards and fixed 2,000,000-slot maximum per boot. Source
+SHA-256 is `53d34a44601716fa9f0ff335863e310e1c7190a1b64fe88213a7b2a4f7d8b43e`;
+image SHA-256 is `c7d4ca54421543ee77ab580310717201e865a95d9c88273f332a90a15136fddc`.
+The preparation script retains assembly, license and manifest beside the image
+outside `web/`, and existing CI prepares it before testing.
+
+The guest lowers OUT and initializes the PIC to discard firmware/setup requests,
+then arms divisor 2000 twice using fresh mode words. Each arm has a bounded
+6000-iteration wait and exactly one hardware IRQ0 with ISR=1, EOI, ISR=0 and
+IRET. Two ordinary latched post-terminal counts must be at least 60000, with the
+first below 65535; 500 LOOP instructions must decrease the count by 900..1100.
+It then remains unmasked for 40000 LOOP instructions (over 65536 PIT clocks),
+rejecting additional IRQ entries and checking IRR0=ISR0=0 before rearming. Both
+the guest and hosts require all 32 result/guard bytes at `8000h..801Fh`:
+`a5020101000001010101a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5`.
+Hosts only boot, step and inspect; no IRQs or results are injected.
+
+The identical source-built image passed on VM/Ap before and after reset,
+natively and through production-release Wasm at `/` and `/pc98-rust/`. All
+**12 boots completed in 84,000 scheduler slots each**. Each required exact
+results/guards, `PIT MODE0 PASS` without `FAIL`, unchanged disk bytes and no
+core/browser errors, within the original two-million-slot budget.
+
+Actual checks in this macOS arm64 worktree:
+
+| Command | Outcome |
+| --- | --- |
+| `python3 -m unittest discover -s tools -p test_fixture_fetch.py` | Passed: 7 tests |
+| `python3 tools/prepare_dma_fixture.py` | Passed |
+| `python3 tools/prepare_gdtr_fixture.py` | Passed |
+| `python3 tools/prepare_idtr_fixture.py` | Passed |
+| `python3 tools/prepare_smsw_fixture.py` | Passed |
+| `python3 tools/prepare_pic_fixture.py` | Passed |
+| `python3 tools/prepare_pic_smm_fixture.py` | Passed |
+| `python3 tools/prepare_pit_mode2_fixture.py` | Passed |
+| `python3 tools/prepare_pit_mode3_fixture.py` | Passed |
+| `python3 tools/prepare_pit_mode0_fixture.py --update-manifest` | Created checked manifest from original source |
+| `python3 tools/prepare_pit_mode0_fixture.py` | Passed: reproduced pinned image/source hashes |
+| `python3 tools/prepare_freedos.py` | Passed: pinned legal binaries and matching complete sources retained |
+| `python3 tools/prepare_font_fixture.py` | Passed |
+| `python3 tools/prepare_dos_apps.py` | Passed |
+| `python3 tools/prepare_cpu_fixture.py` | Passed via existing checksum-pinned mirror after primary HTTP 503 |
+| `python3 tools/prepare_hdd_fixture.py` | Passed |
+| `python3 tools/prepare_music_fixture.py` | Passed |
+| `python3 tools/prepare_device_fixture.py` | Passed via existing checksum-pinned mirror after primary HTTP 503 |
+| `python3 tools/build_media.py --check` | Passed: existing media/firmware hashes unchanged |
+| `python3 tools/build_font.py --check` | Passed: existing CG hash unchanged |
+| `cargo test --locked --test pit -- --nocapture` | Passed: 30 tests; mode-0 native boots each 84,000 slots |
+| `cargo test --locked --test pit` | Passed: final retained-terminal-IRR and partial-transition/latch assertions, 30 tests |
+| `cargo test --locked` | Passed: 190 integration tests across 17 targets, zero failed/ignored; unit/doc targets also passed |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `cargo fmt --check` | Passed |
+| `npm ci` | Passed: zero vulnerabilities |
+| `npx playwright install chromium` | Passed |
+| `npm test` | Release-Wasm build and ten-asset publication audit passed; browser server could not bind occupied port 8000 |
+| `npm test -- --config=.issue49-playwright.config.js` (first run) | 73 passed, 1 failed: existing local VM keyboard test failed at `clock.pauseAt` with “Cannot fast-forward to the past”, before loading the emulator; all mode-0 cases passed |
+| `npm test -- --config=.issue49-playwright.config.js` (complete rerun) | 73 passed, 1 failed: existing Pages VM mode-3 test hit the same `clock.pauseAt` error before loading the emulator; all mode-0 cases passed |
+| `npm test -- --config=.issue49-playwright.config.js --workers=2` | Passed: production-release Wasm build, ten-asset audit and all 74 browser tests, zero skipped, 1.9 minutes |
+| `git diff --check` | Passed |
+
+The temporary config imports the normal Playwright config and changes only
+ports/base URLs to 62082/62083. Its project server is the existing symlink server
+with port 8001 replaced by 62083, preserving rejection of root asset URLs. All
+projects, tests, assertions and execution budgets are retained. The final run
+limits browser concurrency to two workers after two clock setup failures in
+different existing tests with the default eight workers. Existing listeners
+were left alone; both temporary files were removed after testing. No checks were
+skipped. No emulator/test changes were made for the clock setup failures.
+Existing PIT, PIC/SMM, BIOS interval, CPU-shadow, DOS/application, VM and game
+assertions and budgets remain intact. Remote CI and independent review are
+unestablished.
+
+All 26 fixed inventory scopes and statuses remain unchanged: **partial** cpu-v30,
+cpu386, protected-mode, memory, pic, pit, dma, keyboard, mouse, fdc, gdc, egc, pegc,
+text-cg, display-timing, opn, opna, bios, lio, integration; **unimplemented** paging,
+fpu, rtc; **implemented, unverified** ide, grcg, pcm86. PIT remains partial.
+Count-only mode-0 rewrites, external GATE, modes 1/4/5, active mode-3 rewrites,
+BCD, comprehensive latch/access corner cases, divisor-1 mode-2/3 behavior and
+fuller audio remain outstanding; mode-0 audio is unverified. Protected execution,
+paging and basic FPU remain required goals. Limited probes and six-game reports
+do not establish full hardware accuracy or commercial compatibility. No
+commercial ROM or guest was acquired. No push, PR, comment or merge was performed.
+Issue #49 requires no post-merge verification.
