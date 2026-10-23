@@ -346,3 +346,403 @@ fn opn_timers_irq_busy_fm_pitch_and_deterministic_pcm() {
     assert!((25..=27).contains(&crossings), "C4 crossings {crossings}");
     assert!(samples.iter().all(|s| s.is_finite() && s.abs() <= 1.0));
 }
+
+// Independent PCM oracle: default prescale /144, 20-bit phase accumulator,
+// 48 kHz output. Interpolated rising zero crossings avoid FFT bin rounding.
+fn ch3_hz(fnum: u16, block: u8) -> f64 {
+    (3_993_600.0 / 144.0) * (f64::from(fnum) / 1_048_576.0) * 2f64.powi(block.into())
+}
+fn ch3_pitch(samples: &[f32], expected: f64) {
+    assert!(samples.iter().all(|s| s.is_finite() && s.abs() <= 1.0));
+    if expected == 0.0 {
+        assert!(samples.iter().all(|&s| s == 0.0));
+        return;
+    }
+    let crossings: Vec<f64> = samples
+        .windows(2)
+        .enumerate()
+        .filter(|(_, s)| s[0] <= 0.0 && s[1] > 0.0)
+        .map(|(i, s)| i as f64 - f64::from(s[0]) / f64::from(s[1] - s[0]))
+        .collect();
+    assert!(crossings.len() >= 3, "not enough periods: {crossings:?}");
+    let measured =
+        48_000.0 * (crossings.len() - 1) as f64 / (crossings.last().unwrap() - crossings[0]);
+    let tolerance = (expected * 0.0002).max(0.03);
+    assert!(
+        (measured - expected).abs() <= tolerance,
+        "PCM pitch {measured:.6} Hz, expected {expected:.6} +/- {tolerance:.6} Hz"
+    );
+}
+fn ch3_pair(fm: &mut Opn, low: u8, fnum: u16, block: u8) {
+    fm_write(fm, low + 4, (block << 3) | (fnum >> 8) as u8);
+    fm_write(fm, low, fnum as u8);
+}
+fn ch3_voice(ch: usize) -> Opn {
+    let mut fm = Opn::default();
+    fm_write(&mut fm, 0x29, 0x80);
+    let bank = ch / 3 * 256;
+    for slot in [0, 8, 4, 12] {
+        for (reg, value) in [(0x30, 1), (0x40, 0), (0x50, 31), (0x80, 15)] {
+            let addr = bank + reg + ch % 3 + slot;
+            if bank == 0 {
+                fm_write(&mut fm, addr as u8, value);
+            } else {
+                fm.bank_address = addr as u8;
+                fm.write_bank(value);
+            }
+        }
+    }
+    if bank == 0 {
+        fm_write(&mut fm, 0xb0 + ch as u8, 7);
+    } else {
+        fm.bank_address = 0xb0 + (ch % 3) as u8;
+        fm.write_bank(7);
+    }
+    fm
+}
+fn ch3_pcm(fm: &mut Opn) -> Vec<f32> {
+    (0..24_000).map(|_| fm.sample()).collect()
+}
+
+#[test]
+fn opn_ch3_reproduction_independent_operator_one_pcm() {
+    for mode in [0x40, 0x80] {
+        let mut fm = ch3_voice(2);
+        ch3_pair(&mut fm, 0xa2, 0x600, 4);
+        ch3_pair(&mut fm, 0xa9, 0x200, 4);
+        fm_write(&mut fm, 0x27, mode); // Timer A and B stopped, including 80h.
+        fm_write(&mut fm, 0x28, 0x12);
+        ch3_pitch(&ch3_pcm(&mut fm), ch3_hz(0x200, 4));
+    }
+}
+
+#[test]
+fn opn_ch3_each_operator_normal_and_both_special_encodings() {
+    let pairs = [
+        (0xa9, 0x123, 3),
+        (0xaa, 0x456, 4),
+        (0xa8, 0x789, 2),
+        (0xa2, 0x5ab, 5),
+    ];
+    for mode in [0, 0x40, 0x80] {
+        for slot in 0..4 {
+            let mut fm = ch3_voice(2);
+            for (reg, fnum, block) in pairs {
+                ch3_pair(&mut fm, reg, fnum, block);
+            }
+            fm_write(&mut fm, 0x27, mode);
+            fm_write(&mut fm, 0x28, 2 | (0x10 << slot));
+            let (_, fnum, block) = pairs[if mode == 0 { 3 } else { slot }];
+            ch3_pitch(&ch3_pcm(&mut fm), ch3_hz(fnum, block));
+            assert_eq!(fm.status() & 3, 0);
+            assert_eq!(fm.key_edges, 1);
+        }
+    }
+}
+
+#[test]
+fn opn_ch3_fnumber_boundaries_zero_blocks_and_reserved_bits() {
+    for mode in [0, 0x40, 0x80] {
+        for (slot, reg) in [0xa9, 0xaa, 0xa8, 0xa2].into_iter().enumerate() {
+            for (fnum, block) in [
+                (0, 4),
+                (0xff, 4),
+                (0x100, 4),
+                (0x3ff, 4),
+                (0x400, 4),
+                (0x7ff, 4),
+                (0x240, 0),
+                (0x240, 1),
+                (0x240, 2),
+                (0x240, 3),
+                (0x240, 4),
+                (0x240, 5),
+                (0x240, 6),
+                (0x240, 7),
+            ] {
+                let mut fm = ch3_voice(2);
+                ch3_pair(&mut fm, 0xa2, 0x611, 2);
+                let selected = if mode == 0 { 0xa2 } else { reg };
+                ch3_pair(&mut fm, selected, fnum, block);
+                // D7:D6 are outside BLOCK/FNUM and must not affect pitch.
+                fm_write(&mut fm, selected + 4, 0xc0 | block << 3 | (fnum >> 8) as u8);
+                fm_write(&mut fm, selected, fnum as u8);
+                fm_write(&mut fm, 0x27, mode);
+                fm_write(&mut fm, 0x28, 2 | (0x10 << slot));
+                ch3_pitch(&ch3_pcm(&mut fm), ch3_hz(fnum, block));
+            }
+        }
+    }
+}
+
+#[test]
+fn opn_ch3_keyed_mode_changes_preserve_phase_envelope_and_frequencies() {
+    for mode in [0x40, 0x80] {
+        for (slot, reg) in [0xa9, 0xaa, 0xa8, 0xa2].into_iter().enumerate() {
+            let mut fm = ch3_voice(2);
+            ch3_pair(&mut fm, 0xa2, 0x623, 4);
+            if slot != 3 {
+                ch3_pair(&mut fm, reg, 0x345, 3);
+            }
+            fm_write(&mut fm, 0x72 + [0, 8, 4, 12][slot], 8);
+            fm_write(&mut fm, 0x28, 2 | (0x10 << slot));
+            let programmed = fm.registers;
+            let mut phase = 0.0;
+            let mut elapsed = 0i32;
+            for control in [0, mode, 0, mode] {
+                fm_write(&mut fm, 0x27, control);
+                assert_eq!(fm.key_edges, 1, "mode change must not key operators");
+                let hz = if control != 0 && slot != 3 {
+                    ch3_hz(0x345, 3)
+                } else {
+                    ch3_hz(0x623, 4)
+                };
+                for _ in 0..4800 {
+                    // Sum the expected phase increments across mode boundaries;
+                    // sustain rate 8 decays continuously after attack/decay.
+                    phase = (phase + hz / 48_000.0).fract();
+                    let level = (1.0f64 - 16.0 / 768_000.0).powi((elapsed - 1).max(0));
+                    let expected = 0.08 * level * (phase * std::f64::consts::TAU).sin();
+                    assert!((f64::from(fm.sample()) - expected).abs() < 0.0000003,
+                        "slot {slot}, mode {control:02x}, sample {elapsed}: phase/envelope discontinuity");
+                    elapsed += 1;
+                }
+                assert_eq!(&fm.registers[0xa0..=0xae], &programmed[0xa0..=0xae]);
+            }
+            assert_eq!(fm.key_edges, 1);
+        }
+    }
+}
+
+#[test]
+fn opn_ch3_selection_preserves_operator_multiple_and_detune() {
+    for mode in [0x40, 0x80] {
+        for (slot, reg) in [0xa9, 0xaa, 0xa8, 0xa2].into_iter().enumerate() {
+            for (dtmul, multiple, detune) in [(0, 0.5, 0.0), (2, 2.0, 0.0), (0x71, 1.0, -0.3)] {
+                let mut fm = ch3_voice(2);
+                ch3_pair(&mut fm, reg, 0x421, 4);
+                fm_write(&mut fm, 0x32 + [0, 8, 4, 12][slot], dtmul);
+                fm_write(&mut fm, 0x27, mode);
+                fm_write(&mut fm, 0x28, 2 | (0x10 << slot));
+                ch3_pitch(&ch3_pcm(&mut fm), ch3_hz(0x421, 4) * multiple + detune);
+            }
+        }
+    }
+}
+
+#[test]
+fn opn_ch3_other_channels_and_upper_bank_are_isolated() {
+    for ch in 0..6 {
+        let mut reference = ch3_voice(ch);
+        let mut changed = ch3_voice(ch);
+        for fm in [&mut reference, &mut changed] {
+            if ch < 3 {
+                ch3_pair(fm, 0xa0 + ch as u8, 0x523, 4);
+            } else {
+                for (reg, value) in [(0xa4 + ch % 3, 0x25), (0xa0 + ch % 3, 0x23)] {
+                    fm.bank_address = reg as u8;
+                    fm.write_bank(value);
+                }
+            }
+            fm_write(
+                fm,
+                0x28,
+                0xf0 | (ch % 3) as u8 | if ch >= 3 { 4 } else { 0 },
+            );
+        }
+        for control in [0, 0x40, 0x80, 0] {
+            if ch != 2 {
+                fm_write(&mut changed, 0x27, control);
+                for reg in [0xa8, 0xa9, 0xaa] {
+                    ch3_pair(&mut changed, reg, 0x712, 7);
+                }
+            } else {
+                // Bank-one extra pairs and mode control must never select or
+                // overwrite channel 3's bank-zero frequency source.
+                changed.bank_address = 0x27;
+                changed.write_bank(control);
+            }
+            for reg in [0xa8, 0xa9, 0xaa, 0xac, 0xad, 0xae] {
+                changed.bank_address = reg;
+                changed.write_bank(0xff);
+            }
+            assert_eq!(ch3_pcm(&mut changed), ch3_pcm(&mut reference));
+        }
+    }
+    // Bank-one writes also cannot change an already selected special pitch.
+    let mut fm = ch3_voice(2);
+    ch3_pair(&mut fm, 0xa9, 0x345, 3);
+    fm_write(&mut fm, 0x27, 0x40);
+    fm_write(&mut fm, 0x28, 0x12);
+    for reg in [0x27, 0xa2, 0xa6, 0xa9, 0xad] {
+        fm.bank_address = reg;
+        fm.write_bank(0xff);
+    }
+    ch3_pitch(&ch3_pcm(&mut fm), ch3_hz(0x345, 3));
+}
+
+#[test]
+fn opn_ch3_board_masks_instances_and_machine_reset() {
+    fn port_write(bus: &mut Bus, bank: bool, reg: u8, value: u8) {
+        bus.output(if bank { 0x18c } else { 0x188 }, reg);
+        bus.output(if bank { 0x18e } else { 0x18a }, value);
+    }
+    let mut m = Machine::new(Profile::Pc9821ApDos);
+    let mut other = Machine::new(Profile::Pc9821ApDos);
+    m.bus.opn = ch3_voice(2);
+    ch3_pair(&mut m.bus.opn, 0xa9, 0x345, 3);
+    port_write(&mut m.bus, false, 0x27, 0x40);
+    port_write(&mut m.bus, false, 0x28, 0x12);
+    assert_eq!(other.bus.opn.registers[0x27], 0);
+    assert_eq!(other.bus.opn.key_edges, 0);
+    assert_eq!(other.bus.opn.sample(), 0.0);
+    other.bus.opn = ch3_voice(2);
+    ch3_pair(&mut other.bus.opn, 0xa2, 0x765, 2);
+    ch3_pair(&mut other.bus.opn, 0xa9, 0x111, 6);
+    fm_write(&mut other.bus.opn, 0x27, 0);
+    fm_write(&mut other.bus.opn, 0x28, 0x12);
+    let writes = m.bus.opn.writes;
+    // Extended bank disabled at reset; whole FM mask bit 1 gates both ports.
+    port_write(&mut m.bus, true, 0xa9, 0xff);
+    assert_eq!(m.bus.opn.writes, writes);
+    m.bus.output(0xa460, 3);
+    port_write(&mut m.bus, false, 0x27, 0);
+    port_write(&mut m.bus, true, 0xa9, 0xff);
+    assert_eq!(m.bus.opn.writes, writes);
+    m.bus.output(0xa460, 1);
+    port_write(&mut m.bus, true, 0xa9, 0xff);
+    assert_eq!(m.bus.opn.registers[0x1a9], 0xff);
+    ch3_pitch(&ch3_pcm(&mut m.bus.opn), ch3_hz(0x345, 3));
+    fm_write(&mut m.bus.opn, 0x27, 0x80);
+    ch3_pitch(&ch3_pcm(&mut other.bus.opn), ch3_hz(0x765, 2));
+    ch3_pitch(&ch3_pcm(&mut m.bus.opn), ch3_hz(0x345, 3));
+    let mut vm = Bus::default();
+    port_write(&mut vm, false, 0x27, 0x40);
+    port_write(&mut vm, false, 0x28, 0x12);
+    assert_eq!(vm.opn.writes, 0); // VM sound exposure remains out of scope.
+    m.bus.tick(100_000);
+    assert!(!m.bus.audio.is_empty());
+    m.reset();
+    assert_eq!(m.bus.opn.registers[0x27], 0);
+    assert_eq!(&m.bus.opn.registers[0xa0..=0xae], &[0; 15]);
+    assert_eq!(m.bus.opn.key_edges, 0);
+    assert_eq!(m.bus.opn.sample(), 0.0);
+    assert!(m.bus.audio.is_empty());
+    assert_eq!(m.bus.pcm.mask, 0);
+    assert_eq!(other.bus.opn.key_edges, 1);
+    assert_eq!(other.bus.opn.registers[0x27], 0);
+    ch3_pitch(&ch3_pcm(&mut other.bus.opn), ch3_hz(0x765, 2));
+}
+
+#[test]
+fn opn_ch3_mode_bits_preserve_timer_load_reset_and_irq() {
+    let mut normal = Opn::default();
+    let mut special = Opn::default();
+    for fm in [&mut normal, &mut special] {
+        for (reg, value) in [(0x24, 255), (0x25, 3), (0x26, 255), (0x27, 15)] {
+            fm_write(fm, reg, value);
+        }
+    }
+    // Changes while loaded must preserve accumulated clocks, status and IRQ.
+    for (cycles, mode, control) in [
+        (100, 0x40, 15),
+        (44, 0x80, 15),
+        (1, 0x40, 15),
+        (1000, 0x80, 31),
+        (1200, 0x40, 15),
+        (1, 0x80, 63),
+        (3000, 0, 12),
+        (100, 0x40, 15),
+        (45, 0x80, 15),
+    ] {
+        normal.tick(cycles);
+        special.tick(cycles);
+        assert_eq!(special.status(), normal.status());
+        assert_eq!(special.irq(), normal.irq());
+        if cycles == 1 && control == 15 {
+            assert_eq!(
+                normal.status() & 1,
+                1,
+                "mode change must not reload Timer A"
+            );
+        }
+        fm_write(&mut normal, 0x27, control);
+        fm_write(&mut special, 0x27, control | mode);
+        assert_eq!(special.status(), normal.status());
+        assert_eq!(special.irq(), normal.irq());
+        assert_eq!(
+            special.key_edges, 0,
+            "CSM automatic keying is outside this subset"
+        );
+    }
+}
+
+#[test]
+fn opn_ch3_guest_pcm_stages_before_and_after_reset() {
+    let image = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/fixtures/opn_ch3/opn_ch3.hdm"
+    ))
+    .expect("run python3 tools/prepare_opn_ch3_fixture.py");
+    let mut m = Machine::new(Profile::Pc9821ApDos);
+    m.insert(0, image.clone(), "opn_ch3.hdm").unwrap();
+    for run in 0..2 {
+        m.reset();
+        assert_eq!(m.bus.opn.key_edges, 0);
+        assert_eq!(m.bus.opn.registers[0x27], 0);
+        let mut pcm: [Vec<f32>; 16] = std::array::from_fn(|_| Vec::new());
+        let mut slots = 0;
+        while slots < 2_000_000 {
+            let before = m.bus.read(0x8001);
+            slots += m.step(1000);
+            assert!(m.error.is_none(), "{:?}", m.error);
+            let after = m.bus.read(0x8001);
+            assert!(
+                m.bus.audio.len() <= 48,
+                "drain far below the 4096 sample queue cap"
+            );
+            assert!(m.bus.audio.iter().all(|s| s.is_finite() && s.abs() <= 1.0));
+            if before == after && (1..=16).contains(&after) {
+                pcm[(after - 1) as usize].extend_from_slice(&m.bus.audio);
+                assert_eq!(m.bus.opn.key_edges, 1 + 2 * u64::from((after - 1) / 4));
+                assert_eq!(m.bus.opn.registers[0x27] & 3, 0, "timers stopped");
+            }
+            m.bus.audio.clear();
+            let text = m.bus.text();
+            assert!(!text.contains("FAIL"), "{text}");
+            if text.contains("OPN CH3 PASS") {
+                break;
+            }
+        }
+        assert!(slots <= 2_000_000);
+        assert!(m.bus.text().contains("OPN CH3 PASS"), "{}", m.bus.text());
+        let pairs = [(0x123, 3), (0x456, 4), (0x789, 2), (0x5ab, 5)];
+        for (stage, data) in pcm.iter().enumerate() {
+            assert!(
+                data.len() >= 3500,
+                "stage {}: {} samples",
+                stage + 1,
+                data.len()
+            );
+            let (fnum, block) = pairs[if matches!(stage % 4, 1 | 2) {
+                stage / 4
+            } else {
+                3
+            }];
+            ch3_pitch(data, ch3_hz(fnum, block));
+        }
+        let mut expected = [0xa5; 64];
+        expected[1] = 0xff;
+        expected[16..32].fill(1);
+        let actual: Vec<_> = (0..64).map(|i| m.bus.read(0x8000 + i)).collect();
+        assert_eq!(actual, expected);
+        assert_eq!(m.bus.disks[0].as_ref().unwrap().bytes, image);
+        assert_eq!(m.bus.fdc.writes, 0);
+        assert_eq!(m.bus.opn.key_edges, 8);
+        assert_eq!(m.bus.beep_edges, 0);
+        println!(
+            "OPN CH3 boot {run}: {slots} slots, stage samples {:?}",
+            pcm.each_ref().map(Vec::len)
+        );
+    }
+}

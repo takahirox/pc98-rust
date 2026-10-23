@@ -2958,3 +2958,152 @@ Reviewed the final implementation, tests, original fixture, CI preparation and
 documentation diff against every Issue #65 acceptance criterion. No existing
 assertions or budgets were removed or weakened. No push, pull request, merge or
 GitHub comment was performed.
+
+## Issue #67 OPN/OPNA channel-3 frequency selection (2026-10-24)
+
+The shared core now selects bank-zero A9/AD, AA/AE, A8/AC and A2/A6 in
+logical operator order for register-27 encodings 40h and 80h. Normal encoding
+00h retains A2/A6 for every operator. Frequency selection is separate from key
+state and timers; existing multiplication, approximate detune/envelopes and
+algorithm routing remain intact. See the [hardware contract](hardware.md#opnopna-channel-3-frequency-selection).
+
+### Actual baseline reproduction and focused coverage
+
+Before editing `src/sound.rs`, the original Rust reproduction was run against
+its unchanged `637972d2c74de79355f823dfc5c46bb80a2a8f72` implementation:
+
+```sh
+cargo test --locked --test ap opn_ch3_reproduction -- --nocapture
+```
+
+It exited **101**, with **0 passed, 1 failed**. The observable PCM assertion
+reported `649.999997 Hz`, expected `216.666667 +/- 0.043333 Hz` for operator 1
+in mode 40h (normal FNUM 600h, special FNUM 200h, both block 4). Execution
+stopped at that first assertion; no baseline 80h result is claimed. After the
+change the same reproduction passes for **both** 40h and 80h, with Timer A/B
+stopped and the same quantitative tolerance.
+
+Nine `opn_ch3_` tests cover:
+
+- Every operator independently under algorithm 7 with distinct F-numbers and
+  blocks in normal, 40h and 80h selection (12 cases).
+- Zero F-number, FFh/100h, 3FFh/400h, 7FFh, every block 0..7, and ignored high
+  register D7:D6 for all four operators and all three accepted encodings
+  (168 PCM cases). Zero must produce exact silence; positive tones must have
+  at least three rising crossings and match the independently calculated pitch
+  within max(0.03 Hz, 0.02%). Interpolation avoids FFT-bin quantization.
+- Keyed normal → special → normal → special transitions for each operator and
+  both nonnormal encodings. Sample-by-sample accumulated phase and continuously
+  decaying envelope are checked within 0.0000003 amplitude over 19,200 samples
+  per voice; programmed pairs and key-edge counts remain unchanged.
+- Preserved half/two-times multiplication and approximate negative detune;
+  unaffected channels 1–2 and 4–6; bank-one mode/extra-pair isolation, including
+  while bank-zero special selection is active; existing board masks, separate
+  instances, absent VM sound exposure, and Machine reset.
+- Register-27 timer load/reload, status reset and IRQ behavior while its mode
+  bits change, compared to a normal-mode timer control with identical low bits.
+- The original guest PCM probe before and after reset.
+
+### Original guest probe and actual PCM evidence
+
+`guest/opn_ch3.asm` is original MIT-licensed 8086 assembly, assembled offline
+with NASM. It contains no proprietary ROM, samples or acquired guest software.
+`python3 tools/prepare_opn_ch3_fixture.py` verifies the checked
+[manifest](../fixtures/opn-ch3-manifest.json), copies the complete source and
+MIT license alongside the image, and keeps all generated assets in ignored
+`fixtures/opn_ch3/`, outside the publication tree. Acceptance CI prepares it.
+
+Final source SHA-256:
+`fc5ad69f15b8df6d685b09221c5cc8834a5e466990cee8bae942d5c171d59916`.
+Boot-sector SHA-256:
+`3342ece1224d0a38fff7155c44df75b02205185c30a7f743711c6e85233bba6b`.
+Complete 1,261,568-byte image SHA-256:
+`dca9f5a4b464fee7d81ccb054a4dce7d9bfc92cd93e097f6af2654b7ca8573c8`.
+
+The guest alone programs the chip through OUT instructions, high before low,
+algorithm 7, DT=0, MULT=1, immediate attack and sustained single operators.
+Each logical operator runs four 80,000-LOOP stages: normal, 40h, 80h, normal,
+without key writes at mode changes. Timer A and B remain stopped. Between
+operators it keys off and waits for release. Native and browser hosts only load,
+step, reset, read outputs and drain the existing PCM queue. They never inject
+register state, patch guest code or write results.
+
+Every boot completed in **1,314,000 instruction slots**, below the declared
+**2,000,000 per boot**: two native boots and four production release-Wasm boots
+(before/after reset at `/` and `/pc98-rust/`). Every one of the 16 stages yielded
+**3,792 samples**, above the unchanged 3,500 minimum. The hosts drain every
+1,000 slots (at most 48 samples), well below the bounded 4,096-sample queue.
+Chunks crossing guest stage markers are discarded. All captured samples,
+including inter-stage chunks, must be finite and bounded by one.
+
+| Logical operator | Normal PCM, both control stages | 40h PCM | 80h PCM |
+| --- | --- | --- | --- |
+| 1 | 1228.060 Hz | 61.572 Hz | 61.572 Hz |
+| 2 | 1228.060 Hz | 469.727 Hz | 469.727 Hz |
+| 3 | 1228.060 Hz | 204.077 Hz | 204.077 Hz |
+| 4 | 1228.060 Hz | 1228.060 Hz | 1228.060 Hz |
+
+These are actual release-Wasm measurements rounded to 0.001 Hz, identical at
+both roots and across resets. Both hosts independently calculate expectations
+from programmed FNUM/block and assert max(0.03 Hz, 0.02%) pitch tolerance with
+at least three interpolated rising zero crossings. Guest markers identify stages;
+PASS alone cannot satisfy the audio assertions. Both hosts also require guest
+`OPN CH3 PASS`, no FAIL/core/browser errors, all 64 exact result/guard bytes,
+unchanged disk bytes, zero disk writes/beep edges and exactly eight key edges
+(four on/off pairs), with unchanged counts throughout each operator's four modes.
+
+### Required checks and review
+
+Validation in the assigned macOS arm64 worktree:
+
+| Command | Actual outcome |
+| --- | --- |
+| `python3 -m unittest discover -s tools -p test_fixture_fetch.py` | Passed, 7 tests |
+| All README fixture preparation prerequisites | Passed: original offline hardware probes, FreeDOS/font/DOS apps/CPU/HDD/music/devices; existing checksum-pinned source/binary/image checks retained |
+| `python3 tools/prepare_opn_ch3_fixture.py` | Passed offline against final checked source/boot/image manifest |
+| `python3 tools/build_font.py --check` | Passed; existing font hash unchanged |
+| `cargo test --locked --test ap opn_ch3_ -- --nocapture` | Passed, all 9 focused tests, zero failed/ignored; both native guest boots 1,314,000 slots |
+| `cargo test --locked` | Passed, all 280 native integration tests across 18 targets, zero failed/ignored; unit/doc targets also passed |
+| `cargo clippy --all-targets -- -D warnings` | Passed after replacing one new needless range loop with a slice comparison |
+| `cargo fmt --check` | Passed |
+| `git diff --check` | Passed |
+| `npm ci` / `npx playwright install chromium` | Passed; zero npm vulnerabilities |
+| `npm test -- --grep 'channel-3'` | Production release-Wasm build and ten-asset publication check passed; browser startup failed because port 8000 was occupied; no browser tests ran in this attempt |
+| `npm test -- --config=.issue67-playwright.config.js` | Passed: production release-Wasm/publication checks and all 100 browser tests, zero skipped, 1.3 minutes |
+
+The first Clippy invocation caught a needless range loop in a new register
+retention assertion. It was replaced with a complete slice comparison. Local
+review also strengthened per-instance coverage with two differently pitched
+active channels, one normal and one special, including resetting one while the
+other continues. All nine focused tests were rerun successfully after these
+final test-only changes; the production implementation was unchanged.
+
+The temporary browser configuration imported the checked Playwright configuration
+and changed only serving ports/base URLs to 18000 and 18001. A temporary copy of
+the project server changed only its listening port, retaining this worktree's
+`web/` and root-asset rejection. Both `/` and `/pc98-rust/` used the same projects,
+eight default workers, assertions and budgets. Existing listeners were untouched;
+temporary files were removed. Production Wasm was **454,258 bytes**, and all ten
+approved publication assets passed the existing allowlist check. Existing Rust
+hardware, DOS/application, VM, music/PCM and six-game assertions and budgets
+remain intact.
+
+All 26 inventory categories retain their full fixed scopes and statuses:
+**partial** cpu-v30, cpu386, protected-mode, memory, pic, pit, dma, rtc, keyboard,
+mouse, fdc, gdc, egc, pegc, text-cg, display-timing, opn, opna, pcm86, bios, lio,
+integration; **implemented_unverified** ide, grcg; **unimplemented** paging, fpu.
+Neither named channel-3 special mode is fully implemented. OPN still requires
+CSM timer-driven keying, combined-mode acceptance (encoding `11` is explicitly
+unverified and currently follows the ordinary path), frequency-write sequencing,
+prescalers, key scaling, fuller envelopes/SSG-EG and broader synthesis
+verification. OPNA additionally retains LFO, pan/stereo, rhythm and ADPCM gaps.
+VM sound exposure remains outstanding. Protected execution, paging and basic
+x87 retain their required scopes. No full hardware accuracy or commercial
+compatibility is established by these limited probes. No post-merge verification
+was specified.
+
+Reviewed the complete implementation, original fixture/source/boot/image
+provenance, test oracles, CI preparation and documentation against every Issue
+#67 acceptance criterion. No existing assertion, game regression or budget was
+removed or weakened. No blocking local review finding remains. No push, pull
+request, merge or GitHub comment was performed.

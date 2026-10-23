@@ -866,6 +866,50 @@ outside this contract. Passing these checks establishes terminal-count reload,
 software master clear, controller disable and their existing FDC consumer, not complete hardware
 accuracy or commercial compatibility. Other hardware inventory requirements remain unchanged.
 
+## OPN/OPNA channel-3 frequency selection
+
+The shared `Opn` core selects the following **bank-zero** pairs when register
+27h D7:D6 is `01` (40h) or `10` (80h). With `00`, all four operators use A2h/A6h.
+These are logical operators; ordinary operator parameter registers still use
+physical order 1,3,2,4.
+
+| Logical operator | F-number low | Block/F-number high |
+| --- | --- | --- |
+| 1 | A9h | ADh |
+| 2 | AAh | AEh |
+| 3 | A8h | ACh |
+| 4 | A2h | A6h |
+
+F-number is 11 bits (high register D2:D0 plus low byte); block is high-register
+D5:D3. Write high before low. The existing default clock is 3,993,600 Hz, with
+frequency `FNUM * 2^BLOCK * clock / (144 * 2^20)`. Normal mode ignores extra
+pairs. Mode changes retain programmed frequencies and active operator phase,
+envelope and key state. Multiplication, approximate detune/envelopes and algorithm
+routing are preserved. Other channels retain their ordinary pairs. Upper-bank
+extra pairs and mode writes cannot alias bank zero. Existing Ap board masks and
+register-29 channel enable remain in force; VM has no exposed sound board.
+
+References: Yamaha [YM2608 Application Manual §§2-2-2, 2-4-1 and 2-8-4](https://csclub.uwaterloo.ca/~pbarfuss/YM2608J_Translated.PDF#page=20)
+and [YM2203 datasheet register descriptions (10), (19), (20)](https://bitsavers.org/components/yamaha/YM2203_198911.pdf#page=5).
+
+The original MIT [assembly probe](../guest/opn_ch3.asm) and
+[manifest](../fixtures/opn-ch3-manifest.json) provide 16 stable PCM stages, four
+per keyed operator: normal → 40h → 80h → normal, with both timers stopped.
+Native and production release-Wasm hosts capture PCM through the existing audio
+queue every 1,000 slots and quantitatively check pitch. Markers identify stages;
+they do not stand in for audio assertions. Each boot has a 2,000,000-slot limit,
+exact result/guard checks and unchanged disk data, before/after reset and at both
+browser roots. See [validation evidence](validation.md#issue-67-opnopna-channel-3-frequency-selection-2026-10-24).
+
+OPN and OPNA remain **partial**. This implements only their common channel-3
+frequency selection, not either complete named special mode. CSM timer-driven
+keying is absent. Combined encoding `11` is explicitly unverified and currently
+follows ordinary frequency selection; that fallback is not a hardware claim.
+Frequency-write latch timing, prescalers, key scaling, fuller envelopes/SSG-EG
+and broader synthesis verification remain outstanding. OPNA also retains LFO,
+pan/stereo, rhythm and ADPCM gaps. VM sound exposure remains outstanding.
+No inventory scope or status is promoted by these bounded probes.
+
 ## Synthetic firmware and boot
 
 `guest/firmware.asm` is assembled to the original IPL in `firmware.bin`. It runs
