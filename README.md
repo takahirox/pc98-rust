@@ -83,6 +83,8 @@ Japanese CG glyphs. FEP input is not implemented.
 ## Reproduce the checks
 
 ```sh
+# Build the independent MIT DMA boot probe offline.
+python3 tools/prepare_dma_fixture.py
 # Fetch checksum-pinned guest binaries AND matching complete source archives.
 # This makes a minimal GPL guest disk; it downloads no emulator code.
 python3 tools/prepare_freedos.py
@@ -102,6 +104,16 @@ npm ci
 npx playwright install chromium
 npm test
 ```
+
+The original MIT [DMA auto-init boot probe](guest/dma_autoinit.asm) builds into
+`fixtures/dma/autoinit.hdm`, separate from all existing disks and publication assets.
+`cargo test --test dma` and production-Wasm browser tests boot it on VM and Ap,
+with a two-million-slot budget at each serving path. It programs raw 8237/FDC
+ports, reuses the DMA buffer for two reads and two writes, and checks register
+reload, exact bytes, guards, result phase and completion IRQ. The
+[manifest](fixtures/dma-manifest.json) records the assembly command, license and
+source/image hashes. No DOS, proprietary ROM or game is required. See the
+[bounded DMA contract](docs/hardware.md#dma-terminal-count-and-auto-initialization).
 
 `npm run build` checks reproducible media, compiles the real Rust/Wasm core and
 runs `npm run check:site`. The latter verifies a nonempty, compilable Wasm module

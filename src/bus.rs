@@ -764,6 +764,7 @@ impl Bus {
                                 st1 = 16;
                                 break;
                             }
+                            let mut terminal_count = false;
                             for i in 0..count {
                                 let addr = self.dma.address(2);
                                 if write {
@@ -773,7 +774,10 @@ impl Bus {
                                     let v = self.disks[d].as_ref().unwrap().bytes[s.offset + i];
                                     self.write(addr, v)
                                 }
-                                self.dma.advance(2);
+                                terminal_count = self.dma.advance(2);
+                                if terminal_count {
+                                    break;
+                                }
                             }
                             if write {
                                 self.disks[d].as_mut().unwrap().writes += 1;
@@ -781,7 +785,7 @@ impl Bus {
                             } else {
                                 self.fdc.reads += 1
                             }
-                            if self.dma.count[2] == 65535 {
+                            if terminal_count {
                                 break;
                             }
                             if r >= eot {

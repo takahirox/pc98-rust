@@ -21,6 +21,7 @@ jobs:
           cache: npm
       - run: sudo apt-get update && sudo apt-get install -y nasm
       - run: python3 tools/build_media.py --check
+      - run: python3 tools/prepare_dma_fixture.py
       - run: python3 tools/prepare_freedos.py
       - run: python3 tools/prepare_font_fixture.py
       - run: python3 tools/prepare_dos_apps.py

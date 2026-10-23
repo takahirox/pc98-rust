@@ -92,7 +92,7 @@ this table is not a claim of complete chip emulation.
 | Ports (hex) | Device and supported behavior | IRQ / notes |
 | --- | --- | --- |
 | `00,02`; `08,0A` | Master/slave 8259: ICW vector/cascade initialization, masks, IRR/ISR, priority, specific/nonspecific EOI, auto EOI | Master IR7 cascades slave; masked/in-service IRQs cannot bypass priority |
-| `01–0F` odd, `11–1F` odd, `21,23,25,27` | 8237 address/count flip-flop, channel masks, direction/decrement, terminal count, bank registers | FDC uses channel 2; count/address change with actual byte transfers |
+| `01–0F` odd, `11–1F` odd, `21,23,25,27` | 8237 address/count flip-flop, channel masks, direction/decrement, terminal count and auto-init reload, bank registers | FDC uses channel 2; count/address change with actual byte transfers |
 | `31,33,35,37` | PPI startup inputs, output C, bit set/reset, active-low beep gate | Input straps are fixed VM-profile constants |
 | `41,43` | Keyboard byte FIFO, ready status, command acknowledgements, down/up scan bytes | IR1 / INT 09; firmware maintains BIOS ring, held-key bitmap and modifier state |
 | `60,62` | Master text GDC parameter/status and command/data readback | RESET, display enable, PITCH, CURS, CCHAR, PRAM start, CSRR |
@@ -109,7 +109,7 @@ this table is not a claim of complete chip emulation.
 
 The hello source uses `OUT 3FDFh,AL`, an immediate-port encoding that truncates to
 `DFh`. That timer mirror is decoded too. Full PIT gate/readback/mode waveforms,
-DMA auto-init reload/arbitration, precise FDC motor/rotation timing, FDC programmed
+DMA arbitration and request modes, precise FDC motor/rotation timing, FDC programmed
 I/O transfers, formatter/scanner commands, GDC vector/area drawing and all GDC
 raster partitions are outside the tested subset. Unsupported FDC commands return
 an invalid-command result. No pretend FM register bank is implemented.
@@ -153,6 +153,36 @@ phase, including pulses within a browser frame. The host copies those samples to
 Web Audio buffers after a user gesture. FM/OPNA is absent; none of the acceptance
 guests needs it. The output is a square wave approximation, not analog speaker
 fidelity.
+
+### DMA terminal count and auto-initialization
+
+The four existing channels retain base and current 16-bit address/count registers.
+Byte writes update the selected byte of each through the shared first/last
+flip-flop; reads expose current values. Each serviced byte increments/decrements
+the address without carrying into the existing PC-98 bank register and decrements
+the count. Count zero transfers one byte; `FFFFh` transfers 65,536. Decrementing
+zero generates a terminal-count event. Mode bit 4 reloads both current registers
+from their bases and preserves the mask; without it the count becomes `FFFFh`
+and the channel is masked. Either case latches TC status until status is read.
+FDC READ/WRITE DATA consumes the event from that byte transfer, independently of
+register reload and previously latched status, then produces seven result bytes
+and the completion IRQ on both VM and Ap.
+
+This bounded contract follows Intel's [8237A datasheet](https://read.seas.harvard.edu/~kohler/class/04f-aos/ref/hardware/8237A.pdf),
+printed pp. 5–10 (autoinitialize and register descriptions), and NEC's
+[µPD765A datasheet](https://hxc2001.com/download/datasheet/floppy/thirdparty/FDC/NEC/uPD765A.pdf)
+(TC and processor interface). `tests/dma.rs` covers all four channels, both address
+directions, byte reprogramming, wrap, repeated service and raw FDC commands;
+the original MIT boot probe executes on native and production Wasm at both browser
+serving paths. See [execution evidence](validation.md#issue-29-dma-terminal-count-auto-init).
+
+DMA remains **partial**. External EOP injection, demand/block/single arbitration,
+software requests, verify transfers, memory-to-memory DMA, cascade/rotating
+priority and additional device interactions still require implementation or
+verification. Broader FDC commands and precise motor/rotation timing remain
+outside this contract. Passing these checks establishes terminal-count reload
+and its existing FDC consumer, not complete hardware accuracy or commercial
+compatibility. Other hardware inventory requirements remain unchanged.
 
 ## Synthetic firmware and boot
 
