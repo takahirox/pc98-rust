@@ -3107,3 +3107,119 @@ provenance, test oracles, CI preparation and documentation against every Issue
 #67 acceptance criterion. No existing assertion, game regression or budget was
 removed or weakened. No blocking local review finding remains. No push, pull
 request, merge or GitHub comment was performed.
+
+## Issue #69: V30 segment interrupt inhibition (2026-10-24)
+
+Implemented VM maskable-INT inhibition after documented segment MOVs in both
+directions (ES/SS/DS destinations; ES/CS/SS/DS sources, register and memory) and
+POP ES/SS/DS. The existing one-boundary inhibition mechanism is renewed by
+consecutive producers. IF and PIC requests are retained, prefixes belong to their
+instruction, and ordinary MOV/PUSH-segment controls gain no inhibition. Ap timing,
+including SS/STI and single-step suppression, remains unchanged. No scheduler,
+REP-loop, PIC or operand-transfer implementation was changed.
+
+Read Issue #69 directly through the GitHub connector. Independently inspected
+NEC's original V20/V30 User's Manual scan, Chapter 6, printed page 6-4 (PDF page
+29), “Interrupt Disable Timing.” It lists all four segment MOV operand forms and
+POP sreg. The large PDF exceeded the web reader's size limit at both supplied
+URLs; downloaded the mirror to a temporary file and read its text with macOS
+PDFKit. No manual or third-party implementation was added to the repository.
+
+### Failure before the fix and focused coverage
+
+With `src/cpu.rs` unchanged from the selected upstream/evaluation implementation,
+`cargo test --locked --test core v30_segment_irq_minimal_mov_ds_reproduction -- --nocapture`
+failed: the first post-MOV step entered `0000:0201`, instead of advancing through
+INC BX to `1000:0103`. The real PIC request was acknowledged too early. The same
+command passed after the decoder change; no reproduction oracle was weakened.
+
+Seven `v30_segment_irq_` tests cover the minimal reproduction, 42 documented MOV
+operand cases (register, default DS/SS, ES/DS/CS overrides, odd word addresses),
+all three POPs, exact transfers and complete FLAGS, guarded operands, pending
+IRR/no ISR while protected, exactly one delivery and all three frame words,
+guest EOI/IRET and resumed progress. Additional cases cover changed SS followed
+by SP setup for MOV and POP, consecutive producers, prefixed following INC
+without an extra instruction of delay, IF clear, masked-then-unmasked IRQ,
+reset with inhibition pending, ordinary MOV and all four PUSH-segment controls.
+
+The `ap_v30_segment_irq_` matrix covers non-SS register/memory segment MOVs and
+POPs, immediate delivery through relocated IDTR, exact frames, EOI/IRET, resumed
+progress and each instruction's own TF trap. Existing Ap SS/STI, single-step,
+exception-frame, IDTR and reset tests are retained. Existing REP interruption
+checks are mandatory regressions, not evidence for every segment-shadow/REP
+interaction.
+
+### Original guest acceptance and provenance
+
+The original MIT `guest/v30_segment_irq.asm` is assembled offline by
+`python3 tools/prepare_v30_segment_irq_fixture.py`. Its checked
+`fixtures/v30-segment-irq-manifest.json` records license, assembly command,
+source/boot/image/synthetic-firmware SHA-256 values, exact bytes and guards,
+VM profile and a maximum 2,000,000 scheduler slots per boot. Generated media,
+license and source copies stay under ignored `fixtures/v30_segment_irq/`, outside
+`web/`; no commercial ROM or guest software is required. Preparation is added to
+acceptance CI and the README reproduction commands.
+
+The guest programs PIC and one-shot PIT channel 0 with IF clear, polls and
+confirms IRR, then tests STI followed by segment-register reads/writes, odd
+memory MOVs, POP, consecutive producers and prefixed following INC. Its handler
+requires the INC marker before entry, exact saved IP/CS, the six-byte frame and
+saved IF, one entry per case, ISR=1/IRR=0 and successful EOI. After IRET the guest
+checks resumed progress, all 48 result/guard bytes, the odd operand and its two
+guards, and SP before producing `V30 SEGMENT IRQ PASS`. Hosts only insert media,
+reset, step and read outputs; host result writes and direct interrupt injection
+are absent from guest acceptance.
+
+Native boots before and after reset each passed in **6,000 slots**. Both require
+the guest PASS marker, no FAIL/emulator errors, every expected result/guard byte
+and unchanged disk bytes. Production release-Wasm uses the identical checked
+image and assertions at `/` and `/pc98-rust/`, before and after reset; all four
+browser boots also passed in **6,000 slots** each.
+
+### Commands, failures and final results
+
+Validation in the assigned macOS arm64 worktree:
+
+| Command | Actual outcome |
+| --- | --- |
+| `python3 -m unittest discover -s tools -p test_fixture_fetch.py` | Passed, 7 tests |
+| All README fixture preparation prerequisites | Passed: original offline probes, new segment probe, FreeDOS/font/DOS apps/CPU/HDD/music/devices. CPULEVEL and DEBUG primary URLs returned HTTP 503; existing pinned mirror fallbacks succeeded with unchanged checksum/provenance validation |
+| `python3 tools/prepare_v30_segment_irq_fixture.py --update-manifest`, then `python3 tools/prepare_v30_segment_irq_fixture.py` | Initial assembly failed because `r8` is a NASM register name; renamed return labels to `resume1`..`resume8`, then created and verified the checked manifest offline |
+| `python3 tools/build_media.py --check` | Passed; synthetic firmware and published media hashes unchanged |
+| `python3 tools/build_font.py --check` | Passed; existing font hash unchanged |
+| `cargo test --locked --test core v30_segment_irq_ -- --nocapture` | Passed, all 7 tests; both native probe boots 6,000 slots |
+| `cargo test --locked --test cpu386 ap_v30_segment_irq_` | Passed, the full non-SS IRQ/TF matrix |
+| `cargo test --locked` | Passed, all 288 native integration tests across 18 targets, zero failed/ignored; unit/doc targets also passed |
+| `cargo clippy --all-targets -- -D warnings` | Initial invocation caught a new reset test's field reassignment after Default; used a struct initializer and reran successfully |
+| `cargo fmt --check` | Passed |
+| `git diff --check` | Passed |
+| `npm ci` / `npx playwright install chromium` | Passed; zero npm vulnerabilities |
+| `npm test` | Release-Wasm build and ten-asset publication check passed; browser server startup failed because port 8000 was occupied; no browser tests ran in this attempt |
+| `npm test -- --config=.issue69-playwright.config.js` | Passed: production release-Wasm build, ten-asset publication check and all 102 browser tests, zero skipped, 1.4 minutes; Wasm 454,334 bytes |
+
+The browser rerun imports the checked Playwright configuration, changing only
+local serving ports/base URLs to 18000/18001. Its temporary copy of the project
+server changes only the listening port, retaining this worktree's `web/` and
+root-asset rejection. Existing listeners are untouched. Tests, workers, budgets,
+assertions and URL paths are unchanged. Temporary configuration/server files were removed after
+the successful run.
+
+All 26 supplied inventory scopes and statuses are retained for this Issue:
+**partial** cpu-v30, cpu386, protected-mode, memory, pic, pit, dma, rtc, keyboard,
+mouse, fdc, ide, gdc, egc, pegc, text-cg, display-timing, opn, opna, pcm86, bios,
+lio, integration; **implemented_unverified** grcg; **unimplemented** paging, fpu.
+No category is completed. V30 still requires packed-BCD strings, bit-field
+extensions, TF traps, NMI and broader instruction/prefix/fault acceptance.
+Segment-shadow interactions beyond ordinary non-REP following instructions
+remain unverified. Undocumented MOV-to-CS/POP-CS, protected execution, paging,
+x87 and unrelated PIC behavior are outside this implementation. Existing hardware,
+DOS/application, VM, audio and six-game assertions and budgets are preserved.
+This bounded contract does not establish full V30 accuracy or commercial
+compatibility. No post-merge verification is specified.
+
+Reviewed the complete change against Issue #69, including the new native/Ap
+matrices, guest-owned acceptance, checked provenance, CI preparation and bounded
+hardware documentation. Focused Rust tests were rerun successfully after the
+reset-test initializer style correction. No existing assertion or instruction
+budget was removed or weakened. No remote CI run, push, pull request, merge or
+GitHub comment was performed.
