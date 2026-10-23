@@ -102,6 +102,7 @@ python3 tools/prepare_v30_bound_fixture.py
 python3 tools/prepare_v30_repc_fixture.py
 python3 tools/prepare_v30_nibble_mem_fixture.py
 python3 tools/prepare_rtc_fixture.py
+python3 tools/prepare_opn_ch3_fixture.py
 # Fetch checksum-pinned guest binaries AND matching complete source archives.
 # This makes a minimal GPL guest disk; it downloads no emulator code.
 python3 tools/prepare_freedos.py
@@ -112,6 +113,7 @@ python3 tools/prepare_hdd_fixture.py
 python3 tools/prepare_music_fixture.py
 python3 tools/prepare_device_fixture.py
 python3 tools/build_font.py --check
+cargo test --locked --test ap opn_ch3_
 cargo test --locked --test rtc
 cargo test --locked --test timer
 cargo test --locked --test pit counter_latch_
@@ -134,6 +136,20 @@ the primary download fails. Every source uses the original SHA-256 and size
 checks before caching; existing cached archives are verified for offline reuse.
 The canonical provenance URLs, source archives and audited image manifests remain
 the same.
+
+The original MIT [channel-3 probe](guest/opn_ch3.asm) programs each logical FM
+operator through guest I/O, with keyed normal → 40h → 80h → normal stages and
+Timer A stopped. Prepare offline with `python3 tools/prepare_opn_ch3_fixture.py`;
+run `cargo test --locked --test ap opn_ch3_` and `npm test`. The
+[checked manifest](fixtures/opn-ch3-manifest.json) pins source, boot and disk
+hashes, license/build provenance, 16 PCM stages and guards. Native and production
+release-Wasm tests boot the identical disk before/after reset at `/` and
+`/pc98-rust/`, capture PCM every 1,000 slots, and assert pitches within
+max(0.03 Hz, 0.02%), finite bounded samples, guards, unchanged media and no errors,
+within 2,000,000 slots per boot. Generated assets remain outside `web/`.
+Only frequency selection is implemented; CSM timer keying is absent and combined
+mode `11` remains explicitly unverified. See the [hardware scope](docs/hardware.md#opnopna-channel-3-frequency-selection)
+and [validation record](docs/validation.md#issue-67-opnopna-channel-3-frequency-selection-2026-10-24).
 
 The original MIT [RTC probe](guest/rtc.asm) exercises Ap parallel 40-bit and
 serial 52-bit calendar reads, BIOS agreement and advancement with IF clear.

@@ -192,6 +192,12 @@ impl Opn {
             * op.level
             * 10f64.powf(-f64::from(tl) * 0.75 / 20.0)
     }
+    fn frequency(&self, low: usize) -> f64 {
+        let high = self.registers[low + 4];
+        let fnum = u16::from(self.registers[low]) | (u16::from(high & 7) << 8);
+        f64::from(fnum) * f64::from(1u16 << ((high >> 3) & 7)) * CLOCK as f64
+            / (144.0 * 1_048_576.0)
+    }
     pub fn sample(&mut self) -> f32 {
         let mut sum = 0.0;
         for ch in 0..6 {
@@ -199,16 +205,20 @@ impl Opn {
                 continue;
             }
             let register_ch = ch % 3 + ch / 3 * 256;
-            let high = self.registers[0xa4 + register_ch];
-            let fnum = u16::from(self.registers[0xa0 + register_ch]) | (u16::from(high & 7) << 8);
-            let hz = f64::from(fnum) * f64::from(1u16 << ((high >> 3) & 7)) * CLOCK as f64
-                / (144.0 * 1_048_576.0);
+            let hz = if ch == 2 && matches!(self.registers[0x27] & 0xc0, 0x40 | 0x80) {
+                // Logical operators 1,2,3,4, bank zero only. This implements
+                // frequency selection, not CSM keying. Combined mode 11 is
+                // unverified and currently follows the ordinary path.
+                [0xa9, 0xaa, 0xa8, 0xa2].map(|low| self.frequency(low))
+            } else {
+                [self.frequency(0xa0 + register_ch); 4]
+            };
             let alg = self.registers[0xb0 + register_ch] & 7;
             let fb = (self.registers[0xb0 + register_ch] >> 3) & 7;
             let first = self.operator(
                 ch,
                 0,
-                hz,
+                hz[0],
                 if fb == 0 {
                     0.0
                 } else {
@@ -219,7 +229,7 @@ impl Opn {
             let second = self.operator(
                 ch,
                 1,
-                hz,
+                hz[1],
                 if matches!(alg, 0 | 3 | 4 | 5 | 6) {
                     first
                 } else {
@@ -229,7 +239,7 @@ impl Opn {
             let third = self.operator(
                 ch,
                 2,
-                hz,
+                hz[2],
                 match alg {
                     0 | 2 => second,
                     1 => first + second,
@@ -240,7 +250,7 @@ impl Opn {
             let fourth = self.operator(
                 ch,
                 3,
-                hz,
+                hz[3],
                 match alg {
                     0..=1 | 4 => third,
                     2 => first + third,
