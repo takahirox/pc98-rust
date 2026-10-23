@@ -97,6 +97,7 @@ python3 tools/prepare_pit_mode0_fixture.py
 python3 tools/prepare_pit_mode0_rewrite_fixture.py
 python3 tools/prepare_pit_mode3_rewrite_fixture.py
 python3 tools/prepare_pit_counter_latch_fixture.py
+python3 tools/prepare_v30_bound_fixture.py
 # Fetch checksum-pinned guest binaries AND matching complete source archives.
 # This makes a minimal GPL guest disk; it downloads no emulator code.
 python3 tools/prepare_freedos.py
@@ -127,6 +128,19 @@ the primary download fails. Every source uses the original SHA-256 and size
 checks before caching; existing cached archives are verified for offline reuse.
 The canonical provenance URLs, source archives and audited image manifests remain
 the same.
+
+The original MIT [V30 BOUND/CHKIND probe](guest/v30_bound.asm) checks signed
+inclusive bounds and guest vector-5 entry with next-instruction return. It checks
+exact frames, IF/TF, nonzero CS, unchanged bounds, IRET, entry counts and guards.
+Prepare offline with `python3 tools/prepare_v30_bound_fixture.py`; run focused
+checks with `cargo test --locked --test core v30_bound_` and
+`cargo test --locked --test cpu386 bound_`. Native and production-release Wasm
+tests boot the identical VM disk at both browser roots, before/after reset,
+requiring `V30 BOUND PASS`, exact results/guards, unchanged disk bytes and no
+FAIL/core/browser errors within two million slots. The
+[manifest](fixtures/v30-bound-manifest.json) pins license, source/boot/image hashes,
+assembly and expected bytes. Generated fixtures stay outside `web/`. See the
+[profile-specific return contract and limits](docs/hardware.md#v30-boundchkind).
 
 The original MIT [PIC boot probe](guest/pic.asm) checks programmed priority and
 rotating EOIs using guest-programmed PIT and keyboard hardware interrupts. Native

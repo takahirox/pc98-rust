@@ -2413,3 +2413,139 @@ basic FPU remain required goals. Limited probes and six-game reports establish
 neither complete hardware accuracy nor commercial compatibility. No commercial
 ROMs or proprietary software were acquired. No push, PR, merge or comment was
 performed. Issue #55 requires no post-merge verification.
+
+## Issue #57 V30 BOUND/CHKIND (2026-10-24)
+
+Issue: [#57](https://github.com/takahirox/pc98-rust/issues/57). Production baseline:
+`9bec0af9db768ecd2d6b3b466a0bbe3b1bfb5cc6`; assigned upstream checkpoint:
+`8c335d90292f75e73f3e77373ba38e5afdb62338`. Work ran in the assigned macOS arm64
+worktree. The [implementation boundary and specifications](hardware.md#v30-boundchkind)
+distinguish NEC's conditional BRK 5/advancing PC interpretation from Intel's
+restartable Ap BOUND fault. Production changes reuse decoding, signed operand
+reads, Bus mapping and interrupt entry, with no general exception redesign.
+
+### Reproduction and focused evidence
+
+Added `v30_bound_minimal_valid_reproduction` to `tests/core.rs` **before** changing
+production code. `cargo test --locked --test core v30_bound_minimal_valid_reproduction`
+failed with exit 101, 0 passed/1 failed, and `unimplemented V30 BOUND`. After the
+implementation, that reproduction reaches `1004h` and preserves architectural
+data and memory. The complete focused VM suite passes six tests; the Ap suite
+passes four tests.
+
+VM matrices cover signed lower/interior/upper/outside values, negative and mixed
+ranges, `8000h`/`7FFFh`, equal/reversed bounds, every index-register encoding,
+and SP before pushes (including wrapping stack locations). All eight EA forms,
+direct/disp8/disp16 addressing, BP default SS, all four overrides, unaligned bounds
+and wrapping EA/bound reads are exercised with distinct competing-segment data.
+Full memory snapshots detect writes outside the six-byte frame and deliberate
+guest invocation counter. Both below and above cases with IF clear/set verify
+original FLAGS, nonzero saved CS, next IP including an ES prefix, entry IF/TF
+clearing, guest IRET, exactly one invocation and forward progress.
+
+Ap coverage retains signed word/dword comparisons, size/address overrides and
+SIB, first-prefix restart, nonzero saved CS, a guest handler repairing the index
+then IRET/retry, register-operand/LOCK rejection and complete-operand segment
+preflight (#SS for SS, #GP for other segments). During test development the Ap
+matrix initially used odd SP values that faulted inside a wrapping stack word;
+those unrelated stack-fault cases are excluded. Its expected frame was also
+corrected to wrap **between** words for small even SP. No production stack or
+segment behavior was changed.
+
+The original MIT [guest/v30_bound.asm](../guest/v30_bound.asm) builds offline
+into a single 1024-byte boot sector and zero-padded HDM. The checked
+[manifest](../fixtures/v30-bound-manifest.json) records source/license, assembly,
+source/boot/image hashes, exact expected bytes/guards and the 2,000,000-slot
+maximum. Image SHA-256:
+`5dbebd0b5b98f5907079acedcfcc48ed0c167adcd03f0deaa06284f604fe625c`.
+The guest checks signed inclusive success, below/above frames at fixed next IPs
+`0105h`/`0145h` including ES prefixes, CS=`1FC0h`, pre-entry FLAGS=`F5D7h`/`F7D7h`,
+entry IF/TF clearing, unmodified IRET, two invocations and two progress results.
+It compares all 32 results/bounds/guards before explicit PASS. Hosts only boot,
+step and observe. Preparation retains source, MIT notice and manifest beside
+the image, outside `web/`; CI prepares it before the complete suites.
+
+### Commands and actual outcomes
+
+All existing fixture manifests, fixtures, assertions and budgets are preserved.
+CPULEVEL and DEBUG each encountered primary HTTP 503, then passed through the
+existing checksum-pinned mirror with matching complete source archives.
+
+| Command | Outcome |
+| --- | --- |
+| `python3 -m unittest discover -s tools -p test_fixture_fetch.py` | Passed: seven tests |
+| `python3 tools/prepare_dma_fixture.py` | Passed |
+| `python3 tools/prepare_gdtr_fixture.py` | Passed |
+| `python3 tools/prepare_idtr_fixture.py` | Passed |
+| `python3 tools/prepare_smsw_fixture.py` | Passed |
+| `python3 tools/prepare_pic_fixture.py` | Passed |
+| `python3 tools/prepare_pic_smm_fixture.py` | Passed |
+| `python3 tools/prepare_pit_mode2_fixture.py` | Passed |
+| `python3 tools/prepare_pit_mode3_fixture.py` | Passed |
+| `python3 tools/prepare_pit_mode0_fixture.py` | Passed |
+| `python3 tools/prepare_pit_mode0_rewrite_fixture.py` | Passed |
+| `python3 tools/prepare_pit_mode3_rewrite_fixture.py` | Passed |
+| `python3 tools/prepare_pit_counter_latch_fixture.py` | Passed |
+| `python3 tools/prepare_v30_bound_fixture.py --update-manifest` | Created checked manifest from original source |
+| `python3 tools/prepare_v30_bound_fixture.py` | Passed: exact source/boot/image/result manifest reproduced |
+| `python3 tools/prepare_freedos.py` | Passed: pinned binaries and matching sources |
+| `python3 tools/prepare_font_fixture.py` | Passed |
+| `python3 tools/prepare_dos_apps.py` | Passed |
+| `python3 tools/prepare_cpu_fixture.py` | Passed via pinned mirror after primary HTTP 503 |
+| `python3 tools/prepare_hdd_fixture.py` | Passed |
+| `python3 tools/prepare_music_fixture.py` | Passed |
+| `python3 tools/prepare_device_fixture.py` | Passed via pinned mirror after primary HTTP 503 |
+| `python3 tools/build_media.py --check` | Passed inside npm build |
+| `python3 tools/build_font.py --check` | Passed, separately and inside npm build |
+| `cargo fmt` | Formatted new tests |
+| `cargo test --locked --test core v30_bound_ -- --nocapture` | Passed: six tests; both native boots at 1,000 slots |
+| `cargo test --locked --test core v30_bound_` | Passed: six tests on final Rust files |
+| `cargo test --locked --test cpu386 bound_` | Passed: four tests on final Rust files |
+| `cargo test --locked --test pit counter_latch_` | Passed: nine tests |
+| `cargo test --locked --test pit mode3_rewrite_` | Passed: 14 tests |
+| `cargo test --locked --test pit mode0_rewrite_` | Passed: 12 tests |
+| `cargo test --locked --test pit` | Passed: 65 tests |
+| `cargo test --locked` | Passed: 235 integration tests across 17 targets; no failures/ignored tests; unit/doc targets passed |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `cargo fmt --check` | Passed |
+| `git diff --check` | Passed |
+| `npm ci` | Passed: zero vulnerabilities |
+| `npx playwright install chromium` | Passed |
+| `npm test -- --config=.issue57-playwright.config.js --workers=2` | Passed: production release-Wasm build, ten-asset publication audit, all 88 browser tests, zero skipped, 2.9 minutes |
+
+Port 8000 was already occupied. A temporary configuration imports
+`playwright.config.js` and changes only the local server port/base URL to
+`http://127.0.0.1:62088/` and the project server port/base URL to
+`http://127.0.0.1:62089/pc98-rust/`. Its local server command is
+`python3 -m http.server 62088 --bind 127.0.0.1 --directory web`. A temporary copy
+of `tests/browser/serve_project.py` changes only its listening port 8001 to
+62089, retaining the `web/` symlink and root-asset rejection. No existing listener
+was stopped or reused. Projects, tests, assertions, timeouts and budgets are
+unchanged; two workers follow the prior recorded browser-clock workaround.
+Both temporary files were removed after the suite completed.
+
+Both native boots and all four production-Wasm boots (before/after reset at
+`/` and `/pc98-rust/`) pass at 1,000 slots each. Every run requires explicit
+`V30 BOUND PASS`, no FAIL/core/browser errors, exact guest-produced results and
+guards, and unchanged disk bytes. Browser tests verify the manifest image hash;
+native and browser tests consume the identical prepared image. All existing
+native hardware, DOS/application, VM and browser regressions pass.
+
+### Review and remaining scope
+
+Reviewed the complete production/test/guest/provenance/CI/documentation changes
+against the Issue and repository guidelines. Verified VM entry occurs only after
+all instruction bytes and index/bounds reads; Ap still uses fault restoration;
+register-only VM operands retain a diagnostic. Guest handlers validate their own
+frames and return without editing saved IP. Existing hardware, DOS/application,
+VM and six-game regression records/fixtures are preserved. No commercial guest
+or proprietary ROM was acquired. Remote CI and independent review are not
+established by this execution. Documentation links/anchors and whitespace were
+checked; no blocking findings remain from local review.
+
+V30 remains **partial**: packed-BCD strings, bit-field extensions, TF single-step,
+NMI and broader instruction/fault acceptance remain outstanding. All 26 inventory
+statuses and fixed scopes remain unchanged. Protected execution, paging and basic
+x87 retain their fixed required scope. Limited probes establish neither full
+hardware accuracy nor commercial compatibility. No push, PR, merge or comment
+was performed; Issue #57 requires no post-merge verification.

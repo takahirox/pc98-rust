@@ -771,3 +771,248 @@ fn device_fifos_remain_bounded_under_unserviced_guest_commands() {
     assert!(b.keyboard.bios.len() <= 16);
     assert_eq!(b.fdc.sense.len(), 2);
 }
+
+#[test]
+fn v30_bound_minimal_valid_reproduction() {
+    let mut c = Cpu {
+        s: [0; 4],
+        ip: 0x1000,
+        ..Cpu::default()
+    };
+    c.r[SP] = 0x9000;
+    c.r[AX] = 5;
+    let mut b = Bus::default();
+    b.mem[0x1000..0x1004].copy_from_slice(&[0x62, 0x06, 0x00, 0x20]);
+    b.write_seg(0, 0x2000, 0, true);
+    b.write_seg(0, 0x2002, 10, true);
+    let saved = c.clone();
+    let memory = b.mem.clone();
+    c.step(&mut b).unwrap();
+    assert_eq!(c.ip, 0x1004);
+    assert_eq!(c.r, saved.r);
+    assert_eq!(c.s, saved.s);
+    assert_eq!(c.flags, saved.flags);
+    assert_eq!(b.mem, memory);
+}
+
+fn v30_bound_cpu(code: &[u8]) -> (Cpu, Bus) {
+    let mut c = Cpu {
+        s: [0x2000, 0x1000, 0x3000, 0x4000],
+        ip: 0x1000,
+        flags: 0xf002 | CF | PF | AF | ZF | SF | TF | IF | DF | OF,
+        ..Cpu::default()
+    };
+    c.r = [5, 0x1234, 0x5678, 0x2000, 0x9000, 0x2100, 3, 7];
+    let mut b = Bus::default();
+    b.mem[0x11000..0x11000 + code.len()].copy_from_slice(code);
+    b.write_seg(0, 0x14, 0x500, true);
+    b.write_seg(0, 0x16, 0x5000, true);
+    // INC byte [DS:6000]; IRET. Caller follows BOUND with NOP.
+    b.mem[0x50500..0x50505].copy_from_slice(&[0xfe, 0x06, 0x00, 0x60, 0xcf]);
+    (c, b)
+}
+
+#[test]
+fn v30_bound_signed_ranges_and_every_index_register() {
+    let cases: &[(i16, i16, &[i16])] = &[
+        (0, 10, &[-1, 0, 1, 5, 10, 11]),
+        (-10, -2, &[-11, -10, -6, -2, -1]),
+        (-2, 2, &[-3, -2, -1, 0, 2, 3]),
+        (i16::MIN, i16::MAX, &[i16::MIN, -1, 0, i16::MAX]),
+        (i16::MIN, i16::MIN, &[i16::MIN, i16::MIN + 1]),
+        (i16::MAX, i16::MAX, &[i16::MAX - 1, i16::MAX]),
+        (5, 5, &[4, 5, 6]),
+        (10, -10, &[-11, -10, 0, 10, 11]),
+    ];
+    for reg in 0..8 {
+        for &(low, high, values) in cases {
+            for &value in values {
+                let (mut c, mut b) = v30_bound_cpu(&[0x62, 0x06 | (reg << 3), 0, 0x20]);
+                c.r[reg as usize] = value as u16;
+                b.write_seg(c.s[DS], 0x2000, low as u16, true);
+                b.write_seg(c.s[DS], 0x2002, high as u16, true);
+                let saved = c.clone();
+                let mut expected = b.mem.clone();
+                c.step(&mut b).unwrap();
+                let outside = value < low || value > high;
+                let mut registers = saved.r;
+                if outside {
+                    registers[SP] = saved.r[SP].wrapping_sub(6);
+                    for (i, word) in [0x1004, saved.s[CS], saved.flags].iter().enumerate() {
+                        for (j, byte) in word.to_le_bytes().iter().enumerate() {
+                            let off = saved.r[SP].wrapping_sub(6).wrapping_add((2 * i + j) as u16);
+                            expected[saved.s[SS] as usize * 16 + off as usize] = *byte;
+                        }
+                    }
+                    assert_eq!((c.s[CS], c.ip), (0x5000, 0x500));
+                    assert_eq!(c.flags, saved.flags & !(IF | TF));
+                } else {
+                    assert_eq!((c.s[CS], c.ip), (saved.s[CS], 0x1004));
+                    assert_eq!(c.flags, saved.flags);
+                }
+                assert_eq!(c.r, registers, "register {reg} value {value}");
+                assert_eq!(b.mem, expected);
+            }
+        }
+    }
+}
+
+#[test]
+fn v30_bound_addressing_segments_unaligned_and_wrapping() {
+    // All 16-bit EA combinations, signed disp8, disp16 and direct addressing.
+    let cases: &[(u8, &[u8], u16, usize)] = &[
+        (0x06, &[1, 0x22], 0x2201, DS),
+        (0, &[], 0x2003, DS),
+        (1, &[], 0x2007, DS),
+        (2, &[], 0x2103, SS),
+        (3, &[], 0x2107, SS),
+        (4, &[], 3, DS),
+        (5, &[], 7, DS),
+        (7, &[], 0x2000, DS),
+        (0x46, &[0], 0x2100, SS),
+        (0x40, &[0xfe], 0x2001, DS),
+        (0x83, &[0xfa, 0xff], 0x2101, SS),
+        (0x87, &[0xff, 0xdf], 0xffff, DS), // BX + dfff wraps; words cross ffff
+        (0x80, &[0xff, 0xdf], 2, DS),      // BX + SI + dfff wraps
+    ];
+    for &(modrm, disp, off, default_seg) in cases {
+        for prefix in [
+            None,
+            Some((0x26, ES)),
+            Some((0x2e, CS)),
+            Some((0x36, SS)),
+            Some((0x3e, DS)),
+        ] {
+            let mut code = Vec::new();
+            if let Some((byte, _)) = prefix {
+                code.push(byte);
+            }
+            code.extend([0x62, modrm]);
+            code.extend(disp);
+            let (mut c, mut b) = v30_bound_cpu(&code);
+            let selected = prefix.map_or(default_seg, |(_, seg)| seg);
+            for seg in [ES, CS, SS, DS] {
+                // Wrong segments contain a reversed range; only the selected one succeeds.
+                b.write_seg(
+                    c.s[seg],
+                    off,
+                    if seg == selected { 0xfffb } else { 10 },
+                    true,
+                );
+                b.write_seg(
+                    c.s[seg],
+                    off.wrapping_add(2),
+                    if seg == selected { 5 } else { 0 },
+                    true,
+                );
+            }
+            let saved = c.clone();
+            let memory = b.mem.clone();
+            c.step(&mut b).unwrap();
+            assert_eq!(c.ip, 0x1000 + code.len() as u32);
+            assert_eq!(c.r, saved.r);
+            assert_eq!(c.s, saved.s);
+            assert_eq!(c.flags, saved.flags);
+            assert_eq!(b.mem, memory);
+        }
+    }
+}
+
+#[test]
+fn v30_bound_vector5_exact_frame_iret_and_forward_progress() {
+    for value in [0xfffau16, 11] {
+        for interrupts in [0, IF] {
+            let (mut c, mut b) = v30_bound_cpu(&[0x26, 0x62, 0x06, 1, 0x20, 0x90]);
+            c.flags = (c.flags & !IF) | interrupts;
+            c.r[AX] = value;
+            b.write_seg(c.s[ES], 0x2001, 0xfffb, true);
+            b.write_seg(c.s[ES], 0x2003, 10, true);
+            let saved = c.clone();
+            let mut expected = b.mem.clone();
+            let frame = 0x38ffa;
+            let bytes: Vec<u8> = [0x1005u16, 0x1000, saved.flags]
+                .into_iter()
+                .flat_map(u16::to_le_bytes)
+                .collect();
+            expected[frame..frame + 6].copy_from_slice(&bytes);
+            c.step(&mut b).unwrap();
+            assert_eq!((c.s[CS], c.ip, c.r[SP]), (0x5000, 0x500, 0x8ffa));
+            assert_eq!(&b.mem[frame..frame + 6], bytes);
+            assert_eq!(c.flags, saved.flags & !(IF | TF));
+            assert_eq!(b.mem, expected);
+            c.step(&mut b).unwrap(); // guest counter
+            expected[0x46000] = 1;
+            c.step(&mut b).unwrap(); // unmodified guest IRET
+            assert_eq!((c.s[CS], c.ip), (0x1000, 0x1005));
+            assert_eq!(c.r, saved.r);
+            assert_eq!(c.flags, saved.flags);
+            c.step(&mut b).unwrap(); // forward progress after BOUND, no retry
+            assert_eq!(c.ip, 0x1006);
+            assert_eq!(b.mem, expected);
+        }
+    }
+}
+
+#[test]
+fn v30_bound_register_operand_has_explicit_diagnostic() {
+    let (mut c, mut b) = v30_bound_cpu(&[0x62, 0xc0]);
+    let memory = b.mem.clone();
+    assert_eq!(
+        c.step(&mut b).unwrap_err(),
+        "invalid V30 BOUND: memory operand required"
+    );
+    assert_eq!(b.mem, memory);
+}
+
+#[test]
+fn v30_bound_original_boot_probe_before_and_after_reset() {
+    let image = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/fixtures/v30_bound/v30_bound.hdm"
+    ))
+    .expect("run python3 tools/prepare_v30_bound_fixture.py");
+    let manifest = include_str!("../fixtures/v30-bound-manifest.json");
+    let hex = manifest
+        .split_once("\"result_hex\": \"")
+        .unwrap()
+        .1
+        .split('"')
+        .next()
+        .unwrap();
+    let expected: Vec<u8> = hex
+        .as_bytes()
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+        .collect();
+    assert_eq!(expected.len(), 32);
+    for profile in [pc98_rust::Profile::Pc9801Vm] {
+        let mut m = Machine::new(profile);
+        m.insert(0, image.clone(), "v30_bound.hdm").unwrap();
+        for run in 0..2 {
+            if run != 0 {
+                m.reset();
+            }
+            let mut slots = 0;
+            while slots < 2_000_000 {
+                slots += m.step(1000);
+                assert!(m.error.is_none(), "{:?}", m.error);
+                let text = m.bus.text();
+                assert!(
+                    !text.contains("FAIL"),
+                    "{profile:?} boot {run}: {slots} slots; {text}; {:02x?}",
+                    &m.bus.mem[0x8000..0x8020]
+                );
+                if text.contains("V30 BOUND PASS") {
+                    break;
+                }
+            }
+            assert!(slots <= 2_000_000);
+            assert!(m.bus.text().contains("V30 BOUND PASS"), "{}", m.bus.text());
+            assert_eq!(&m.bus.mem[0x8000..0x8020], expected.as_slice());
+            assert_eq!(m.bus.disks[0].as_ref().unwrap().bytes, image);
+            println!("{profile:?} boot {run}: {slots} slots");
+        }
+    }
+}

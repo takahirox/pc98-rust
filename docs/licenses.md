@@ -92,6 +92,13 @@ Preparation copies the original assembly, repository MIT license and manifest
 beside `fixtures/pit_mode0_rewrite/pit_mode0_rewrite.hdm`. The image is test-only
 and excluded from `web/`; it contains no third-party guest or commercial ROM.
 
+The original MIT [V30 BOUND probe](../guest/v30_bound.asm) assembles offline with
+NASM. `tools/prepare_v30_bound_fixture.py` verifies its checked
+[manifest](../fixtures/v30-bound-manifest.json) and retains the original assembly,
+repository license and manifest beside `fixtures/v30_bound/v30_bound.hdm`.
+The image contains only original boot code and zero padding, stays outside
+`web/`, and requires no external guest, proprietary ROM or emulator code.
+
 ## HelloWorld-PC98
 
 Upstream: [TakedaHiromasa/HelloWorld-PC98](https://github.com/TakedaHiromasa/HelloWorld-PC98),
