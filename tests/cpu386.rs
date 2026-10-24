@@ -2409,3 +2409,32 @@ fn ap_v30_segment_irq_non_ss_forms_remain_immediately_interruptible() {
         assert_eq!(b.read16((c.r[SP]) as usize), 0x1000 + producer.len() as u16);
     }
 }
+
+#[test]
+fn ap_v30_add4s_retains_i486_diagnostic_without_arithmetic() {
+    for prefix in [None, Some(0x26), Some(0x2e), Some(0x36), Some(0x3e)] {
+        let mut code: Vec<u8> = prefix.into_iter().collect();
+        code.extend([0x0f, 0x20, 0x90]);
+        let (mut c, mut b) = cpu(&code);
+        c.r[SI] = 0x3000;
+        c.r[DI] = 0x4000;
+        c.r[CX] = 0xab02;
+        c.flags = 2 | CF | ZF | AF | OF | SF | PF | DF;
+        b.mem[0x3000] = 0x09;
+        b.mem[0x4000] = 1;
+        let before = c.clone();
+        let ram = b.mem.clone();
+        let graphics = b.graphics.clone();
+        // Emulator limitation for the i486 control-register family, not #UD.
+        assert_eq!(
+            c.step(&mut b).unwrap_err(),
+            "unimplemented i486 opcode 0F 20"
+        );
+        assert_eq!(c.r, before.r);
+        assert_eq!(c.upper, before.upper);
+        assert_eq!(c.s, before.s);
+        assert_eq!(c.flags, before.flags);
+        assert_eq!(b.mem, ram);
+        assert_eq!(b.graphics, graphics);
+    }
+}

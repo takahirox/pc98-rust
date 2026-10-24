@@ -61,13 +61,14 @@ interrupt entry/IRET, byte/word IN/OUT,
 CLI/STI/HLT. Immediate push, PUSHA/POPA, ENTER/LEAVE and immediate shifts implement
 the 186-compatible forms available on V30. TEST1/CLR1/SET1/NOT1 implement V30
 single-bit operations; [memory nibble rotations](#v30-memory-nibble-rotations)
-implement `ROL4 mem8` and `ROR4 mem8`. BOUND/CHKIND implements signed inclusive word bounds and
-next-instruction vector-5 return as [specified below](#v30-boundchkind). AAM/AAD
+implement `ROL4 mem8` and `ROR4 mem8`. [ADD4S](#v30-add4s) adds packed-BCD
+strings. BOUND/CHKIND implements signed inclusive word bounds and next-instruction
+vector-5 return as [specified below](#v30-boundchkind). AAM/AAD
 consume but ignore the encoded radix, using decimal 10 as on V30. See the [NEC V20/V30 user manual](https://www.dosdays.co.uk/media/nec/NEC-V20-V30-Users-Manual.pdf)
 and [NEC V-Series data book](https://bitsavers.org/components/nec/_dataBooks/1990_NEC_16-bit_V-Series_Microprocessor_Data_Book.pdf).
 
 Unimplemented opcodes fail with CS:IP and opcode information. V30 8080 emulation
-mode, packed BCD string extensions, bit-field extensions, coprocessor/ESC,
+mode, remaining packed BCD strings (SUB4S/CMP4S), bit-field extensions, coprocessor/ESC,
 TF single-step traps, NMI, undocumented opcodes and later x86 extensions are not
 implemented in VM. LOCK has no bus-contention effect in this single-CPU machine.
 
@@ -120,11 +121,59 @@ supply guest acceptance. See the [validation record](validation.md#issue-69-v30-
 
 Acceptance is bounded to maskable interrupts and ordinary non-REP following
 instructions. Existing REP interruption regressions remain required, but do not
-verify all segment-shadow/REP interactions. V30 remains **partial**: packed-BCD
-strings, bit-field extensions, TF traps, NMI and broader instruction/prefix/fault
-acceptance remain outstanding. Protected execution, paging and basic x87 retain
+verify all segment-shadow/REP interactions. V30 remains **partial**: remaining
+packed-BCD strings (SUB4S/CMP4S), bit-field extensions, TF traps, NMI and broader
+instruction/prefix/fault acceptance remain outstanding. Protected execution, paging and basic x87 retain
 their required scope. No inventory category is completed and no full V30 accuracy
 or commercial compatibility is established.
+
+## V30 ADD4S
+
+VM decodes `0F 20` as two bytes without ModR/M. For valid packed-BCD operands,
+CL=1..254 selects `ceil(CL/2)` bytes: source defaults to DS:SI and permits ES/CS/SS/DS
+overrides; destination is fixed ES:DI. Both digits of the final byte participate
+for odd CL. Incoming CF is ignored; decimal carry propagates across the rounded
+width. CF reports overflow beyond that width and ZF reports an entirely zero
+rounded result. Thus CL=4, 9999+0001 gives 0000 with CF=ZF=1, while CL=3,
+0999+0001 gives 1000 with CF=ZF=0. A nonzero extra high digit also participates.
+
+Specification: NEC's [V-Series Instruction Manual, printed pp.15–16](https://www.ardent-tool.com/CPU/docs/NEC/V20-V30/v_series.pdf#page=26).
+Increasing byte offsets, unchanged SI/DI/CL and DF-independent traversal are our
+interpretation of the operation and offset diagram; they are not separately
+stated hardware guarantees. NEC describes DIR-controlled traversal separately
+for block transfer/I/O in [Appendix A.4(9)](https://www.ardent-tool.com/CPU/docs/NEC/V20-V30/v_series.pdf#page=200).
+Other registers and control flags are preserved. AF/OF/PF/SF are hardware-undefined;
+**preserving their initial values is deterministic emulator policy**, tested
+separately from defined status results.
+
+Each byte uses existing CPU memory helpers and Bus mappings, including separate
+16-bit source/destination offset wrapping, 20-bit physical wrapping, ROM read/write
+protection and ordinary planar VRAM with accelerators disabled. Disjoint buffers
+and exact aliasing are tested. Ap still takes its separate i486 extended decoder
+and reports `unimplemented i486 opcode 0F 20` without arithmetic side effects;
+that is an emulator limitation for the control-register family, not an architectural
+#UD claim.
+
+The independent base-100 Rust oracle exhausts all 100×100 one-byte operand pairs
+with both incoming CF states and covers every documented CL with deterministic
+patterns, full and terminated carry chains, leading zeros and whole-result ZF.
+The original MIT [guest probe](../guest/v30_add4s.asm) checks five literal sums,
+masked flags, unchanged source/registers and guards itself. Its checked
+[manifest](../fixtures/v30-add4s-manifest.json) pins offline assembly, license,
+source/boot/image hashes, exact results and a finite 2,000,000-slot budget.
+Native and production release-Wasm tests boot the identical VM image cold and
+after reset, at `/` and `/pc98-rust/`. Hosts only mount, reset, step and inspect.
+See the [actual validation record](validation.md#issue-95-v30-add4s-2026-10-24).
+
+CL=0/255, nondecimal nibbles, partially overlapping buffers, new REP/LOCK semantics,
+interruption within ADD4S and exact instruction timing remain outside this verified
+subset and remain future inventory work. The operation currently completes in one
+scheduler slot; this is not an instruction timing guarantee. V30 remains **partial**:
+SUB4S/CMP4S, bit-field extensions, register nibble rotations, TF traps, NMI and
+broader flags/prefix/interrupt/fault acceptance remain outstanding. All 26 category
+scopes/statuses remain unchanged; protected execution, paging and basic numerical
+x87 remain required. These probes establish neither full CPU accuracy nor commercial
+compatibility.
 
 ## V30 memory nibble rotations
 
@@ -157,8 +206,9 @@ hashes, exact masked-AL/AH/FLAGS/results/guards and a 2,000,000-slot boot budget
 Native and production release-Wasm tests boot the same VM disk before/after reset
 at both browser roots. Hosts only insert, reset, step and read. See the
 [validation record](validation.md#issue-65-v30-memory-nibble-rotations-2026-10-24).
-V30 remains **partial**: register-operand nibble rotations, packed-BCD strings,
-bit-field extensions, TF traps, NMI and broader instruction/prefix/fault acceptance
+V30 remains **partial**: register-operand nibble rotations, remaining packed-BCD
+strings (SUB4S/CMP4S), bit-field extensions, TF traps, NMI and broader
+instruction/prefix/fault acceptance
 remain outstanding. Protected execution, paging and basic x87 retain their fixed
 required scope. No inventory category becomes verified; bounded probes do not
 establish full hardware accuracy or commercial compatibility.
@@ -191,8 +241,8 @@ explicit unsupported emulator-limitation diagnostic. This describes emulator sco
 and does not claim hardware exception semantics for those excluded encodings.
 Ap continues to decode `64h`/`65h` as FS/GS overrides, including with ordinary
 F2/F3 repetition and operand/address-size overrides. V30 remains partial:
-packed-BCD strings, bit-field extensions, VM TF traps, NMI and broader instruction,
-prefix and fault acceptance remain outstanding. Protected execution, paging and
+remaining packed-BCD strings (SUB4S/CMP4S), bit-field extensions, VM TF traps, NMI
+and broader instruction, prefix and fault acceptance remain outstanding. Protected execution, paging and
 x87 remain required project goals outside this Issue. These probes do not establish
 full V30 accuracy or commercial compatibility.
 
@@ -231,8 +281,9 @@ two entries with forward progress. Native and production-release Wasm checks
 boot the identical VM image before/after reset, at both browser roots. See the
 [actual validation record](validation.md#issue-57-v30-boundchkind-2026-10-24).
 
-V30 remains **partial**: packed-BCD strings, bit-field extensions, TF single-step,
-NMI and broader instruction/fault acceptance remain outstanding, as do the other
+V30 remains **partial**: remaining packed-BCD strings (SUB4S/CMP4S), bit-field
+extensions, TF single-step, NMI and broader instruction/fault acceptance remain
+outstanding, as do the other
 VM exclusions above. Protected execution, paging and basic x87 retain their
 fixed required scope. These bounded probes establish neither full hardware
 accuracy nor commercial compatibility.

@@ -109,6 +109,7 @@ python3 tools/prepare_pit_counter_latch_fixture.py
 python3 tools/prepare_v30_bound_fixture.py
 python3 tools/prepare_v30_repc_fixture.py
 python3 tools/prepare_v30_nibble_mem_fixture.py
+python3 tools/prepare_v30_add4s_fixture.py
 python3 tools/prepare_v30_segment_irq_fixture.py
 python3 tools/prepare_ide_verify_fixture.py
 python3 tools/prepare_rtc_fixture.py
@@ -271,6 +272,18 @@ unchanged disk bytes and no FAIL/core/browser errors within 2,000,000 slots.
 The [manifest](fixtures/v30-nibble-mem-manifest.json) records MIT provenance,
 assembly, source/boot/image hashes and exact result/guard layout. Generated media
 stays outside `web/`. See the [operand subset and AL policy](docs/hardware.md#v30-memory-nibble-rotations).
+
+The original MIT [V30 ADD4S probe](guest/v30_add4s.asm) checks literal packed-BCD
+sums, rounded odd digit counts, CF/ZF, preserved control flags/registers, source
+bytes and guards before printing PASS. Prepare offline with
+`python3 tools/prepare_v30_add4s_fixture.py`; run
+`cargo test --locked --test core v30_add4s_` and
+`cargo test --locked --test cpu386 ap_v30_add4s_`, then `npm test`.
+The [manifest](fixtures/v30-add4s-manifest.json) pins MIT provenance, assembly,
+source/boot/image hashes, exact results, masked flags and guards. Native and
+production release-Wasm checks boot the identical VM image cold and after reset,
+at both browser roots, with a 2,000,000-slot budget per boot. Generated media stays
+outside `web/`. See the [ADD4S contract and limitations](docs/hardware.md#v30-add4s).
 
 The original MIT [single-mode PIC probe](guest/pic_single.asm) programs SNGL
 through guest I/O, enters real PIT interrupt handlers in normal and AEOI modes,
