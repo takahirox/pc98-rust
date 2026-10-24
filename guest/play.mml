@@ -1,9 +1,0 @@
-; Original MIT score and FM voice. No third-party music or sample data.
-#Filename PLAY.M
-@0 7 0
- 31 0 0 8 0 32 0 1 0 0
- 31 0 0 8 0 32 0 1 0 0
- 31 0 0 8 0 32 0 1 0 0
- 31 0 0 8 0 32 0 1 0 0
-A t120 @0 v12 o4 l4 L ceg>c<gec2
-G t120 v8 o3 l4 L cdefgab>c<bagfedc
