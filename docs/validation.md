@@ -4213,3 +4213,105 @@ cases ran. `npm test -- --config=playwright.issue83-fix.config.js --workers=4`
 then passed all 118 browser cases in 2.2 minutes. Temporary configuration/server
 copies used ports 18483/18484 for `/` and `/pc98-rust/`, with all scenarios,
 assertions and budgets unchanged; those copies were removed afterward.
+
+## Issue #85 single-head multi-sector FDC non-DMA WRITE DATA
+
+The R=EOT-only guard has been removed from ND=1 WRITE DATA dispatch. The existing
+PIO scheduler now resolves each successive C/H/R/N through EOT for writes as it
+already did for reads, retaining C/H/N, byte timing, direction, interrupts and
+per-sector write accounting. No new transfer engine or media format was added.
+
+The new `issue_85_multi_sector_write_requests_payload_instead_of_invalid_command`
+regression was executed before the implementation change: the reported R=2/EOT=3
+command failed with MSR `D0h` (208), expected `B0h` (176). After the change it
+accepts 2,048 bytes and returns `40 80 00 00 00 03 03`. Only the obsolete
+multi-sector rejection was replaced; R=0, R>EOT and unsupported variants remain
+covered, as do the single-sector write guest and ND=0/BIOS handoff regressions.
+
+The clocked port tests exercise these contracts:
+
+- 192 full-image combinations: VM/Ap, drives 0/1, heads 0/1, cylinders 0/2 after
+  an actual seek, two-sector and longer ranges, D88 N=1/2/3 and all three raw
+  geometries, including physical-track EOT. Distinct per-sector payloads use
+  independent layout arithmetic; complete selected and other-drive images,
+  headers, untouched sectors and exact write counts are compared.
+- Waiting/ready/result/idle `30/B0/D0/80` transitions, early/duplicate writes,
+  wrong-direction reads, result draining, real cascaded PIC delivery and both
+  EOIs for 2,048 byte requests and one distinct result request. A held request
+  does not retrigger after EOI; payload service preserves the PIC ISRs.
+- Raw and D88 next-sector boundaries at 127/128 clocks, service at 103 clocks,
+  timeout at 104 clocks, one-clock/split/batched ticks and overshoot. Repeated
+  port polling leaves availability and deadlines unchanged. Timeout retains the
+  completed sector and only the accepted next-sector prefix, with exact counts,
+  complete image/metadata comparison and fresh-command recovery.
+- Original valid D88 missing-later-ID and later-N-mismatch media, and raw EOT
+  beyond available sectors: completed writes remain, the result identifies the
+  failing requested CHRN with ND, and later payload/metadata remain untouched.
+  Protected multi-sector commands return NW without accepting bytes; fresh
+  commands recover on writable media.
+- 96 cancellation combinations after one completed sector: raw/D88, VM/Ap,
+  either drive, zero/seven accepted next-sector bytes, waiting/ready requests,
+  reset/eject/replacement. Removed/replacement/other-drive images and counts are
+  checked; replacement cancels execution before a stale byte can reach new media,
+  and changing the other drive preserves execution. Existing tests retain raw,
+  writable D88 and protected D88 replacement coverage.
+- Enabled/unmasked and disabled/masked DMA during two-sector PIO writes: current
+  and base address/count behavior, bank, mode, masks, enable, shared byte pointer,
+  sticky TC and guarded RAM survive unchanged. Idle BIOS DMA reads back both
+  sectors, then a fresh ND=1 command reenters PIO successfully.
+
+The separate original MIT [guest](../guest/fdc_write_multi.asm), offline
+[builder](../tools/prepare_fdc_write_multi_fixture.py) and checked
+[manifest](../fixtures/fdc-write-multi-manifest.json) issue one R=2/EOT=3 WRITE
+DATA and one PIO READ DATA. Actual INT 13h handlers supply/collect 2,048 bytes per
+direction and drain one seven-byte result per command, recording both PIC ISRs
+and issuing both EOIs themselves. Guest and host check distinct payloads, exact
+records/results, all guards and restored stack (guest checked in both targets,
+also inspected natively). Hosts only mount, step, inspect and reset. Expected
+media, payloads and results come from independent fixture oracles. The manifest
+pins source, MIT license, assembly command, boot/firmware/image hashes and a
+2,000,000-slot budget. CI and README preparation include the new offline builder.
+
+Validation performed in this worktree on 2026-10-24:
+
+| Check | Actual outcome |
+| --- | --- |
+| `python3 -m unittest discover -s tools -p test_fixture_fetch.py` | 7 passed |
+| All README Python fixture preparations | Passed with original/licensed assets and pinned hashes; CPULEVEL/DEBUG primary mirrors returned HTTP 503 and the existing pinned fallbacks succeeded |
+| `python3 tools/prepare_fdc_write_multi_fixture.py` | Offline manifest verification passed |
+| `cargo test --locked --test fdc --test fdc_bios --test core --test dma --test pic` | 115 passed: FDC 26, BIOS 1, core 49, DMA 11, PIC 28; repeated after strengthening D88 boundary/timeout coverage |
+| `cargo test --locked` | 341 passed, zero failed/ignored; final strengthened FDC tests also passed in the 115-test focused run |
+| `cargo clippy --all-targets -- -D warnings` | Passed, including final strengthened tests |
+| `cargo fmt --check`; `git diff --check` | Passed |
+| `npm ci`; `npx playwright install chromium` | Passed |
+| `npm test` on default ports | Production release-Wasm build and site checks passed; occupied port 8000 blocked browser startup, zero cases ran |
+| Initial isolated-port full browser run | 121 passed; one existing Ap PIT mode-3 rewrite case failed with no readable IPL while asynchronous file loading was still completing |
+| `npx playwright test tests/browser/pit-mode3-rewrite.spec.js --project=local --grep 'Ap:' --config=playwright.issue85.config.js --workers=1` | Passed both guest boots at 17,000 slots; the case and the new FDC probe now explicitly await the mounted filename before stepping |
+| Final `npm test -- --config=playwright.issue85.config.js --workers=4` | **122 passed** (118 existing + 4 new), zero failures, in 2.3 minutes; production release Wasm and site checks passed at both paths |
+
+Temporary configuration and project-server copies use ports 18585/18586 instead
+of the occupied default ports. They preserve `web/` at `/` and the project server
+exposing only `/pc98-rust/`, with every scenario, assertion and budget unchanged.
+These temporary files are removed after validation and are not committed.
+The production release-Wasm SHA-256 is
+`ed45b96a87d93ab999e46af70504ec862959c7547664cbc6a4b7dc2ad9317fde`.
+
+All four native and eight browser multi-sector probe boots completed in
+**130,000 slots each**, below 2,000,000, with exact 2,048 write/read byte IRQ
+records, two result IRQs, guards and independently expected complete media.
+The single-sector probe and existing DOS/apps/VM/audio, IDE-edge and six-game
+assertions and budgets all passed in the final run without changing their limits.
+No final check was skipped. The initial port conflict and media-load failure are
+recorded separately above.
+
+FDC remains **partial**, with no whole-category verification claim. The final
+EOT ID is the repository's interpretation of NEC's EN/result descriptions,
+without independently measured hardware evidence. MT/head switching, N=0/DTL,
+deleted-data/format/scan/diagnostic commands, TC/EOP injection, full SPECIFY
+and mechanical/CRC/flux fidelity, new formats, 512-byte IPL, active BIOS
+preemption and broader board controls remain outside this change. The A/B
+final-byte overrun distinction remains unverified; timeout acceptance targets
+first/interior requests. All 26 inventory categories retain their scopes and
+statuses: 23 partial, GRCG implemented_unverified, paging/FPU unimplemented,
+none verified. Protected mode, paging and basic x87 remain required; these
+bounded probes establish neither complete accuracy nor commercial compatibility.

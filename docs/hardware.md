@@ -461,7 +461,7 @@ this table is not a claim of complete chip emulation.
 | `A4,A6` | Display and CPU graphics page select | Two independent three-plane pages |
 | `7C,7E` | GRCG mode/tile writes | TDW and RMW, plane masks; no EGC |
 | `71,73,75,77`; `3FD9–3FDF` odd | 8253 channels, control/access modes, low/high writes, counter latches | Channel 0 IR0 / INT 08; channel 1 beep; VM input clock 1,996,800 Hz |
-| `90,92,94` | 2HD FDC status/FIFO/control, SPECIFY, sense status/interrupt, recalibrate, seek, read ID, READ/WRITE DATA through DMA, non-DMA READ DATA and single-sector WRITE DATA, board-control gating | IR11 / INT 13; delayed command completion and seven-byte transfer results |
+| `90,92,94` | 2HD FDC status/FIFO/control, SPECIFY, sense status/interrupt, recalibrate, seek, read ID, READ/WRITE DATA through DMA, single-head non-DMA READ/WRITE DATA, board-control gating | IR11 / INT 13; delayed command completion and seven-byte transfer results |
 | `BE` | Fixed 1 MB floppy interface selection | No alternate 640 KB controller at C8/CA |
 | `40,5C,5E,64,6E` | Fixed system/display inputs and deterministic clock status | See `Bus::input`; VM has no RTC serial protocol |
 | `F0` | Private synthetic-firmware thunk ABI, accepted only from its ROM stubs | Not a guest DOS API or claim of a real VM hardware port |
@@ -793,8 +793,8 @@ Protected execution, paging and basic FPU remain required project goals.
 
 The hello source uses `OUT 3FDFh,AL`, an immediate-port encoding that truncates to
 `DFh`. That timer mirror is decoded too. PIT behavior beyond the subset above,
-DMA arbitration and request modes, precise FDC motor/rotation timing, multi-sector FDC programmed
-I/O writes, formatter/scanner commands, GDC vector/area drawing and all GDC
+DMA arbitration and request modes, precise FDC motor/rotation timing, FDC MT/head
+switching, formatter/scanner commands, GDC vector/area drawing and all GDC
 raster partitions are outside the tested subset. Unsupported FDC commands return
 an invalid-command result. No pretend FM register bank is implemented.
 
@@ -940,7 +940,7 @@ unchanged. The probe pins `40 80 00 00 00 03 03` for sectors 2–3, head 0, N=3.
 
 [Issue #79 validation](validation.md#issue-79-fdc-non-dma-read-data) covers raw-port
 transitions and an original MIT interrupt-driven boot probe. FDC remains partial:
-multi-sector PIO writes, MT/head switching, N=0/DTL, deleted-data/format/scan/diagnostic commands,
+MT/head switching, N=0/DTL, deleted-data/format/scan/diagnostic commands,
 full SPECIFY timing, TC/EOP injection, mechanical/flux timing, new formats, broad
 error fidelity and comprehensive external board controls remain outside this
 subset. Protected execution, paging and basic x87 remain required project work;
@@ -948,11 +948,15 @@ these probes make no complete hardware or commercial compatibility claim.
 
 ## FDC non-DMA WRITE DATA
 
-On VM and Ap, ND=1 also accepts single-sector MFM WRITE DATA (`45h`, MT=0),
-matching selected head/H, N=1–3 and R=EOT≥1. Both drives and either head use the
-existing normal raw/D88 sector lookup. Transfer length is `128 << N`; DTL does
-not shorten it. Other write variants return one-byte invalid-command `80h`
-without DMA or media activity. ND=0 retains the existing DMA backend.
+On VM and Ap, ND=1 also accepts single-head multi-sector MFM WRITE DATA
+(`45h`, MT=0), matching selected head/H, N=1–3 and 1≤R≤EOT. Both drives and
+either head use the existing normal raw/D88 sector lookup. Each sector transfers
+`128 << N` bytes; DTL does not shorten it. After each sector, R increments while
+C/H/N remain fixed, without an intermediate result or another command. A missing
+later C/H/R/N stops at that requested ID with ST1.ND; completed payload remains
+and later sectors and all metadata remain unchanged. Other write variants return
+one-byte invalid-command `80h` without DMA or media activity. ND=0 retains the
+existing DMA backend.
 
 During dispatch and execution MSR is `30h` while waiting, `B0h` when accepting
 one byte (CB/EXM set, DIO clear). Only a ready FIFO write consumes a request.
@@ -965,9 +969,9 @@ The [NEC status/instruction tables](https://hxc2001.com/download/datasheet/flopp
 define direction, non-DMA execution, write protection and error flags.
 
 Writes share the read scheduler: 160 clocks to dispatch, first request 128 clocks
-later, subsequent requests every 128 clocks, and timeout at 104 unserviced clocks.
-Service at 103 clocks succeeds without moving the next boundary; service at the
-104-clock deadline is too late. These are deterministic emulator choices derived
+later, subsequent requests every 128 clocks including sector boundaries, and
+timeout at 104 unserviced clocks. Service at 103 clocks succeeds without moving
+the next boundary; service at the 104-clock deadline is too late. These are deterministic emulator choices derived
 from NEC's MFM intervals at the repository's 8 MHz clock, not mechanical or
 instruction-cycle accuracy. Every byte request interrupts via slave IR3/master
 IR7, its servicing write acknowledges the FDC request, and completion generates
@@ -975,6 +979,8 @@ a distinct result request. PIC ISRs still require normal EOIs.
 
 Without TC, R=EOT ends with `40h | head<<2 | drive`, ST1.EN=`80h`, ST2=0 and
 final C/H/R/N, using the [read derivation above](#fdc-non-dma-read-data).
+This final-ID policy is the repository's interpretation of NEC's EOT/EN and
+result-field descriptions, without independently measured hardware evidence.
 Protected media reports ST1.NW=`02h`, absent/missing sectors ST1.ND=`04h`, and
 first/interior missed service ST1.OR=`10h`, with abnormal ST0. No DMA address,
 count, bank, mode, mask, controller enable, shared byte pointer or sticky TC is
@@ -998,9 +1004,19 @@ budget. Native and release-Wasm VM/Ap run the identical image before/after reset
 with browser paths `/` and `/pc98-rust/`. See
 [Issue #83 validation](validation.md#issue-83-fdc-non-dma-write-data).
 
-Multi-sector PIO writes, MT/head switching, deleted-data/format/scan/diagnostic
-commands, N=0/DTL, new formats, full SPECIFY timing, TC/EOP injection, active BIOS
-preemption and broader board/mechanical/error fidelity remain out of scope.
+The separate original MIT [multi-sector probe](../guest/fdc_write_multi.asm)
+issues one R=2/EOT=3 write and one readback command. Guest handlers service
+exactly 2,048 byte interrupts per direction and one result interrupt per command,
+with both PIC EOIs. It checks distinct sector payloads, `40 80 00 00 00 03 03`
+results, guards and restored SP before printing `FDC WRITE MULTI PASS`. Its
+[manifest](../fixtures/fdc-write-multi-manifest.json) pins source/license, assembly,
+firmware/image hashes, independent result/media oracles and the same
+2,000,000-slot budget. Native and production release-Wasm VM/Ap run this identical
+probe before/after reset at both browser paths. See
+[Issue #85 validation](validation.md#issue-85-single-head-multi-sector-fdc-non-dma-write-data).
+
+MT/head switching, deleted-data/format/scan/diagnostic commands, N=0/DTL, new
+formats, full SPECIFY timing, TC/EOP injection, active BIOS preemption and broader board/mechanical/error fidelity remain out of scope.
 Additional media and 512-byte IPL acceptance remain FDC work. The A/B final-byte
 OR distinction is unverified; missed-service tests cover first/interior requests.
 FDC remains partial; all 26 inventory statuses and full scopes remain unchanged.
@@ -1021,9 +1037,9 @@ scheduler and interrupt path. No sector payload bypasses the controller.
 
 An earlier raw client may leave ND=1; BIOS selects DMA for its own request and
 does not restore ND. A subsequent fresh SPECIFY ND=1 still enables supported
-byte-handshaked PIO reads and single-sector writes. The original source-built probe and native regressions
-cover reads/writes on VM/Ap, same-cylinder/seek-required requests, error recovery,
-complete media differences, payload/guard checks, DMA progression/TC, drained
+byte-handshaked single-head PIO reads and writes. The original source-built probe
+and native regressions cover reads/writes on VM/Ap, same-cylinder/seek-required
+requests, error recovery, complete media differences, payload/guard checks, DMA progression/TC, drained
 results and PIO reentry. See [Issue #81 validation](validation.md#issue-81-bios-floppy-dma-handoff).
 Active-command preemption, BIOS VERIFY redesign and broader FDC functionality
 remain outside this idle-controller handoff contract. The FDC inventory remains
