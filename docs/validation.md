@@ -4640,3 +4640,116 @@ egc, pegc, text-cg, display-timing, opn, opna, pcm86, bios, lio, integration;
 Protected execution, paging and numerical x87 remain required. These bounded
 probes and six-game regressions establish neither full hardware accuracy nor
 commercial compatibility.
+
+## Issue #93: 8253 binary mode 4 (2026-10-24)
+
+Implemented binary software-triggered strobe for all three shared counters under
+held-high GATE. The worktree started from evaluation baseline
+`065f02bc0840924c62270496d4798882a89940e7` plus GitWeave metadata commits. The
+original Issue reproduction was added and executed before the production change:
+`cargo test --locked --test pit mode4_original_initial_load_reproduction` failed
+with actual `(2, true)` versus specified `(3, true)` after `tick(5)`. The same
+unchanged reproduction passes after implementation. No remote CI, independent
+review, PR, push or merge is claimed; this node commits locally only.
+
+A fresh mode word immediately sets high OUT, cancels prior activity and clears
+partial write/read and latch state. Complete counts transfer on the next clock
+without decrementing. First bytes of paired replacements leave counting and an
+already complete pending value intact. A complete replacement restarts on the
+next clock, preserving OUT until that clock. Terminal count produces one low
+clock, then OUT remains high through continued 16-bit wraps. Actual channel-0
+rises, including ones hidden within large batches, use existing PIC delivery.
+Channel-1 beeper samples use OUT, preserving mode-3 behavior. The unchanged
+batch sampler can miss a low pulse entirely between sample endpoints and uses
+the final state for samples emitted by a single bus tick. See the
+[hardware semantics and Intel source links](hardware.md#8253-binary-mode-4-subset).
+
+Fourteen original `mode4_` tests cover literal N=3 clock/count/OUT/rise traces;
+all channels, byte formats and representable boundary counts including binary
+zero; fresh initialization from modes 0/2/3/4 with low OUT, incomplete writes,
+pending loads and unread latches; count-only replacements at lifecycle boundaries,
+latest complete values and unfinished following pairs; retained latch snapshots,
+continued wraps, isolation, fractional clocks, zero cycles and `u32::MAX`;
+single-clock versus irregular batches, including replacement during an old low
+pulse; VM/Ap cross-bank accesses; separate setup and strobe rises; no falling-edge
+or channel-1/2 IRQ0; masked IRR retention, ISR/normal EOI, IF deferral and natural
+handler/IRET; resets during partial, pending, countdown, low and completed phases;
+and channel-1 audio polarity at endpoints and after wrap. Expectations are
+literal or independent scheduler conversions, rather than production counter
+logic.
+
+The original MIT [assembly probe](../guest/pit_mode4.asm) is assembled offline by
+`python3 tools/prepare_pit_mode4_fixture.py`. Its checked
+[manifest](../fixtures/pit-mode4-manifest.json) pins provenance, license,
+source/boot/image hashes, exact result bytes, guards and budget. Source SHA-256:
+`34b06bd7c8cab6c3a5573721df68e556817c3c0eb1d7ee559771515b5dba183f`;
+boot SHA-256:
+`9d2595fe9ccb736107d9027a8ba9ce850d76d9d2f082cf6c88c1d5f2e4bd41f9`;
+image SHA-256:
+`79feb75fc9de1120c60ecdfcc1c9f83c8d2841e909a2995416297ab79c463d1c`.
+Generated media, source/license copies and manifest are ignored under
+`fixtures/pit_mode4/`, outside `web/`. README and CI include offline preparation.
+No commercial ROM or guest-software acquisition is needed for this probe.
+
+The guest selects mode 4 from known low OUT, then initializes the PIC to discard
+setup requests. It twice arms 60000, writes a replacement first byte and delays,
+latching the still-running old count in 58000..59999. Completing 2000 through the
+opposite bank must yield a latched 1900..2000 count. Both arming cycles use
+count-only writes, both port banks and cross-bank paired writes/reads. Each
+natural IRQ0 records ISR=1, issues normal EOI, records ISR=0 and returns through
+IRET. Post-terminal count snapshots must be 60000..65534 and advance 900..1100
+over 500 LOOP instructions. A further 40000-LOOP quiet interval exceeds one full
+wrap while unmasked and IF-enabled; it must retain exactly one entry per arming
+and IRR0=ISR0=0. Guest and hosts compare all 32 literal result/guard bytes; hosts
+only mount, step, inspect and reset.
+
+The identical image passed natively on VM and Ap, cold and after reset, at
+**85,000 slots per boot**. It also passed in production release-Wasm on both
+profiles, cold and after reset, at both `/` and `/pc98-rust/`, at **85,000 slots
+per boot**. Each boot requires `PIT MODE4 PASS` without `FAIL`, exact independent
+32-byte results/guards, unchanged media and no emulator errors within 2,000,000
+slots. Browser cases additionally reject page/console errors.
+
+| Check | Outcome |
+| --- | --- |
+| `python3 -m unittest discover -s tools -p test_fixture_fetch.py` | Passed: 7 cases |
+| All README offline fixture preparation commands | Passed; checked manifests reproduced |
+| `python3 tools/prepare_pit_mode4_fixture.py` | Passed without manifest-update mode |
+| README FreeDOS/font/DOS apps/CPU/HDD/music/device preparation | Passed with checksum-pinned binaries, matching sources and notices; CPULEVEL/DEBUG primary URLs returned HTTP 503, existing verified mirrors succeeded |
+| `python3 tools/build_media.py --check`; `python3 tools/build_font.py --check` | Passed |
+| `cargo test --locked --test pit mode4_` | Passed: 14 cases, zero failures/ignored |
+| `cargo test --locked` | Passed: 377 native cases, zero failures/ignored; doc-tests passed (0 cases) |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `cargo fmt --check`; `git diff --check` | Passed |
+| `npm ci`; `npx playwright install chromium` | Passed |
+| `npm test` | Release-Wasm build and ten-asset publication audit passed; occupied default server port prevented startup, zero browser cases executed |
+| `npx playwright test --config target/mode4-playwright.config.js` | Passed: 134 browser cases, zero failures/skips, 2.2 minutes |
+
+The equivalent browser run used the same production release-Wasm artifact:
+462,446 bytes, SHA-256
+`581bdd3fdc0b52deb660b3d3150351ea833bf50dc0153edd83545482fc57dfe6`.
+The ignored temporary config copies `playwright.config.js`, preserving projects,
+all assertions, workers, timeouts and budgets. It resolves test/server working
+directories to this worktree and changes only server ports to **18093/18094**.
+The project-path server copies `tests/browser/serve_project.py`, resolving
+`web/` and changing its port to 18094; the temporary project symlink and rejection
+of root asset requests are preserved. The existing listener was left alone and
+committed default ports remain unchanged. All existing PIT/PIC/BIOS timer, CPU
+interrupt-shadow, audio, DOS/apps, VM, storage and six-game assertions and budgets
+were retained. The 134 browser cases include all 130 existing cases and four new
+mode-4 cases; each new case includes cold and reset boots.
+
+Local review covered the full diff, Issue acceptance, next-clock load and low-pulse
+replacement boundaries, constant-work arithmetic, setup versus strobe IRQs,
+latches, byte formats, fixture provenance and identical native/browser media.
+No post-merge verification is required.
+
+PIT remains **partial**: modes 1/5, external GATE/retriggering, BCD, remaining
+access/latch sequencing, mode-2/3 divisor-1 behavior and fuller beeper timing
+remain outstanding. All 26 fixed inventory scopes/statuses are unchanged:
+**partial** cpu-v30, cpu386, protected-mode, fpu, memory, pic, pit, dma, rtc,
+keyboard, mouse, fdc, ide, gdc, egc, pegc, text-cg, display-timing, opn, opna, pcm86,
+bios, lio, integration; **implemented_unverified** grcg; **unimplemented** paging.
+None is verified. Protected execution, paging, numerical x87 and every other
+inventory gap remain required. Limited probes and six-game regressions establish
+neither full hardware accuracy nor commercial compatibility.

@@ -189,6 +189,7 @@ pub struct Counter {
     load_pending: bool,
     mode3_phase: u32,
     mode3_reload: u32, // Active half-cycle divisor; reload may already differ.
+    mode4_armed: bool,
     pub enabled: bool,
     pub output: bool,
 }
@@ -206,6 +207,7 @@ impl Default for Counter {
             load_pending: false,
             mode3_phase: 0,
             mode3_reload: 65536,
+            mode4_armed: false,
             enabled: false,
             output: false,
         }
@@ -244,8 +246,8 @@ impl Counter {
                 if !self.enabled {
                     self.load_pending = true;
                 }
-            } else if self.mode == 0 {
-                // Mode 0 transfers each replacement on a separate clock.
+            } else if matches!(self.mode, 0 | 4) {
+                // Modes 0/4 transfer each replacement on a separate clock.
                 self.load_pending = true;
             } else {
                 self.remaining = self.reload;
@@ -290,6 +292,9 @@ impl Counter {
         }
         if self.mode == 3 {
             return self.tick_mode3(ticks);
+        }
+        if self.mode == 4 {
+            return self.tick_mode4(ticks);
         }
         if ticks >= self.remaining {
             self.remaining = self.reload - (ticks - self.remaining) % self.reload;
@@ -394,8 +399,39 @@ impl Counter {
         };
         rising
     }
+    fn tick_mode4(&mut self, mut ticks: u32) -> bool {
+        if ticks == 0 {
+            return false;
+        }
+        let mut rising = false;
+        if self.load_pending {
+            self.load_pending = false;
+            self.remaining = self.reload;
+            self.mode4_armed = true;
+            // A write alone leaves OUT alone. On the load clock an old low
+            // strobe finishes, even when a replacement restarts the count.
+            rising = !self.output;
+            self.output = true;
+            ticks -= 1;
+        }
+        if ticks != 0 && !self.output {
+            self.output = true;
+            rising = true;
+        }
+        if self.mode4_armed && ticks >= self.remaining {
+            self.mode4_armed = false;
+            self.output = ticks > self.remaining;
+            // Preserve a rise hidden inside a batch crossing the low pulse.
+            rising |= self.output;
+        }
+        if ticks != 0 {
+            // Counting continues through wrap, without another strobe.
+            self.remaining = self.remaining.wrapping_sub(ticks) & 0xffff;
+        }
+        rising
+    }
     pub(crate) fn beep_high(&self) -> bool {
-        if self.mode == 3 {
+        if matches!(self.mode, 3 | 4) {
             self.output
         } else {
             self.remaining > self.reload / 2
@@ -429,12 +465,13 @@ impl Pit {
                     c.write_hi = false;
                     c.read_hi = false;
                     c.load_pending = false;
-                    if matches!(c.mode, 0 | 2 | 3) {
+                    if matches!(c.mode, 0 | 2 | 3 | 4) {
                         c.enabled = false;
                         c.output = c.mode != 0;
                         c.latch = None;
                         c.mode3_phase = 0;
                         c.mode3_reload = 65536;
+                        c.mode4_armed = false;
                     }
                 }
             }
