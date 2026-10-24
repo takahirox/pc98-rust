@@ -580,12 +580,57 @@ fn ide_edge_held_cpu_and_poll_acknowledgement() {
                 ide_held_silence(&mut m, 2, 0x80);
                 ide_eoi(&mut m);
                 ide_held_silence(&mut m, 0, 0);
-                // Only primary status drops INTRQ; another command is a real edge.
+                // Primary status also drops INTRQ before the next command.
                 assert_eq!(m.bus.input(0x64e), if error { 0x51 } else { 0x50 });
                 verify_issue(&mut m, 0x40, 1, [7, 0, 0, 0xe0]);
                 m.bus.tick(8);
                 assert_eq!(m.bus.irq(), Some(0x11));
                 ide_pic_state(&m, 0, 2, 0x80);
+            }
+        }
+    }
+}
+
+#[test]
+fn ide_edge_command_completion_without_primary_status() {
+    for opcode in [0x40, 0x41] {
+        for error in [false, true] {
+            for nien in [false, true] {
+                let mut m = verify_machine();
+                ide_pic_init(&mut m);
+                verify_issue(&mut m, 0x40, 1, [7, 0, 0, 0xe0]);
+                m.bus.tick(8);
+                assert_eq!(m.bus.irq(), Some(0x11));
+                ide_pic_state(&m, 0, 2, 0x80);
+                ide_eoi(&mut m);
+                assert_eq!(m.bus.input(0x74c), 0x50);
+                ide_held_silence(&mut m, 0, 0);
+                if nien {
+                    m.bus.output(0x74c, 2);
+                }
+                // Do not read primary status: command acceptance itself clears
+                // pending INTRQ before synchronous completion raises it again.
+                let address = if error {
+                    [0, 2, 0, 0xe0]
+                } else {
+                    [8, 0, 0, 0xe0]
+                };
+                verify_issue(&mut m, opcode, 1, address);
+                m.bus.tick(8);
+                assert_eq!(m.bus.input(0x74c), if error { 0x51 } else { 0x50 });
+                assert!(m.bus.ide.irq);
+                if nien {
+                    ide_held_silence(&mut m, 0, 0);
+                    assert!(!m.bus.ide.irq_enabled());
+                    m.bus.output(0x74c, 0);
+                }
+                ide_pic_state(&m, 2, 0, 0);
+                assert_eq!(m.bus.pics[0].irr, 0x80);
+                assert_eq!(m.bus.irq(), Some(0x11));
+                ide_pic_state(&m, 0, 2, 0x80);
+                ide_held_silence(&mut m, 2, 0x80);
+                ide_eoi(&mut m);
+                ide_held_silence(&mut m, 0, 0);
             }
         }
     }

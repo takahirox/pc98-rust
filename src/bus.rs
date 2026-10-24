@@ -588,6 +588,11 @@ impl Bus {
             | 0x74c
                 if self.profile == Profile::Pc9821ApDos =>
             {
+                if p == 0x64e {
+                    // Command acceptance clears pending INTRQ before the
+                    // synchronous command implementation can raise it again.
+                    self.ide_irq = false;
+                }
                 self.ide.output(p, v);
                 // Includes nIEN/SRST, commands and WRITE sector boundaries.
                 self.sync_ide_irq();

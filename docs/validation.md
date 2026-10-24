@@ -3731,3 +3731,41 @@ device selection and error interactions remain future work. All 26 inventory
 categories retain their scopes/statuses; protected execution, paging and basic
 x87 remain required. This probe and existing six-game checks do not establish
 full hardware accuracy or commercial compatibility.
+
+## Issue 77 review revision: synchronous IDE command edges (2026-10-24)
+
+The review found that a command issued while INTRQ remained asserted could lose
+its completion edge: command acceptance clears pending INTRQ, but the synchronous
+command implementation raises it again before the bus samples the final level.
+The bus now records the command-acceptance low phase before sampling completion.
+The final sample still respects nIEN; suppressed pending completions become
+deliverable when nIEN is cleared.
+
+`cargo test --locked --test hdd ide_edge_command_completion_without_primary_status -- --nocapture`
+failed against reviewed routing with slave IRR 0 instead of 2, then passed with
+the fix. The port/clock-driven regression acknowledges the first VERIFY through
+INT 11h, sends normal EOIs, reads only alternate status, and issues another VERIFY.
+It checks both opcodes, successful and error completions, nIEN suppression and
+reenabling, exact IRR/ISR/vector outcomes, and held-input silence during service
+and after EOIs. It does not assign device IRQ flags or inject PIC requests.
+
+All Python prerequisites in the command list above were rerun, from the fixture
+fetch unit tests through `python3 tools/build_font.py --check`, including the
+unchanged original IDE probe's offline build/hash check. All passed. CPULEVEL and
+DEBUG primary downloads returned HTTP 503; existing pinned fallbacks succeeded
+with size/hash verification and matching source provenance. `npm ci` and
+`npx playwright install chromium` also passed.
+
+| Command | Result |
+| --- | --- |
+| `cargo test --locked --test hdd --test pic --test sound86` | Passed: 16 HDD, 28 PIC, 16 sound tests (60 total) |
+| `cargo test --locked` | Passed: 314 integration tests, zero failed or ignored; unit/doc targets also passed |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `cargo fmt --check` | Passed |
+| `git diff --check` | Passed |
+| `npm test -- --config=.issue77-playwright.config.js` | Passed: production release-Wasm (456,162 bytes), ten-asset publication check, all 106 browser cases across both roots, zero skipped, 1.7 minutes; all four IDE boots 30,000 slots |
+
+A read-only port check found port 8000 occupied, so browser validation used the
+same temporary configuration documented above (ports 18770/18771). Both roots,
+all tests, assertions, concurrency and budgets were retained. The temporary file
+was removed after validation. No push or merge was performed.
