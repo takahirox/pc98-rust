@@ -4186,3 +4186,30 @@ the independently expected full media. All required existing browser coverage,
 including DOS/apps/VM/audio, IDE-edge and six-game checks, passed. No final check
 was skipped; the initial port-startup and reset-count assertion failures above
 are recorded separately from the complete passing final run.
+
+### Issue #83 review fix: media replacement during PIO execution
+
+Floppy insertion and ejection now terminate active PIO execution on that drive
+with ST1.ND before a stale cached sector offset can be used on replacement media.
+The accepted prefix remains on the removed image. Loading the other drive leaves
+the active transfer intact.
+
+`nd_write_media_changes_cancel_waiting_and_ready_requests` failed before the fix
+(result-phase MSR was B0 instead of D0) and passes after it. Its 48 combinations
+cover VM/Ap, drives 0/1, waiting/ready requests after an accepted byte, direct
+replacement/eject-then-insert without intervening clocks, and raw, writable D88
+and protected D88 replacements. It compares complete original/replacement/other
+drive images, write counters, seven-byte missing-data results and fresh-command
+recovery (including write-protection results on the replacement).
+
+All README Python fixture preparations and the seven fixture-fetch unit tests
+passed. The focused FDC/BIOS/core/DMA/PIC suite passed all 109 tests.
+`cargo test --locked` passed all 335 native tests with none failed or ignored;
+`cargo clippy --all-targets -- -D warnings`, `cargo fmt --check` and
+`git diff --check` passed.
+`npm ci` and `npx playwright install chromium` passed. The default-port `npm test`
+built and checked production Wasm, but port 8000 was occupied and no browser
+cases ran. `npm test -- --config=playwright.issue83-fix.config.js --workers=4`
+then passed all 118 browser cases in 2.2 minutes. Temporary configuration/server
+copies used ports 18483/18484 for `/` and `/pc98-rust/`, with all scenarios,
+assertions and budgets unchanged; those copies were removed afterward.

@@ -57,6 +57,22 @@ impl Default for Bus {
     }
 }
 impl Bus {
+    /// Replace or eject floppy media, terminating execution tied to the old disk.
+    pub fn mount_floppy(&mut self, drive: usize, disk: Option<Disk>) -> Option<Disk> {
+        let previous = std::mem::replace(&mut self.disks[drive], disk);
+        if self
+            .fdc
+            .pio
+            .as_ref()
+            .is_some_and(|pio| pio.drive as usize == drive)
+        {
+            let pio = self.fdc.pio.take().unwrap();
+            // Cached sector offsets belong to the removed media. Preserve its
+            // accepted prefix, but never service another byte on a replacement.
+            self.end_fdc_pio(&pio, 4);
+        }
+        previous
+    }
     pub fn new(profile: Profile) -> Self {
         let mut palette = [[0; 3]; 16];
         for (i, p) in palette.iter_mut().enumerate() {

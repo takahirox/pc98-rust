@@ -960,6 +960,85 @@ fn nd_write_errors_unsupported_variants_reset_and_eject() {
 }
 
 #[test]
+fn nd_write_media_changes_cancel_waiting_and_ready_requests() {
+    for profile in PROFILES {
+        for drive in 0..2 {
+            for ready in [false, true] {
+                for eject in [false, true] {
+                    for replacement in ["raw", "d88", "protected.d88"] {
+                        let mut m = Machine::new(profile);
+                        m.insert(drive, patterned_raw(), "original.hdm").unwrap();
+                        m.bus.output(0x94, 0x18);
+                        command(&mut m.bus, &[3, 0xdf, 3]);
+                        command(&mut m.bus, &write_command(drive as u8, 0, 1, 3));
+                        m.bus.tick(128);
+                        m.bus.output(0x92, 0x59);
+                        if ready {
+                            m.bus.tick(128);
+                        }
+                        // Loading the other drive must leave this request intact.
+                        let other = patterned_d88(3);
+                        m.insert(1 - drive, other.clone(), "other.d88").unwrap();
+                        assert_eq!(m.bus.input(0x90), if ready { 0xb0 } else { 0x30 });
+                        let mut original = patterned_raw();
+                        original[0] = 0x59;
+                        assert_eq!(m.bus.disks[drive].as_ref().unwrap().bytes, original);
+                        if eject {
+                            let disk = m.bus.mount_floppy(drive, None).unwrap();
+                            assert_eq!(disk.bytes, original);
+                            assert_eq!(disk.writes, 1);
+                            assert_eq!(m.bus.input(0x90), 0xd0);
+                        }
+                        let image = if replacement == "raw" {
+                            patterned_raw()
+                        } else {
+                            let mut image = patterned_d88(3);
+                            if replacement == "protected.d88" {
+                                image[0x1a] = 0x10;
+                            }
+                            image
+                        };
+                        let name = if replacement == "raw" {
+                            "new.hdm"
+                        } else {
+                            "new.d88"
+                        };
+                        m.insert(drive, image.clone(), name).unwrap();
+                        // A stale service byte must not reach the replacement,
+                        // even when no guest clocks separate eject and insert.
+                        m.bus.output(0x92, 0xcc);
+                        m.bus.tick(128);
+                        assert_eq!(m.bus.disks[drive].as_ref().unwrap().bytes, image);
+                        assert_eq!(m.bus.disks[drive].as_ref().unwrap().writes, 0);
+                        assert_eq!(m.bus.fdc.writes, 1);
+                        assert_eq!(results(&mut m.bus), [0x40 | drive as u8, 4, 0, 0, 0, 1, 3]);
+                        // A fresh command resolves offsets/protection on the new disk.
+                        command(&mut m.bus, &write_command(drive as u8, 0, 1, 3));
+                        if replacement == "protected.d88" {
+                            assert_eq!(results(&mut m.bus), [0x40 | drive as u8, 2, 0, 0, 0, 1, 3]);
+                            assert_eq!(m.bus.disks[drive].as_ref().unwrap().bytes, image);
+                        } else {
+                            write_payload(&mut m.bus, &[0xa6; 1024]);
+                            assert_eq!(
+                                results(&mut m.bus),
+                                [0x40 | drive as u8, 0x80, 0, 0, 0, 1, 3]
+                            );
+                            let mut expected = image;
+                            let offset = if replacement == "raw" { 0 } else { 0x2b0 };
+                            expected[offset..offset + 1024].fill(0xa6);
+                            assert_eq!(m.bus.disks[drive].as_ref().unwrap().bytes, expected);
+                            assert_eq!(m.bus.disks[drive].as_ref().unwrap().writes, 1);
+                        }
+                        assert_eq!(m.bus.disks[1 - drive].as_ref().unwrap().bytes, other);
+                        assert_eq!(m.bus.disks[1 - drive].as_ref().unwrap().writes, 0);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn nd_write_isolates_all_dma_state_then_bios_readback_and_pio_reentry() {
     for profile in PROFILES {
         for disabled in [false, true] {

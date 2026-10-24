@@ -986,7 +986,8 @@ suffix, neighboring sectors and all D88 metadata unchanged. One sector receiving
 any payload increments the FDC/media write counters once. This is an image-model
 approximation: damaged data fields, CRC and flux consequences are not represented.
 No TC-specific zero filling applies to commands that receive no TC. Reset
-cancels execution and requests; eject ends safely with missing-data results.
+cancels execution and requests; eject or replacement on the active drive ends
+execution with missing-data results before another byte can reach the new media.
 
 The original MIT [interrupt-driven boot probe](../guest/fdc_write.asm) supplies
 1,024 bytes, checks PIO readback, both seven-byte results, real PIC ISR/EOI
