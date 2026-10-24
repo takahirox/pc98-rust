@@ -1,6 +1,8 @@
-//! Bounded Ap µPD4990A calendar/read protocol (NEC IC-1755, pp. 4–8, 11–13).
-//! No host clock, time setting, TP/IRQ controls, or test mode.
+//! Bounded Ap µPD4990A register controls (NEC IC-1755, pp. 4–8, 11–13).
+//! No host clock, TP/IRQ controls, or test mode.
 const CLOCK_HZ: u64 = 8_000_000;
+// Stages 1–9 continue while Time Set resets stages 10–15 (64 Hz boundary).
+const LOWER_DIVIDER_CLOCKS: u64 = CLOCK_HZ / 64;
 
 /// Counter seed in binary; year is the chip's two-digit year, weekday Sunday=0.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -14,6 +16,32 @@ pub struct Calendar {
     second: u8,
 }
 impl Calendar {
+    fn from_shift(data: u64, serial: bool, stored_year: u8) -> Option<Self> {
+        fn binary(byte: u8) -> Option<u8> {
+            if byte & 15 > 9 || byte >> 4 > 9 {
+                None
+            } else {
+                Some((byte >> 4) * 10 + (byte & 15))
+            }
+        }
+        let [second, minute, hour, day, month_weekday, year, _, _] = data.to_le_bytes();
+        // Parallel mode permits an explicitly loaded February 29 independent of
+        // the ineffective year counter. Validate against year 00, then retain it.
+        let mut date = Self::new(
+            if serial { binary(year)? } else { 0 },
+            month_weekday >> 4,
+            binary(day)?,
+            month_weekday & 15,
+            binary(hour)?,
+            binary(minute)?,
+            binary(second)?,
+        )
+        .ok()?;
+        if !serial {
+            date.year = stored_year;
+        }
+        Some(date)
+    }
     pub fn new(
         year: u8,
         month: u8,
@@ -139,6 +167,10 @@ impl Rtc {
     }
     pub fn tick(&mut self, clocks: u32) {
         self.fraction += u64::from(clocks);
+        if self.mode == 2 {
+            self.fraction %= LOWER_DIVIDER_CLOCKS;
+            return;
+        }
         let seconds = self.fraction / CLOCK_HZ;
         self.fraction %= CLOCK_HZ;
         for _ in 0..seconds {
@@ -146,7 +178,7 @@ impl Rtc {
         }
     }
     pub fn data_out(&self) -> u8 {
-        if self.mode == 1 {
+        if matches!(self.mode, 1 | 2) {
             (self.data & 1) as u8
         } else {
             u8::from(self.fraction >= CLOCK_HZ / 2)
@@ -157,7 +189,7 @@ impl Rtc {
         self.control = value;
         let serial = value & 7 == 7;
         // Figs. 4–5: shift on CLK rising, stable for CPU trailing-edge sampling.
-        // The command register shifts independently even in Hold/Time Read.
+        // The command register shifts independently even in Time Set.
         if rising & 16 != 0 {
             let input = u64::from(value & 32 != 0);
             if self.mode == 1 {
@@ -175,9 +207,21 @@ impl Rtc {
         // Figs. 2–3: STB rising latches; unchanged writes cannot retrigger.
         if rising & 8 != 0 {
             let command = if serial { self.command } else { value & 7 };
-            if matches!(command, 0 | 1 | 3) {
+            if matches!(command, 0..=3) {
+                if command == 2 || self.mode == 2 {
+                    self.fraction %= LOWER_DIVIDER_CLOCKS;
+                }
                 self.extended = serial;
                 self.mode = command;
+                if command == 2 {
+                    // Emulator policy for malformed payloads: retain the whole
+                    // previous calendar, but apply hold/output/divider controls.
+                    // This does not specify undocumented silicon behavior.
+                    if let Some(date) = Calendar::from_shift(self.data, serial, self.calendar.year)
+                    {
+                        self.calendar = date;
+                    }
+                }
                 if command == 3 {
                     let [year, month, day, hour, minute, second] = self.snapshot();
                     self.data = u64::from_le_bytes([

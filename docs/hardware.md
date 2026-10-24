@@ -377,17 +377,18 @@ not establish full protected-mode accuracy or commercial software compatibility.
 
 ## Ap calendar read path
 
-Ap implements the bounded µPD4990A read protocol at `20h` and `33h`, based on
-NEC's [PC-9800 Technical Data Book HARDWARE, printed pp.127 and 137](https://vtda.org/docs/computing/NEC/PC-9800TechnicalDataBookHARDWARE%2BOCR_1993.pdf#page=140)
+Ap implements the bounded µPD4990A register-control protocol at `20h` and `33h`,
+based on NEC's [PC-9800 Technical Data Book HARDWARE, printed pp.127 and 137](https://vtda.org/docs/computing/NEC/PC-9800TechnicalDataBookHARDWARE%2BOCR_1993.pdf#page=140)
 and [µPD4990A IC-1755 datasheet, printed pp.4–8 and Figures 2–5](https://www.renesas.com/en/document/dst/upd4990a-data-sheet).
 Port `20h` has C0–C2 in bits 0–2, STB in bit 3, CLK in bit 4 and DATA IN in bit 5.
 Port `33h` retains its existing `38h` inputs and adds DATA OUT in bit 0.
 
-STB rising latches parallel `000` Hold, `001` Shift or `011` Time Read. With
-C0–C2 continuously `111`, CLK rising shifts DATA IN into the independent four-bit
-command register, least significant bit first; STB rising accepts serial `0000`,
-`0001` or `0011` for those same functions. Repeated unchanged control writes have
-no edge and no effect. Electrical setup/delay tolerances are not simulated.
+STB rising latches parallel `000` Hold, `001` Shift, `010` Time Set or
+`011` Time Read. With C0–C2 continuously `111`, CLK rising shifts DATA IN into
+the independent four-bit command register, least significant bit first; STB rising accepts serial `0000`,
+`0001`, `0010` or `0011` for those same functions. Repeated unchanged control
+writes have no edge and no effect. Electrical setup/delay tolerances are not
+simulated.
 
 Time Read captures the running counter into a held shift register. Hold freezes
 that register; neither command stops the calendar. Shift immediately exposes the
@@ -395,9 +396,9 @@ initial LSB, then CLK rising shifts to the next bit, which is stable at CLK's
 trailing edge for CPU sampling (Figures 4–5). Parallel transfers have 40 calendar
 bits; serial transfers have 48 calendar bits followed by four command bits.
 In serial mode the command register shifts on every CLK rising, even during
-Hold/Time Read. During Shift its old LSB feeds the top of the 48-bit calendar
-register, with DATA IN entering the command register. The command tail therefore
-contains the command bits present when shifting began, unless subsequently
+Hold/Time Set/Time Read. During Shift its old LSB feeds the top of the 48-bit
+calendar register, with DATA IN entering the command register. The command tail
+therefore contains the command bits present when shifting began, unless subsequently
 replaced by further shifting. In parallel mode DATA IN feeds bit 39 directly.
 
 Calendar bytes are seconds, minutes, hours, day, month/weekday, then year in
@@ -410,7 +411,7 @@ seconds never alter an already captured snapshot.
 
 The counter uses 24-hour time, month lengths and weekday rollover. Parallel
 commands disable year counting and automatic leap days: February normally has
-28 days, while an explicitly seeded February 29 rolls to March 1. Serial commands
+28 days, while an explicitly loaded February 29 rolls to March 1. Serial commands
 enable the two-digit year (99→00) and leap years divisible by four, including 00.
 This follows the chip's two-digit rule, without Gregorian century correction.
 Cold construction starts in compatibility Hold at 2026-01-01 Thursday 00:00:00.
@@ -418,22 +419,49 @@ Cold construction starts in compatibility Hold at 2026-01-01 Thursday 00:00:00.
 an explicit validated binary seed for native tests; it is not a guest setting
 service. Each Bus owns its own RTC.
 
-Every 8,000,000 scheduler clocks advances one second. Fractional clocks survive
-all tick batch sizes, including `u32::MAX`, and advancement continues with IF
+While running, every 8,000,000 scheduler clocks advance one second. Fractional
+clocks survive all tick batch sizes, including `u32::MAX`, and advancement continues with IF
 clear or HLT. Hold/Time Read DATA OUT is a 1 Hz, 50% duty waveform, deterministically
-low for the first half-second and high for the second; commands do not reset its
-phase. Host wall time and browser animation timing do not initialize or advance
-the counter. `Machine::reset` retains the entire battery-backed RTC: calendar,
-fraction, active mode/width, control levels, captured data and command register.
+low for the first half-second and high for the second. Register commands preserve
+phase except Time Set entry/release, as described below. Host wall time and
+browser animation timing do not initialize or advance the counter.
+`Machine::reset` retains the entire battery-backed RTC: calendar, fraction, active mode/width, control levels, captured data and command register.
 A partial transfer can continue across reset; a rebooting guest should frame a
 fresh command/capture itself.
+
+Time Set transfers the shift register to the counter on STB rising: 40 parallel
+bits preserve the stored year; 48 serial bits load the year too. To serially load
+while in Shift, send the six calendar bytes followed by the four-bit Time Set
+command, all LSB first, then strobe. The complete chain is 52 bits: clocking
+another command after all 52 bits would displace the calendar data.
+Time Set holds the calendar counter and shift register and drives DATA OUT from
+the held LSB. CLK can still shift the independent serial command register.
+Commands 0/1/3 release the counter and perform their usual register operation.
+
+Entry (including repeated Time Set strobes) and release reset divider stages
+10–15; lower stages continue. At the 8 MHz scheduler rate their retained phase
+is the position within a 125,000-clock (64 Hz) period. The next second occurs on
+the 64th subsequent 64 Hz edge after release, rather than necessarily 8,000,000
+clocks later. Held time cannot accumulate catch-up seconds. Machine reset while
+held retains that state and lower phase; it does not implicitly release Time Set.
+
+Valid BCD/range/date payloads load atomically, including an explicitly loaded
+parallel February 29 even when the stored year is not a leap year. Malformed
+BCD, impossible dates or out-of-range fields retain the entire previous calendar;
+Time Set still applies hold, LSB output and divider controls. This is a bounded
+emulator policy, not a claim about unspecified invalid-data silicon behavior.
+The original [Time Set guest](../guest/rtc_set.asm),
+[manifest](../fixtures/rtc-set-manifest.json) and
+[validation evidence](validation.md#issue-87-ap-rtc-time-setcounter-hold) cover
+this contract. Limited probes and game regressions establish neither full RTC
+accuracy nor commercial compatibility.
 
 Ap INT `1Ch/AH=00` copies one coherent snapshot to ES:BX as year, month/weekday,
 day, hour, minute, second. It retains the existing 16-bit destination-offset
 wrapping and caller register/flag behavior. VM retains its fixed BIOS date and
 port inputs. AH=02 remains the independent interval callback service.
 
-RTC is **partial**. Time Set/Counter Hold, BIOS setting services, TP selection,
+RTC is **partial**. BIOS setting services, TP selection,
 interval/IRQ controls, test mode and the VM's older µPD1990-family behavior remain
 outstanding. Unsupported RTC commands currently leave the implemented register
 mode unchanged. General 8255 emulation and host synchronization are absent.
