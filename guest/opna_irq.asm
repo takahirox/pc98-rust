@@ -67,7 +67,7 @@ mov ah, bl
 mov al, 0x29
 call fm_write                    ; expose already pending flag
 call irr
-stosb                            ; IR4 latched on ordinary ticks
+stosb                            ; IR4 latched on the enable edge
 mov ax, 0x8029                  ; SCH enabled, timers suppressed
 call fm_write
 call irr
@@ -162,6 +162,7 @@ handler:
 push ax
 push dx
 push di
+push cx
 call status
 stosb
 mov al, 0x0b
@@ -172,17 +173,15 @@ mov al, 0x0b
 out 0, al
 in al, 0
 stosb
-mov ax, 0x0029                  ; suppress output, preserving PIC state
-call fm_write
-mov ax, 0x3027                  ; independent device flag acknowledgement
-call fm_write
 inc byte [es:0x8001]
 mov al, 0x20
 out 8, al
 out 0, al                       ; both EOIs required for subsequent delivery
-; The existing scheduler samples an enabled source again after CPU INTA.
-; Drain that retained request through ordinary PIC poll acknowledgement/EOI.
-; First path (suppressed before INTA): 00,00; enabled recovery: 87,84.
+; Keep recovery output enabled and asserted across both EOIs and guest clocks.
+; Neither held source may produce another edge: all eight poll bytes must be 0.
+mov cx, 128
+.held:
+loop .held
 mov al, 0x0c
 out 0, al
 in al, 0
@@ -193,9 +192,13 @@ out 8, al
 in al, 8
 mov [es:bp], al
 inc bp
-mov al, 0x20
-out 8, al
-out 0, al
+cmp word [es:bp-2], 0         ; reject duplicates before any source cleanup
+jne fail
+mov ax, 0x0029                  ; suppress only after held-output observation
+call fm_write
+mov ax, 0x3027                  ; independent device flag acknowledgement
+call fm_write
+pop cx
 pop di
 pop dx
 pop ax
@@ -234,6 +237,6 @@ times 14 db 0xa5
 db 1,1,0,0x10,0x10,1,0x10,0x80,1,0,0,1,0x10,0x80,2,0
 db 2,2,0,0x10,0x10,2,0x10,0x80,3,0,0,2,0x10,0x80,4,0
 times 16 db 0xa5
-db 0,0,0x87,0x84,0,0,0x87,0x84
+times 8 db 0
 times 56 db 0xa5
 times 1024-($-$$) db 0

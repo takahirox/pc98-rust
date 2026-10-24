@@ -3468,3 +3468,130 @@ boundary, manifest reproducibility, CI wiring and documentation. Independent
 review and remote CI remain for the downstream review stage, before any merge.
 OPN/OPNA and all other inventory statuses remain unchanged; remaining synthesis,
 protected execution, paging and basic x87 gaps are not claimed resolved.
+
+## Issue #75: Ap shared sound IRQ edges (2026-10-24)
+
+Issue #75 fixes only the Ap shared OPNA/PCM input under the existing
+edge-triggered, normal-EOI cascade. `Bus` now remembers the combined logical
+assertion `opn.irq() || (pcm.irq && pcm.control & 0x20 != 0)` independently of
+PIC IRR/ISR. Relevant sound writes, timer advancement and PCM FIFO consumption
+observe this wire. Only a rising edge requests slave IR4. PIC initialization
+retains the wire history; Machine reset reconstructs it with the sound devices.
+No PIC arbitration, register-29 semantics, timer periods, VM sound exposure,
+PCM playback, inventory status or other device routing was changed.
+
+The six new `shared_sound_*` Rust tests use guest ports and elapsed clocks to
+produce Timer A/B overflows and real PCM FIFO threshold crossings. They cover
+CPU and normal-EOI poll acknowledgement, held inputs through service/EOI,
+recovery after a new edge, masked capture/unmasking, retained IRR/ISR through
+suppression, both EOI orders, new edges during service, overlapping OPNA/PCM
+contributors in both orders, consecutive register-29 and PCM enable writes,
+PCM acknowledgement/refill, board gating, timer/PCM clock partitioning,
+same-tick audio threshold observation, PIC reinitialization while held,
+independent Machines and successful delivery after reset. Existing 145/2308
+CPU-clock timer expectations are preserved regression boundaries, not new
+hardware-frequency or prescaler verification.
+
+### Regression evidence and original guest
+
+With only `src/bus.rs` restored from evaluation baseline `b4897044`, and the
+final new tests/probe unchanged, both commands failed as required (exit 101):
+
+```sh
+cargo test --locked --test sound86 shared_sound_held_input_regression -- --exact
+cargo test --locked --test sound86 opna_irq_original_guest_before_and_after_reset -- --exact
+```
+
+The Rust assertion observed IRR4=`10h` instead of zero after CPU acknowledgement
+and held-input clocks. The strengthened guest reported `OPNA IRQ FAIL` at
+1,000 slots, immediately rejecting recovery poll bytes `87h,84h` after two
+handler entries. The final routing was restored before all acceptance runs.
+An earlier probe version without the immediate pair assertion also failed on
+baseline after 14,000 slots; the immediate assertion makes the duplicate itself
+the explicit guest failure before subsequent service can time out.
+
+The original MIT `guest/opna_irq.asm` retains both timer paths, four actual
+vector-1Ch entries, suppression/retention checks, ISR observations, SP=7C00h and
+all 128 result/guard comparisons. Enabled recovery now stays asserted across
+both ordinary EOIs and a bounded 128-iteration guest delay. Each master/slave
+poll pair must be zero before source cleanup; the extra cleanup EOI pair is
+removed. The independent Python oracle, checked provenance manifest, native
+expectations and production-browser expectations all require eight zero poll
+bytes. This supersedes the scheduler-drain workaround documented in the
+historical Issue #73 validation record above.
+
+Offline reproduction remains:
+
+```sh
+nasm -f bin guest/opna_irq.asm -o opna_irq.bin
+python3 tools/prepare_opna_irq_fixture.py --update-manifest
+python3 tools/prepare_opna_irq_fixture.py
+```
+
+The checked manifest pins source SHA-256
+`9fa21c8b855d7fe6ad9efa7dc1ace317d19629ee85af98b76fe3e7db4500bd06`,
+boot SHA-256
+`5f5618db9d5ac8132c760b0ad63a052bfdea37efff23fc8499d176c769b729cf`,
+and image SHA-256
+`a29480de67b89ba274348e824aba2aaa0948835d95cd88494a5112e12782a605`.
+The original synthetic firmware, MIT source/license copies, 1,261,568-byte
+floppy geometry, unchanged-media checks, PASS/FAIL markers and **500,000-slot
+budget per boot** remain intact. Generated fixture files stay outside `web/`.
+Hosts only mount, step, reset and inspect; they inject no IRQs, flags or results.
+No proprietary firmware, samples or commercial software was acquired.
+
+### Coordinator acceptance
+
+All preparation commands in the README's **Reproduce the checks** block were
+executed: `python3 -m unittest discover -s tools -p test_fixture_fetch.py`,
+every listed original `python3 tools/prepare_*_fixture.py`, the pinned
+FreeDOS/font/DOS-app/CPU/HDD/music/device preparation commands, and
+`python3 tools/build_font.py --check`. All passed. CPULEVEL and DEBUG primary
+ibiblio downloads returned HTTP 503; the existing checksum-pinned mirror
+fallbacks succeeded. Original/licensed provenance, source archives and existing
+fixture manifests were preserved. `npm ci` and
+`npx playwright install chromium` also passed; npm reported zero vulnerabilities.
+
+| Command | Outcome |
+| --- | --- |
+| `python3 tools/prepare_opna_irq_fixture.py --update-manifest`, then `python3 tools/prepare_opna_irq_fixture.py` | Passed; final source/boot/image/result provenance reproduced offline |
+| `cargo test --locked --test sound86 opna_irq_original_guest_before_and_after_reset -- --exact --nocapture` | Passed on the final image; native probe before/after reset: 3,000 slots and four entries each |
+| `cargo test --locked --test sound86 --test pic --test ap --test music` | Passed, 62 tests across the four targets |
+| `cargo test --locked` | Passed, 308 integration tests; unit/doc targets passed, zero failures or ignored tests |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `cargo fmt --check` / `git diff --check` | Passed |
+| `npm test` | Release-Wasm build, media/font reproducibility and ten-asset publication audit passed; browser server failed to bind occupied port 8000, exit 1 before any browser tests |
+| `npm test -- --config=.issue75-playwright.config.js` | Passed, all 106 browser cases, zero skipped, 1.6 minutes; production release-Wasm 455,709 bytes and publication checks passed |
+
+The temporary browser configuration imported `playwright.config.js`, changed
+only the local project's base URL and server command from port 8000 to 18075,
+and retained the Pages server on port 8001, all tests, assertions and budgets.
+Its local command was
+`python3 -m http.server 18075 --bind 127.0.0.1 --directory web`; both production
+paths `/` and `/pc98-rust/` were exercised. The unrelated listener was left
+running and the temporary configuration was removed after validation. All four
+OPNA browser boots (both roots, before/after reset) completed in **3,000 slots**
+with four handler entries, eight zero poll bytes, all 128 result/guard bytes,
+unchanged media and no FAIL/core/browser errors.
+
+### Scope and review
+
+Local review checked the complete diff against Issue #75 and the repository
+review guidelines, including combined-wire semantics, source observation,
+initialization/reset behavior, independent oracle/provenance consistency, guest
+stack/guard checks and unchanged acceptance budgets. No blocking local findings
+remain. No remote PR/CI review or merge is performed by this execution node;
+downstream review must assess the
+checkpoint and this evidence before merge. The existing acceptance workflow
+`.github/workflows/emulator.yml` already prepares the OPNA fixture before full
+native/browser suites and remains wired to the strengthened source and manifest.
+
+PIC and OPNA remain partial. SNGL/general ICW sequencing, programmable ICW3
+routing, SFNM, level triggering, electrical/spurious timing and broader
+polling/AEOI/rotation/concurrent-acknowledgement acceptance remain outside this
+bounded routing result. OPNA synthesis, prescaler/timer-frequency reconciliation,
+CSM and other documented gaps remain. All 26 inventory scopes/statuses are
+unchanged: 23 partial, GRCG implemented/unverified, paging and FPU unimplemented.
+Protected execution, paging and basic x87 remain required future work. Limited
+probes and six-game reports establish neither complete hardware accuracy nor
+commercial compatibility. No post-merge verification is required by Issue #75.

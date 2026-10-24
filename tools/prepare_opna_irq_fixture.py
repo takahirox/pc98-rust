@@ -20,7 +20,7 @@ def expected_results():
                   0, 0, flag, 16, 128, 2 * timer + 2, 0]
         result[16 + timer * 16:32 + timer * 16] = bytes(record)
         records.append({'timer': 'AB'[timer], 'result_hex': bytes(record).hex()})
-    result[64:72] = bytes([0, 0, 0x87, 0x84] * 2)
+    result[64:72] = bytes(8)
     return bytes(result), records
 
 
@@ -47,13 +47,13 @@ def build(update=False):
         'firmware_sha256': sha(firmware),
         'specifications': [
             'Yamaha YM2608 Application Manual sections 2-2-1 (page 19) and 2-8-3 (page 36)',
-            'Intel 8259A datasheet: interrupt acknowledgement, IRR/ISR and normal EOI',
+            'Intel 8259A datasheet: edge-triggered initialization, interrupt acknowledgement, IRR/ISR and normal EOI',
         ],
         'host': 'Mount, step, reset and read outputs only; no flag, interrupt or result injection',
         'result_address': '0x8000',
         'result_length': len(result),
         'result_hex': result.hex(),
-        'result_layout': '8001=4 actual vector-1Ch handler entries; 8010..801f=Timer A, 8020..802f=Timer B; 8040..8047=master/slave poll acknowledgements (00,00 suppressed; 87,84 enabled, per timer); all other bytes A5',
+        'result_layout': '8001=4 actual vector-1Ch handler entries; 8010..801f=Timer A, 8020..802f=Timer B; 8040..8047=master/slave poll bytes (all eight zero, suppressed and held-enabled paths per timer); all other bytes A5',
         'record_layout': ['suppressed status', 'repeated status', 'suppressed IRR4',
                           'enabled pending IRR4', 'device-suppressed retained IRR4',
                           'handler status', 'handler slave ISR', 'handler master ISR',
@@ -62,7 +62,7 @@ def build(update=False):
                           'cumulative handler count', 'recovery post-EOI IRR4'],
         'records': records,
         'guards': '8000,8002..800f,8030..803f,8048..807f remain A5; guest and hosts compare all 128 bytes; guest checks SP=7c00',
-        'irq_contract': 'Each timer overflows while suppressed, status remains readable and PIC clean; enabling pending flag latches slave IR4; suppression retains request; actual vector-1Ch handler observes ISR4/master ISR7, clears flags with 27h, EOIs both; new overflow and enable recovers with output enabled at CPU entry; handler suppresses/clears the source and drains the scheduler-retained request with PIC poll acknowledgement and EOIs. Guest explicitly sets slave vector base=18h.',
+        'irq_contract': 'Each timer overflows while suppressed, status remains readable and PIC clean; enabling pending flag latches slave IR4; suppression retains request; actual vector-1Ch handler observes ISR4/master ISR7 and EOIs both; new overflow and enable recovers with output enabled at CPU entry; handler retains enabled assertion across both normal EOIs and a bounded 128-iteration guest delay; master/slave polling must return zero (checked immediately) before source suppression/27h flag clearing, with no cleanup EOI pair. Guest explicitly sets slave vector base=18h.',
         'markers': ['OPNA IRQ PASS', 'OPNA IRQ FAIL'],
         'media': 'Unchanged floppy; no guest disk writes',
         'slot_budget': 500_000,

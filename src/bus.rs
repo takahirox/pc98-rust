@@ -12,6 +12,7 @@ pub struct Bus {
     pub graphics: Vec<u8>,
     pub pics: [Pic; 2],
     slave_int: bool,
+    sound_irq: bool,
     pub pit: Pit,
     pub rtc: crate::rtc::Rtc,
     pub opn: crate::sound::Opn,
@@ -90,6 +91,7 @@ impl Bus {
             ],
             pics: [Pic::new(8), Pic::new(0x10)],
             slave_int: false,
+            sound_irq: false,
             pit: Pit::default(),
             rtc: crate::rtc::Rtc::default(),
             opn: crate::sound::Opn::default(),
@@ -309,9 +311,7 @@ impl Bus {
         }
         if self.profile == Profile::Pc9821ApDos {
             self.opn.tick(cycles);
-            if self.opn.irq() || (self.pcm.irq && self.pcm.control & 32 != 0) {
-                self.pics[1].request(4);
-            }
+            self.sync_sound_irq();
         }
         if self.vsync_armed && self.cycles / 133_333 != old_frame {
             self.pics[0].request(2);
@@ -325,7 +325,10 @@ impl Bus {
         while self.audio_fraction >= 8_000_000 {
             self.audio_fraction -= 8_000_000;
             let fm = if self.profile == Profile::Pc9821ApDos {
-                self.opn.sample() + self.pcm.sample()
+                let sample = self.opn.sample() + self.pcm.sample();
+                // PCM threshold IRQs arise during FIFO consumption.
+                self.sync_sound_irq();
+                sample
             } else {
                 0.0
             };
@@ -357,6 +360,15 @@ impl Bus {
             }
         }
         self.sync_cascade();
+    }
+    // One edge detector for the combined Ap sound wire, independent of IRR/ISR.
+    // Keep its history across PIC initialization: a held input is not a new edge.
+    fn sync_sound_irq(&mut self) {
+        let asserted = self.opn.irq() || (self.pcm.irq && self.pcm.control & 0x20 != 0);
+        if asserted && !self.sound_irq {
+            self.pics[1].request(4);
+        }
+        self.sound_irq = asserted;
     }
     // Fixed PC-98 wiring: latch rising slave INT edges even with CPU IF clear.
     // A master poll leaves slave acknowledgement to a separate port read.
@@ -727,7 +739,9 @@ impl Bus {
                 self.opn.address = v
             }
             0x18a if self.profile == Profile::Pc9821ApDos && self.pcm.mask & 2 == 0 => {
-                self.opn.write(v)
+                self.opn.write(v);
+                self.sync_sound_irq();
+                self.sync_cascade();
             }
             0x18c if self.profile == Profile::Pc9821ApDos && self.pcm.mask & 3 == 1 => {
                 self.opn.bank_address = v
@@ -736,7 +750,9 @@ impl Bus {
                 self.opn.write_bank(v)
             }
             0xa460 | 0xa466 | 0xa468 | 0xa46a | 0xa46c if self.profile == Profile::Pc9821ApDos => {
-                self.pcm.output(p, v)
+                self.pcm.output(p, v);
+                self.sync_sound_irq();
+                self.sync_cascade();
             }
             0x40 | 0x50 | 0x52 | 0x5f | 0xbe | 0x188 | 0x18a => {}
             0xf0 => self.firmware_request = true,
