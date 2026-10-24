@@ -13,6 +13,7 @@ pub struct Bus {
     pub pics: [Pic; 2],
     slave_int: bool,
     sound_irq: bool,
+    ide_irq: bool,
     pub pit: Pit,
     pub rtc: crate::rtc::Rtc,
     pub opn: crate::sound::Opn,
@@ -92,6 +93,7 @@ impl Bus {
             pics: [Pic::new(8), Pic::new(0x10)],
             slave_int: false,
             sound_irq: false,
+            ide_irq: false,
             pit: Pit::default(),
             rtc: crate::rtc::Rtc::default(),
             opn: crate::sound::Opn::default(),
@@ -306,8 +308,8 @@ impl Bus {
         if self.mouse.tick(cycles) {
             self.pics[1].request(5);
         }
-        if self.profile == Profile::Pc9821ApDos && self.ide.irq_enabled() {
-            self.pics[1].request(1);
+        if self.profile == Profile::Pc9821ApDos {
+            self.sync_ide_irq();
         }
         if self.profile == Profile::Pc9821ApDos {
             self.opn.tick(cycles);
@@ -360,6 +362,15 @@ impl Bus {
             }
         }
         self.sync_cascade();
+    }
+    // Track the Ap IDE input independently of PIC IRR/ISR, including through
+    // PIC initialization. Only an inactive-to-active transition captures IR1.
+    fn sync_ide_irq(&mut self) {
+        let asserted = self.ide.irq_enabled();
+        if asserted && !self.ide_irq {
+            self.pics[1].request(1);
+        }
+        self.ide_irq = asserted;
     }
     // One edge detector for the combined Ap sound wire, independent of IRR/ISR.
     // Keep its history across PIC initialization: a held input is not a new edge.
@@ -427,7 +438,12 @@ impl Bus {
             | 0x74e
                 if self.profile == Profile::Pc9821ApDos =>
             {
-                self.ide.input(p)
+                let value = self.ide.input(p);
+                // Primary status drops INTRQ; the last data byte may raise the
+                // next sector IRQ. Observe both even without a clock tick.
+                self.sync_ide_irq();
+                self.sync_cascade();
+                value
             }
             1..=0x11 if p & 1 != 0 => self.dma.read(p),
             0x31 => 0x7b,
@@ -572,7 +588,15 @@ impl Bus {
             | 0x74c
                 if self.profile == Profile::Pc9821ApDos =>
             {
-                self.ide.output(p, v)
+                if p == 0x64e {
+                    // Command acceptance clears pending INTRQ before the
+                    // synchronous command implementation can raise it again.
+                    self.ide_irq = false;
+                }
+                self.ide.output(p, v);
+                // Includes nIEN/SRST, commands and WRITE sector boundaries.
+                self.sync_ide_irq();
+                self.sync_cascade();
             }
             1..=0x29 if p & 1 != 0 => self.dma.write(p, v),
             0x35 => {

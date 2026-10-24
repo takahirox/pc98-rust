@@ -91,10 +91,25 @@ out dx, al
 dec bp
 jnz .next
 
-; All CPU interrupts stay disabled. Observe the slave PIC separately from the
-; device latch: status acknowledgement cannot remove a previously latched IR1.
+; Normal-EOI edge-triggered cascade, IDE routed to INT 11h.
+mov al, 0x11
+out 0, al
+out 8, al
+mov al, 8
+out 2, al
+mov al, 0x10
+out 10, al
+mov al, 0x80
+out 2, al
+mov al, 7
+out 10, al
+mov al, 1
+out 2, al
+out 10, al
+mov al, 0x7f
+out 2, al
 mov al, 0xfd
-out 0x0a, al
+out 10, al
 mov dx, 0x74c
 xor al, al
 out dx, al
@@ -107,11 +122,17 @@ mov dx, 0x74c
 in al, dx
 cmp al, 0x50
 jne fail
-call drain                    ; PIC acknowledgement while device latch persists
-call irr                      ; alternate status must allow IR1 to relatch
+call drain                    ; poll/EOI while device latch remains asserted
+call irr                      ; a held input cannot relatch
 mov [es:0x8002], al
-cmp al, 2
+cmp al, 0
 jne fail
+; A real nIEN output transition exposes the still-pending interrupt again.
+mov dx, 0x74c
+mov al, 2
+out dx, al
+xor al, al
+out dx, al
 mov dx, 0x64e
 in al, dx
 cmp al, 0x50
@@ -149,6 +170,18 @@ call drain
 call irr
 mov [es:0x8007], al
 cmp al, 0
+jne fail
+; Execute the actual INT 11h handler twice, leaving INTRQ held through both
+; EOIs and bounded guest clocks. Primary status then permits genuine recovery.
+mov word [es:0x11*4], handler
+mov ax, cs
+mov [es:0x11*4+2], ax
+mov byte [es:0x8009], 0
+call issue
+call deliver
+call issue
+call deliver
+cmp byte [es:0x8009], 2
 jne fail
 ; A subsequent valid IDENTIFY, then READ: guest checks geometry and reads all
 ; data without altering media. Native tests separately exercise WRITE recovery.
@@ -211,8 +244,8 @@ mov byte [es:0x8008], 1
 ; Check all guards, including the entire unused result tail, before PASS.
 mov bx, 0x8000
 call guard
-mov bx, 0x8009
-mov cx, 7
+mov bx, 0x800c
+mov cx, 4
 .guard_prefix:
 call guard
 inc bx
@@ -260,13 +293,84 @@ and al, 2
 ret
 drain:
 mov al, 0x0c
+out 0, al
+in al, 0
+cmp al, 0x87
+jne fail
+mov al, 0x0c
 out 8, al
 in al, 8
 cmp al, 0x81
 jne fail
+call quiet                    ; no duplicate during service
 mov al, 0x20
 out 8, al
+out 0, al
+call quiet                    ; no duplicate after normal EOIs
 ret
+quiet:
+push cx
+mov cx, 128
+.wait:
+call irr
+cmp al, 0
+jne fail
+mov al, 0x0a
+out 0, al
+in al, 0
+and al, 0x80
+jnz fail
+loop .wait
+pop cx
+ret
+deliver:
+mov bl, [es:0x8009]
+mov cx, 4096
+sti
+.wait:
+cmp bl, [es:0x8009]
+jne .done
+loop .wait
+cli
+jmp fail
+.done:
+cli
+ret
+handler:
+push ax
+push dx
+push cx
+mov al, 0x0b
+out 8, al
+in al, 8
+mov [es:0x800a], al
+cmp al, 2
+jne fail
+mov al, 0x0b
+out 0, al
+in al, 0
+mov [es:0x800b], al
+cmp al, 0x80
+jne fail
+mov dx, 0x74c
+in al, dx
+cmp al, 0x50
+jne fail
+call quiet
+mov al, 0x20
+out 8, al
+out 0, al
+call quiet
+; The held device is acknowledged only after both silence observations.
+mov dx, 0x64e
+in al, dx
+cmp al, 0x50
+jne fail
+inc byte [es:0x8009]
+pop cx
+pop dx
+pop ax
+iret
 fail:
 mov si, fail_text
 report:

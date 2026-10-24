@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 
 for (const [profile, name] of [['1', 'Ap']]) {
-  test(`${name}: IDE VERIFY legacy completion and first-error residuals before and after reset`, async ({ page }) => {
+  test(`${name}: IDE VERIFY edge IRQ silence, cascade recovery and task-file results before and after reset`, async ({ page }) => {
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => {
@@ -20,6 +20,7 @@ for (const [profile, name] of [['1', 'Ap']]) {
     const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/ide-verify-manifest.json', import.meta.url)));
     expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
     const expected = [...Buffer.from(manifest.result_hex, 'hex')];
+    expect(expected.slice(1, 12)).toEqual([2, 0, 2, 0, 0, 2, 0, 1, 2, 2, 0x80]);
     await page.locator('#drive').selectOption({ value: '2' });
     await page.locator('#file').setInputFiles({ name: 'ide_verify.hdi', mimeType: 'application/octet-stream', buffer: image });
     for (let run = 0; run < 2; run++) {

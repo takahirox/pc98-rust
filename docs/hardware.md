@@ -930,16 +930,30 @@ device IRQ latch; primary-status reads clear it. nIEN suppresses delivery while
 retaining the latch. An already latched slave PIC IR1 request survives device
 acknowledgement and requires its own PIC acknowledgement/EOI.
 
+The Ap IDE wire latches slave IR1 only on inactive-to-active enabled INTRQ.
+Its input history is independent of PIC IRR/ISR and survives PIC initialization:
+acknowledgement, EOI and initialization cannot turn a held input into a new edge.
+Machine reset recreates both the device and wire history coherently. Port side
+effects are sampled immediately, including primary status, nIEN/SRST and PIO
+sector boundaries, so consecutive operations between clock ticks retain edges.
+SRST clears pending state; nIEN retains it, and re-enabling a pending output forms
+a genuine edge. This follows
+[Intel 8259A, initialization and edge-triggered modes, printed pp. 9 and 17](https://courses.cs.washington.edu/courses/cse451/25wi/documentation/8259A.pdf)
+and [T13/1321D revision 3, §§6.3, 7.3, 7.9 and 7.15](https://www.seagate.com/support/disc/manuals/ata/d1153r17.pdf)
+(the linked file is an ATA/ATAPI-5 working draft despite its filename).
+
 Original [Rust tests](../tests/hdd.rs) cover both opcodes/modes, counts 1/2/255/256,
 CHS transitions, LBA carry, final-sector success, invalid addresses, inclusive
 residuals, recovery, IRQ/nIEN, byte-identical media and subsequent IDENTIFY/read/write.
 The MIT [guest probe](../guest/ide_verify.asm) independently checks 46 literal
-result records, IRQ observations, recovery and guards before PASS. Its
+result records, bounded held-input silence during service and after normal EOIs,
+IRQ observations, two actual INT 11h entries through the cascade, recovery and
+guards before PASS. Its
 [manifest](../fixtures/ide-verify-manifest.json) pins offline assembly, source,
 boot/image/synthetic-firmware hashes, geometry, exact oracle bytes and a
 500,000-slot budget. Native and production release-Wasm tests boot the identical
 HDI before/after reset at both browser roots; see
-[validation evidence](validation.md#issue-71-ide-read-verify-2026-10-24).
+[validation evidence](validation.md#issue-77-ap-ide-irq-edges-2026-10-24).
 
 IDE remains **partial**. Completed 256-sector PIO transfers, READ/WRITE final
 addresses and error residuals, and fuller reset, nIEN and device/error interactions
