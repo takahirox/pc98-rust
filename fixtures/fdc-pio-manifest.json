@@ -1,0 +1,43 @@
+{
+  "source": "guest/fdc_pio.asm",
+  "license": "MIT; original source, synthetic firmware source and LICENSE copied alongside image",
+  "assembly": "nasm -f bin guest/fdc_pio.asm -o fdc_pio.bin",
+  "source_sha256": "cc3b218726beb95ce9ca047587b25e154def59cd397ed040a5e21026127e4f04",
+  "boot_sha256": "ca7002ed746388db64f8a5954ef189afac0e5091f884908c702228678c9a096f",
+  "image": "fixtures/fdc_pio/fdc_pio.hdm",
+  "image_sha256": "7c2e1aa598c19078511a824728e521e813a45c4f3267723f1839bcb0ba1ba450",
+  "firmware_source": "guest/firmware.asm",
+  "firmware_source_sha256": "3dc8969cddb750912c267ee5012dce2382cfe1b23115d0eb5c22e87a66ebc4db",
+  "firmware_sha256": "64a9985dc777a515780515f4453320f9aedcdd44659b3f9622cad47712baddf8",
+  "geometry": "77 cylinders, 2 heads, 8 sectors, 1024 bytes per sector",
+  "profiles": [
+    "VM",
+    "Ap"
+  ],
+  "provenance": "Original source-built bare-metal probe; no acquired binary, commercial ROM, DOS or copied emulator implementation",
+  "contract": "Raw SPECIFY ND=1 and MFM READ DATA sectors 2..3; masked channel 2 AND disabled DMA controller; actual INT 13h handler distinguishes EXM data and result requests, collects payload and results, reads cascade ISRs, EOIs both PICs; guest validates all payload/results/guards and SP before PASS",
+  "specifications": [
+    "NEC uPD765 specification, processor interface and READ DATA functional description; Table 2 applies only to processor/TC termination",
+    "NEC uPD765A/B Tables 2-4: EXM/DIO/RQM/CB, ST0 abnormal, ST1 EN/OR, result order",
+    "NEC Application Note 8, page 2: MFM normal 16 us byte interval, worst-case 13 us service time"
+  ],
+  "result_address": "0x8000",
+  "result_length": 64,
+  "result_hex": "a50100080880009801a5a5a5a5a5a5a540800000000303a5d0d0800000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+  "result_layout": "8001=done; 8002 word=2048 data IRQs; 8004/5=slave/master ISR aggregates 08/80; 8006 word=9800 payload end; 8008=1 result IRQ; 8010..16=40 80 00 00 00 03 03; 8018..1c=MSR before/after first/after last result and post-EOI ISRs: d0 d0 80 00 00; remaining record bytes A5",
+  "payload_address": "0x9000",
+  "payload_length": 2048,
+  "payload_sha256": "83a7022ac89ee17549b3774261248c94c4ce43481f3a3c92b68e0f1e16cb8016",
+  "payload_pattern": "(i ^ (i >> 8)) & 255 for i in range(2048)",
+  "guards": "Record A5 bytes, entire 8040..8fff and 9800..980f must remain A5; guest validates each; hosts compare records, complete payload, both adjacent 16-byte guards and unchanged full media",
+  "termination": "EOT without TC: abnormal ST0=40, ST1.EN=80, ST2=0, final sector ID 00 00 03 03; not the C+1/R=1 processor-termination row",
+  "markers": [
+    "FDC PIO PASS",
+    "FDC PIO FAIL"
+  ],
+  "host": "Mount, step, inspect and reset only; no host-supplied guest results or IRQs",
+  "media": "Complete unchanged exported floppy; zero writes",
+  "slot_budget": 2000000,
+  "reset": "Same image, result, payload and guard expectations before/after Machine reset",
+  "distribution": "Test only; excluded from web/"
+}

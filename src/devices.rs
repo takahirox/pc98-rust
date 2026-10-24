@@ -776,13 +776,45 @@ pub struct Fdc {
     pub writes: u64,
     pub pending: bool,
     pub delay: u32,
+    pub(crate) non_dma: bool,
+    pub(crate) pio: Option<FdcRead>,
+    pub(crate) irq: bool,
+}
+// One sector at a time; the bus resolves the next CHRN against mounted media.
+#[derive(Clone)]
+pub(crate) struct FdcRead {
+    pub drive: u8,
+    pub c: u8,
+    pub h: u8,
+    pub r: u8,
+    pub n: u8,
+    pub eot: u8,
+    pub offset: usize,
+    pub len: usize,
+    pub pos: usize,
+    pub ready: bool,
+    pub delay: u32,
 }
 impl Fdc {
+    // Deterministic 500 kbit/s MFM approximation at the 8 MHz guest clock:
+    // byte arrivals every 16 us, service required within 13 us of arrival.
+    pub(crate) const BYTE_CLOCKS: u32 = 128;
+    pub(crate) const SERVICE_CLOCKS: u32 = 104;
     pub fn seek_result(&mut self, status: u8, cylinder: u8) {
         self.sense.retain(|(s, _)| s & 3 != status & 3);
         self.sense.push_back((status, cylinder));
     }
     pub fn status(&self) -> u8 {
+        if let Some(pio) = &self.pio {
+            return 0x70 | if pio.ready { 0x80 } else { 0 };
+        }
+        if self.pending {
+            return if self.non_dma && self.command[0] & 31 == 6 {
+                0x70
+            } else {
+                0x90
+            };
+        }
         0x80 | if !self.result.is_empty() {
             0x50
         } else if !self.command.is_empty() {
