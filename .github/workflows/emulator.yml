@@ -30,6 +30,7 @@ jobs:
       - run: python3 tools/prepare_pic_fixture.py
       - run: python3 tools/prepare_pic_smm_fixture.py
       - run: python3 tools/prepare_pic_poll_fixture.py
+      - run: python3 tools/prepare_pic_single_fixture.py
       - run: python3 tools/prepare_fdc_pio_fixture.py
       - run: python3 tools/prepare_fdc_write_fixture.py
       - run: python3 tools/prepare_fdc_write_multi_fixture.py

@@ -522,7 +522,7 @@ this table is not a claim of complete chip emulation.
 
 | Ports (hex) | Device and supported behavior | IRQ / notes |
 | --- | --- | --- |
-| `00,02`; `08,0A` | Master/slave 8259: existing ICW path, masks, IRR/ISR, OCW2 programmable/rotating priority, specific/nonspecific EOI, auto EOI, automatic rotation, OCW3 special-mask mode and normal-EOI polling | Master IR7 cascades slave; each controller resolves its own priority and ISR blocking |
+| `00,02`; `08,0A` | Master/slave 8259: SNGL/IC4 initialization, masks, IRR/ISR, OCW2 programmable/rotating priority, specific/nonspecific EOI, auto EOI, automatic rotation, OCW3 special-mask mode and normal-EOI polling | Master IR7 cascades slave unless SNGL selects local delivery; each controller resolves its own priority and ISR blocking |
 | `01–0F` odd, `11–1F` odd, `21,23,25,27` | 8237 address/count flip-flop, controller disable, channel masks, direction/decrement, terminal count and auto-init reload, master clear, bank registers | FDC uses channel 2; count/address change with actual byte transfers |
 | `31,33,35,37` | PPI startup inputs, output C, bit set/reset, active-low beep gate | Input straps are fixed VM-profile constants; Ap RTC DATA OUT replaces bit 0 of 33h |
 | `41,43` | Keyboard byte FIFO, ready status, command acknowledgements, down/up scan bytes | IR1 / INT 09; firmware maintains BIOS ring, held-key bitmap and modifier state |
@@ -537,6 +537,56 @@ this table is not a claim of complete chip emulation.
 | `BE` | Fixed 1 MB floppy interface selection | No alternate 640 KB controller at C8/CA |
 | `40,5C,5E,64,6E` | Fixed system/display inputs and deterministic clock status | See `Bus::input`; VM has no RTC serial protocol |
 | `F0` | Private synthetic-firmware thunk ABI, accepted only from its ROM stubs | Not a guest DOS API or claim of a real VM hardware port |
+
+### 8259A single-mode initialization and 8086 delivery
+
+At both controllers' command/data ports, a fresh ICW1 (D4=1) restarts
+initialization at any stage. ICW1.SNGL (D1) controls ICW3 consumption;
+ICW1.IC4 (D0) controls ICW4 consumption:
+
+| SNGL | IC4 | Initialization data writes after ICW1 |
+| --- | --- | --- |
+| 0 | 0 | ICW2, ICW3 |
+| 0 | 1 | ICW2, ICW3, ICW4 |
+| 1 | 0 | ICW2 |
+| 1 | 1 | ICW2, ICW4 |
+
+The next and all subsequent data writes are OCW1 masks. ICW2 retains bits 7:3;
+the supported 8086 vector is `(ICW2 & F8h) | local_irq`. ICW4.D1 selects AEOI:
+normal acknowledgement consumes IRR and retains ISR until EOI, while AEOI
+consumes IRR without retaining ISR. IC4=0 leaves AEOI disabled; acceptance of
+that sequence does not implement MCS-80/85 interrupt output.
+
+ICW1 preserves the existing initialization policy: clear IRR/ISR/IMR, disable
+AEOI/rotation/special-mask mode, restore fixed priority and IRR readback, and
+cancel any armed poll. Construction and Machine reset retain the existing
+masked, cascade-mode defaults and vector bases 08h/10h. Programming one
+controller does not initialize the other.
+
+SNGL on the master makes IR7 a local acknowledgement returning its own vector;
+it does not acknowledge the slave or drop its physical INT history. Fixed
+slave INT → master IR7 wiring still captures rising edges, including while IF
+is clear. Held slave INT remains held across local acknowledgement, master EOI,
+ticks, port operations and PIC initialization, so it cannot repeatedly latch
+IR7. An observed deassertion followed by reassertion captures a new edge.
+Software can separately poll/acknowledge the slave. With quiescent inputs,
+reinitializing ordinary cascade mode restores slave vector delivery and separate
+normal-EOI obligations on both controllers.
+
+The reference is [Intel 8259A, interrupt sequence/vector format and initialization
+Figures 6–7, printed pp. 7–11](https://www.scs.stanford.edu/11wi-cs140/pintos/specs/8259A.pdf#page=7).
+Original [native tests](../tests/pic.rs) cover all four sequences at both port
+pairs, masks, vector alignment, all local IRQs, normal/AEOI delivery, held/new
+slave INT edges, reinitialization/restarts, poll cancellation, isolation and reset.
+The original MIT [guest probe](../guest/pic_single.asm) uses guest PIT/FDC I/O
+and real hardware interrupt entry/IRET to check single-mode normal/AEOI PIT,
+local IR7 with an untouched pending slave, held INT, separate slave drain, then
+restored cascading. The [manifest](../fixtures/pic-single-manifest.json) pins
+source/license, assembly command, source/boot/image hashes, 64 exact result/guard
+bytes and the 2,000,000-slot budget. The same image is checked natively and in
+production release-Wasm, on VM/Ap before/after reset and at both browser roots.
+See [validation evidence](validation.md#issue-91-8259a-single-mode-initialization-and-delivery-2026-10-24).
+PIC remains partial; the limitations listed below still apply.
 
 ### 8259A OCW2 priority subset
 
@@ -570,7 +620,8 @@ Construction and Machine reset deterministically start with IR0 highest, IR7
 lowest and automatic rotation disabled. This is the emulator's initialization
 policy, rather than a model of uninitialized chip power-on state. ICW1 restores
 that priority/rotation state, clears AEOI pending ICW4, and selects IRR readback.
-The existing ICW sequencing and fixed master-IR7 cascade abstraction are retained.
+ICW sequencing honors SNGL and IC4 as specified above; physical master-IR7
+wiring is retained.
 Slave delivery sets ISR independently on both controllers in normal EOI mode;
 each requires its own EOI, and pending requests survive deferral.
 
@@ -661,7 +712,7 @@ and guards. See [validation evidence](validation.md#issue-63-8259a-ocw3-polling-
 
 PIC remains **partial**. Polling with AEOI/automatic rotation, concurrent CPU
 acknowledgement while a poll is armed, special fully nested mode,
-general ICW sequencing/SNGL/ICW3 configuration, alternate cascade wiring, edge/level
+programmable ICW3 routing, MCS-80/85 interrupt output, alternate cascade wiring, edge/level
 electrical modeling and spurious-interrupt fidelity remain outside this subset.
 These bounded checks do not establish full hardware accuracy or commercial
 software compatibility.
