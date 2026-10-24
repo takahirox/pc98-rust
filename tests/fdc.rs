@@ -92,14 +92,20 @@ fn read_payload(b: &mut Bus, expected: &[u8]) {
 // Original normal MFM D88 tracks. Parser, commands and clocks are the only
 // entry points; no execution state or PIC requests are injected.
 fn patterned_d88(n: u8) -> Vec<u8> {
+    patterned_d88_cylinders(n, 1)
+}
+
+fn patterned_d88_cylinders(n: u8, cylinders: u8) -> Vec<u8> {
     let mut image = vec![0; 0x2a0];
     image[0x1b] = 0x20;
-    for h in 0..2u8 {
+    for track in 0..cylinders * 2 {
+        let (c, h) = (track / 2, track % 2);
         let offset = image.len() as u32;
-        image[0x20 + h as usize * 4..0x24 + h as usize * 4].copy_from_slice(&offset.to_le_bytes());
+        image[0x20 + track as usize * 4..0x24 + track as usize * 4]
+            .copy_from_slice(&offset.to_le_bytes());
         for r in 1..=3u8 {
             let mut header = [0; 16];
-            header[..6].copy_from_slice(&[0, h, r, n, 3, 0]);
+            header[..6].copy_from_slice(&[c, h, r, n, 3, 0]);
             let len = 128u16 << n;
             header[14..].copy_from_slice(&len.to_le_bytes());
             image.extend(header);
@@ -631,6 +637,11 @@ fn write_command(drive: u8, h: u8, r: u8, n: u8) -> [u8; 9] {
 }
 
 fn write_payload(b: &mut Bus, payload: &[u8]) {
+    write_execution_bytes(b, payload);
+    b.tick(128);
+}
+
+fn write_execution_bytes(b: &mut Bus, payload: &[u8]) {
     for &byte in payload {
         assert_eq!(b.input(0x90), 0x30);
         b.output(0x92, !byte); // early/duplicate writes cannot become parameters
@@ -645,7 +656,6 @@ fn write_payload(b: &mut Bus, payload: &[u8]) {
         assert_eq!(b.input(0x90), 0x30);
         b.output(0x92, !byte);
     }
-    b.tick(128);
 }
 
 #[test]
@@ -814,9 +824,9 @@ fn nd_write_each_byte_and_distinct_result_use_real_pic_and_eoi() {
         let mut b = setup(profile);
         b.output(2, 0x7f);
         b.output(10, 0xf7);
-        command(&mut b, &write_command(0, 0, 2, 3));
+        command(&mut b, &[0x45, 0, 0, 0, 2, 3, 3, 0x1b, 1]);
         assert_eq!(b.irq(), None);
-        for i in 0..1024 {
+        for i in 0..2048 {
             b.tick(if i == 0 { 128 } else { 127 });
             assert_eq!(b.irq(), Some(0x13));
             assert_eq!((b.pics[0].isr, b.pics[1].isr), (0x80, 8));
@@ -845,7 +855,7 @@ fn nd_write_each_byte_and_distinct_result_use_real_pic_and_eoi() {
         eoi(&mut b);
         b.tick(1000);
         assert_eq!(b.irq(), None);
-        for byte in [0x80, 0, 0, 0, 2, 3] {
+        for byte in [0x80, 0, 0, 0, 3, 3] {
             assert_eq!(b.input(0x92), byte);
         }
         assert_eq!(b.input(0x90), 0x80);
@@ -891,7 +901,7 @@ fn nd_write_errors_unsupported_variants_reset_and_eject() {
             (5, 4),
             (3, 1),
             (4, 0),
-            (6, 3),
+            (6, 1), // R>EOT remains invalid
         ] {
             let mut bytes = write_command(0, 0, 2, 3);
             bytes[index] = value;
@@ -1053,12 +1063,14 @@ fn nd_write_isolates_all_dma_state_then_bios_readback_and_pio_reentry() {
             b.output(0x11, if disabled { 4 } else { 0 });
             b.input(9);
             let mut expected = b.dma.clone();
-            b.mem[0x28ff0..0x29410].fill(0xa5);
-            let payload: Vec<_> = (0..1024).map(|i| (i * 29 + 71) as u8).collect();
-            command(&mut b, &write_command(0, 0, 2, 3));
+            b.mem[0x28ff0..0x29810].fill(0xa5);
+            let payload: Vec<_> = (0..2048)
+                .map(|i| (i * 29 + 71 + i / 1024 * 91) as u8)
+                .collect();
+            command(&mut b, &[0x45, 0, 0, 0, 2, 3, 3, 0x1b, 1]);
             write_payload(&mut b, &payload);
-            assert_eq!(results(&mut b), [0x40, 0x80, 0, 0, 0, 2, 3]);
-            assert!(b.mem[0x28ff0..0x29410].iter().all(|&v| v == 0xa5));
+            assert_eq!(results(&mut b), [0x40, 0x80, 0, 0, 0, 3, 3]);
+            assert!(b.mem[0x28ff0..0x29810].iter().all(|&v| v == 0xa5));
             assert_eq!(b.dma.addr, expected.addr);
             assert_eq!(b.dma.count, expected.count);
             assert_eq!(b.dma.page, expected.page);
@@ -1079,17 +1091,17 @@ fn nd_write_isolates_all_dma_state_then_bios_readback_and_pio_reentry() {
                 &mut b,
                 0,
                 [0, 0, 2, 3],
-                1024,
+                2048,
                 0x29000,
                 false
             ));
-            assert_eq!(&b.mem[0x29000..0x29400], &payload);
+            assert_eq!(&b.mem[0x29000..0x29800], &payload);
             assert_eq!(&b.mem[0x28ff0..0x29000], &[0xa5; 16]);
-            assert_eq!(&b.mem[0x29400..0x29410], &[0xa5; 16]);
+            assert_eq!(&b.mem[0x29800..0x29810], &[0xa5; 16]);
             command(&mut b, &[3, 0xdf, 3]);
-            command(&mut b, &write_command(0, 0, 2, 3));
+            command(&mut b, &[0x45, 0, 0, 0, 2, 3, 3, 0x1b, 1]);
             write_payload(&mut b, &payload);
-            assert_eq!(results(&mut b), [0x40, 0x80, 0, 0, 0, 2, 3]);
+            assert_eq!(results(&mut b), [0x40, 0x80, 0, 0, 0, 3, 3]);
         }
     }
 }
@@ -1168,5 +1180,419 @@ fn issue_83_write_data_requests_payload_instead_of_invalid_command() {
         b.output(0x92, 0x59);
         assert_eq!(b.input(0x90), 0x30);
         assert_eq!(b.disks[0].as_ref().unwrap().bytes[1024], 0x59);
+    }
+}
+
+#[test]
+fn issue_85_multi_sector_write_requests_payload_instead_of_invalid_command() {
+    for profile in PROFILES {
+        let mut b = setup(profile);
+        command(&mut b, &[0x45, 0, 0, 0, 2, 3, 3, 0x1b, 0xff]);
+        b.tick(128);
+        assert_eq!(b.input(0x90), 0xb0, "R=2/EOT=3 must request payload");
+        for i in 0..2048 {
+            if i != 0 {
+                b.tick(128);
+            }
+            assert_eq!(b.input(0x90), 0xb0);
+            b.output(0x92, (i / 1024 + i * 29) as u8);
+        }
+        b.tick(128);
+        assert_eq!(results(&mut b), [0x40, 0x80, 0, 0, 0, 3, 3]);
+        assert_eq!(b.fdc.writes, 2);
+    }
+}
+
+#[test]
+fn nd_write_multi_full_images_ranges_seek_and_physical_eot() {
+    for profile in PROFILES {
+        for (n, raw_len, spt) in [
+            (1, 0, 3),
+            (2, 0, 3),
+            (3, 0, 3),
+            (2, 655_360, 8),
+            (2, 1_228_800, 15),
+            (3, 1_261_568, 8),
+        ] {
+            let len = 128usize << n;
+            let image: Vec<u8> = if raw_len == 0 {
+                patterned_d88_cylinders(n, 3)
+            } else {
+                (0..raw_len).map(|i| (i ^ (i >> 8)) as u8).collect()
+            };
+            let name = if raw_len == 0 {
+                "original.d88"
+            } else {
+                "original.hdm"
+            };
+            for drive in 0..2u8 {
+                for h in 0..2u8 {
+                    for c in [0, 2u8] {
+                        for (first, eot) in [(2, 3), (1, spt)] {
+                            let mut b = setup(profile);
+                            for d in 0..2 {
+                                b.mount_floppy(d, Some(Disk::parse(image.clone(), name).unwrap()));
+                            }
+                            command(&mut b, &[15, drive | h << 2, c]);
+                            command(&mut b, &[8]);
+                            assert_eq!(b.input(0x92), 0x20 | drive);
+                            assert_eq!(b.input(0x92), c);
+                            let count = (eot - first + 1) as usize;
+                            let payload: Vec<_> = (0..count * len)
+                                .map(|i| (i * 29 + i / len * 91 + 71) as u8)
+                                .collect();
+                            let mut expected = image.clone();
+                            for sector in 0..count {
+                                // Independent layout oracle; no parsed sector offsets.
+                                let track = c as usize * 2 + h as usize;
+                                let r = first as usize + sector;
+                                let offset = if raw_len == 0 {
+                                    0x2a0 + (track * 3 + r - 1) * (16 + len) + 16
+                                } else {
+                                    (track * spt as usize + r - 1) * len
+                                };
+                                expected[offset..offset + len]
+                                    .copy_from_slice(&payload[sector * len..(sector + 1) * len]);
+                            }
+                            command(
+                                &mut b,
+                                &[0x45, drive | h << 2, c, h, first, n, eot, 0x1b, 1],
+                            );
+                            // This helper checks waiting/ready and wrong/early/duplicate
+                            // accesses for every byte, including every sector boundary.
+                            write_payload(&mut b, &payload);
+                            assert_eq!(
+                                results(&mut b),
+                                [0x40 | drive | h << 2, 0x80, 0, c, h, eot, n]
+                            );
+                            for d in 0..2 {
+                                let disk = b.disks[d].as_ref().unwrap();
+                                assert_eq!(
+                                    disk.bytes,
+                                    if d == drive as usize {
+                                        &expected
+                                    } else {
+                                        &image
+                                    }[..]
+                                );
+                                assert_eq!(
+                                    disk.writes,
+                                    if d == drive as usize { count as u64 } else { 0 }
+                                );
+                            }
+                            assert_eq!(b.fdc.writes, count as u64);
+                            assert_eq!(b.fdc.reads, 0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// A valid, original D88 whose third requested ID is absent or has a different
+// size. Build headers and lengths together rather than mutating parsed sectors.
+fn later_unavailable_d88(mismatch: bool) -> Vec<u8> {
+    let mut image = vec![0; 0x2a0];
+    image[0x1b] = 0x20;
+    for h in 0..2u8 {
+        let offset = image.len() as u32;
+        image[0x20 + h as usize * 4..0x24 + h as usize * 4].copy_from_slice(&offset.to_le_bytes());
+        for id in 1..=3u8 {
+            let r = if id == 3 && !mismatch { 4 } else { id };
+            let n = if id == 3 && mismatch { 2 } else { 3 };
+            let len = 128u16 << n;
+            let mut header = [0; 16];
+            header[..6].copy_from_slice(&[0, h, r, n, 3, 0]);
+            header[14..].copy_from_slice(&len.to_le_bytes());
+            image.extend(header);
+            image.extend((0..len).map(|i| (i as u8).wrapping_add(r * 17 + h * 61)));
+        }
+    }
+    let len = image.len() as u32;
+    image[0x1c..0x20].copy_from_slice(&len.to_le_bytes());
+    image
+}
+
+#[test]
+fn nd_write_multi_missing_later_id_size_mismatch_and_raw_track_end() {
+    for profile in PROFILES {
+        for kind in ["missing", "mismatch", "raw"] {
+            let (image, name, first, eot, offset, failing) = if kind == "raw" {
+                (patterned_raw(), "original.hdm", 7, 10, 6144, 9)
+            } else {
+                (
+                    later_unavailable_d88(kind == "mismatch"),
+                    "original.d88",
+                    1,
+                    3,
+                    0x2b0,
+                    3,
+                )
+            };
+            let mut b = setup(profile);
+            for d in 0..2 {
+                b.mount_floppy(d, Some(Disk::parse(image.clone(), name).unwrap()));
+            }
+            let payload: Vec<_> = (0..2048).map(|i| (i * 13 + i / 1024 * 71) as u8).collect();
+            command(&mut b, &[0x45, 0, 0, 0, first, 3, eot, 0x1b, 1]);
+            write_payload(&mut b, &payload);
+            assert_eq!(results(&mut b), [0x40, 4, 0, 0, 0, failing, 3]);
+            let mut expected = image.clone();
+            expected[offset..offset + 1024].copy_from_slice(&payload[..1024]);
+            let next = offset + 1024 + if kind == "raw" { 0 } else { 16 };
+            expected[next..next + 1024].copy_from_slice(&payload[1024..]);
+            assert_eq!(b.disks[0].as_ref().unwrap().bytes, expected);
+            assert_eq!(b.disks[0].as_ref().unwrap().writes, 2);
+            assert_eq!(b.fdc.writes, 2);
+            assert_eq!(b.disks[1].as_ref().unwrap().bytes, image);
+            assert_eq!(b.disks[1].as_ref().unwrap().writes, 0);
+            command(&mut b, &write_command(0, 0, first, 3));
+            write_payload(&mut b, &[0x59; 1024]);
+            assert_eq!(results(&mut b), [0x40, 0x80, 0, 0, 0, first, 3]);
+        }
+        let mut image = patterned_d88(3);
+        image[0x1a] = 0x10;
+        let mut b = setup(profile);
+        b.mount_floppy(
+            0,
+            Some(Disk::parse(image.clone(), "protected.d88").unwrap()),
+        );
+        command(&mut b, &[0x45, 0, 0, 0, 2, 3, 3, 0x1b, 1]);
+        assert_eq!(results(&mut b), [0x40, 2, 0, 0, 0, 2, 3]);
+        assert_eq!(b.disks[0].as_ref().unwrap().bytes, image);
+        assert_eq!(b.fdc.writes, 0);
+        b.mount_floppy(0, Some(Disk::parse(patterned_raw(), "new.hdm").unwrap()));
+        command(&mut b, &[0x45, 0, 0, 0, 2, 3, 3, 0x1b, 1]);
+        write_payload(&mut b, &[0x6a; 2048]);
+        assert_eq!(results(&mut b), [0x40, 0x80, 0, 0, 0, 3, 3]);
+    }
+}
+
+#[test]
+fn nd_write_multi_boundary_deadline_polling_and_tick_partitioning() {
+    for profile in PROFILES {
+        for d88 in [false, true] {
+            let image = if d88 {
+                patterned_d88(3)
+            } else {
+                patterned_raw()
+            };
+            let name = if d88 { "original.d88" } else { "original.hdm" };
+            let offset = if d88 { 0x2b0 + 1040 } else { 1024 };
+            let next = offset + 1024 + if d88 { 16 } else { 0 };
+            for prefix in [0, 7] {
+                for timeout in [false, true] {
+                    for chunks in [vec![128], vec![127, 1], vec![1; 128]] {
+                        let mut b = setup(profile);
+                        b.mount_floppy(0, Some(Disk::parse(image.clone(), name).unwrap()));
+                        command(&mut b, &[0x45, 0, 0, 0, 2, 3, 3, 0x1b, 1]);
+                        write_execution_bytes(&mut b, &[0x59; 1024]);
+                        write_execution_bytes(&mut b, &vec![0x6a; prefix]);
+                        for clocks in chunks {
+                            // Polling cannot advance the pending boundary.
+                            for _ in 0..10 {
+                                assert_eq!(b.input(0x90), 0x30);
+                                assert_eq!(b.input(0x92), 0x80);
+                            }
+                            b.tick(clocks);
+                        }
+                        assert_eq!(b.input(0x90), 0xb0);
+                        b.tick(103);
+                        for _ in 0..10 {
+                            assert_eq!(b.input(0x90), 0xb0);
+                            assert_eq!(b.input(0x92), 0x80);
+                        }
+                        if timeout {
+                            b.tick(1);
+                            b.output(0x92, 0xcc);
+                            assert_eq!(results(&mut b), [0x40, 0x10, 0, 0, 0, 3, 3]);
+                        } else {
+                            b.output(0x92, 0x7b);
+                            b.tick(24);
+                            assert_eq!(b.input(0x90), 0x30);
+                            b.tick(1);
+                            assert_eq!(b.input(0x90), 0xb0);
+                        }
+                        let mut expected = image.clone();
+                        expected[offset..offset + 1024].fill(0x59);
+                        expected[next..next + prefix].fill(0x6a);
+                        if !timeout {
+                            expected[next + prefix] = 0x7b;
+                        }
+                        assert_eq!(b.disks[0].as_ref().unwrap().bytes, expected);
+                        assert_eq!(b.fdc.writes, 1 + u64::from(prefix != 0 || !timeout));
+                        assert_eq!(b.disks[0].as_ref().unwrap().writes, b.fdc.writes);
+                    }
+                }
+                for chunks in [vec![232], vec![128, 103, 1], vec![1; 232], vec![1000]] {
+                    let mut b = setup(profile);
+                    b.mount_floppy(0, Some(Disk::parse(image.clone(), name).unwrap()));
+                    command(&mut b, &[0x45, 0, 0, 0, 2, 3, 3, 0x1b, 1]);
+                    write_execution_bytes(&mut b, &[0x59; 1024]);
+                    write_execution_bytes(&mut b, &vec![0x6a; prefix]);
+                    for clocks in chunks {
+                        b.tick(clocks);
+                    }
+                    assert_eq!(results(&mut b), [0x40, 0x10, 0, 0, 0, 3, 3]);
+                    let mut expected = image.clone();
+                    expected[offset..offset + 1024].fill(0x59);
+                    expected[next..next + prefix].fill(0x6a);
+                    assert_eq!(b.disks[0].as_ref().unwrap().bytes, expected);
+                    assert_eq!(b.fdc.writes, 1 + u64::from(prefix != 0));
+                    assert_eq!(b.disks[0].as_ref().unwrap().writes, b.fdc.writes);
+                    command(&mut b, &write_command(0, 0, 2, 3));
+                    write_payload(&mut b, &[0x7b; 1024]);
+                    assert_eq!(results(&mut b), [0x40, 0x80, 0, 0, 0, 2, 3]);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn nd_write_multi_reset_eject_and_replacement_retain_only_accepted_bytes() {
+    for profile in PROFILES {
+        for drive in 0..2 {
+            for d88 in [false, true] {
+                for prefix in [0, 7] {
+                    for ready in [false, true] {
+                        for action in ["reset", "eject", "replace"] {
+                            let mut b = setup(profile);
+                            let image = if d88 {
+                                patterned_d88(3)
+                            } else {
+                                patterned_raw()
+                            };
+                            let name = if d88 { "original.d88" } else { "original.hdm" };
+                            b.mount_floppy(drive, Some(Disk::parse(image.clone(), name).unwrap()));
+                            command(&mut b, &[0x45, drive as u8, 0, 0, 2, 3, 3, 0x1b, 1]);
+                            write_execution_bytes(&mut b, &[0x59; 1024]);
+                            write_execution_bytes(&mut b, &vec![0x6a; prefix]);
+                            if ready {
+                                b.tick(128);
+                            }
+                            // Changing the other drive preserves execution, whether waiting or ready.
+                            let other = patterned_d88(2);
+                            b.mount_floppy(
+                                1 - drive,
+                                Some(Disk::parse(other.clone(), "other.d88").unwrap()),
+                            );
+                            assert_eq!(b.input(0x90), if ready { 0xb0 } else { 0x30 });
+                            let mut expected = image;
+                            let offset = if d88 { 0x2b0 + 1040 } else { 1024 };
+                            expected[offset..offset + 1024].fill(0x59);
+                            let next = offset + 1024 + if d88 { 16 } else { 0 };
+                            expected[next..next + prefix].fill(0x6a);
+                            let writes = 1 + u64::from(prefix != 0);
+                            if action == "reset" {
+                                b.output(0x94, 0x98);
+                                b.output(0x94, 0x18);
+                                b.tick(1000);
+                                assert_eq!(b.input(0x90), 0x80);
+                                assert_eq!(b.disks[drive].as_ref().unwrap().bytes, expected);
+                                assert_eq!(b.disks[drive].as_ref().unwrap().writes, writes);
+                            } else {
+                                let replacement = patterned_d88(3);
+                                let old = b
+                                    .mount_floppy(
+                                        drive,
+                                        if action == "eject" {
+                                            None
+                                        } else {
+                                            Some(
+                                                Disk::parse(replacement.clone(), "new.d88")
+                                                    .unwrap(),
+                                            )
+                                        },
+                                    )
+                                    .unwrap();
+                                assert_eq!(old.bytes, expected);
+                                assert_eq!(old.writes, writes);
+                                // No tick between replacement and this stale payload write.
+                                b.output(0x92, 0xcc);
+                                b.tick(1000);
+                                let r = if prefix != 0 || ready { 3 } else { 2 };
+                                assert_eq!(results(&mut b), [0x40 | drive as u8, 4, 0, 0, 0, r, 3]);
+                                assert_eq!(b.fdc.writes, writes);
+                                if action == "replace" {
+                                    assert_eq!(b.disks[drive].as_ref().unwrap().bytes, replacement);
+                                    assert_eq!(b.disks[drive].as_ref().unwrap().writes, 0);
+                                    command(&mut b, &[0x45, drive as u8, 0, 0, 2, 3, 3, 0x1b, 1]);
+                                    write_payload(&mut b, &[0x7b; 2048]);
+                                    assert_eq!(
+                                        results(&mut b),
+                                        [0x40 | drive as u8, 0x80, 0, 0, 0, 3, 3]
+                                    );
+                                }
+                            }
+                            assert_eq!(b.disks[1 - drive].as_ref().unwrap().bytes, other);
+                            assert_eq!(b.disks[1 - drive].as_ref().unwrap().writes, 0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn original_interrupt_driven_multi_write_probe_before_and_after_reset() {
+    let image = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/fixtures/fdc_write_multi/fdc_write_multi.hdm"
+    ))
+    .expect("run python3 tools/prepare_fdc_write_multi_fixture.py");
+    let payload: Vec<_> = (0..2048)
+        .map(|i| (29 * i + 71 + i / 1024 * 91) as u8)
+        .collect();
+    let mut expected_media = image.clone();
+    expected_media[1024..3072].copy_from_slice(&payload);
+    let mut expected = [0xa5; 128];
+    for (base, end) in [(0, 0x98), (64, 0xa0)] {
+        expected[base + 1..base + 9].copy_from_slice(&[1, 0, 8, 8, 0x80, 0, end, 1]);
+        expected[base + 16..base + 23].copy_from_slice(&[0x40, 0x80, 0, 0, 0, 3, 3]);
+        expected[base + 24..base + 29].copy_from_slice(&[0xd0, 0xd0, 0x80, 0, 0]);
+    }
+    for profile in PROFILES {
+        let mut m = Machine::new(profile);
+        m.insert(0, image.clone(), "fdc_write_multi.hdm").unwrap();
+        for run in 0..2 {
+            if run != 0 {
+                m.reset();
+            }
+            let mut slots = 0;
+            while slots < 2_000_000 {
+                slots += m.step(1000);
+                assert!(m.error.is_none(), "{:?}", m.error);
+                let text = m.bus.text();
+                assert!(
+                    !text.contains("FAIL"),
+                    "{profile:?}: {text}; ip={:x} record={:02x?}",
+                    m.cpu.ip,
+                    &m.bus.mem[0x8000..0x8080]
+                );
+                if text.contains("FDC WRITE MULTI PASS") {
+                    break;
+                }
+            }
+            assert!(
+                m.bus.text().contains("FDC WRITE MULTI PASS"),
+                "{profile:?}: ip={:x} record={:02x?}",
+                m.cpu.ip,
+                &m.bus.mem[0x8000..0x8080]
+            );
+            assert!(slots <= 2_000_000);
+            assert_eq!(&m.bus.mem[0x8000..0x8080], &expected);
+            assert!(m.bus.mem[0x8080..0x9000].iter().all(|&v| v == 0xa5));
+            assert_eq!(&m.bus.mem[0x9000..0x9800], &payload);
+            assert_eq!(&m.bus.mem[0x9800..0xa000], &payload);
+            assert_eq!(&m.bus.mem[0xa000..0xa010], &[0xa5; 16]);
+            assert_eq!(m.cpu.r[pc98_rust::cpu::SP], 0x7c00);
+            assert_eq!(m.bus.disks[0].as_ref().unwrap().bytes, expected_media);
+            assert_eq!(m.bus.disks[0].as_ref().unwrap().writes, 2 * (run + 1));
+            assert_eq!(m.bus.fdc.writes, 2);
+            println!("{profile:?} FDC WRITE MULTI boot {run}: {slots} slots; 2048 write + 2048 read byte IRQs, two result IRQs");
+        }
     }
 }

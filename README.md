@@ -94,6 +94,7 @@ python3 tools/prepare_pic_smm_fixture.py
 python3 tools/prepare_pic_poll_fixture.py
 python3 tools/prepare_fdc_pio_fixture.py
 python3 tools/prepare_fdc_write_fixture.py
+python3 tools/prepare_fdc_write_multi_fixture.py
 python3 tools/prepare_fdc_bios_fixture.py
 python3 tools/prepare_pit_mode2_fixture.py
 python3 tools/prepare_pit_mode3_fixture.py
@@ -398,6 +399,17 @@ hosts require `FDC WRITE PASS`, exact whole-media changes and no errors. The
 [manifest](fixtures/fdc-write-manifest.json) pins source/license, assembly,
 firmware/image hashes and independent expectations. See the
 [write subset and prefix-retention policy](docs/hardware.md#fdc-non-dma-write-data).
+
+The separate original MIT [multi-sector write probe](guest/fdc_write_multi.asm)
+builds offline with `python3 tools/prepare_fdc_write_multi_fixture.py`. The same
+native/browser commands run it on VM and Ap before/after reset at both serving
+paths. One R=2/EOT=3 command writes distinct sectors, then one PIO command reads
+both back. The guest services exactly 2,048 byte interrupts per direction, one
+result interrupt per command, and both PIC EOIs; it checks records, guards and
+restored SP before `FDC WRITE MULTI PASS`. Hosts compare all records, payloads and
+complete exported media within 2,000,000 slots. The
+[manifest](fixtures/fdc-write-multi-manifest.json) pins provenance and independent
+expectations. See [Issue #85 validation](docs/validation.md#issue-85-single-head-multi-sector-fdc-non-dma-write-data).
 
 The original MIT [non-DMA FDC probe](guest/fdc_pio.asm) builds offline with
 `python3 tools/prepare_fdc_pio_fixture.py`. Run `cargo test --locked --test fdc`

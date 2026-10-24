@@ -966,7 +966,6 @@ impl Bus {
                 let (c, h, mut r, n, eot) = (p[2], p[3], p[4], p[5], p[6]);
                 if self.fdc.non_dma
                     && (!matches!(p[0], 0x45 | 0x46)
-                        || (op == 5 && r != eot)
                         || !(1..=3).contains(&n)
                         || h > 1
                         || (p[1] >> 2) & 1 != h
