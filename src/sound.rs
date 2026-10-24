@@ -1,5 +1,6 @@
 //! Original, sample-clocked OPN subset. No chip code or ROM tables are imported.
-//! Register contract: Yamaha YM2203 datasheet. Analog/envelope timing is approximate.
+//! Shared synthesis: Yamaha YM2203 datasheet; Ap IRQ/SCH: YM2608 register 29h.
+//! Analog/envelope timing is approximate. VM does not expose this sound core.
 use std::f64::consts::TAU;
 
 const CLOCK: u64 = 3_993_600;
@@ -35,6 +36,9 @@ impl Default for Opn {
     fn default() -> Self {
         let mut registers = [0; 512];
         registers[7] = 0xff;
+        // Ap YM2608: all five IRQ enables set, SCH clear at reset. Reserved
+        // D6:D5 reset to zero; writes retain them without assigning behavior.
+        registers[0x29] = 0x1f;
         Self {
             registers,
             address: 0,
@@ -61,7 +65,8 @@ impl Opn {
         self.status | if self.busy > 0 { 128 } else { 0 }
     }
     pub fn irq(&self) -> bool {
-        self.status & 3 != 0
+        // Register 29h gates output only; 27h owns timer flags and progression.
+        self.status & self.registers[0x29] & 3 != 0
     }
     pub fn write(&mut self, value: u8) {
         self.write_at(self.address as usize, value);
