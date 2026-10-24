@@ -4753,3 +4753,107 @@ bios, lio, integration; **implemented_unverified** grcg; **unimplemented** pagin
 None is verified. Protected execution, paging, numerical x87 and every other
 inventory gap remain required. Limited probes and six-game regressions establish
 neither full hardware accuracy nor commercial compatibility.
+
+## Issue #95: V30 ADD4S (2026-10-24)
+
+Implemented VM `0F 20` packed-BCD string addition for valid operands and CL=1..254.
+The worktree started at `12c0ae85e5aa7284123916c9a270a7d9f43541b6`, including
+GitWeave metadata after evaluation baseline `b8a7e415ee9758fc3b8ed2f73c78740d421f30df`.
+The original minimal reproduction was added and executed **before** production
+edits: `cargo test --locked --test core v30_add4s_minimal_reproduction` failed
+with exit 101, 0 passed/1 failed, and `unsupported V30 opcode 0F 20`. The unchanged
+reproduction passed after implementation: 09h+01h becomes 10h, CF=ZF=0, IP advances
+two bytes and the following NOP executes independently.
+
+The instruction uses existing CPU memory helpers and Bus read/write mappings;
+Ap keeps its separate extended decoder and existing i486 diagnostic. Only CF/ZF
+are defined status results. Preserving AF/OF/PF/SF is deterministic emulator
+policy. Increasing offsets, preserved SI/DI/CL and DF-independent traversal are
+our interpretation of NEC's operation/diagram, distinct from explicit guarantees.
+See the [contract, primary manual and limitations](hardware.md#v30-add4s).
+
+Nine `v30_add4s_` tests include an independent base-100 oracle with bounded per-byte
+arithmetic. They exhaust 100×100 valid byte pairs with both incoming CF states
+(20,000 executions), varied initial flags/CH and preserved unrelated registers,
+upper halves, segments and control bits. Every CL=1..254 runs deterministic
+patterns, full carry chains, terminated carries, leading zeros, an all-zero sum
+and a nonzero result ending in a zero byte, with DF clear/set (2,540 executions).
+Literal tests distinguish CL=4, 9999+0001 → 0000/CF=ZF=1 from CL=3,
+0999+0001 → 1000/CF=ZF=0; CL=3, 1999+8001 → 0000/CF=ZF=1 requires the
+extra high digit to participate. Undefined-flag policy has a separately named test.
+Default DS and all ES/CS/SS/DS overrides use distinct contents and a fixed ES
+destination, disjoint and exactly aliased buffers, both DF states, next-NOP
+progress, unchanged disjoint sources and destination guards. Separate and joint
+offset wraps, physical wrapping, ROM reads/protected writes and all three ordinary
+planar VRAM planes are covered. Poisoned backing RAM and unchanged surrounding
+RAM/graphics expose accidental raw-memory access. The `ap_v30_add4s_` test checks
+all source prefixes, unchanged operands/registers/flags/graphics and the existing
+`unimplemented i486 opcode 0F 20` diagnostic, without claiming architectural #UD.
+
+The original MIT [assembly](../guest/v30_add4s.asm) builds offline with
+`python3 tools/prepare_v30_add4s_fixture.py`. Normal preparation verifies the
+checked [manifest](../fixtures/v30-add4s-manifest.json), including source, boot
+and full-image SHA-256, exact literal results, mask 0641h (CF/ZF/IF/DF), guards,
+license/provenance and a finite 2,000,000-slot budget. Image SHA-256 is
+`e7ffe8d6f292221c3e8afde283145f47bdcbd4fa3f6c63fcfe3f4f560737a1ed`.
+Generated media and source/license copies remain ignored outside `web/`; README
+and existing emulator CI include preparation. No commercial software, proprietary
+ROM or copied emulator implementation was acquired for this instruction.
+
+The guest executes five literal cases (09+01, full overflow, odd rounded carry,
+nonzero extra high digit, and last-byte-zero/nonzero result), checks its results,
+source bytes, masked flags, SI/DI/CX/AX/BX/DX/DS/ES/SP and immediate guards, and
+compares the complete 32-byte result/guard record before printing `V30 ADD4S PASS`.
+Hosts only mount, reset, step, inspect and export media; they do not manufacture
+results. Native cold/reset boots both passed in 1,000 slots, requiring PASS
+without FAIL, exact records/operand guards, unchanged image and no core error.
+The identical image also passed cold/reset boots in production release-Wasm at
+both `/` and `/pc98-rust/`, with the same exact results, guards, unchanged media
+and finite budget; both browser cases also reject core/page/console errors.
+
+| Coordinator check | Outcome |
+| --- | --- |
+| `python3 -m unittest discover -s tools -p test_fixture_fetch.py` | Passed: 7 cases |
+| All README offline fixture preparations and `python3 tools/build_font.py --check` | Passed; existing checked manifests reproduced |
+| README FreeDOS/font/DOS apps/CPU/HDD/music/device preparation | Passed with checksum-pinned sources/binaries and notices; CPULEVEL/DEBUG primary HTTP 503 responses recovered through existing verified mirrors |
+| `python3 tools/prepare_v30_add4s_fixture.py --update-manifest` | Created initial checked manifest from original MIT source |
+| `python3 tools/prepare_v30_add4s_fixture.py` | Passed offline without update mode; exact manifest reproduced |
+| `cargo test --locked --test core v30_add4s_` | Passed: 9 tests, zero failures/ignored |
+| `cargo test --locked --test cpu386 ap_v30_add4s_` | Passed: 1 test, zero failures/ignored |
+| `cargo test --locked` | Passed: 387 native cases, zero failures/ignored; doc-tests passed (0 cases) |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `cargo fmt --check`; `git diff --check` | Passed |
+| `npm ci`; `npx playwright install chromium` | Passed |
+| `npm test` | Production release-Wasm build, media/font checks and ten-asset publication audit passed; occupied default port prevented server startup, zero browser cases executed |
+| `npx playwright test --config target/add4s-playwright.config.js` | Passed: 136 browser cases, zero failures/skips, 2.4 minutes; includes all 134 existing cases and two ADD4S cases with cold/reset boots |
+
+The alternate-port browser run uses the production release-Wasm artifact built
+by `npm test`: 462,925 bytes, SHA-256
+`7ef35b1ad8b063b7fa2a8a4460edaa182676f6c4dd490cc8438c4c3266fc7dad`.
+Its ignored temporary config copies `playwright.config.js`, preserving both
+projects, assertions, workers, timeouts and scheduler budgets. Only serving ports
+(**18095/18096**) and working/test/server path resolution change. The project-path
+server copies `tests/browser/serve_project.py`, resolves this worktree's `web/`
+and changes its port; it retains the temporary project symlink and root-asset
+rejection. The occupied listener and committed default ports are untouched.
+
+Local review checked the complete diff against Issue acceptance, decimal carry
+and whole-result zero handling, odd width, register/control preservation, source
+prefix and fixed destination selection, Bus mappings, Ap separation, guest-owned
+checks, manifest verification and both hosting roots. Existing CPU, Ap, PIT/PIC,
+timer, memory/graphics, DOS/apps, VM, audio/storage and all six-game assertions,
+budgets and reports are retained as supporting evidence. No independent review
+or remote CI result is claimed; this node commits locally without push, PR,
+comment or merge. No post-merge verification is required.
+
+V30 remains **partial**: SUB4S/CMP4S, bit-field extensions, register nibble rotations,
+TF traps, NMI and broader flags/prefix/interrupt/fault acceptance remain outstanding.
+CL=0/255, nondecimal nibbles, partial overlap, new REP/LOCK semantics, interruption
+within ADD4S and exact timing are unverified future inventory work. All 26 fixed
+inventory scopes/statuses remain unchanged: **partial** cpu-v30, cpu386,
+protected-mode, fpu, memory, pic, pit, dma, rtc, keyboard, mouse, fdc, ide, gdc, egc,
+pegc, text-cg, display-timing, opn, opna, pcm86, bios, lio, integration;
+**implemented_unverified** grcg; **unimplemented** paging. None is verified.
+Protected execution, paging and basic numerical x87 remain required. Bounded
+probes and six-game regressions establish neither full hardware accuracy nor
+commercial compatibility.

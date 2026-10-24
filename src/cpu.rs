@@ -1813,7 +1813,7 @@ impl Cpu {
                     _ => return Err(ExecError::Fault(6)),
                 }
             }
-            // V30 bit operations and memory-only nibble rotations.
+            // V30 bit operations, packed-BCD addition and memory nibble rotations.
             0x0f => {
                 if b.profile == crate::Profile::Pc9821ApDos {
                     return self.extended(b, ov);
@@ -1842,6 +1842,28 @@ impl Cpu {
                     if ext & 6 != 0 {
                         self.put(b, o, out, w)?
                     }
+                } else if ext == 0x20 {
+                    // ADD4S has no ModR/M. NEC's byte-offset diagram is
+                    // interpreted as increasing offsets, independent of DF,
+                    // without changing SI/DI/CL. Odd counts include both nibbles
+                    // of the last byte. Only CF/ZF are architecturally defined;
+                    // preserving AF/OF/PF/SF is deterministic emulator policy.
+                    let source = ov.unwrap_or(DS);
+                    let count = (self.byte(CX) as u32).div_ceil(2);
+                    let mut carry = 0;
+                    let mut zero = true;
+                    for i in 0..count {
+                        let a = self.read_mem(b, source, self.r[SI] as u32 + i, 1)?;
+                        let d = self.read_mem(b, ES, self.r[DI] as u32 + i, 1)?;
+                        let low = (a & 15) + (d & 15) + carry;
+                        let high = (a >> 4) + (d >> 4) + u32::from(low >= 10);
+                        let result = ((high % 10) << 4) | (low % 10);
+                        carry = u32::from(high >= 10);
+                        zero &= result == 0;
+                        self.write_mem(b, ES, self.r[DI] as u32 + i, result, 1)?;
+                    }
+                    self.flag(CF, carry != 0);
+                    self.flag(ZF, zero);
                 } else if matches!(ext, 0x28 | 0x2a) {
                     let m = self.fetch(b)?;
                     if m >> 6 == 3 || m & 0x38 != 0 {

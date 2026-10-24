@@ -36,3 +36,4 @@ __pycache__/
 /fixtures/rtc_set/
 /fixtures/fpu_init/
 /fixtures/pic_single/
+/fixtures/v30_add4s/

@@ -45,6 +45,7 @@ jobs:
       - run: python3 tools/prepare_v30_bound_fixture.py
       - run: python3 tools/prepare_v30_repc_fixture.py
       - run: python3 tools/prepare_v30_nibble_mem_fixture.py
+      - run: python3 tools/prepare_v30_add4s_fixture.py
       - run: python3 tools/prepare_v30_segment_irq_fixture.py
       - run: python3 tools/prepare_ide_verify_fixture.py
       - run: python3 tools/prepare_rtc_fixture.py

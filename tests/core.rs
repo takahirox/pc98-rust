@@ -2051,3 +2051,419 @@ fn v30_segment_irq_original_boot_probe_before_and_after_reset() {
         }
     }
 }
+
+#[test]
+fn v30_add4s_minimal_reproduction() {
+    let mut c = Cpu {
+        s: [0; 4],
+        ip: 0x100,
+        flags: CF | ZF | 2,
+        ..Cpu::default()
+    };
+    c.r[SI] = 0x2000;
+    c.r[DI] = 0x3000;
+    c.r[CX] = 2;
+    let mut b = Bus::default();
+    b.mem[0x100..0x103].copy_from_slice(&[0x0f, 0x20, 0x90]);
+    b.mem[0x2000] = 0x09;
+    b.mem[0x3000] = 0x01;
+    c.step(&mut b).unwrap();
+    assert_eq!(b.read(0x3000), 0x10);
+    assert_eq!(c.flags & (CF | ZF), 0);
+    assert_eq!(c.ip, 0x102);
+    c.step(&mut b).unwrap();
+    assert_eq!(c.ip, 0x103);
+}
+
+// Independent base-100 oracle: no whole-string host integer and no nibble
+// carry/adjustment formula shared with production.
+fn v30_add4s_oracle(source: &[u8], destination: &[u8]) -> (Vec<u8>, u16) {
+    let mut carry = 0u16;
+    let result: Vec<u8> = source
+        .iter()
+        .zip(destination)
+        .map(|(&a, &b)| {
+            let sum = u16::from(a / 16 * 10 + a % 16) + u16::from(b / 16 * 10 + b % 16) + carry;
+            carry = sum / 100;
+            let value = (sum % 100) as u8;
+            value / 10 * 16 + value % 10
+        })
+        .collect();
+    let flags = if carry != 0 { CF } else { 0 }
+        | if result.iter().all(|&b| b == 0) {
+            ZF
+        } else {
+            0
+        };
+    (result, flags)
+}
+
+fn v30_add4s_cpu(cl: u8, flags: u16) -> Cpu {
+    let mut c = Cpu {
+        s: [0; 4],
+        ip: 0x100,
+        r: [
+            0x1234,
+            0xab00 | cl as u16,
+            0x3456,
+            0x4567,
+            0x8000,
+            0x6789,
+            0x2000,
+            0x3000,
+        ],
+        upper: [0x9876; 8],
+        flags,
+        ..Cpu::default()
+    };
+    c.r[CX] |= (cl as u16).wrapping_mul(47) << 8;
+    c
+}
+
+fn v30_add4s_assert_state(c: &mut Cpu, b: &mut Bus, before: &Cpu, end: u32, flags: u16) {
+    assert_eq!(c.r, before.r);
+    assert_eq!(c.upper, before.upper);
+    assert_eq!(c.s, before.s);
+    assert_eq!(c.flags & (CF | ZF), flags);
+    // Control/reserved bits must survive; undefined status bits are excluded.
+    assert_eq!(
+        c.flags & !(CF | ZF | AF | OF | PF | SF),
+        before.flags & !(CF | ZF | AF | OF | PF | SF)
+    );
+    assert_eq!(c.ip, end);
+    c.step(b).unwrap();
+    assert_eq!(c.ip, end + 1);
+}
+
+#[test]
+fn v30_add4s_exhaustive_one_byte_pairs() {
+    let mut b = Bus::default();
+    b.mem[0x100..0x103].copy_from_slice(&[0x0f, 0x20, 0x90]);
+    for a in 0..100u8 {
+        for d in 0..100u8 {
+            let source = a / 10 * 16 + a % 10;
+            let destination = d / 10 * 16 + d % 10;
+            for incoming in [0, CF] {
+                let initial = 0xf002
+                    | incoming
+                    | if (a + d) & 1 == 0 {
+                        AF | OF | SF | PF | DF | IF | ZF
+                    } else {
+                        0
+                    };
+                let mut c = v30_add4s_cpu(2, initial);
+                c.r[CX] = ((a as u16 ^ d as u16) << 8) | 2;
+                let before = c.clone();
+                b.mem[0x1fff..0x2002].copy_from_slice(&[0xa5, source, 0x5a]);
+                b.mem[0x2fff..0x3002].copy_from_slice(&[0xa5, destination, 0x5a]);
+                let (expected, flags) = v30_add4s_oracle(&[source], &[destination]);
+                c.step(&mut b).unwrap();
+                assert_eq!(&b.mem[0x2fff..0x3002], &[0xa5, expected[0], 0x5a]);
+                assert_eq!(&b.mem[0x1fff..0x2002], &[0xa5, source, 0x5a]);
+                v30_add4s_assert_state(&mut c, &mut b, &before, 0x102, flags);
+            }
+        }
+    }
+}
+
+fn v30_add4s_ram_case(cl: u8, source: &[u8], destination: &[u8], literal: Option<(&[u8], u16)>) {
+    let (expected, flags) = v30_add4s_oracle(source, destination);
+    if let Some((bytes, defined)) = literal {
+        assert_eq!(expected, bytes);
+        assert_eq!(flags, defined);
+    }
+    for df in [0, DF] {
+        let mut c = v30_add4s_cpu(cl, 0xfad7 | df);
+        let before = c.clone();
+        let mut b = Bus::default();
+        b.mem[0x100..0x103].copy_from_slice(&[0x0f, 0x20, 0x90]);
+        let n = source.len();
+        assert_eq!(n, (cl as usize).div_ceil(2));
+        b.mem[0x2000..0x2000 + n].copy_from_slice(source);
+        b.mem[0x2fff] = 0xa5;
+        b.mem[0x3000..0x3000 + n].copy_from_slice(destination);
+        b.mem[0x3000 + n] = 0x5a;
+        c.step(&mut b).unwrap();
+        assert_eq!(&b.mem[0x3000..0x3000 + n], expected.as_slice(), "CL={cl}");
+        assert_eq!(&b.mem[0x2000..0x2000 + n], source);
+        assert_eq!((b.read(0x2fff), b.read(0x3000 + n)), (0xa5, 0x5a));
+        v30_add4s_assert_state(&mut c, &mut b, &before, 0x102, flags);
+    }
+}
+
+#[test]
+fn v30_add4s_all_documented_counts_and_carry_patterns() {
+    for cl in 1..=254u8 {
+        let n = (cl as usize).div_ceil(2);
+        let source: Vec<u8> = (0..n)
+            .map(|i| ((i * 37 + cl as usize) % 100) as u8)
+            .map(|v| v / 10 * 16 + v % 10)
+            .collect();
+        let dest: Vec<u8> = (0..n)
+            .map(|i| ((i * 61 + 19) % 100) as u8)
+            .map(|v| v / 10 * 16 + v % 10)
+            .collect();
+        v30_add4s_ram_case(cl, &source, &dest, None);
+        let mut one = vec![0; n];
+        one[0] = 1;
+        v30_add4s_ram_case(cl, &one, &vec![0x99; n], None); // Full carry chain.
+        let mut terminated = vec![0x99; n];
+        terminated[n / 2] = 0x48;
+        v30_add4s_ram_case(cl, &one, &terminated, None);
+        v30_add4s_ram_case(cl, &vec![0; n], &one, None); // Last byte zero, result nonzero.
+        v30_add4s_ram_case(cl, &vec![0; n], &vec![0; n], None);
+    }
+}
+
+#[test]
+fn v30_add4s_literal_rounded_width_and_whole_result_zero() {
+    v30_add4s_ram_case(4, &[0x01, 0], &[0x99, 0x99], Some((&[0, 0], CF | ZF)));
+    v30_add4s_ram_case(3, &[0x01, 0], &[0x99, 0x09], Some((&[0, 0x10], 0)));
+    v30_add4s_ram_case(3, &[0x01, 0x80], &[0x99, 0x19], Some((&[0, 0], CF | ZF)));
+    v30_add4s_ram_case(4, &[1, 0], &[0, 0], Some((&[1, 0], 0)));
+}
+
+#[test]
+fn v30_add4s_source_overrides_fixed_destination_and_aliasing() {
+    for (prefix, segment) in [
+        (None, DS),
+        (Some(0x26), ES),
+        (Some(0x2e), CS),
+        (Some(0x36), SS),
+        (Some(0x3e), DS),
+    ] {
+        for df in [0, DF] {
+            for alias in [false, true] {
+                let mut c = v30_add4s_cpu(3, 0xfad7 | df);
+                c.s = [0x1100, 0x2200, 0x3300, 0x4400];
+                if alias {
+                    c.s[ES] = c.s[segment];
+                    c.r[DI] = c.r[SI];
+                }
+                let mut b = Bus::default();
+                // Distinct candidate sources and destinations expose wrong selection.
+                for (i, &s) in c.s.iter().enumerate() {
+                    b.write_seg(s, c.r[SI], 0x1111 * (i as u16 + 1), true);
+                    if !alias {
+                        b.write_seg(s, c.r[DI], 0x1212 * (i as u16 + 1), true);
+                    }
+                }
+                let src = c.s[segment] as usize * 16 + c.r[SI] as usize;
+                let dst = c.s[ES] as usize * 16 + c.r[DI] as usize;
+                b.write(dst - 1, 0xa5);
+                b.write(dst + 2, 0x5a);
+                let source = [b.read(src), b.read(src + 1)];
+                let destination = [b.read(dst), b.read(dst + 1)];
+                let (expected, flags) = v30_add4s_oracle(&source, &destination);
+                let mut code: Vec<u8> = prefix.into_iter().collect();
+                code.extend([0x0f, 0x20, 0x90]);
+                let start = c.s[CS] as usize * 16 + 0x100;
+                b.mem[start..start + code.len()].copy_from_slice(&code);
+                let ram = b.mem.clone();
+                let before = c.clone();
+                c.step(&mut b).unwrap();
+                assert_eq!(&b.mem[dst..dst + 2], expected.as_slice());
+                // Every other byte includes all alternative destinations, source and guards.
+                assert_eq!(&b.mem[..dst], &ram[..dst]);
+                assert_eq!(&b.mem[dst + 2..], &ram[dst + 2..]);
+                v30_add4s_assert_state(
+                    &mut c,
+                    &mut b,
+                    &before,
+                    0x102 + u32::from(prefix.is_some()),
+                    flags,
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn v30_add4s_offset_and_physical_wraps() {
+    for (source_segment, dest_segment, si, di) in [
+        (0x1000, 0x4000, 0xffff, 0x2000),
+        (0x1000, 0x4000, 0x2000, 0xffff),
+        (0x1000, 0x4000, 0xffff, 0xffff),
+        (0xffff, 0x4000, 0x000f, 0x2000),
+        (0x1000, 0xffff, 0x2000, 0x000f),
+        (0xffff, 0xffff, 0x000f, 0x002f),
+    ] {
+        let mut c = v30_add4s_cpu(4, 0xfed7);
+        c.s[DS] = source_segment;
+        c.s[ES] = dest_segment;
+        c.r[SI] = si;
+        c.r[DI] = di;
+        let addr = |s: u16, off: u16, delta: u16| {
+            (s as usize * 16 + off.wrapping_add(delta) as usize) & 0xfffff
+        };
+        let mut b = Bus::default();
+        b.mem[0x100..0x103].copy_from_slice(&[0x0f, 0x20, 0x90]);
+        // Seed ROM through fixture setup; CPU must read through the bus.
+        for (i, value) in [0x99, 0x01].into_iter().enumerate() {
+            b.mem[addr(source_segment, si, i as u16)] = value;
+        }
+        for (i, value) in [0x01, 0x02].into_iter().enumerate() {
+            b.mem[addr(dest_segment, di, i as u16)] = value;
+        }
+        let left = addr(dest_segment, di, u16::MAX);
+        let right = addr(dest_segment, di, 2);
+        b.mem[left] = 0xa5;
+        b.mem[right] = 0x5a;
+        let before = c.clone();
+        let ram = b.mem.clone();
+        c.step(&mut b).unwrap();
+        // First destination byte may be ROM (fffff), whose write is ignored.
+        for (i, expected) in [0x00, 0x04].into_iter().enumerate() {
+            let a = addr(dest_segment, di, i as u16);
+            assert_eq!(b.read(a), if a >= 0xf0000 { ram[a] } else { expected });
+        }
+        assert_eq!((b.read(left), b.read(right)), (0xa5, 0x5a));
+        for i in 0..2 {
+            let a = addr(source_segment, si, i);
+            assert_eq!(b.read(a), ram[a]);
+        }
+        v30_add4s_assert_state(&mut c, &mut b, &before, 0x102, 0);
+    }
+}
+
+#[test]
+fn v30_add4s_rom_and_planar_vram_use_bus_mapping() {
+    for (source, destination) in [
+        (0xf000, 0x3000),
+        (0x2000, 0xf000),
+        (0xa800, 0xb000),
+        (0xb800, 0x3000),
+        (0x2000, 0xb800),
+    ] {
+        let mut c = v30_add4s_cpu(4, 0xfed7);
+        c.s[DS] = source;
+        c.s[ES] = destination;
+        c.r[SI] = 0x10;
+        c.r[DI] = 0x20;
+        let mut b = Bus::default();
+        assert_eq!(b.grcg_mode, 0);
+        assert!(!b.egc.enabled && !b.pegc);
+        b.mem[0x100..0x103].copy_from_slice(&[0x0f, 0x20, 0x90]);
+        let src = source as usize * 16 + 0x10;
+        let dst = destination as usize * 16 + 0x20;
+        for (base, data) in [(src, [0x99, 0x01]), (dst, [0x01, 0x02])] {
+            for (i, value) in data.into_iter().enumerate() {
+                if base >= 0xf0000 {
+                    b.mem[base + i] = value;
+                } else {
+                    b.write(base + i, value);
+                }
+            }
+        }
+        if destination >= 0xf000 {
+            b.mem[dst - 1] = 0xa5;
+            b.mem[dst + 2] = 0x5a;
+        } else {
+            b.write(dst - 1, 0xa5);
+            b.write(dst + 2, 0x5a);
+        }
+        // Poison unused backing RAM for VRAM; raw access must fail these assertions.
+        for base in [src, dst] {
+            if (0xa8000..0xc0000).contains(&base) {
+                b.mem[base..base + 2].fill(0x77);
+            }
+        }
+        let ram = b.mem.clone();
+        let graphics = b.graphics.clone();
+        let before = c.clone();
+        c.step(&mut b).unwrap();
+        assert_eq!(
+            (b.read(dst), b.read(dst + 1)),
+            if destination >= 0xf000 {
+                (1, 2)
+            } else {
+                (0, 4)
+            }
+        );
+        assert_eq!((b.read(src), b.read(src + 1)), (0x99, 1));
+        assert_eq!((b.read(dst - 1), b.read(dst + 2)), (0xa5, 0x5a));
+        if (0xa8000..0xc0000).contains(&dst) {
+            assert_eq!(b.mem, ram);
+            let offset = dst - 0xa8000;
+            assert_eq!(&b.graphics[..offset], &graphics[..offset]);
+            assert_eq!(&b.graphics[offset + 2..], &graphics[offset + 2..]);
+        } else {
+            assert_eq!(b.graphics, graphics);
+        }
+        if destination >= 0xf000 {
+            assert_eq!(b.mem, ram);
+        }
+        v30_add4s_assert_state(&mut c, &mut b, &before, 0x102, 0);
+    }
+}
+
+#[test]
+fn v30_add4s_undefined_status_flag_preservation_policy() {
+    // Emulator policy only: NEC leaves AF/OF/PF/SF undefined for ADD4S.
+    for policy in [0, AF | OF | PF | SF, AF | PF, OF | SF] {
+        let mut c = v30_add4s_cpu(2, 2 | policy);
+        let mut b = Bus::default();
+        b.mem[0x100..0x102].copy_from_slice(&[0x0f, 0x20]);
+        b.mem[0x2000] = 0x99;
+        b.mem[0x3000] = 1;
+        c.step(&mut b).unwrap();
+        assert_eq!(c.flags & (AF | OF | PF | SF), policy);
+    }
+}
+
+#[test]
+fn v30_add4s_original_boot_probe_before_and_after_reset() {
+    let image = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/fixtures/v30_add4s/v30_add4s.hdm"
+    ))
+    .expect("run python3 tools/prepare_v30_add4s_fixture.py");
+    let manifest = include_str!("../fixtures/v30-add4s-manifest.json");
+    let hex = manifest
+        .split_once("\"result_hex\": \"")
+        .unwrap()
+        .1
+        .split('"')
+        .next()
+        .unwrap();
+    let expected: Vec<u8> = hex
+        .as_bytes()
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+        .collect();
+    assert_eq!(expected.len(), 32);
+    for profile in [pc98_rust::Profile::Pc9801Vm] {
+        let mut m = Machine::new(profile);
+        m.insert(0, image.clone(), "v30_add4s.hdm").unwrap();
+        for run in 0..2 {
+            if run != 0 {
+                m.reset();
+            }
+            let mut slots = 0;
+            while slots < 2_000_000 {
+                slots += m.step(1000);
+                assert!(m.error.is_none(), "{:?}", m.error);
+                let text = m.bus.text();
+                assert!(
+                    !text.contains("FAIL"),
+                    "{profile:?} boot {run}: {slots} slots; {text}; {:02x?}",
+                    &m.bus.mem[0x8000..0x8020]
+                );
+                if text.contains("V30 ADD4S PASS") {
+                    break;
+                }
+            }
+            assert!(slots <= 2_000_000);
+            assert!(m.bus.text().contains("V30 ADD4S PASS"), "{}", m.bus.text());
+            assert_eq!(&m.bus.mem[0x8000..0x8020], expected.as_slice());
+            assert_eq!(
+                &m.bus.mem[0x9000..0x9014],
+                &[0xa5, 0, 0, 0x5a, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xa5, 1, 0, 0x5a]
+            );
+            assert_eq!(m.bus.disks[0].as_ref().unwrap().bytes, image);
+            println!("{profile:?} boot {run}: {slots} slots");
+        }
+    }
+}
