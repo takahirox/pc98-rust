@@ -4069,3 +4069,120 @@ passing. The temporary port configuration and server copy were removed after
 validation; neither was committed. No final check was skipped. The default-port
 startup failure and interrupted initial browser run above remain distinct from
 the complete passing final run.
+
+## Issue #83 FDC non-DMA WRITE DATA
+
+The bounded ND=1 path now accepts `45h`, MT=0, matching selected head/H,
+N=1–3 and R=EOT≥1 on normal existing raw/D88 media. The read execution state
+and deterministic scheduler now carry direction; the FIFO output path accepts
+exactly one byte per ready request. Each accepted byte changes its logical
+payload immediately. An interrupted write retains that prefix and leaves the
+unaccepted suffix untouched; it does not zero fill without TC. This image-model
+approximation does not represent damaged data fields, CRC or flux consequences.
+The [hardware contract](hardware.md#fdc-non-dma-write-data) describes MSR, status,
+IRQ, timing, image policy and remaining limits.
+
+The raw-port reproduction test
+`issue_83_write_data_requests_payload_instead_of_invalid_command` was copied to
+an isolated source archive of baseline `e19295865bac9e0d9c07032c10ba2f58242cdd72`.
+It failed as intended: after dispatch and first-byte clocks, MSR was `D0h`
+(decimal 208), instead of the required write request `B0h` (decimal 176).
+The same test passes with this implementation. No controller execution state
+or PIC request is injected by the reproduction or transfer tests.
+
+Native acceptance includes:
+
+- 48 complete image comparisons: VM/Ap × drives 0/1 × heads 0/1 × six media
+  cases (original normal-MFM D88 N=1/2/3; raw 80×2×8×512, 80×2×15×512 and
+  77×2×8×1024). Expected byte offsets come from independent fixture layout
+  arithmetic, not the controller's sector lookup. Every byte of both drives is
+  compared, preserving D88 metadata, neighboring sectors and the other drive.
+  DTL=1 still transfers the entire N>0 sector. Each sector receiving payload
+  increments FDC/media counters once.
+- Command, dispatch, waiting `30h`, ready `B0h`, seven-result `D0h` and idle
+  `80h` states; early/duplicate writes, wrong-direction reads and result-phase
+  writes cannot consume another byte or start another command. Unsupported MT,
+  FM/flag, deleted/format/scan, size, head and sector-range variants return
+  invalid-command without media, RAM or enabled-DMA activity.
+- Single-clock and batched ticks, including a batch crossing dispatch, first
+  availability and timeout; late service at 103 clocks preserves the next
+  128-clock boundary, while the 104-clock deadline fails. First/interior missed
+  requests compare exact raw and D88 accepted prefixes, untouched suffixes and
+  metadata, write counts, complete results and fresh-command recovery.
+- Real cascaded byte/result IRQs; FIFO service retains PIC ISR bits until EOI,
+  held requests do not retrigger after EOI, and both normal completion and a
+  missed held request produce distinct result events. Protected D88, absent
+  media and missing sectors produce NW/ND without writes. Reset during a prefix
+  or ready request cancels execution while retaining accepted bytes; eject
+  between guest steps ends safely and preserves the ejected image's prefix.
+- Enabled/unmasked and disabled/masked DMA configurations preserve current/base
+  addresses/counts, bank, mode, masks, controller enable, shared byte pointer and
+  sticky TC. Auto-init advancement of cloned programming observes retained
+  bases; RAM guards differ from FIFO payload. Existing ND=0 DMA read/write and
+  Issue #81 handoff tests remain. A completed PIO write is read back through
+  BIOS DMA, followed by fresh ND=1 PIO-write reentry.
+
+The original MIT [source-built guest](../guest/fdc_write.asm) issues SPECIFY,
+WRITE DATA and READ DATA itself. Tight INT 13h handlers supply 1,024 bytes,
+collect readback, drain both results, record real slave/master ISR bits and
+EOI both PICs. The guest compares source/readback patterns, all result/record
+bytes, surrounding RAM and SP before printing `FDC WRITE PASS`. Hosts only mount,
+step, inspect and reset. The [manifest](../fixtures/fdc-write-manifest.json)
+pins source/license, assembly command, synthetic firmware/image hashes,
+independent payload/results/media expectations and a 2,000,000-slot budget.
+Fixture preparation verifies the manifest and copies source/license beside the
+image; README and CI prepare it, and generated files stay outside `web/`.
+
+The payload is independently `(29*i+71)&255`, 1,024 bytes, replacing image bytes
+1024..2047 only. Both result records contain `40 80 00 00 00 02 03`, exactly
+1,024 byte IRQs and one result IRQ, ISR aggregates `08/80`, post-EOI ISRs `00/00`,
+and result MSRs `D0/D0/80`. All padding/guards remain A5. The media write counter
+accumulates across reset; FDC statistics reset and report one sector write per
+boot. The expected exported media SHA-256 is
+`c545c108ffb87258530848eb3e850ca6a67859970b32113980834ef75f3ff9b1`.
+
+Validation was performed locally; no push, PR, comment, merge, remote CI or
+independent PR review was performed. No post-merge verification is required.
+The existing DOS/apps/VM/audio, IDE-edge and six-game assertions and budgets are
+unchanged. All 26 inventory categories retain their full scopes and statuses:
+23 partial, GRCG implemented_unverified, paging/FPU unimplemented, none verified.
+Protected mode, paging and basic x87 remain required. Multi-sector PIO writes,
+MT/head switching, deleted/format/scan/diagnostic commands, N=0/DTL, new formats,
+full SPECIFY timing, TC/EOP injection, active BIOS preemption, broader board,
+mechanical and error fidelity, additional media and 512-byte IPL acceptance
+remain outside this subset. The A/B final-byte OR distinction remains unverified;
+missed-service acceptance covers first/interior requests.
+
+Checks and environment outcomes:
+
+| Check | Outcome |
+| --- | --- |
+| Baseline reproduction on `e192958` | Failed as intended: MSR D0 instead of B0; exit 101 |
+| `python3 -m unittest discover -s tools -p test_fixture_fetch.py` | 7 passed |
+| All README Python fixture preparations, including the new write fixture | Passed; original/licensed source and pinned hashes verified. CPULEVEL/DEBUG primary mirrors returned HTTP 503; existing pinned fallbacks succeeded |
+| `python3 tools/prepare_fdc_write_fixture.py` | Manifest verification passed |
+| `cargo test --locked --test fdc --test fdc_bios --test core --test dma --test pic` | 108 passed: FDC 19, BIOS 1, core 49, DMA 11, PIC 28 |
+| `cargo test --locked` | 334 passed, zero failed/ignored/filtered. Subsequent test-only strengthening for D88 timeout prefixes, dispatch-crossing batches and both byte EOI orders also passed the 108-test focused suite |
+| `cargo clippy --all-targets -- -D warnings` | Passed, including final strengthened tests |
+| `cargo fmt --check`; `git diff --check` | Passed |
+| `npm ci`; `npx playwright install chromium` | Passed |
+| `npm test` with default ports | Production release build/site checks passed; occupied port 8000 prevented browser startup, zero cases executed |
+| Initial isolated-port full browser run | 114 existing cases passed; four new cases failed only because the initial test expected cumulative FDC statistics after reset (expected 2, actual 1). All guest boots reached PASS. The assertion now expects one FDC write each boot, consistent with native reset behavior |
+| Final `npm test -- --config=playwright.issue83.config.js --workers=4` | **118 passed** (114 existing + 4 new), zero failures, in 2.2 minutes; actual production release Wasm and publication-tree checks, both serving paths |
+| Final `git diff --cached --check` | Passed, including all new files |
+
+For browser acceptance only, temporary copies of the Playwright configuration
+and project-path server substituted ports 18383/18384 for occupied default ports
+8000/8001. The root command still served `web/`; the project server still exposed
+only `/pc98-rust/`. No scenarios, assertions or slot budgets were removed or
+relaxed. The temporary files were removed after the runs and are not committed.
+The final release Wasm SHA-256 was
+`1dea3d8867c162a0a79e5cb52c74b54f2c6deb36b3c27c214b7c7a9cd079b143`.
+
+All four native probe boots and all eight final browser probe boots completed
+in **70,000 slots each**, below 2,000,000, with exact results, 1,024 write and
+1,024 read byte IRQs, two distinct result IRQs, unchanged guards and precisely
+the independently expected full media. All required existing browser coverage,
+including DOS/apps/VM/audio, IDE-edge and six-game checks, passed. No final check
+was skipped; the initial port-startup and reset-count assertion failures above
+are recorded separately from the complete passing final run.

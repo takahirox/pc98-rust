@@ -93,6 +93,7 @@ python3 tools/prepare_pic_fixture.py
 python3 tools/prepare_pic_smm_fixture.py
 python3 tools/prepare_pic_poll_fixture.py
 python3 tools/prepare_fdc_pio_fixture.py
+python3 tools/prepare_fdc_write_fixture.py
 python3 tools/prepare_fdc_bios_fixture.py
 python3 tools/prepare_pit_mode2_fixture.py
 python3 tools/prepare_pit_mode3_fixture.py
@@ -386,6 +387,17 @@ preserving the earlier phases and their assertions. The
 [manifest](fixtures/dma-manifest.json) records the assembly command, license and
 source/image hashes. No DOS, proprietary ROM or game is required. See the
 [bounded DMA contract](docs/hardware.md#dma-terminal-count-and-auto-initialization).
+
+The original MIT [non-DMA WRITE DATA probe](guest/fdc_write.asm) builds offline
+with `python3 tools/prepare_fdc_write_fixture.py`. Run `cargo test --locked --test
+fdc --test fdc_bios --test core --test dma --test pic` and `npm test`. Native and
+production release-Wasm VM/Ap boot the identical image before/after reset at `/`
+and `/pc98-rust/`, within two million slots. Guest interrupt handlers supply the
+single-sector payload and validate readback, results, PIC records and guards;
+hosts require `FDC WRITE PASS`, exact whole-media changes and no errors. The
+[manifest](fixtures/fdc-write-manifest.json) pins source/license, assembly,
+firmware/image hashes and independent expectations. See the
+[write subset and prefix-retention policy](docs/hardware.md#fdc-non-dma-write-data).
 
 The original MIT [non-DMA FDC probe](guest/fdc_pio.asm) builds offline with
 `python3 tools/prepare_fdc_pio_fixture.py`. Run `cargo test --locked --test fdc`

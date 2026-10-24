@@ -370,54 +370,58 @@ impl Bus {
                 self.sync_fdc_irq();
             }
         }
-        while let Some(mut read) = self.fdc.pio.take() {
-            if cycles < read.delay {
-                read.delay -= cycles;
-                self.fdc.pio = Some(read);
+        while let Some(mut pio) = self.fdc.pio.take() {
+            if cycles < pio.delay {
+                pio.delay -= cycles;
+                self.fdc.pio = Some(pio);
                 break;
             }
-            cycles -= read.delay;
-            if read.ready {
-                self.end_fdc_read(&read, 0x10); // unserviced byte: OR
+            cycles -= pio.delay;
+            if self.disks[pio.drive as usize].is_none() {
+                self.end_fdc_pio(&pio, 4);
                 break;
             }
-            if read.pos == read.len {
-                if read.r == read.eot {
-                    self.end_fdc_read(&read, 0x80); // EOT without TC: EN
+            if pio.ready {
+                self.end_fdc_pio(&pio, 0x10); // unserviced byte: OR
+                break;
+            }
+            if pio.pos == pio.len {
+                if pio.r == pio.eot {
+                    self.end_fdc_pio(&pio, 0x80); // EOT without TC: EN
                     break;
                 }
-                read.r += 1;
-                if let Some(s) = self.disks[read.drive as usize]
+                pio.r += 1;
+                if let Some(s) = self.disks[pio.drive as usize]
                     .as_ref()
-                    .and_then(|disk| disk.sector(read.c, read.h, read.r, read.n))
+                    .and_then(|disk| disk.sector(pio.c, pio.h, pio.r, pio.n))
                 {
-                    read.offset = s.offset;
-                    read.len = s.len;
-                    read.pos = 0;
+                    pio.offset = s.offset;
+                    pio.len = s.len;
+                    pio.pos = 0;
                 } else {
-                    self.end_fdc_read(&read, 4);
+                    self.end_fdc_pio(&pio, 4);
                     break;
                 }
             }
-            read.ready = true;
-            read.delay = Fdc::SERVICE_CLOCKS;
-            self.fdc.pio = Some(read);
+            pio.ready = true;
+            pio.delay = Fdc::SERVICE_CLOCKS;
+            self.fdc.pio = Some(pio);
             self.fdc.irq = true;
             self.sync_fdc_irq();
         }
     }
-    fn end_fdc_read(&mut self, read: &FdcRead, st1: u8) {
+    fn end_fdc_pio(&mut self, pio: &FdcPio, st1: u8) {
         // A held data request and the result request are distinct interrupt events.
         self.fdc.irq = false;
         self.sync_fdc_irq();
         self.fdc.result.extend([
-            0x40 | read.drive | (read.h << 2),
+            0x40 | pio.drive | (pio.h << 2),
             st1,
             0,
-            read.c,
-            read.h,
-            read.r,
-            read.n,
+            pio.c,
+            pio.h,
+            pio.r,
+            pio.n,
         ]);
         self.fdc.irq = true;
         self.sync_fdc_irq();
@@ -559,25 +563,25 @@ impl Bus {
             0x3fd9 | 0x3fdb | 0x3fdd => self.pit.read(((p - 0x3fd9) / 2) as usize),
             0x90 => self.fdc.status(),
             0x92 => {
-                let value = if let Some(read) = self.fdc.pio.as_mut() {
-                    if !read.ready {
+                let value = if let Some(pio) = self.fdc.pio.as_mut() {
+                    if pio.write || !pio.ready {
                         return 0x80;
                     }
-                    let value = self.disks[read.drive as usize]
+                    let value = self.disks[pio.drive as usize]
                         .as_ref()
-                        .and_then(|disk| disk.bytes.get(read.offset + read.pos))
+                        .and_then(|disk| disk.bytes.get(pio.offset + pio.pos))
                         .copied();
                     let Some(value) = value else {
                         // Media can be removed/replaced between host steps.
-                        let read = self.fdc.pio.take().unwrap();
-                        self.end_fdc_read(&read, 4);
+                        let pio = self.fdc.pio.take().unwrap();
+                        self.end_fdc_pio(&pio, 4);
                         return 0x80;
                     };
-                    read.pos += 1;
-                    read.ready = false;
+                    pio.pos += 1;
+                    pio.ready = false;
                     // Preserve the arrival cadence, independent of service time.
-                    read.delay += Fdc::BYTE_CLOCKS - Fdc::SERVICE_CLOCKS;
-                    if read.pos == read.len {
+                    pio.delay += Fdc::BYTE_CLOCKS - Fdc::SERVICE_CLOCKS;
+                    if pio.pos == pio.len {
                         self.fdc.reads += 1;
                     }
                     value
@@ -790,7 +794,30 @@ impl Bus {
                 }
             }
             0x92 => {
-                if !self.fdc.pending && self.fdc.pio.is_none() && self.fdc.result.is_empty() {
+                if let Some(mut pio) = self.fdc.pio.take() {
+                    if pio.write && pio.ready {
+                        let disk = self.disks[pio.drive as usize].as_mut();
+                        let Some(disk) =
+                            disk.filter(|disk| pio.offset + pio.pos < disk.bytes.len())
+                        else {
+                            self.end_fdc_pio(&pio, 4);
+                            return;
+                        };
+                        disk.bytes[pio.offset + pio.pos] = v;
+                        // Count a sector receiving payload once, including a
+                        // prefix retained after reset or a missed service.
+                        if pio.pos == 0 {
+                            disk.writes += 1;
+                            self.fdc.writes += 1;
+                        }
+                        pio.pos += 1;
+                        pio.ready = false;
+                        pio.delay += Fdc::BYTE_CLOCKS - Fdc::SERVICE_CLOCKS;
+                        self.fdc.irq = false;
+                        self.sync_fdc_irq();
+                    }
+                    self.fdc.pio = Some(pio);
+                } else if !self.fdc.pending && self.fdc.result.is_empty() {
                     self.fdc.command.push(v);
                     let count = Fdc::param_count(self.fdc.command[0]);
                     if self.fdc.command.len() == count {
@@ -922,7 +949,8 @@ impl Bus {
             5 | 6 => {
                 let (c, h, mut r, n, eot) = (p[2], p[3], p[4], p[5], p[6]);
                 if self.fdc.non_dma
-                    && (p[0] != 0x46
+                    && (!matches!(p[0], 0x45 | 0x46)
+                        || (op == 5 && r != eot)
                         || !(1..=3).contains(&n)
                         || h > 1
                         || (p[1] >> 2) & 1 != h
@@ -949,13 +977,14 @@ impl Bus {
                     st1 = 4;
                 } else if self.fdc.non_dma {
                     if let Some(s) = self.disks[d].as_ref().unwrap().sector(c, h, r, n) {
-                        self.fdc.pio = Some(FdcRead {
+                        self.fdc.pio = Some(FdcPio {
                             drive,
                             c,
                             h,
                             r,
                             n,
                             eot,
+                            write,
                             offset: s.offset,
                             len: s.len,
                             pos: 0,

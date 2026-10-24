@@ -29,4 +29,5 @@ __pycache__/
 /fixtures/ide_verify/
 /fixtures/opna_irq/
 /fixtures/fdc_pio/
+/fixtures/fdc_write/
 /fixtures/fdc_bios/
