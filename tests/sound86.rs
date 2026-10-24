@@ -335,7 +335,7 @@ fn opna_irq_board_gating_upper_bank_and_pcm_independence() {
     }
     b.output(0xa468, 0xa0);
     b.tick(100_000);
-    b.tick(8); // PCM samples are generated after source routing in a bus tick
+    // The threshold crossing must be routed in the same tick as audio sampling.
     assert!(b.pcm.irq);
     assert_eq!(b.irq(), Some(0x1c));
     b.output(0xa468, 0x80); // clear only PCM
@@ -410,7 +410,7 @@ fn opna_irq_original_guest_before_and_after_reset() {
             0,
         ]);
     }
-    expected[64..72].copy_from_slice(&[0, 0, 0x87, 0x84, 0, 0, 0x87, 0x84]);
+    expected[64..72].copy_from_slice(&[0; 8]);
     let mut m = Machine::new(Profile::Pc9821ApDos);
     m.insert(0, image.clone(), "opna_irq.hdm").unwrap();
     for run in 0..2 {
@@ -448,5 +448,270 @@ fn opna_irq_original_guest_before_and_after_reset() {
         assert_eq!(m.bus.opn.status() & 3, 0);
         assert_eq!((m.bus.pics[0].isr, m.bus.pics[1].isr), (0, 0));
         println!("Ap OPNA IRQ boot {run}: {slots} slots, 4 handler entries");
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum SoundInput {
+    TimerA,
+    TimerB,
+    Pcm,
+}
+impl SoundInput {
+    fn period(self) -> u32 {
+        match self {
+            Self::TimerA => 145,
+            Self::TimerB => 2308,
+            // Two 48 kHz samples: the first accumulates phase, the second
+            // consumes byte 129 and crosses the real 128-byte FIFO threshold.
+            Self::Pcm => 334,
+        }
+    }
+    fn program(self, b: &mut Bus) {
+        match self {
+            Self::TimerA | Self::TimerB => {
+                let flag = if matches!(self, Self::TimerA) { 1 } else { 2 };
+                for (a, v) in [
+                    (0x29, flag),
+                    (0x24, 0xff),
+                    (0x25, 3),
+                    (0x26, 0xff),
+                    (0x27, flag | (flag << 2)),
+                ] {
+                    register(b, false, a, v);
+                }
+            }
+            Self::Pcm => {
+                b.output(0xa468, 8); // reset FIFO and resampling phase
+                b.output(0xa468, 0);
+                b.output(0xa46a, 0xd0); // signed 8-bit mono, divisor 12
+                b.output(0xa468, 0x20);
+                b.output(0xa46a, 1);
+                for _ in 0..129 {
+                    b.output(0xa46c, 0x40);
+                }
+                b.output(0xa468, 0xa0);
+            }
+        }
+    }
+    fn hold(self, b: &mut Bus) {
+        match self {
+            Self::Pcm => b.output(0xa468, 0x30), // stop playback, retain enabled IRQ
+            _ => register(b, false, 0x27, 0),    // stop timer, retain enabled flag
+        }
+    }
+    fn raise(self, b: &mut Bus) {
+        self.program(b);
+        b.tick(self.period());
+        self.hold(b);
+        assert!(match self {
+            Self::Pcm => b.pcm.irq,
+            _ => b.opn.irq(),
+        });
+    }
+    fn clear(self, b: &mut Bus) {
+        match self {
+            Self::Pcm => b.output(0xa468, 0),
+            _ => register(b, false, 0x27, 0x30),
+        }
+    }
+}
+
+fn sound_poll(b: &mut Bus, port: u16) -> u8 {
+    b.output(port, 0x0c);
+    b.tick(8); // an asserted input must not retrigger the frozen poll
+    b.input(port)
+}
+fn sound_empty(b: &mut Bus) {
+    assert_eq!(b.pics[1].irr & 16, 0);
+    assert_eq!(sound_poll(b, 0), 0);
+    assert_eq!(sound_poll(b, 8), 0);
+    assert_eq!(b.irq(), None);
+}
+
+#[test]
+fn shared_sound_held_input_regression() {
+    for source in [SoundInput::TimerA, SoundInput::TimerB, SoundInput::Pcm] {
+        for poll in [false, true] {
+            let mut b = Bus::new(Profile::Pc9821ApDos);
+            sound_pic(&mut b);
+            source.raise(&mut b);
+            assert_eq!(b.pics[1].irr & 16, 16, "{source:?}");
+            if poll {
+                assert_eq!(sound_poll(&mut b, 0), 0x87);
+                assert_eq!(sound_poll(&mut b, 8), 0x84);
+            } else {
+                assert_eq!(b.irq(), Some(0x1c));
+            }
+            assert_eq!((b.pics[0].isr, b.pics[1].isr), (128, 16));
+            b.tick(10_000);
+            sound_empty(&mut b);
+            sound_eoi(&mut b);
+            b.tick(10_000);
+            sound_empty(&mut b);
+            source.clear(&mut b);
+            source.raise(&mut b);
+            assert_eq!(b.irq(), Some(0x1c), "fresh edge: {source:?}");
+        }
+    }
+}
+
+#[test]
+fn shared_sound_masked_capture_suppression_and_edge_during_service() {
+    for source in [SoundInput::TimerA, SoundInput::TimerB, SoundInput::Pcm] {
+        for slave_first in [false, true] {
+            let mut b = Bus::new(Profile::Pc9821ApDos);
+            sound_pic(&mut b);
+            b.output(10, 0xff);
+            source.raise(&mut b);
+            assert_eq!(b.pics[1].irr & 16, 16);
+            assert_eq!(b.irq(), None);
+            source.clear(&mut b);
+            assert_eq!((b.pics[1].irr & 16, b.pics[1].isr), (16, 0));
+            b.output(10, 0xef);
+            assert_eq!(b.irq(), Some(0x1c));
+            source.raise(&mut b); // genuine edge while IR4 is in service
+            source.clear(&mut b); // suppression cannot erase either register
+            assert_eq!((b.pics[1].irr & 16, b.pics[1].isr), (16, 16));
+            assert_eq!(b.pics[0].isr, 128);
+            assert_eq!(b.irq(), None);
+            b.output(if slave_first { 8 } else { 0 }, 0x20);
+            assert_eq!(b.irq(), None, "both cascade EOIs are necessary");
+            b.output(if slave_first { 0 } else { 8 }, 0x20);
+            assert_eq!(b.irq(), Some(0x1c));
+            assert_eq!((b.pics[1].irr & 16, b.pics[1].isr), (0, 16));
+            sound_eoi(&mut b);
+            sound_empty(&mut b);
+        }
+    }
+}
+
+#[test]
+fn shared_sound_consecutive_pending_flag_and_pcm_control_writes() {
+    for source in [SoundInput::TimerA, SoundInput::TimerB] {
+        let mut b = Bus::new(Profile::Pc9821ApDos);
+        sound_pic(&mut b);
+        source.raise(&mut b);
+        assert_eq!(b.irq(), Some(0x1c));
+        let flag = b.input(0x188) & 3;
+        register(&mut b, false, 0x29, 0);
+        assert_eq!((b.pics[1].irr & 16, b.pics[1].isr), (0, 16));
+        register(&mut b, false, 0x29, flag); // no tick between disable/enable
+        assert_eq!(b.input(0x188) & 3, flag);
+        assert_eq!((b.pics[1].irr & 16, b.pics[1].isr), (16, 16));
+        register(&mut b, false, 0x29, 0);
+        assert_eq!((b.pics[1].irr & 16, b.pics[1].isr), (16, 16));
+        sound_eoi(&mut b);
+        assert_eq!(b.irq(), Some(0x1c));
+    }
+    let mut b = Bus::new(Profile::Pc9821ApDos);
+    sound_pic(&mut b);
+    SoundInput::Pcm.raise(&mut b);
+    assert_eq!(b.irq(), Some(0x1c));
+    b.output(0xa468, 0x10); // disable output but retain pending PCM IRQ
+    b.output(0xa468, 0x30); // enable without an intervening tick
+    assert!(b.pcm.irq);
+    assert_eq!((b.pics[1].irr & 16, b.pics[1].isr), (16, 16));
+    sound_eoi(&mut b);
+    assert_eq!(b.irq(), Some(0x1c));
+    b.output(0xa468, 0x20); // acknowledge, preserving FIFO and IRQ enable
+    assert!(!b.pcm.irq);
+    assert_eq!(b.pcm.fifo.len(), 128);
+    b.output(0xa46c, 0x40); // refill above threshold
+    b.output(0xa468, 0xa0);
+    b.tick(334);
+    assert!(b.pcm.irq);
+    assert_eq!((b.pics[1].irr & 16, b.pics[1].isr), (16, 16));
+    sound_eoi(&mut b);
+    assert_eq!(b.irq(), Some(0x1c));
+}
+
+#[test]
+fn shared_sound_overlapping_contributors_do_not_create_edges() {
+    for timer in [SoundInput::TimerA, SoundInput::TimerB] {
+        for pcm_first in [false, true] {
+            let (first, second) = if pcm_first {
+                (SoundInput::Pcm, timer)
+            } else {
+                (timer, SoundInput::Pcm)
+            };
+            let mut b = Bus::new(Profile::Pc9821ApDos);
+            sound_pic(&mut b);
+            first.raise(&mut b);
+            assert_eq!(b.irq(), Some(0x1c));
+            second.raise(&mut b);
+            // Neither contributor's consecutive output-enable writes create
+            // an edge while the other holds the combined input asserted.
+            let flag = b.input(0x188) & 3;
+            register(&mut b, false, 0x29, 0);
+            register(&mut b, false, 0x29, flag);
+            b.output(0xa468, 0x10);
+            b.output(0xa468, 0x30);
+            b.output(0xa460, 3); // board I/O gating does not gate the IRQ wire
+            b.output(0xa460, 0);
+            first.clear(&mut b);
+            b.tick(10_000);
+            sound_empty(&mut b);
+            sound_eoi(&mut b);
+            sound_empty(&mut b); // second contributor still holds the shared wire
+            second.clear(&mut b);
+            first.raise(&mut b);
+            assert_eq!(b.irq(), Some(0x1c));
+        }
+    }
+}
+
+#[test]
+fn shared_sound_clock_partitioning_observes_audio_threshold_same_tick() {
+    for source in [SoundInput::TimerA, SoundInput::TimerB, SoundInput::Pcm] {
+        let period = source.period();
+        for partition in [vec![period], vec![period - 1, 1], vec![1; period as usize]] {
+            let mut b = Bus::new(Profile::Pc9821ApDos);
+            sound_pic(&mut b);
+            source.program(&mut b);
+            let mut elapsed = 0;
+            for clocks in partition {
+                b.tick(clocks);
+                elapsed += clocks;
+                assert_eq!(b.pics[1].irr & 16, if elapsed == period { 16 } else { 0 });
+            }
+            if matches!(source, SoundInput::Pcm) {
+                assert_eq!(b.pcm.fifo.len(), 128);
+                assert_eq!(b.pcm.samples, 1);
+            }
+            source.hold(&mut b);
+            assert_eq!(b.irq(), Some(0x1c));
+            b.tick(period * 2);
+            sound_eoi(&mut b);
+            sound_empty(&mut b);
+        }
+    }
+}
+
+#[test]
+fn shared_sound_pic_reinitialization_instances_and_machine_reset() {
+    for source in [SoundInput::TimerA, SoundInput::TimerB, SoundInput::Pcm] {
+        let mut m = Machine::new(Profile::Pc9821ApDos);
+        let mut other = Machine::new(Profile::Pc9821ApDos);
+        sound_pic(&mut m.bus);
+        sound_pic(&mut other.bus);
+        source.raise(&mut m.bus);
+        sound_empty(&mut other.bus);
+        sound_pic(&mut m.bus); // clears IRR; a held input must not re-latch
+        m.bus.tick(10_000);
+        sound_empty(&mut m.bus);
+        source.clear(&mut m.bus);
+        source.raise(&mut m.bus);
+        assert_eq!(m.bus.irq(), Some(0x1c));
+        sound_pic(&mut m.bus); // also clear ISR without fabricating an edge
+        m.bus.tick(10_000);
+        sound_empty(&mut m.bus);
+        m.reset();
+        sound_pic(&mut m.bus);
+        sound_empty(&mut m.bus);
+        source.raise(&mut m.bus);
+        assert_eq!(m.bus.irq(), Some(0x1c));
+        source.raise(&mut other.bus); // independent detector, including PCM
+        assert_eq!(other.bus.irq(), Some(0x1c));
     }
 }

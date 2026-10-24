@@ -2,10 +2,10 @@
   "source": "guest/opna_irq.asm",
   "license": "MIT; original source and LICENSE copied alongside image",
   "assembly": "nasm -f bin guest/opna_irq.asm -o opna_irq.bin",
-  "source_sha256": "c62efe15fa6eaa29fda1915f8017ec16d26bd32f3bda7ce95e428e3e8fef4801",
-  "boot_sha256": "43013a2d581e760226c6a5bef0745eacec0a6b3a43b372f590cc81a6b9aefd0a",
+  "source_sha256": "9fa21c8b855d7fe6ad9efa7dc1ace317d19629ee85af98b76fe3e7db4500bd06",
+  "boot_sha256": "5f5618db9d5ac8132c760b0ad63a052bfdea37efff23fc8499d176c769b729cf",
   "image": "fixtures/opna_irq/opna_irq.hdm",
-  "image_sha256": "821eed997de3dea24566debda3376058fcf18d8d7451e251b2e4138c92b42f20",
+  "image_sha256": "a29480de67b89ba274348e824aba2aaa0948835d95cd88494a5112e12782a605",
   "geometry": "77 cylinders, 2 heads, 8 sectors, 1024 bytes per sector",
   "profiles": [
     "Ap"
@@ -16,13 +16,13 @@
   "firmware_sha256": "64a9985dc777a515780515f4453320f9aedcdd44659b3f9622cad47712baddf8",
   "specifications": [
     "Yamaha YM2608 Application Manual sections 2-2-1 (page 19) and 2-8-3 (page 36)",
-    "Intel 8259A datasheet: interrupt acknowledgement, IRR/ISR and normal EOI"
+    "Intel 8259A datasheet: edge-triggered initialization, interrupt acknowledgement, IRR/ISR and normal EOI"
   ],
   "host": "Mount, step, reset and read outputs only; no flag, interrupt or result injection",
   "result_address": "0x8000",
   "result_length": 128,
-  "result_hex": "a504a5a5a5a5a5a5a5a5a5a5a5a5a5a50101001010011080010000011080020002020010100210800300000210800400a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a50000878400008784a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
-  "result_layout": "8001=4 actual vector-1Ch handler entries; 8010..801f=Timer A, 8020..802f=Timer B; 8040..8047=master/slave poll acknowledgements (00,00 suppressed; 87,84 enabled, per timer); all other bytes A5",
+  "result_hex": "a504a5a5a5a5a5a5a5a5a5a5a5a5a5a50101001010011080010000011080020002020010100210800300000210800400a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a50000000000000000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+  "result_layout": "8001=4 actual vector-1Ch handler entries; 8010..801f=Timer A, 8020..802f=Timer B; 8040..8047=master/slave poll bytes (all eight zero, suppressed and held-enabled paths per timer); all other bytes A5",
   "record_layout": [
     "suppressed status",
     "repeated status",
@@ -52,7 +52,7 @@
     }
   ],
   "guards": "8000,8002..800f,8030..803f,8048..807f remain A5; guest and hosts compare all 128 bytes; guest checks SP=7c00",
-  "irq_contract": "Each timer overflows while suppressed, status remains readable and PIC clean; enabling pending flag latches slave IR4; suppression retains request; actual vector-1Ch handler observes ISR4/master ISR7, clears flags with 27h, EOIs both; new overflow and enable recovers with output enabled at CPU entry; handler suppresses/clears the source and drains the scheduler-retained request with PIC poll acknowledgement and EOIs. Guest explicitly sets slave vector base=18h.",
+  "irq_contract": "Each timer overflows while suppressed, status remains readable and PIC clean; enabling pending flag latches slave IR4; suppression retains request; actual vector-1Ch handler observes ISR4/master ISR7 and EOIs both; new overflow and enable recovers with output enabled at CPU entry; handler retains enabled assertion across both normal EOIs and a bounded 128-iteration guest delay; master/slave polling must return zero (checked immediately) before source suppression/27h flag clearing, with no cleanup EOI pair. Guest explicitly sets slave vector base=18h.",
   "markers": [
     "OPNA IRQ PASS",
     "OPNA IRQ FAIL"

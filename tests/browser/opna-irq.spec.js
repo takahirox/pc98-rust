@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 
 for (const [profile, name] of [['1', 'Ap']]) {
-  test(`${name}: YM2608 Timer A/B IRQ enables before and after reset`, async ({ page }) => {
+  test(`${name}: YM2608 Timer A/B shared IRQ edges before and after reset`, async ({ page }) => {
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => {
@@ -20,13 +20,14 @@ for (const [profile, name] of [['1', 'Ap']]) {
     const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/opna-irq-manifest.json', import.meta.url)));
     expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
     const expected = [...Buffer.from(manifest.result_hex, 'hex')];
+    expect(expected.slice(64, 72)).toEqual(Array(8).fill(0));
     await page.locator('#drive').selectOption({ value: '0' });
     await page.locator('#file').setInputFiles({ name: 'opna_irq.hdm', mimeType: 'application/octet-stream', buffer: image });
     for (let run = 0; run < 2; run++) {
       if (run) await page.locator('#reset').click();
       let slots = 0;
       let text = '';
-      // Guest checks both timer paths, four real handler entries and every guard.
+      // Guest checks both timers, four entries, held-output EOIs, eight empty polls and every guard.
       // Host only steps the production core and reads its outputs.
       while (slots < manifest.slot_budget) {
         const snapshot = await page.evaluate(remaining => {

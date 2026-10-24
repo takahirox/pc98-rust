@@ -1009,28 +1009,43 @@ status, reload timers or discard accumulated/fractional clocks. Register 27h
 continues to control loading, overflow flag generation and independent flag
 clearing. Status reads are nondestructive. Timer frequencies are unchanged.
 
-The bus samples device output on the next normal scheduler tick and ORs it with
-PCM's independently enabled FIFO IRQ at slave IR4. Suppression changes only the
-device output: latched PIC IRR and ISR survive until ordinary acknowledgement
-and EOI. Both cascade controllers require EOI. Existing board I/O masks and
-upper-bank isolation remain in force. The probe explicitly programs slave base
+The bus ORs OPNA output with PCM's independently enabled FIFO IRQ at slave IR4:
+`opn.irq() || (pcm.irq && pcm.control & 0x20 != 0)`. One logical edge detector
+observes this combined wire after relevant guest writes, timer advancement and
+PCM audio sampling. Only inactive-to-active transitions latch IRR4; holding the
+wire active across CPU or poll acknowledgement and normal EOI cannot request it
+again. Consecutive output-disable/enable writes remain visible without a tick.
+Adding or clearing one contributor while the other holds the wire active does
+not create an edge. A PCM threshold crossing is observed in the same bus tick
+as FIFO consumption, even when no further scheduler tick occurs.
+
+Suppression changes only device output: latched PIC IRR and ISR survive until
+ordinary acknowledgement and EOI. Acknowledgement clears IRR4 and sets ISR4;
+a fresh edge during service remains pending for later delivery. Masked edges
+remain captured for unmasking. Both cascade controllers require normal EOI.
+PIC initialization clears its request/service registers but retains the bus's
+input history, so an already asserted input cannot fabricate an edge. Machine
+reset reconstructs the devices and their edge history for fresh delivery.
+Existing board I/O masks and upper-bank isolation remain in force. The probe explicitly programs slave base
 18h to observe vector 1Ch; it does not change the emulator's existing PIC reset
 or synthetic firmware base 10h. The shared Rust name `Opn` does not imply that
 YM2203 has register 29h; VM sound remains unexposed.
 
 References: Yamaha [YM2608 Application Manual §2-2-1, page 19](https://csclub.uwaterloo.ca/~pbarfuss/YM2608J_Translated.PDF#page=19)
 and [§2-8-3, page 36](https://csclub.uwaterloo.ca/~pbarfuss/YM2608J_Translated.PDF#page=36),
-and Intel [8259A interrupt sequence and EOI](https://courses.cs.washington.edu/courses/cse451/25wi/documentation/8259A.pdf#page=7).
+and Intel [8259A interrupt sequence and EOI](https://courses.cs.washington.edu/courses/cse451/25wi/documentation/8259A.pdf#page=7),
+[initialization](https://courses.cs.washington.edu/courses/cse451/25wi/documentation/8259A.pdf#page=9)
+and [edge-triggered input](https://courses.cs.washington.edu/courses/cse451/25wi/documentation/8259A.pdf#page=17).
 
 The original MIT [guest probe](../guest/opna_irq.asm) and
 [provenance manifest](../fixtures/opna-irq-manifest.json) cover both timers,
 suppressed overflow/status reads, enabling pending flags, retained requests,
 actual guest handler execution, ISR observations, EOIs and subsequent recovery.
-The enabled recovery enters the handler with device output asserted. As the
-existing scheduler can sample the active source again after CPU acknowledgement,
-the handler suppresses/clears the source, issues both EOIs, and acknowledges the
-retained request through PIC polling and another EOI pair. These observations
-are checked separately from the exact four CPU handler entries. Every result
+The enabled recovery keeps device output asserted across both ordinary EOIs
+and a bounded 128-iteration guest delay. All eight master/slave poll bytes must
+be zero; the guest checks each pair before suppressing/clearing the source.
+There is no extra cleanup EOI pair. These observations are checked separately
+from the exact four CPU handler entries. Every result
 and guard byte is checked by guest and host, before/after reset, natively and in
 production release-Wasm at `/` and `/pc98-rust/`, within 500,000 slots per boot.
 

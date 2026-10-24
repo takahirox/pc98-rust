@@ -158,7 +158,9 @@ and [validation record](docs/validation.md#issue-67-opnopna-channel-3-frequency-
 
 The original MIT [YM2608 IRQ probe](guest/opna_irq.asm) checks Timer A/B
 suppression, pending-flag enables, retained PIC requests, actual vector-1Ch
-handlers, acknowledgement/EOI and recovery on Ap. Prepare it offline with
+handlers, acknowledgement/EOI and recovery on Ap. Enabled recovery holds the
+shared IRQ asserted across both normal EOIs and a bounded guest delay; all eight
+master/slave poll bytes must remain zero. Prepare it offline with
 `python3 tools/prepare_opna_irq_fixture.py`; run
 `cargo test --locked --test sound86 opna_irq_`, the full `sound86`, `ap`, `music`
 and `pic` targets, and `npm test`. The
@@ -169,7 +171,7 @@ tests boot the same image before/after reset and at both browser roots, requirin
 unchanged media and no errors within 500,000 scheduler slots per boot. Hosts only
 mount, step, reset and inspect outputs. Generated files stay outside `web/`.
 See the [bounded register-29 contract](docs/hardware.md#ap-ym2608-timer-irq-enables)
-and [validation record](docs/validation.md#issue-73-ym2608-timer-irq-enables-2026-10-24).
+and [edge-routing validation record](docs/validation.md#issue-75-ap-shared-sound-irq-edges-2026-10-24).
 
 The original MIT [RTC probe](guest/rtc.asm) exercises Ap parallel 40-bit and
 serial 52-bit calendar reads, BIOS agreement and advancement with IF clear.
