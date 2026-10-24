@@ -1,0 +1,50 @@
+{
+  "source": "guest/fdc_bios.asm",
+  "license": "MIT; original guest, synthetic firmware source and LICENSE copied alongside image",
+  "assembly": "nasm -f bin guest/fdc_bios.asm -o fdc_bios.bin",
+  "source_sha256": "6d74e6823d99718c05a0a8f0844048325efb4978c072d21973708c58645291b6",
+  "boot_sha256": "b2c63bda02cb495775c4e7754a8a3fe85e4d442462eccc2096c66459f83f5b58",
+  "image": "fixtures/fdc_bios/fdc_bios.hdm",
+  "image_sha256": "8d3a427b3607e7b9231f4be8951673b12d8ea29333eb989bff048b9d0a3eb3a5",
+  "firmware_source_sha256": "3dc8969cddb750912c267ee5012dce2382cfe1b23115d0eb5c22e87a66ebc4db",
+  "firmware_sha256": "64a9985dc777a515780515f4453320f9aedcdd44659b3f9622cad47712baddf8",
+  "geometry": "77 cylinders, 2 heads, 8 sectors, 1024 bytes per sector",
+  "profiles": [
+    "VM",
+    "Ap"
+  ],
+  "provenance": "Original source-built bare-metal MIT probe; no acquired binary, commercial ROM, DOS or copied emulator implementation",
+  "contract": "Fresh SPECIFY ND=1 independently before BIOS reads C0/C2 R2 and writes C0/C2 R3; BIOS readback of both writes; completed PIO C2/R2 -> BIOS C0/R2 -> fresh SPECIFY ND=1 -> PIO C0/R2. Actual INT 1Bh AL=90h AH=06h/05h CH=3 DH=0 BX=1024 ES:BP=buffer. Guest checks every CF/AH, payload, guard, PIO MSR/result and final SP.",
+  "record_address": "0x8000",
+  "record_hex": "010000000000000000000000000000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+  "record_layout": "8000=PASS done; 8001..800e=seven AH/CF pairs, all zero; rest A5",
+  "read_patterns": {
+    "C0H0R2": "(i ^ (i >> 8)) & 255",
+    "C2H0R2": "(7*i + 0x31) & 255"
+  },
+  "write_patterns": {
+    "C0H0R3": "(29*i + 71) & 255",
+    "C2H0R3": "(13*i + 0xb3) & 255"
+  },
+  "buffers": {
+    "0x9000": "C0H0R2",
+    "0x9800": "C2H0R2",
+    "0xa000": "C0H0R3",
+    "0xa800": "C2H0R3",
+    "0xb000": "C2H0R3 readback",
+    "0xb800": "C2H0R2 PIO",
+    "0xc000": "C0H0R2 PIO"
+  },
+  "guards": "All RAM 800f..c40f outside the seven 1024-byte buffers remains A5; host compares the complete 8000..c40f region",
+  "pio_result": "40 80 00 C 00 02 03; EOT without TC, separate result phase after 1024 EXM data bytes",
+  "expected_media_sha256": "fe6f5502d622351e98c9a18a1b938249631a404d0b0e3268fc0d453fdcdec9c4",
+  "media": "Exactly two writes: only C0/H0/R3 (2048..3071) and C2/H0/R3 (34816..35839); hosts compare complete exported media to independently constructed expected bytes",
+  "markers": [
+    "FDC BIOS PASS",
+    "FDC BIOS FAIL"
+  ],
+  "slot_budget": 2000000,
+  "host": "Mount, step, observe and reset only; no injected code, guest results or IRQs",
+  "reset": "Same image retained across reset; identical results and idempotent writes",
+  "distribution": "Test only; excluded from web/"
+}

@@ -3921,3 +3921,151 @@ subsequent PR workflow before merge. No post-merge verification is required by
 this Issue. Limited probes establish this subset, without a full FDC hardware
 accuracy or commercial compatibility claim; protected execution, paging and basic
 x87 remain required work.
+
+## Issue #81: BIOS floppy DMA handoff
+
+The suspected regression was reproduced before changing firmware. The original
+MIT Rust reproduction is retained as `tests/fdc_bios.rs` (SHA-256
+`398a62080915286a1447f3462867b8115e8c6c50da827ea5e6c7456f3064b9c4`).
+It creates fresh patterned writable media for every VM/Ap × helper/actual
+INT 1Bh × read/write × cylinder 0/2 combination, enables DMA, sends
+`03 DF 03`, advances dispatch and checks idle MSR. The guest reproduction executes
+`INT 1Bh; HLT` with AL=90h, AH=06h/05h, CH=3, CL=0/2, DH=0, DL=2,
+BX=1024 and ES:BP=0000:9000. It compares complete media, exact payload,
+16-byte guards, DMA progression/TC and final MSR. This small host-arranged
+reproduction is separate from the source-built boot acceptance probe below.
+
+Exact revision reproduction commands (from the implementation worktree):
+
+```sh
+git worktree add --detach /tmp/pc98-issue81/baseline ae6b96926ce9146de9dbdfd1269686b74ae3a643
+git worktree add --detach /tmp/pc98-issue81/merge 14824332666e7a7ce3a529d766a7af282865f23e
+cp tests/fdc_bios.rs /tmp/pc98-issue81/baseline/tests/issue81_repro.rs
+cp tests/fdc_bios.rs /tmp/pc98-issue81/merge/tests/issue81_repro.rs
+cargo test --locked --manifest-path /tmp/pc98-issue81/baseline/Cargo.toml --test issue81_repro -- --nocapture
+cargo test --locked --manifest-path /tmp/pc98-issue81/merge/Cargo.toml --test issue81_repro -- --nocapture
+```
+
+The baseline passed all 16 combinations; the recorded merge failed all 16. Both
+profiles and both cylinder requests produced the same observations:
+
+| Revision/path | Return | Payload/media | DMA address/count/TC | Final MSR |
+| --- | --- | --- | --- | --- |
+| Baseline helper read/write | true | Exact payload and expected full media | 9400/FFFF/4 | 80 |
+| Baseline INT 1Bh read/write | CF=0, AH=00 | Exact payload and expected full media | 9400/FFFF/4 | 80 |
+| Merge helper read | false | Buffer still A5; media unchanged | 9000/03FF/0 | 70 (PIO execution) |
+| Merge INT 1Bh read | CF=1, AH=40 | Buffer still A5; media unchanged | 9000/03FF/0 | 70 (PIO execution) |
+| Merge helper write | false | Source buffer intact; intended write absent | 9000/03FF/0 | 80 |
+| Merge INT 1Bh write | CF=1, AH=40 | Source buffer intact; intended write absent | 9000/03FF/0 | 80 |
+
+All guards remained intact. The original reproduction was rerun at both exact
+revisions after Rust formatting, with the same outcomes. The merge exits 101
+because the final assertion counts 16 failed combinations. The baseline exits 0.
+No commercial compatibility failure is claimed.
+
+The forward fix checks retained ND and, when needed, selects DMA through the
+normal FIFO using `03 DF 02` (SRT=13, HUT=15, HLT=1, ND=0). It polls for idle MSR
+with a 160-clock dispatch bound before seek/data commands; SPECIFY has no result
+phase. Timing parameters are a synthetic firmware policy and remain unmodeled.
+There is no direct media copying or modification of retained ND/PIO behavior.
+When DMA is already selected, the existing request timing is preserved.
+
+An initial implementation sent SPECIFY unconditionally. Its focused FDC checks
+passed, but full native validation found the unchanged
+`opn_ch3_guest_pcm_stages_before_and_after_reset` PCM chunk-size assertion failing.
+The first production-Wasm/browser run also exposed that assertion. The redundant
+command added clocks to default-DMA boot reads. The final implementation avoids
+that redundant command, retaining all existing PCM assertions and budgets.
+
+The added helper matrix covers VM/Ap, fresh idle ND=1, reads/writes on cylinder
+0/2 and head 1, missing-sector reads/writes and protected writes. It asserts exact
+buffers and guards, complete media differences/write counts, channel-2 page,
+address/count/mask/TC, drained results, subsequent SENSE DRIVE STATUS, and completed
+PIO reads after fresh SPECIFY ND=1. The original 16-case reproduction additionally
+checks the actual INT 1Bh CF/AH contract from head 0.
+
+The original MIT boot probe `guest/fdc_bios.asm` is assembled offline with:
+
+```sh
+python3 tools/prepare_fdc_bios_fixture.py
+# Equivalent assembly command:
+nasm -f bin guest/fdc_bios.asm -o fdc_bios.bin
+```
+
+The checked [manifest](../fixtures/fdc-bios-manifest.json) records provenance,
+license, build command, source/boot/image/firmware hashes and independent expected
+results. Source SHA-256 is
+`6d74e6823d99718c05a0a8f0844048325efb4978c072d21973708c58645291b6`;
+image SHA-256 is
+`8d3a427b3607e7b9231f4be8951673b12d8ea29333eb989bff048b9d0a3eb3a5`.
+The generated directory contains the guest source, synthetic firmware source,
+MIT license and manifest alongside the image; it is excluded from Git and web
+publication. No commercial ROMs or guest software were acquired.
+
+Guest code independently checks seven actual INT 1Bh CF/AH pairs, exact original
+read patterns and distinct write payloads, both BIOS write readbacks, all guards,
+final SP, idle readiness and separate PIO data/result phases. It performs fresh
+ND=1 before same-cylinder/seek-required BIOS reads and writes, then completed
+PIO C2/R2 → BIOS C0/R2 → fresh ND=1 → PIO C0/R2. Native and browser hosts only
+mount, step, observe and reset. Both compare the entire guarded RAM region
+8000h..C40Fh and complete exported media against independent expectations. Only
+C0/H0/R3 (offset 2048, length 1024) and C2/H0/R3 (offset 34816, length 1024)
+may change. Reset retains the same disk, so writes are idempotent; the per-boot
+FDC count is two, and native media counters accumulate to four after reset.
+All executions have an explicit 2,000,000-slot limit and require guest PASS with
+no FAIL/core/browser errors.
+
+Browser execution history is recorded separately from final acceptance. The
+ordinary `npm test` built and checked the production artifact but ran **zero**
+browser cases because a configured loopback port was occupied. A temporary
+`.issue81-playwright.config.js` changed only serving ports to 18081/18082 and
+worker count to two, preserving `/`, `/pc98-rust/`, every assertion, timeout and
+guest budget. Its project server was an exact copy of `serve_project.py` with
+8001 replaced by 18082. The first isolated run used the initial unconditional
+SPECIFY implementation; it was stopped after the known PCM failure to begin
+validation of the corrected artifact. Its actual totals were **66 passed,
+1 failed, 2 interrupted, 45 did not run** (3.6 minutes). That run is not counted
+as complete acceptance. The corrected artifact was rebuilt and the full suite
+started anew with `npm test -- --config=.issue81-playwright.config.js`.
+
+Local diff review checked the FIFO handoff, the no-result SPECIFY lifecycle and
+bounded readiness wait, default-DMA timing preservation, DMA/result/error
+contracts, independent media/payload expectations, reset behavior, provenance
+and CI fixture preparation. Existing PIO, DOS/apps/VM/audio, IDE-edge and six-game
+regression sources, assertions and budgets were retained. All 26 inventory
+categories keep their previous scopes/statuses: 23 partial, GRCG
+implemented_unverified, and paging/FPU unimplemented; none is verified. Protected
+mode, paging and basic x87 remain required work. FDC still excludes PIO writes,
+MT, deleted-data/format/scan, N=0/DTL, fuller timing/board/error behavior,
+additional media coverage and 512-byte IPL acceptance.
+
+This node implements, validates and commits locally only. Push, PR creation,
+comments, remote CI, independent PR review and merge were not performed, as
+required by the execution instruction. The evidence here is ready for the later
+PR workflow; independent review and remote CI remain for that workflow. No
+post-merge verification is required by this Issue.
+
+Final checks on the corrected implementation:
+
+| Check | Outcome |
+| --- | --- |
+| `python3 -m unittest discover -s tools -p test_fixture_fetch.py` | 7 passed |
+| All README fixture preparation commands, plus `python3 tools/prepare_fdc_bios_fixture.py` | Passed; original/licensed source provenance and pinned hashes checked. Primary FreeDOS CPULEVEL/DEBUG mirrors returned HTTP 503; existing pinned fallbacks succeeded |
+| `cargo test --locked --test fdc --test core --test dma --test pic` | 100 passed: FDC 12, core 49, DMA 11, PIC 28 |
+| `cargo test --locked --test fdc --test fdc_bios --test core --test dma --test pic` | 101 passed, including the original 16-combination reproduction |
+| `cargo test --locked` | 327 passed; zero failures, ignored or filtered tests |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `cargo fmt --check`; `git diff --check`; `git diff --cached --check` | Passed, including new staged files |
+| `npm ci`; `npx playwright install chromium` | Passed |
+| `npm test` (default ports) | Build/site checks passed; occupied port prevented browser startup; zero cases executed |
+| `npm test -- --config=.issue81-playwright.config.js` (corrected artifact, isolated ports) | All 114 cases passed (110 existing + 4 new) in 5.4 minutes; production release Wasm, both serving paths |
+
+All four final native probe boots and all eight final browser probe boots
+(VM/Ap × root/project path × before/after reset) finished in **146,000 slots**
+each. Every boot required seven CF=0/AH=0 pairs, exact payloads and full guarded
+RAM, precisely two intended writes, complete expected exported media and no
+guest/core/browser errors. Existing interrupt-driven PIO acceptance remains
+passing. The temporary port configuration and server copy were removed after
+validation; neither was committed. No final check was skipped. The default-port
+startup failure and interrupted initial browser run above remain distinct from
+the complete passing final run.

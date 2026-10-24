@@ -472,3 +472,157 @@ fn unavailable_media_and_missing_later_sector_end_in_result_phase() {
         assert_eq!(results(&mut b), [0x40, 4, 0, 0, 0, 1, 1]);
     }
 }
+
+#[test]
+fn bios_takes_idle_nd_for_dma_and_preserves_errors_and_pio_reentry() {
+    for profile in PROFILES {
+        for cylinder in [0, 2] {
+            for (write, missing, protected) in [
+                (false, false, false),
+                (true, false, false),
+                (false, true, false),
+                (true, true, false),
+                (true, false, true),
+            ] {
+                let mut b = setup(profile);
+                b.output(0x11, 0);
+                b.disks[0].as_mut().unwrap().protected = protected;
+                let mut expected_media = patterned_raw();
+                let sector = if missing { 9 } else { 2 };
+                let offset = cylinder as usize * 16384 + 8192 + 1024;
+                let payload: Vec<_> = (0..1024)
+                    .map(|i| (i as u8).wrapping_mul(29).wrapping_add(71))
+                    .collect();
+                b.mem[0x28ff0..0x29410].fill(0xa5);
+                if write {
+                    b.mem[0x29000..0x29400].copy_from_slice(&payload);
+                }
+                let success = !missing && !protected;
+                if write && success {
+                    expected_media[offset..offset + 1024].copy_from_slice(&payload);
+                }
+                assert_eq!(b.input(0x90), 0x80);
+                assert_eq!(
+                    pc98_rust::firmware::disk_transfer(
+                        &mut b,
+                        0,
+                        [cylinder, 1, sector, 3],
+                        1024,
+                        0x29000,
+                        write,
+                    ),
+                    success,
+                    "{profile:?} C={cylinder} write={write} missing={missing} protected={protected}"
+                );
+                let expected_buffer = if write {
+                    payload
+                } else if success {
+                    expected_media[offset..offset + 1024].to_vec()
+                } else {
+                    vec![0xa5; 1024]
+                };
+                assert_eq!(&b.mem[0x29000..0x29400], &expected_buffer);
+                assert_eq!(&b.mem[0x28ff0..0x29000], &[0xa5; 16]);
+                assert_eq!(&b.mem[0x29400..0x29410], &[0xa5; 16]);
+                assert_eq!(b.disks[0].as_ref().unwrap().bytes, expected_media);
+                assert_eq!(
+                    b.disks[0].as_ref().unwrap().writes,
+                    u64::from(write && success)
+                );
+                assert_eq!(b.fdc.writes, u64::from(write && success));
+                assert_eq!(b.fdc.reads, u64::from(!write && success));
+                assert_eq!(b.dma.addr[2], if success { 0x9400 } else { 0x9000 });
+                assert_eq!(b.dma.page[2], 2);
+                assert_eq!(b.dma.count[2], if success { 0xffff } else { 1023 });
+                assert_eq!(b.dma.status & 4, if success { 4 } else { 0 });
+                assert_eq!(b.dma.mask & 4, if success { 4 } else { 0 });
+                assert_eq!(b.fdc.cylinder[0], cylinder);
+                // All seven results were drained; the controller is idle.
+                assert_eq!(b.input(0x90), 0x80);
+                assert_eq!(b.input(0x92), 0x80);
+                // An ordinary command works immediately after success or error.
+                command(&mut b, &[4, 0]);
+                assert_eq!(
+                    b.input(0x92),
+                    0x28 | if cylinder == 0 { 16 } else { 0 } | if protected { 64 } else { 0 }
+                );
+                assert_eq!(b.input(0x90), 0x80);
+                // BIOS selecting DMA must not remove raw clients' PIO capability.
+                command(&mut b, &[3, 0xdf, 3]);
+                command(&mut b, &[0x46, 0, cylinder, 0, 1, 3, 1, 0x1b, 0xff]);
+                let start = cylinder as usize * 16384;
+                read_payload(&mut b, &expected_media[start..start + 1024]);
+                assert_eq!(results(&mut b), [0x40, 0x80, 0, cylinder, 0, 1, 3]);
+            }
+        }
+    }
+}
+
+#[test]
+fn original_bios_handoff_guest_before_and_after_reset() {
+    let image = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/fixtures/fdc_bios/fdc_bios.hdm"
+    ))
+    .expect("run python3 tools/prepare_fdc_bios_fixture.py");
+    let mut expected_media = image.clone();
+    let write0: Vec<_> = (0..1024).map(|i| (29 * i + 71) as u8).collect();
+    let write2: Vec<_> = (0..1024).map(|i| (13 * i + 0xb3) as u8).collect();
+    expected_media[2048..3072].copy_from_slice(&write0);
+    expected_media[34816..35840].copy_from_slice(&write2);
+    let mut expected_ram = vec![0xa5; 0x4410];
+    expected_ram[0] = 1;
+    expected_ram[1..15].fill(0); // seven successful AH/CF pairs
+    for (address, payload) in [
+        (0x9000, &image[1024..2048]),
+        (0x9800, &image[33792..34816]),
+        (0xa000, &write0[..]),
+        (0xa800, &write2[..]),
+        (0xb000, &write2[..]),
+        (0xb800, &image[33792..34816]),
+        (0xc000, &image[1024..2048]),
+    ] {
+        expected_ram[address - 0x8000..address - 0x8000 + 1024].copy_from_slice(payload);
+    }
+    for profile in PROFILES {
+        let mut m = Machine::new(profile);
+        m.insert(0, image.clone(), "fdc_bios.hdm").unwrap();
+        for run in 0..2 {
+            if run != 0 {
+                m.reset();
+            }
+            let mut slots = 0;
+            while slots < 2_000_000 {
+                slots += m.step(1000);
+                assert!(m.error.is_none(), "{:?}", m.error);
+                let text = m.bus.text();
+                assert!(
+                    !text.contains("FAIL"),
+                    "{profile:?}: {text}; ip={:x} record={:02x?}",
+                    m.cpu.ip,
+                    &m.bus.mem[0x8000..0x8020]
+                );
+                if text.contains("FDC BIOS PASS") {
+                    break;
+                }
+            }
+            assert!(
+                m.bus.text().contains("FDC BIOS PASS"),
+                "{profile:?}: ip={:x} record={:02x?}",
+                m.cpu.ip,
+                &m.bus.mem[0x8000..0x8020]
+            );
+            assert!(slots <= 2_000_000);
+            assert_eq!(&m.bus.mem[0x8000..0xc410], &expected_ram);
+            assert_eq!(m.cpu.r[pc98_rust::cpu::SP], 0x7c00);
+            assert_eq!(m.bus.disks[0].as_ref().unwrap().bytes, expected_media);
+            assert_eq!(m.bus.fdc.writes, 2);
+            assert_eq!(m.bus.disks[0].as_ref().unwrap().writes, 2 * (run + 1));
+            assert_eq!(m.bus.dma.addr[2], 0x9400);
+            assert_eq!(m.bus.dma.count[2], 0xffff);
+            assert_eq!(m.bus.dma.status & 4, 4);
+            assert_eq!(m.bus.input(0x90), 0x80);
+            println!("{profile:?} FDC BIOS boot {run}: {slots} slots; seven INT 1Bh calls, two PIO reads, two writes");
+        }
+    }
+}

@@ -946,6 +946,30 @@ error fidelity and comprehensive external board controls remain outside this
 subset. Protected execution, paging and basic x87 remain required project work;
 these probes make no complete hardware or commercial compatibility claim.
 
+## BIOS floppy DMA handoff
+
+From an idle FDC with retained ND=1, the synthetic BIOS's floppy transfer helper
+sends SPECIFY `03 DF 02` through port `0092h` before seeking or submitting
+READ/WRITE DATA. It checks the retained controller mode to avoid a redundant
+command and preserve existing request timing when DMA is already selected.
+This selects SRT=13, HUT=15, HLT=1 and ND=0. Timing fields remain unmodeled; these
+are synthetic firmware parameters, not a claim about proprietary NEC BIOS
+internals. SPECIFY has no execution/result phase. The helper waits for idle
+command readiness (`MSR=80h`) with a 160-clock dispatch budget before proceeding.
+Transfers still use the existing channel-2 DMA, controller command/result FIFO,
+scheduler and interrupt path. No sector payload bypasses the controller.
+
+An earlier raw client may leave ND=1; BIOS selects DMA for its own request and
+does not restore ND. A subsequent fresh SPECIFY ND=1 still enables supported
+byte-handshaked PIO reads. The original source-built probe and native regressions
+cover reads/writes on VM/Ap, same-cylinder/seek-required requests, error recovery,
+complete media differences, payload/guard checks, DMA progression/TC, drained
+results and PIO reentry. See [Issue #81 validation](validation.md#issue-81-bios-floppy-dma-handoff).
+Active-command preemption, BIOS VERIFY redesign and broader FDC functionality
+remain outside this idle-controller handoff contract. The FDC inventory remains
+partial; this probe does not establish full hardware accuracy or commercial
+software compatibility.
+
 ## Ap IDE READ VERIFY
 
 The existing bank-zero master accepts both `40h` and `41h` in CHS and LBA modes.

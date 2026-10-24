@@ -93,6 +93,7 @@ python3 tools/prepare_pic_fixture.py
 python3 tools/prepare_pic_smm_fixture.py
 python3 tools/prepare_pic_poll_fixture.py
 python3 tools/prepare_fdc_pio_fixture.py
+python3 tools/prepare_fdc_bios_fixture.py
 python3 tools/prepare_pit_mode2_fixture.py
 python3 tools/prepare_pit_mode3_fixture.py
 python3 tools/prepare_pit_mode0_fixture.py
@@ -396,6 +397,21 @@ media and zero writes within two million slots per boot. The checked
 [manifest](fixtures/fdc-pio-manifest.json) pins original source, assembly command,
 synthetic firmware/image hashes and expectations. See the
 [implemented subset and timing policy](docs/hardware.md#fdc-non-dma-read-data).
+
+Prepare the original MIT BIOS floppy DMA handoff probe with
+`python3 tools/prepare_fdc_bios_fixture.py`.
+Run `cargo test --locked --test fdc --test fdc_bios` and `npm test`. VM and Ap
+boot the identical image natively and through production release Wasm at both
+serving paths, before/after reset. The guest issues actual INT 1Bh reads/writes
+after fresh SPECIFY ND=1, reads back both writes, and completes a PIO read → BIOS
+transfer → fresh SPECIFY ND=1 → PIO read sequence. Each boot requires
+`FDC BIOS PASS`, seven successful CF/AH pairs, exact payloads and guarded RAM,
+exactly two intended sector writes with a complete media comparison, and no
+guest/core/browser errors within 2,000,000 slots. The
+[manifest](fixtures/fdc-bios-manifest.json) pins original source, license,
+assembly command, hashes and independent expected results. Generated media stays
+outside `web/`. See the [handoff contract](docs/hardware.md#bios-floppy-dma-handoff)
+and [Issue #81 validation](docs/validation.md#issue-81-bios-floppy-dma-handoff).
 
 `npm run build` checks reproducible media, compiles the real Rust/Wasm core and
 runs `npm run check:site`. The latter verifies a nonempty, compilable Wasm module

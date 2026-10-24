@@ -90,6 +90,28 @@ pub fn disk_transfer(
         return false;
     }
     b.output(0x94, 0x18); // spindle motor + DMA handshake enable
+    if b.fdc.non_dma {
+        while !b.fdc.result.is_empty() {
+            b.input(0x92);
+        }
+        // Synthetic BIOS policy: SPECIFY SRT=13, HUT=15, HLT=1, ND=0.
+        // Timing fields are not yet modeled. Select ND through the command FIFO
+        // when a raw client left PIO mode; keep default-DMA request timing intact.
+        for v in [0x03, 0xdf, 0x02] {
+            b.output(0x92, v);
+        }
+        // SPECIFY has no result phase. Wait for dispatch before SEEK or data
+        // commands, bounded so an active controller cannot hang BIOS.
+        for _ in 0..160 {
+            if b.input(0x90) == 0x80 {
+                break;
+            }
+            b.tick(1);
+        }
+        if b.input(0x90) != 0x80 {
+            return false;
+        }
+    }
     if b.fdc.cylinder[drive as usize] != c {
         for v in [15, drive, c] {
             b.output(0x92, v)
