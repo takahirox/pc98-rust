@@ -33,3 +33,4 @@ __pycache__/
 /fixtures/fdc_bios/
 /fixtures/fdc_write_multi/
 /fixtures/rtc_set/
+/fixtures/fpu_init/

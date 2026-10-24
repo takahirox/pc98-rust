@@ -4409,3 +4409,114 @@ paging/FPU unimplemented, none verified; protected mode, paging and basic x87
 remain required. Limited probes and existing six-game regressions establish
 neither full hardware accuracy nor commercial compatibility. No independent
 review, remote CI or post-merge verification is claimed.
+
+## Issue #89: Ap x87 environment initialization/readback (2026-10-24)
+
+Implemented original Rust for the four requested non-waiting real-mode forms:
+FNINIT, FNSTCW m16, FNSTSW m16 and FNSTSW AX. The
+[hardware contract](hardware.md#ap-x87-environment-initialization) documents the
+Intel486 choice of exception 13 for SS overruns, EM/TS exception 7, LOCK exception
+6, retained environment on RESET without BIST, deterministic cold metadata and
+preservation of the stores' undefined x87 condition bits. Numerical execution,
+WAIT completion, protected execution and paging remain outside this prerequisite.
+
+Before changing `src/cpu.rs`, ran the new minimal reproduction:
+
+```sh
+cargo test --locked --test fpu minimal_reproduction
+```
+
+It failed (exit 101, 0 passed, 1 failed) with
+`unsupported opcode db at 0000:1000`. After implementation, the same sequence
+passes with literal bytes `7F 03 00 00` at `8000h`, AX zero and IP `100Ch`.
+Nine original tests in `tests/fpu.rs` additionally cover:
+
+- Seeded nondefault control/status/tags, both pointers/selectors and last opcode;
+  complete, repeatable initialization despite pending exception status; current
+  readback without pointer/opcode replacement or numerical exception delivery.
+- Preserved integer registers/flags and EAX upper halves; independent operand and
+  address sizes, repeated overrides, all segment overrides including last-wins
+  FS/GS, 16-bit addressing and 32-bit SIB/default SS; unaligned exact stores.
+- Successful FFFE stores, atomic FFFF/10000/FFFFFFFF rejection including SS,
+  unchanged destination/environment on faults, complete six-byte first-prefix
+  frames and IRET/retry. EM, TS and both are tested independently of LOCK for
+  every form, using default and relocated IDTR delivery without simultaneous-fault
+  precedence assertions. Guest handlers repair boundary operands and each LOCK.
+- CPU isolation, deterministic construction, seeded reset retention and explicit
+  reinitialization, A20 mapping, ROM protection, VM rejection, Ap CPUID exception
+  6 and neighboring valid unimplemented x87 diagnostic rejection.
+
+The original MIT [probe](../guest/fpu_init.asm) is built offline by
+`tools/prepare_fpu_init_fixture.py`; the checked
+[manifest](../fixtures/fpu_init-manifest.json) pins source/boot/image hashes,
+license, assembly command, independently specified result/guard bytes and the
+2,000,000-slot limit. No proprietary ROM or guest software is used. Source/image
+hashes are respectively
+`8b4622a1cc6156d672ddbbb47e58c38975d694c98edbcaefc74136456aa3d92e` and
+`4f2d42c2eb151f9c67a07cb56495b10f461b7b14758ae000069ac66b4be74464`.
+Preparation is integrated into README and CI. Generated media and copied notices
+remain ignored under `fixtures/fpu_init/`, outside publication assets.
+
+Native and production release-Wasm tests boot that identical image cold and after
+reset. Every boot used **100,000 slots**, required `FPU PASS` without `FAIL`, exact
+64-byte result/guard data and `A5 7F 03` at FFFDh, unchanged mounted media and no
+emulator error. Both browser roots additionally reject page/console errors; the
+browser host only mounts, steps, inspects and resets. Native boot tests use literal
+expected bytes independent of the manifest and CPU implementation.
+
+All checks below were executed in this worktree. An initial combined focused run
+started before CPULEVEL preparation completed: core passed 49 cases, CPU386 passed
+56 and failed its missing-fixture prerequisite, and Cargo did not reach FPU.
+After preparation the required combined command passed all 115 cases. During
+construction two test-harness expectations were corrected (CPUID delivers guest
+#UD; address32 memory forms must select EBX). They pass in the final suite.
+
+| Check | Outcome |
+| --- | --- |
+| `python3 -m unittest discover -s tools -p test_fixture_fetch.py` | Passed: 7 cases |
+| All README offline `prepare_*_fixture.py` commands, including the new FPU builder | Passed; all checked manifests reproduced |
+| `python3 tools/prepare_freedos.py`, `prepare_font_fixture.py`, `prepare_dos_apps.py`, `prepare_cpu_fixture.py`, `prepare_hdd_fixture.py`, `prepare_music_fixture.py`, `prepare_device_fixture.py` | Passed with checksum-pinned binaries and complete matching sources/notices. CPULEVEL and DEBUG primary downloads returned HTTP 503; existing pinned mirrors succeeded without changing hashes |
+| `python3 tools/build_font.py --check` | Passed |
+| `cargo test --locked --test fpu --test cpu386 --test core` | Passed: 9 FPU + 57 CPU386 + 49 core, zero failures/ignored |
+| `cargo test --locked --test sound86 opna_irq_` | Passed: 8 cases |
+| `cargo test --locked --test sound86 --test ap --test music --test pic` | Passed: 16 sound86 + 17 Ap + 1 music + 28 PIC |
+| `cargo test --locked --test ap opn_ch3_` | Passed: 9 cases |
+| `cargo test --locked --test rtc`; `cargo test --locked --test timer` | Passed: 19 RTC + 8 timer |
+| `cargo test --locked --test pit counter_latch_`, `mode3_rewrite_`, `mode0_rewrite_`; `cargo test --locked --test pit` | Passed: 9, 14, 12 and 65 cases respectively |
+| `cargo test --locked` | Passed: **357 native tests**, zero failures/ignored; doc-tests passed (0 cases) |
+| `cargo clippy --all-targets -- -D warnings` | Passed, all targets with warnings denied |
+| `cargo fmt --check`; `git diff --check` | Passed |
+| `npm ci`; `npx playwright install chromium` | Passed |
+| `npm test` | Release-Wasm build and ten-asset publication audit passed; occupied port 8000 prevented browser startup, zero cases executed |
+| `npx playwright test --config target/fpu-playwright.config.js` | Passed: **126 browser cases**, zero failures/skips, 1.6 minutes |
+
+The equivalent alternate-port browser run used the same production release-Wasm
+artifact (462,245 bytes, SHA-256
+`b1ec413ca432c703148df283f275da22b249995040a820d9e87e584c856948b8`).
+The ignored temporary config copies the repository config, retaining both projects,
+all assertions, workers, timeouts and budgets. It resolves test/server directories
+to this worktree and changes only the two server ports to 18089/18090. Commands:
+`python3 -m http.server 18089 --bind 127.0.0.1 --directory web` and
+`python3 target/fpu-serve-project.py`. The latter copies
+`tests/browser/serve_project.py`, retaining its temporary project symlink and
+root-asset rejection while selecting this worktree's `web/` and port 18090.
+Both `/` and `/pc98-rust/` were tested. The existing port-8000 listener was left
+alone; committed default ports are unchanged. All existing hardware, DOS/apps,
+VM/audio, storage and six-game assertions and budgets were preserved and passed.
+Logs/configs are local ignored validation artifacts under `target/`.
+
+Local review covered the complete diff against the Issue's bounded contract,
+metadata lifecycle, decoding, exception atomicity/restart, bus behavior, fixture
+provenance, identical native/browser image and integration. No independent review,
+remote CI, PR or merge is claimed. No post-merge verification is required.
+
+Only FPU moves from unimplemented to **partial**. All 26 scopes retain their full
+required work: **partial** cpu-v30, cpu386, protected-mode, memory, pic, pit, dma,
+rtc, keyboard, mouse, fdc, ide, gdc, egc, pegc, text-cg, display-timing, opn, opna,
+pcm86, bios, lio, integration and fpu; **implemented_unverified** grcg;
+**unimplemented** paging. None is verified. Remaining FPU work includes stack and
+load/store operations, arithmetic/comparisons/conversions, rounding/precision,
+other control/environment operations, numerical exceptions and WAIT/NE/IRQ
+behavior. Protected execution, paging and all other inventory gaps remain required.
+These limited probes and game regressions establish neither full hardware accuracy
+nor commercial compatibility.

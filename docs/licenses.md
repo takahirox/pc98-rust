@@ -282,8 +282,8 @@ The ADV98 release's original `PLAY.M`, effects and artwork remain excluded.
 Paul Vojta's DEBUG 1.25 (2011-08-08) has an MIT permission notice in `DEBUG.ASM`;
 Japheth explicitly places his extensions in the public domain. The pinned original
 `DEBUG125.zip` includes its full sources/notices. Its optional startup x87 probe
-is bypassed for this no-FPU profile, and the adapted source is retained alongside
-the archive. Port/memory/DOS command processing is unchanged. The disk includes
+is bypassed for this profile without numerical FPU execution. The adapted source
+is retained alongside the archive. Port/memory/DOS command processing is unchanged. The disk includes
 the original notice-bearing source and README; no DEBUGX, DPMI examples, Win32
 DLLs or unrelated archive contents are installed in the guest image.
 
@@ -294,3 +294,8 @@ the fixture output. It is not a runtime dependency and is never placed in Pages
 or linked into a guest executable as a library. Only guest programs and a compiler
 are acquired; no emulator/chip source or ROM is introduced. Rust dependencies
 remain empty. Pages' ten-asset publication allowlist is unchanged.
+
+The original MIT `guest/fpu_init.asm` probe and offline
+`tools/prepare_fpu_init_fixture.py` use no third-party guest software or ROM.
+`fixtures/fpu_init-manifest.json` records source/image hashes, assembly command,
+license and literal expected bytes. Generated test media stays outside `web/`.
