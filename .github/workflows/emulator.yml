@@ -38,6 +38,7 @@ jobs:
       - run: python3 tools/prepare_pit_mode2_fixture.py
       - run: python3 tools/prepare_pit_mode3_fixture.py
       - run: python3 tools/prepare_pit_mode0_fixture.py
+      - run: python3 tools/prepare_pit_mode4_fixture.py
       - run: python3 tools/prepare_pit_mode0_rewrite_fixture.py
       - run: python3 tools/prepare_pit_mode3_rewrite_fixture.py
       - run: python3 tools/prepare_pit_counter_latch_fixture.py

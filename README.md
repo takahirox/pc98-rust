@@ -102,6 +102,7 @@ python3 tools/prepare_fdc_bios_fixture.py
 python3 tools/prepare_pit_mode2_fixture.py
 python3 tools/prepare_pit_mode3_fixture.py
 python3 tools/prepare_pit_mode0_fixture.py
+python3 tools/prepare_pit_mode4_fixture.py
 python3 tools/prepare_pit_mode0_rewrite_fixture.py
 python3 tools/prepare_pit_mode3_rewrite_fixture.py
 python3 tools/prepare_pit_counter_latch_fixture.py
@@ -129,6 +130,7 @@ cargo test --locked --test sound86 --test ap --test music --test pic
 cargo test --locked --test ap opn_ch3_
 cargo test --locked --test rtc
 cargo test --locked --test timer
+cargo test --locked --test pit mode4_
 cargo test --locked --test pit counter_latch_
 cargo test --locked --test pit mode3_rewrite_
 cargo test --locked --test pit mode0_rewrite_
@@ -290,6 +292,24 @@ trace `1,0,0,1,1,0`, guest-confirmed competing IRR bits, `PIC PASS`, exact resul
 and guards, no `FAIL` or host error, and unchanged disk bytes within two million
 slots per boot, before and after reset. Its offline preparation script verifies
 the checked-in [source/image/result manifest](fixtures/pic-manifest.json).
+
+The original MIT [mode-4 PIT probe](guest/pit_mode4.asm) checks software-triggered
+strobes through both port banks, delayed paired replacement, repeated count-only
+arming, natural IRQ0 service with normal EOI/IRET, advancing post-terminal latched
+counts and a quiet interval longer than one full wrap. Prepare it offline with
+`python3 tools/prepare_pit_mode4_fixture.py`; run
+`cargo test --locked --test pit mode4_` and `npm test`. Native and production
+release-Wasm tests boot the identical image on VM and Ap, cold and after reset,
+at `/` and `/pc98-rust/`. They require `PIT MODE4 PASS`, no `FAIL`, exact independent
+32-byte results/guards, unchanged media and no errors within 2,000,000 slots per
+boot; browser checks also reject page/console errors. Hosts only mount, step,
+inspect and reset. The [manifest](fixtures/pit-mode4-manifest.json) pins original
+MIT source, boot/image hashes and results. Generated fixtures stay outside `web/`.
+Mode 4 uses held-high GATE, next-clock loads, one low clock and continued wrap
+without repeated strobes. Beeper polarity follows OUT at sample endpoints; the
+existing batch sampler can miss a pulse entirely between endpoints. PIT remains
+partial; see [hardware scope](docs/hardware.md#8253-binary-mode-4-subset) and
+[validation](docs/validation.md#issue-93-8253-binary-mode-4-2026-10-24).
 
 The original MIT [mode-0 PIT probe](guest/pit_mode0.asm) arms a terminal-count
 IRQ0 twice using fresh mode words. Each arming verifies one hardware entry with

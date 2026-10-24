@@ -752,6 +752,60 @@ reset on VM/Ap at both browser roots. See the
 PIT remains **partial**; all fixed inventory scopes and deferred work below
 remain unchanged.
 
+### 8253 binary mode-4 subset
+
+All three shared counters implement binary software-triggered strobe under the
+existing held-high GATE model, through both `71/73/75/77h` and
+`3FD9/3FDB/3FDD/3FDFh` aliases, including interleaved cross-bank accesses.
+A fresh mode word immediately establishes high OUT and cancels the old count
+sequence, pending load, partial write, latch and byte-read phase. Counting waits
+for a complete LSB-only, MSB-only or LSB/MSB value; no pre-load count is promised.
+Each complete initial or replacement count transfers on the next clock without
+decrementing. Binary zero means 65,536. For N=3, successive clock states are
+`(3,H), (2,H), (1,H), (0,L), (FFFFh,H), (FFFEh,H)`.
+
+Count-only writes preserve OUT until a clock arrives. The first byte of a pair
+leaves the active sequence and any completed pending load intact; the second
+schedules the next-clock load. The latest complete value before that clock wins,
+even with a following unfinished pair. A low strobe reached before pair completion
+still finishes normally. Loading during the low pulse finishes that pulse with
+an actual rising edge and restarts the count. Ordinary latch snapshots survive
+count-only replacement and wrap until the programmed read completes. After the
+single low clock, counting continues through any number of 16-bit wraps with
+OUT high and no periodic strobe or IRQ recurrence. Large batches use constant
+work and retain any rise crossed inside the batch.
+
+These semantics follow Intel's [8253/8253-5 datasheet, Counter Loading and Mode 4](https://www.cpu-galaxy.at/CPU/Ram%20Rom%20Eprom/Other_Intel_chips/other_intel-Dateien/C8253.pdf).
+The [8254 datasheet, Mode 4/Figure 19 and Counter/Figure 22](https://www.scs.stanford.edu/23wi-cs212/pintos/specs/8254.pdf#page=15)
+clarifies the shared load clock, paired replacement and continued wrap behavior;
+this adds no 8254 read-back command.
+
+Channel 0 actual low-to-high transitions use existing IRQ0/PIC delivery, including
+a programming-induced setup rise from prior low OUT. Tests drain that request
+separately before measuring the strobe. The falling edge requests nothing;
+channel 1/2 transitions cannot request IRQ0. Masked IRR retention, normal
+ISR/EOI, IF deferral and natural CPU handler/IRET behavior remain shared.
+Channel 1 beeper polarity follows mode-4 OUT at current sample endpoints,
+including after wrap. Mode-3 audio is preserved. The existing batch sampler
+uses the final OUT for all samples emitted by a bus tick, so short pulses
+between endpoints can be missed; no audio scheduler redesign is claimed.
+
+The [Rust tests](../tests/pit.rs) use literal clock traces and independent expected
+results. The original MIT [boot probe](../guest/pit_mode4.asm) uses guest port I/O,
+cross-bank software replacement and repeated arming, natural IRQ0 handlers,
+normal EOI/IRET, advancing post-terminal latches and a quiet interval exceeding
+one full wrap. Its [manifest](../fixtures/pit-mode4-manifest.json) pins provenance,
+source/boot/image hashes, exact results/guards and the two-million-slot budget.
+Hosts only mount, step, inspect and reset. See
+[actual validation](validation.md#issue-93-8253-binary-mode-4-2026-10-24).
+
+PIT remains **partial**. Modes 1/5, external GATE/retriggering, BCD, remaining
+access/latch sequencing, mode-2/3 divisor-1 behavior and fuller beeper timing
+remain outstanding. All 26 fixed inventory scopes/statuses are unchanged;
+protected execution, paging, numerical x87 and every other inventory gap remain
+required. Limited probes establish neither full hardware accuracy nor commercial
+compatibility.
+
 ### 8253 binary mode-0 subset
 
 All three counters on VM/Ap and both primary/mirrored timer banks support a
@@ -906,7 +960,7 @@ with ISR/EOI/IRET. Its [manifest](../fixtures/pit-mode3-rewrite-manifest.json) p
 offline source, boot and image hashes, results/guards and the same per-boot budget.
 See [rewrite validation](validation.md#issue-53-mode-3-count-only-rewrites-at-half-cycle-boundaries-2026-10-24).
 
-PIT remains **partial**. Mode-specific behavior for 1/4/5,
+PIT remains **partial**. Mode-specific behavior for 1/5,
 external GATE/retriggering, BCD, divisor-1 behavior, comprehensive latch/access
 sequencing and fuller beeper timing remain outstanding. These shared counter
 subsets do not establish instruction-cycle accuracy, full audio or hardware

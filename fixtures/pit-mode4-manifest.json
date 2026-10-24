@@ -1,0 +1,29 @@
+{
+  "source": "guest/pit_mode4.asm",
+  "license": "MIT; LICENSE and original assembly copied alongside image",
+  "assembly": "nasm -f bin guest/pit_mode4.asm -o pit_mode4.bin",
+  "source_sha256": "34b06bd7c8cab6c3a5573721df68e556817c3c0eb1d7ee559771515b5dba183f",
+  "boot_sha256": "9d2595fe9ccb736107d9027a8ba9ce850d76d9d2f082cf6c88c1d5f2e4bd41f9",
+  "image": "fixtures/pit_mode4/pit_mode4.hdm",
+  "image_sha256": "79feb75fc9de1120c60ecdfcc1c9f83c8d2841e909a2995416297ab79c463d1c",
+  "geometry": "77 cylinders, 2 heads, 8 sectors, 1024 bytes per sector",
+  "profiles": [
+    "VM",
+    "Ap real mode"
+  ],
+  "provenance": "Original source; no DOS, commercial ROM, guest binary or copied emulator implementation",
+  "contract": "Establish mode-4 high OUT before PIC initialization to drain setup requests; twice arm count 60000, write replacement LSB and delay while old count remains 58000..59999, complete count 2000 through opposite bank and latch active count 1900..2000; both port banks and cross-bank reads/writes; bounded 6000-iteration IRQ wait, exactly one natural IRQ0 per arming with ISR=1, normal EOI, ISR=0, IRET; latched post-terminal counts 60000..65534 separated by 500 LOOP instructions advance by 900..1100; 40000 LOOP quiet interval (>65536 PIT clocks) per arm with no extra IRQ and IRR0=ISR0=0",
+  "host": "Boot, step and read only; no input, IRQ injection or result writes",
+  "result_address": "0x8000",
+  "result_length": 32,
+  "result_hex": "a502010100000101010101010101a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+  "guards": "All a5 bytes in result_hex must remain unchanged; guest and host compare all 32 bytes",
+  "result_layout": "8000 guard; 8001 total IRQ0 entries=2; 8002/8003 ISR entry=1/1; 8004/8005 post-EOI=0/0; 8006/8007 advancing post-terminal counts=1/1; 8008/8009 quiet full wrap=1/1; 800a/800b partial replacement preserves count=1/1; 800c/800d completed replacement loaded=1/1; 800e..801f guards=a5",
+  "markers": [
+    "PIT MODE4 PASS",
+    "PIT MODE4 FAIL"
+  ],
+  "slot_budget": 2000000,
+  "reset": "Same image, results and budget before and after Machine reset",
+  "distribution": "Test only; excluded from web/"
+}

@@ -2874,3 +2874,632 @@ fn counter_latch_original_boot_probe_before_and_after_reset_in_both_profiles() {
         }
     }
 }
+
+#[test]
+fn mode4_original_initial_load_reproduction() {
+    let mut pit = Pit::default();
+    pit.write(3, 0x36);
+    pit.write(3, 0x38);
+    pit.write(0, 3);
+    pit.write(0, 0);
+    assert!(!pit.tick(5));
+    assert_eq!((pit.c[0].remaining, pit.c[0].output), (3, true));
+}
+
+#[test]
+fn mode4_literal_traces_all_channels_and_byte_formats() {
+    // Intel mode 4: load, N decrements, one low clock, then high forever.
+    for channel in 0..3 {
+        for (access, encoded, n) in [
+            (1, 1, 1),
+            (1, 2, 2),
+            (1, 3, 3),
+            (2, 0x100, 256),
+            (2, 0xff00, 65280),
+            (3, 1, 1),
+            (3, 2, 2),
+            (3, 3, 3),
+            (3, 0xffff, 65535),
+            (1, 0, 65536),
+            (2, 0, 65536),
+            (3, 0, 65536),
+        ] {
+            let mut c = Clock::default();
+            program(&mut c.pit, channel, access, 4, encoded);
+            assert!(c.pit.c[channel].output);
+            let before = c.pit.clone();
+            assert!(!c.advance(0));
+            assert_eq!(c.pit, before);
+            assert!(!c.advance(1));
+            assert_eq!(
+                (c.pit.c[channel].remaining, c.pit.c[channel].output),
+                (n, true)
+            );
+            assert!(!c.advance(n - 1));
+            assert_eq!(
+                (c.pit.c[channel].remaining, c.pit.c[channel].output),
+                (1, true)
+            );
+            assert!(!c.advance(1));
+            assert_eq!(
+                (c.pit.c[channel].remaining, c.pit.c[channel].output),
+                (0, false)
+            );
+            assert_eq!(c.advance(1), channel == 0);
+            assert_eq!(
+                (c.pit.c[channel].remaining, c.pit.c[channel].output),
+                (65535, true)
+            );
+            assert!(!c.advance(1));
+            assert_eq!(
+                (c.pit.c[channel].remaining, c.pit.c[channel].output),
+                (65534, true)
+            );
+        }
+        let mut c = Clock::default();
+        program(&mut c.pit, channel, 3, 4, 3);
+        for (count, high, rise) in [
+            (3, true, false),
+            (2, true, false),
+            (1, true, false),
+            (0, false, false),
+            (65535, true, true),
+            (65534, true, false),
+        ] {
+            assert_eq!(c.advance(1), rise && channel == 0);
+            assert_eq!(
+                (c.pit.c[channel].remaining, c.pit.c[channel].output),
+                (count, high)
+            );
+        }
+    }
+}
+
+#[test]
+fn mode4_fresh_programming_cancels_active_partial_pending_and_latched_state() {
+    for channel in 0..3 {
+        for mode in [0, 2, 3, 4] {
+            for phase in 0..7 {
+                let mut c = Clock::default();
+                for other in 0..3 {
+                    program(&mut c.pit, other, 3, 4, 100);
+                }
+                program(&mut c.pit, channel, 3, mode, 2);
+                match phase {
+                    0 => {
+                        // pending load
+                        c.pit.write(channel, 0xaa); // unfinished following pair
+                    }
+                    1 => {
+                        c.advance(1);
+                    }
+                    2 => {
+                        c.advance(2);
+                    }
+                    3 => {
+                        c.advance(3);
+                    }
+                    4 => {
+                        c.advance(4);
+                    }
+                    5 => {
+                        c.advance(10);
+                        write_count(&mut c.pit, channel, 3, 5);
+                        c.pit.write(channel, 0xbb);
+                    }
+                    _ => {
+                        c.pit.write(3, ((channel as u8) << 6) | 0x30 | (mode << 1));
+                        c.pit.write(channel, 0xcc); // incomplete initial pair
+                        c.advance(100);
+                    }
+                }
+                c.pit.write(3, (channel as u8) << 6);
+                c.pit.read(channel); // unread high latch byte
+                let others = c.pit.c;
+                c.pit.write(3, ((channel as u8) << 6) | 0x38);
+                assert!(!c.pit.c[channel].enabled);
+                assert!(c.pit.c[channel].output);
+                for (other, old) in others.iter().enumerate() {
+                    if other != channel {
+                        assert_eq!(&c.pit.c[other], old);
+                    }
+                }
+                c.pit.write(channel, 3);
+                let stopped = c.pit.c[channel];
+                c.advance(100);
+                assert_eq!(c.pit.c[channel], stopped); // no undefined pre-load count expectation
+                c.pit.write(channel, 0);
+                c.advance(1);
+                assert_eq!(
+                    (c.pit.c[channel].remaining, c.pit.c[channel].output),
+                    (3, true)
+                );
+                // Fresh control discards both old latch and read/write byte phases.
+                assert_eq!(c.pit.read(channel), 3);
+                assert_eq!(c.pit.read(channel), 0);
+            }
+        }
+    }
+}
+
+#[test]
+fn mode4_replacement_at_each_phase_preserves_out_until_load_clock() {
+    // Prior sequence: pending, loaded, countdown, terminal low, completed high.
+    for elapsed in 0..=6 {
+        for channel in 0..3 {
+            for (access, replacement) in [(1, 2), (2, 0x100), (3, 2)] {
+                let mut c = Clock::default();
+                program(
+                    &mut c.pit,
+                    channel,
+                    access,
+                    4,
+                    if access == 2 { 0x100 } else { 3 },
+                );
+                // For MSB-only, visit its terminal and completed phases too.
+                let clocks = if access == 2 && elapsed >= 4 {
+                    elapsed + 253
+                } else {
+                    elapsed
+                };
+                c.advance(clocks);
+                let old = c.pit.c[channel];
+                write_count(&mut c.pit, channel, access, replacement);
+                assert_eq!(
+                    (c.pit.c[channel].remaining, c.pit.c[channel].output),
+                    (old.remaining, old.output)
+                );
+                assert_eq!(c.advance(1), !old.output && channel == 0);
+                let n = replacement as u32;
+                assert_eq!(
+                    (c.pit.c[channel].remaining, c.pit.c[channel].output),
+                    (n, true)
+                );
+                assert!(!c.advance(n));
+                assert_eq!(
+                    (c.pit.c[channel].remaining, c.pit.c[channel].output),
+                    (0, false)
+                );
+                assert_eq!(c.advance(1), channel == 0);
+                assert!(!c.advance(3 * 65536));
+                assert_eq!(
+                    (c.pit.c[channel].remaining, c.pit.c[channel].output),
+                    (65535, true)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn mode4_delayed_pairs_keep_old_strobe_and_latest_complete_pending_value() {
+    for channel in 0..3 {
+        let mut c = Clock::default();
+        program(&mut c.pit, channel, 3, 4, 3);
+        write_count(&mut c.pit, channel, 3, 4);
+        write_count(&mut c.pit, channel, 3, 2); // latest complete wins
+        c.pit.write(channel, 9); // unfinished following pair must not cancel load
+        assert!(!c.advance(1));
+        assert_eq!(
+            (c.pit.c[channel].remaining, c.pit.c[channel].output),
+            (2, true)
+        );
+        assert!(!c.advance(2));
+        assert_eq!(
+            (c.pit.c[channel].remaining, c.pit.c[channel].output),
+            (0, false)
+        );
+        assert_eq!(c.advance(1), channel == 0); // old strobe survives partial replacement
+        assert!(!c.advance(65536 * 2));
+        assert_eq!(
+            (c.pit.c[channel].remaining, c.pit.c[channel].output),
+            (65535, true)
+        );
+        c.pit.write(channel, 0); // finish the delayed pair
+        assert!(!c.advance(1));
+        assert_eq!(
+            (c.pit.c[channel].remaining, c.pit.c[channel].output),
+            (9, true)
+        );
+        assert_eq!(c.advance(10), channel == 0); // complete low pulse inside batch
+        assert_eq!(
+            (c.pit.c[channel].remaining, c.pit.c[channel].output),
+            (65535, true)
+        );
+    }
+}
+
+#[test]
+fn mode4_latch_survives_replacement_terminal_and_multiple_wraps() {
+    for channel in 0..3 {
+        for access in [1, 2, 3] {
+            let mut c = Clock::default();
+            program(
+                &mut c.pit,
+                channel,
+                access,
+                4,
+                if access == 2 { 0x100 } else { 3 },
+            );
+            c.advance(1);
+            c.pit.write(3, (channel as u8) << 6);
+            if access == 3 {
+                assert_eq!(c.pit.read(channel), 3);
+            }
+            write_count(
+                &mut c.pit,
+                channel,
+                access,
+                if access == 2 { 0x200 } else { 2 },
+            );
+            c.advance(if access == 2 { 514 } else { 4 });
+            c.pit.write(3, (channel as u8) << 6); // duplicate cannot replace snapshot
+            assert_eq!(
+                c.pit.read(channel),
+                if access == 3 {
+                    0
+                } else if access == 2 {
+                    1
+                } else {
+                    3
+                }
+            );
+            for _ in 0..3 {
+                c.pit.write(3, (channel as u8) << 6);
+                let first = c.pit.read(channel);
+                if access == 3 {
+                    assert_eq!(first, 0xff);
+                    c.advance(65536);
+                    c.pit.write(3, (channel as u8) << 6);
+                    assert_eq!(c.pit.read(channel), 0xff);
+                } else {
+                    assert_eq!(first, 0xff);
+                }
+                assert!(!c.advance(65536));
+                assert_eq!(
+                    (c.pit.c[channel].remaining, c.pit.c[channel].output),
+                    (65535, true)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn mode4_batches_fraction_zero_and_maximum_cycles_agree() {
+    for channel in 0..3 {
+        for encoded in [1, 2, 3, 0xffff, 0] {
+            let mut single = Clock::default();
+            program(&mut single.pit, channel, 3, 4, encoded);
+            let mut batch = Clock {
+                pit: single.pit.clone(),
+                ..Clock::default()
+            };
+            for n in [0, 1, 2, 13, 65536, 190007] {
+                let mut edges = false;
+                for _ in 0..n {
+                    edges |= single.advance(1);
+                }
+                assert_eq!(batch.advance(n), edges);
+                assert_eq!(single.pit, batch.pit);
+            }
+            let mut a = Pit::default();
+            program(&mut a, channel, 3, 4, encoded);
+            let mut b = a.clone();
+            assert!(!a.tick(0));
+            assert!(!a.tick(1)); // fractional clock cannot load
+            assert!(!a.tick(3));
+            let edge_a = a.tick(u32::MAX - 4);
+            let edge_b = b.tick(u32::MAX);
+            assert_eq!(edge_a, channel == 0);
+            assert_eq!(edge_a, edge_b);
+            assert_eq!(a, b);
+            let mut edges = false;
+            for n in [17, 1000000, u32::MAX - 1000017] {
+                edges |= a.tick(n);
+            }
+            assert!(!b.tick(u32::MAX));
+            assert!(!edges);
+            assert_eq!(a, b);
+        }
+    }
+}
+
+#[test]
+fn mode4_both_profiles_cross_bank_irq_mask_irr_isr_eoi_and_isolation() {
+    for profile in PROFILES {
+        for (base, other) in [(0x71, 0x3fd9), (0x3fd9, 0x71)] {
+            let mut b = Bus::new(profile);
+            let (mut clocks, mut cycles) = (0u64, 0u64);
+            let mut advance = |b: &mut Bus, n: u32| {
+                clocks += n as u64;
+                let next = (clocks * 625).div_ceil(156);
+                b.tick((next - cycles) as u32);
+                cycles = next;
+            };
+            b.output(2, 0xff);
+            b.output(base + 6, 0x30); // establish low OUT
+            b.output(other + 6, 0x38); // programming rise is a separate setup request
+            assert_eq!(b.pics[0].irr & 1, 1);
+            assert_eq!(b.irq(), None);
+            b.output(2, 0xfe);
+            assert_eq!(b.irq(), Some(8));
+            assert_eq!(b.pics[0].isr & 1, 1);
+            b.output(0, 0x20);
+            b.output(2, 0xff);
+            // Interleaved byte writes through opposite aliases share each counter.
+            for channel in 0..3u8 {
+                b.output(base + 6, (channel << 6) | 0x38);
+                b.output(base + 2 * channel as u16, if channel == 0 { 3 } else { 1 });
+                b.output(other + 2 * channel as u16, 0);
+            }
+            advance(&mut b, 2); // other channels low; zero still high
+            assert_eq!(b.pics[0].irr & 1, 0);
+            advance(&mut b, 1); // other channels rise, no IRQ0
+            assert_eq!(b.pics[0].irr & 1, 0);
+            advance(&mut b, 1); // channel zero falling edge
+            assert!(!b.pit.c[0].output);
+            assert_eq!(b.pics[0].irr & 1, 0);
+            advance(&mut b, 1); // exactly one strobe request
+            assert!(b.pit.c[0].output);
+            assert_eq!(b.pics[0].irr & 1, 1);
+            assert_eq!(b.irq(), None);
+            advance(&mut b, 3 * 65536);
+            b.output(base + 6, 0);
+            assert_eq!(b.input(other), 0xff);
+            assert_eq!(b.input(base), 0xff);
+            b.output(2, 0xfe);
+            assert_eq!(b.irq(), Some(8));
+            assert_eq!(b.pics[0].irr & 1, 0);
+            assert_eq!(b.pics[0].isr & 1, 1);
+            advance(&mut b, 65536);
+            assert_eq!(b.irq(), None);
+            b.output(0, 0x20);
+            assert_eq!(b.pics[0].isr & 1, 0);
+            assert_eq!(b.irq(), None);
+            let isolated = [b.pit.c[1], b.pit.c[2]];
+            // Count-only rearm after completion, without another setup edge.
+            b.output(base, 2);
+            b.output(other, 0);
+            assert_eq!([b.pit.c[1], b.pit.c[2]], isolated);
+            assert_eq!(b.pics[0].irr & 1, 0);
+            advance(&mut b, 3);
+            assert!(!b.pit.c[0].output);
+            assert_eq!(b.irq(), None);
+            advance(&mut b, 1);
+            assert_eq!(b.irq(), Some(8));
+            b.output(0, 0x20);
+            advance(&mut b, 200000);
+            assert_eq!(b.irq(), None);
+        }
+    }
+}
+
+#[test]
+fn mode4_bus_access_formats_all_channels_and_banks() {
+    for profile in PROFILES {
+        for (base, other) in [(0x71, 0x3fd9), (0x3fd9, 0x71)] {
+            for channel in 0..3u8 {
+                for (access, value) in [(1, 3u16), (2, 0x100), (3, 2)] {
+                    let mut b = Bus::new(profile);
+                    let port = base + 2 * channel as u16;
+                    let alias = other + 2 * channel as u16;
+                    b.output(base + 6, (channel << 6) | (access << 4) | 8);
+                    if access != 2 {
+                        b.output(port, value as u8);
+                    }
+                    if access != 1 {
+                        b.output(alias, (value >> 8) as u8);
+                    }
+                    b.tick(5);
+                    assert_eq!(
+                        (
+                            b.pit.c[channel as usize].remaining,
+                            b.pit.c[channel as usize].output
+                        ),
+                        (value as u32, true)
+                    );
+                    b.output(other + 6, channel << 6);
+                    if access != 2 {
+                        assert_eq!(b.input(alias), value as u8);
+                    }
+                    if access != 1 {
+                        assert_eq!(b.input(port), (value >> 8) as u8);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn mode4_if_deferral_natural_handler_eoi_iret_and_no_repeat() {
+    for profile in PROFILES {
+        for base in [0x71, 0x3fd9] {
+            let mut m = Machine::new(profile);
+            m.cpu.s = [0; 4];
+            m.cpu.ip = 0x100;
+            m.cpu.r[4] = 0x7c00;
+            m.cpu.flags = 2;
+            m.cpu.halted = true;
+            m.bus.mem[0x100] = 0xf4;
+            m.bus.mem[0x200..0x20b]
+                .copy_from_slice(&[0x50, 0xfe, 0x06, 0, 0x81, 0xb0, 0x20, 0xe6, 0, 0x58, 0xcf]);
+            m.bus.write_seg(0, 8 * 4, 0x200, true);
+            m.bus.write_seg(0, 8 * 4 + 2, 0, true);
+            m.bus.output(base + 6, 0x38);
+            m.bus.output(2, 0xfe);
+            assert_eq!(m.bus.irq(), Some(8)); // drain setup
+            m.bus.output(0, 0x20);
+            m.bus.output(base, 0xe8);
+            m.bus.output(base, 3); // 1000
+            m.step(600);
+            assert!(m.cpu.halted);
+            assert_eq!(m.bus.mem[0x8100], 0);
+            assert_eq!(m.bus.pics[0].irr & 1, 1);
+            m.cpu.flags |= IF;
+            m.step(20);
+            assert!(m.cpu.halted);
+            assert_eq!(m.bus.mem[0x8100], 1);
+            assert_eq!(m.bus.pics[0].isr & 1, 0);
+            assert_eq!(m.cpu.r[4], 0x7c00);
+            assert_ne!(m.cpu.flags & IF, 0);
+            m.step(100000);
+            assert_eq!(m.bus.mem[0x8100], 1);
+            assert_eq!(m.bus.pics[0].irr & 1, 0);
+            assert!(m.error.is_none(), "{:?}", m.error);
+        }
+    }
+}
+
+#[test]
+fn mode4_reset_all_channels_partial_pending_countdown_low_and_completed() {
+    for profile in PROFILES {
+        for (base, other) in [(0x71, 0x3fd9), (0x3fd9, 0x71)] {
+            for phase in 0..5 {
+                let mut m = Machine::new(profile);
+                for channel in 0..3u8 {
+                    m.bus.output(base + 6, (channel << 6) | 0x38);
+                    m.bus.output(base + 2 * channel as u16, 3);
+                    if phase != 0 {
+                        m.bus.output(other + 2 * channel as u16, 0);
+                    }
+                }
+                m.bus.tick([0, 0, 9, 17, 21][phase]); // partial, pending, count=2, low, completed
+                for channel in 0..3u8 {
+                    let counter = &m.bus.pit.c[channel as usize];
+                    assert_eq!(counter.enabled, phase != 0);
+                    assert_eq!(counter.output, phase != 3);
+                    if phase >= 2 {
+                        assert_eq!(counter.remaining, [2, 0, 65535][phase - 2]);
+                    }
+                    m.bus.output(other + 6, channel << 6);
+                    m.bus.input(base + 2 * channel as u16);
+                }
+                m.reset();
+                assert_eq!(m.bus.pit, Pit::default());
+                assert_eq!(m.bus.pics[0].irr, 0);
+                assert_eq!(m.bus.pics[0].isr, 0);
+                for channel in 0..3 {
+                    program(&mut m.bus.pit, channel, 3, 4, 2);
+                }
+                m.bus.tick(5);
+                for channel in 0..3 {
+                    assert_eq!(
+                        (m.bus.pit.c[channel].remaining, m.bus.pit.c[channel].output),
+                        (2, true)
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn mode4_beeper_follows_out_at_sample_endpoints_including_wrap() {
+    for profile in PROFILES {
+        for base in [0x71, 0x3fd9] {
+            let mut b = Bus::new(profile);
+            b.output(0x37, 6);
+            b.output(base + 6, 0x78);
+            b.output(base + 2, 40);
+            b.output(base + 2, 0);
+            b.tick(167); // 41 PIT clocks: load + 40 -> low at first audio sample
+            assert_eq!((b.pit.c[1].remaining, b.pit.c[1].output), (0, false));
+            assert_eq!(b.audio.last(), Some(&-0.15));
+            b.tick(167);
+            assert!(b.pit.c[1].output);
+            assert_eq!(b.audio.last(), Some(&0.15));
+            b.audio.clear();
+            b.tick(262821); // cross a full counter wrap; completed OUT stays high
+            assert!(b.pit.c[1].output);
+            assert!(b.audio.iter().all(|&sample| sample == 0.15));
+            b.output(base + 2, 40);
+            b.output(base + 2, 0);
+            b.audio.clear();
+            b.tick(100); // high at a count below divisor/2
+            assert!(b.pit.c[1].remaining < 20);
+            assert_eq!(b.audio.last(), Some(&0.15));
+            b.output(0x37, 7);
+            b.tick(167);
+            assert_eq!(b.audio.last(), Some(&0.0));
+        }
+    }
+}
+
+#[test]
+fn mode4_original_boot_probe_before_and_after_reset_in_both_profiles() {
+    let image = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/fixtures/pit_mode4/pit_mode4.hdm"
+    ))
+    .expect("run python3 tools/prepare_pit_mode4_fixture.py");
+    let mut expected = [0xa5; 32];
+    expected[..14].copy_from_slice(&[0xa5, 2, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1]);
+    for profile in PROFILES {
+        let mut m = Machine::new(profile);
+        m.insert(0, image.clone(), "pit_mode4.hdm").unwrap();
+        for run in 0..2 {
+            if run != 0 {
+                m.reset();
+            }
+            let mut slots = 0;
+            while slots < 2_000_000 {
+                slots += m.step(1000);
+                assert!(m.error.is_none(), "{:?}", m.error);
+                let text = m.bus.text();
+                assert!(
+                    !text.contains("FAIL"),
+                    "{text}; {:02x?}",
+                    &m.bus.mem[0x8000..0x8020]
+                );
+                if text.contains("PIT MODE4 PASS") {
+                    break;
+                }
+            }
+            assert!(slots <= 2_000_000);
+            assert!(m.bus.text().contains("PIT MODE4 PASS"), "{}", m.bus.text());
+            assert_eq!(&m.bus.mem[0x8000..0x8020], &expected);
+            assert_eq!(m.bus.disks[0].as_ref().unwrap().bytes, image);
+            println!("{profile:?} boot {run}: {slots} slots");
+        }
+    }
+}
+
+#[test]
+fn mode4_replacement_batches_preserve_old_low_rise_and_new_strobe() {
+    for channel in 0..3 {
+        for elapsed in 0..=5 {
+            let mut single = Clock::default();
+            program(&mut single.pit, channel, 3, 4, 3);
+            single.advance(elapsed);
+            write_count(&mut single.pit, channel, 3, 2);
+            write_count(&mut single.pit, channel, 3, 5);
+            single.pit.write(channel, 9); // complete replacement followed by partial
+            let mut batch = Clock {
+                pit: single.pit.clone(),
+                clocks: single.clocks,
+                cycles: single.cycles,
+            };
+            for n in [0, 1, 2, 1, 0, 3, 65536, 65539] {
+                let mut edges = false;
+                for _ in 0..n {
+                    edges |= single.advance(1);
+                }
+                assert_eq!(batch.advance(n), edges);
+                assert_eq!(single.pit, batch.pit);
+            }
+            let mut a = single.pit.clone();
+            a.write(channel, 0); // complete the delayed pair
+            let mut b = a.clone();
+            let edge_a = a.tick(u32::MAX);
+            let mut edge_b = false;
+            for cycles in [0, 1, 17, 1000, u32::MAX - 1018] {
+                edge_b |= b.tick(cycles);
+            }
+            assert_eq!(edge_a, channel == 0);
+            assert_eq!(edge_a, edge_b);
+            assert_eq!(a, b);
+        }
+    }
+}
