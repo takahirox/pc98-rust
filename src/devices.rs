@@ -7,6 +7,7 @@ pub struct Pic {
     pub base: u8,
     init: u8,
     icw4: bool,
+    single: bool,
     read_isr: bool,
     special_mask: bool,
     // Outer None: no transaction; Some(None): frozen empty poll.
@@ -25,6 +26,7 @@ impl Pic {
             base,
             init: 0,
             icw4: false,
+            single: false,
             read_isr: false,
             special_mask: false,
             poll: None,
@@ -76,6 +78,9 @@ impl Pic {
             self.lowest_priority = n;
         }
     }
+    pub(crate) fn single(&self) -> bool {
+        self.single
+    }
     pub(crate) fn poll_armed(&self) -> bool {
         self.poll.is_some()
     }
@@ -111,9 +116,10 @@ impl Pic {
                     3 => self.auto_eoi = v & 2 != 0,
                     _ => {}
                 }
-                self.init = if self.init == 1 {
+                // SNGL skips ICW3; IC4 alone determines whether ICW4 follows.
+                self.init = if self.init == 1 && !self.single {
                     2
-                } else if self.init == 2 && self.icw4 {
+                } else if self.init <= 2 && self.icw4 {
                     3
                 } else {
                     0
@@ -124,6 +130,7 @@ impl Pic {
         } else if v & 16 != 0 {
             self.init = 1;
             self.icw4 = v & 1 != 0;
+            self.single = v & 2 != 0;
             self.isr = 0;
             self.irr = 0;
             self.mask = 0;

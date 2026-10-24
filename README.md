@@ -94,6 +94,7 @@ python3 tools/prepare_fpu_init_fixture.py
 python3 tools/prepare_pic_fixture.py
 python3 tools/prepare_pic_smm_fixture.py
 python3 tools/prepare_pic_poll_fixture.py
+python3 tools/prepare_pic_single_fixture.py
 python3 tools/prepare_fdc_pio_fixture.py
 python3 tools/prepare_fdc_write_fixture.py
 python3 tools/prepare_fdc_write_multi_fixture.py
@@ -268,6 +269,19 @@ unchanged disk bytes and no FAIL/core/browser errors within 2,000,000 slots.
 The [manifest](fixtures/v30-nibble-mem-manifest.json) records MIT provenance,
 assembly, source/boot/image hashes and exact result/guard layout. Generated media
 stays outside `web/`. See the [operand subset and AL policy](docs/hardware.md#v30-memory-nibble-rotations).
+
+The original MIT [single-mode PIC probe](guest/pic_single.asm) programs SNGL
+through guest I/O, enters real PIT interrupt handlers in normal and AEOI modes,
+and uses FDC READ ID to drive master IR7. It checks local vector `27h`, retained
+slave IRR and empty slave ISR, no repeated entry while slave INT stays high,
+separate slave polling/draining, then restored cascaded vector `53h` and separate
+EOIs. Prepare offline with `python3 tools/prepare_pic_single_fixture.py`; run
+`cargo test --locked --test pic` and `npm test`. The identical image boots in VM
+and Ap, cold and after reset, natively and in production release-Wasm at `/` and
+`/pc98-rust/`. Guest and hosts check all 64 result/guard bytes, PASS without FAIL,
+unchanged media and no errors within 2,000,000 scheduler slots per boot. The
+[manifest](fixtures/pic-single-manifest.json) pins its source/license, assembly
+command, source/boot/image hashes, independently specified results and budget.
 
 The original MIT [PIC boot probe](guest/pic.asm) checks programmed priority and
 rotating EOIs using guest-programmed PIT and keyboard hardware interrupts. Native

@@ -478,13 +478,15 @@ impl Bus {
     pub fn irq(&mut self) -> Option<u8> {
         self.sync_cascade();
         let n = self.pics[0].ack()?;
-        if n == self.pics[0].base + 7 {
+        if !self.pics[0].single() && n == self.pics[0].base + 7 {
             let vector = self.pics[1].ack();
             // INTA drops slave INT, including when AEOI leaves more work.
             self.slave_int = false;
             self.sync_cascade();
             vector
         } else {
+            // A local acknowledgement, including single-mode IR7, leaves the
+            // slave request and physical INT history untouched.
             Some(n)
         }
     }

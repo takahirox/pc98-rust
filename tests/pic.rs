@@ -1016,3 +1016,275 @@ fn polling_slave_freeze_retains_later_higher_priority_cascade_work() {
         assert_eq!(b.irq(), None);
     }
 }
+
+#[test]
+fn single_minimal_reproduction() {
+    let mut p = Pic::new(8);
+    p.write(false, 0x13);
+    p.write(true, 0x20);
+    p.write(true, 0x01);
+    p.write(true, 0xfe);
+    assert_eq!(p.read(true), 0xfe);
+    assert!(!p.auto_eoi);
+}
+
+fn initialize(b: &mut Bus, controller: usize, single: bool, ic4: bool, base: u8, aeoi: bool) {
+    let command = (controller * 8) as u16;
+    let data = command + 2;
+    b.output(command, 0x10 | (u8::from(single) * 2) | u8::from(ic4));
+    b.output(data, base);
+    if !single {
+        b.output(data, if controller == 0 { 0x80 } else { 7 });
+    }
+    if ic4 {
+        b.output(data, if aeoi { 3 } else { 1 });
+    }
+}
+
+#[test]
+fn single_and_cascade_all_initialization_sequences_and_independent_port_masks() {
+    for profile in PROFILES {
+        for controller in 0..2 {
+            for single in [false, true] {
+                for ic4 in [false, true] {
+                    for aeoi in [false, true] {
+                        for base in [0x23, 0x9f, 0xff] {
+                            let mut b = Bus::new(profile);
+                            // Complete the opposite mode first, with AEOI enabled.
+                            // Reinitialization with IC4=0 must restore its default.
+                            initialize(&mut b, controller, !single, true, 8, true);
+                            let other = b.pics[1 - controller].clone();
+                            initialize(&mut b, controller, single, ic4, base, aeoi);
+                            let data = (controller * 8 + 2) as u16;
+                            assert_eq!(b.input(data), 0);
+                            assert_eq!(b.pics[controller].base, base & 0xf8);
+                            assert_eq!(b.pics[controller].auto_eoi, ic4 && aeoi);
+                            for mask in [0xfe, 0x5a, 0xa5] {
+                                b.output(data, mask);
+                                assert_eq!(b.input(data), mask);
+                                assert_eq!(b.pics[controller].auto_eoi, ic4 && aeoi);
+                            }
+                            let p = &b.pics[1 - controller];
+                            assert_eq!(
+                                (p.base, p.mask, p.irr, p.isr, p.auto_eoi),
+                                (other.base, other.mask, other.irr, other.isr, other.auto_eoi)
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn single_8086_all_local_levels_vectors_masks_and_eoi_on_both_controllers() {
+    for profile in PROFILES {
+        for controller in 0..2 {
+            for base in [0x27, 0x93, 0xff] {
+                for aeoi in [false, true] {
+                    for n in 0..8 {
+                        let mut b = Bus::new(profile);
+                        initialize(&mut b, controller, true, true, base, aeoi);
+                        let data = (controller * 8 + 2) as u16;
+                        b.output(data, 255);
+                        let p = &mut b.pics[controller];
+                        p.request(n);
+                        status(p, 1 << n, 0, 255);
+                        assert_eq!(p.ack(), None);
+                        b.output(data, !(1 << n));
+                        let p = &mut b.pics[controller];
+                        assert_eq!(p.ack(), Some((base & 0xf8) | n));
+                        status(p, 0, if aeoi { 0 } else { 1 << n }, !(1 << n));
+                        p.request(n);
+                        if !aeoi {
+                            assert_eq!(p.ack(), None);
+                            p.write(false, 0x60 | n);
+                            status(p, 1 << n, 0, !(1 << n));
+                        }
+                        assert_eq!(p.ack(), Some((base & 0xf8) | n));
+                        p.write(false, 0x20);
+                        status(p, 0, 0, !(1 << n));
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn single_master_ir7_is_local_and_held_slave_int_requires_a_new_edge() {
+    for profile in PROFILES {
+        for aeoi in [false, true] {
+            for slave_pending in [false, true] {
+                let mut b = Bus::new(profile);
+                initialize(&mut b, 0, true, true, 0x27, aeoi);
+                initialize(&mut b, 1, false, true, 0x50, false);
+                b.output(2, 0x7f);
+                b.output(10, 0xf7);
+                if slave_pending {
+                    b.pics[1].request(3);
+                    b.tick(1); // physical slave INT, rather than a local request
+                } else {
+                    b.pics[0].request(7);
+                }
+                status(&mut b.pics[0], 0x80, 0, 0x7f);
+                assert_eq!(b.irq(), Some(0x27));
+                let slave_irr = if slave_pending { 8 } else { 0 };
+                status(&mut b.pics[0], 0, if aeoi { 0 } else { 0x80 }, 0x7f);
+                status(&mut b.pics[1], slave_irr, 0, 0xf7);
+                b.output(0, 0x20);
+                for _ in 0..4 {
+                    b.tick(100);
+                    b.output(0, 0x0a);
+                    assert_eq!(b.input(0), 0);
+                    assert_eq!(b.input(10), 0xf7);
+                    assert_eq!(b.irq(), None);
+                    status(&mut b.pics[1], slave_irr, 0, 0xf7);
+                }
+                // Reinitialization does not reset the physical input history.
+                initialize(&mut b, 0, true, true, 0x28, aeoi);
+                b.output(2, 0x7f);
+                assert_eq!(b.irq(), None);
+                if slave_pending {
+                    b.output(10, 255); // actual INT deassertion through masking
+                    b.tick(1);
+                    b.output(10, 0xf7); // reassertion of retained slave request
+                    assert_eq!(b.irq(), Some(0x2f));
+                    status(&mut b.pics[1], 8, 0, 0xf7);
+                    b.output(0, 0x20);
+                    b.output(8, 0x0c); // separately acknowledge the slave
+                    assert_eq!(b.input(8), 0x83);
+                    status(&mut b.pics[1], 0, 8, 0xf7);
+                    b.output(8, 0x20);
+                    assert_eq!(b.irq(), None);
+                }
+                // Quiescent inputs, then restore ordinary cascade delivery.
+                initialize(&mut b, 0, false, true, 8, false);
+                initialize(&mut b, 1, false, true, 0x10, false);
+                b.output(2, 0x7f);
+                b.output(10, 0xf7);
+                b.pics[1].request(3);
+                assert_eq!(b.irq(), Some(0x13));
+                status(&mut b.pics[0], 0, 0x80, 0x7f);
+                status(&mut b.pics[1], 0, 8, 0xf7);
+                b.output(8, 0x20);
+                status(&mut b.pics[0], 0, 0x80, 0x7f);
+                b.output(0, 0x20);
+                status(&mut b.pics[0], 0, 0, 0x7f);
+                status(&mut b.pics[1], 0, 0, 0xf7);
+            }
+        }
+    }
+}
+
+#[test]
+fn single_initialization_restart_at_every_stage_cancels_poll_and_is_isolated() {
+    for profile in PROFILES {
+        for controller in 0..2 {
+            for old_single in [false, true] {
+                for old_ic4 in [false, true] {
+                    let stages = 1 + usize::from(!old_single) + usize::from(old_ic4);
+                    for stage in 0..stages {
+                        for new_single in [false, true] {
+                            for new_ic4 in [false, true] {
+                                let mut b = Bus::new(profile);
+                                let command = (controller * 8) as u16;
+                                let data = command + 2;
+                                b.output(data, 0);
+                                b.pics[controller].request(4);
+                                b.output(command, 0x0f); // armed poll, ISR read selected
+                                b.output(
+                                    command,
+                                    0x10 | (u8::from(old_single) * 2) | u8::from(old_ic4),
+                                );
+                                for value in [0x38, 0x80, 3].into_iter().take(stage) {
+                                    b.output(data, value);
+                                }
+                                initialize(&mut b, controller, new_single, new_ic4, 0x67, false);
+                                b.output(data, 0xef);
+                                assert_eq!(b.input(data), 0xef); // no frozen poll response
+                                assert_eq!(b.input(command), 0); // IRR selection restored
+                                assert_eq!(b.pics[controller].base, 0x60);
+                                assert!(!b.pics[controller].auto_eoi);
+                                status(&mut b.pics[controller], 0, 0, 0xef);
+                                let other = &mut b.pics[1 - controller];
+                                // An armed slave request also reached the physical master IR7 wire.
+                                status(other, if controller == 1 { 0x80 } else { 0 }, 0, 255);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let mut m = Machine::new(profile);
+        let mut other = Machine::new(profile);
+        for controller in 0..2 {
+            initialize(&mut m.bus, controller, true, true, 0x60, true);
+            m.bus.output((controller * 8 + 2) as u16, 0);
+            m.bus.pics[controller].request(2);
+            m.bus.output((controller * 8) as u16, 0x0c);
+            status(&mut other.bus.pics[controller], 0, 0, 255);
+        }
+        m.reset();
+        for (controller, base) in [(0, 8), (1, 0x10)] {
+            let p = &mut m.bus.pics[controller];
+            status(p, 0, 0, 255);
+            assert_eq!(p.base, base);
+            assert!(!p.auto_eoi);
+        }
+        // Reset restores cascade policy as well as cancelling both polls.
+        m.bus.output(2, 0x7f);
+        m.bus.output(10, 0xf7);
+        m.bus.pics[1].request(3);
+        assert_eq!(m.bus.irq(), Some(0x13));
+        assert_eq!((m.bus.pics[0].isr, m.bus.pics[1].isr), (0x80, 8));
+        assert_eq!(other.bus.irq(), None);
+    }
+}
+
+#[test]
+fn single_hardware_boot_probe_before_and_after_reset_in_both_profiles() {
+    let image = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/fixtures/pic_single/pic_single.hdm"
+    ))
+    .expect("run python3 tools/prepare_pic_single_fixture.py");
+    let mut expected = vec![
+        0xa5, 1, 1, 0, 0xfe, 0, 1, 0, 0, 0xfe, 0, 1, 0x80, 0, 0, 8, 0x7f, 0xf7, 0, 1, 0, 8, 0x83,
+        8, 0, 0, 0, 0, 0, 0, 0, 1, 3, 1, 0x80, 8, 0, 0, 0x80, 0, 0, 0, 0, 0, 0, 0, 1, 3,
+    ];
+    expected.extend([0xa5; 16]);
+    for profile in PROFILES {
+        let mut m = Machine::new(profile);
+        m.insert(0, image.clone(), "pic_single.hdm").unwrap();
+        for run in 0..2 {
+            if run != 0 {
+                m.reset();
+            }
+            let mut slots = 0;
+            while slots < 2_000_000 {
+                slots += m.step(1000);
+                assert!(m.error.is_none(), "{:?}", m.error);
+                let text = m.bus.text();
+                assert!(
+                    !text.contains("FAIL"),
+                    "{text}; results={:02x?}",
+                    &m.bus.mem[0x8000..0x8040]
+                );
+                if text.contains("PIC SINGLE PASS") {
+                    break;
+                }
+            }
+            assert!(slots <= 2_000_000);
+            assert!(
+                m.bus.text().contains("PIC SINGLE PASS"),
+                "ip={:x} results={:02x?}",
+                m.cpu.ip,
+                &m.bus.mem[0x8000..0x8040]
+            );
+            assert_eq!(&m.bus.mem[0x8000..0x8040], &expected);
+            assert_eq!(m.bus.disks[0].as_ref().unwrap().bytes, image);
+        }
+    }
+}

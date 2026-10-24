@@ -4520,3 +4520,123 @@ other control/environment operations, numerical exceptions and WAIT/NE/IRQ
 behavior. Protected execution, paging and all other inventory gaps remain required.
 These limited probes and game regressions establish neither full hardware accuracy
 nor commercial compatibility.
+
+## Issue #91: 8259A single-mode initialization and delivery (2026-10-24)
+
+The starting device/bus implementation matched evaluation baseline
+`d793aaf83579e701fdebfe570d374392fc6c8c00`. Before changing either file, added
+and executed the Issue's original minimal reproduction:
+
+```sh
+cargo test --locked --test pic single_minimal_reproduction -- --exact
+```
+
+It failed (exit 101, 0 passed, 1 failed): IMR read `00h`, expected `FEh`.
+After implementation the same command passed (1 case), including its normal-EOI
+assertion. ICW1 now retains SNGL, ICW2 skips ICW3 in single mode, and IC4 alone
+controls ICW4 consumption. Master IR7 acknowledgement consults SNGL before
+acknowledging the slave; local acknowledgement preserves slave INT history.
+Existing PIC construction/reset, priority, poll and physical wiring policies
+are preserved.
+
+Six original tests added to `tests/pic.rs` cover the reproduction and:
+
+- All four SNGL/IC4 sequences on both independent controller port pairs in VM
+  and Ap, completing the opposite mode first with AEOI enabled, then checking
+  ICW2 alignment, IC4=0 AEOI defaults and distinct `FE/5A/A5` mask writes.
+  IC4=0 is tested only for sequencing/defaults, without 8086 delivery claims.
+- All eight local IRQs on both controllers at ICW2 values `27/93/FF`, with masks,
+  retained IRR, exact vectors, normal ISR/EOI and AEOI ISR behavior.
+- Single-mode master IR7 with an idle or pending slave, normal EOI and AEOI;
+  exact states on both controllers; held slave INT across acknowledgement, EOI,
+  ticks, port operations and master reinitialization; actual INT deassertion
+  through masking followed by reassertion, then separate slave polling/EOI.
+- Fresh ICW1 restart during every initialization stage of all four sequences,
+  either replacement mode, poll cancellation, controller/machine isolation,
+  Machine reset and return to ordinary slave vectors with separate EOIs.
+
+During test construction, one isolation expectation was corrected to retain the
+physical master IR7 request produced by an armed slave poll. Clippy initially
+flagged two test expressions for operator precedence; parentheses resolved both.
+These were test-harness findings; no existing assertions or budgets were relaxed.
+
+The original MIT [guest probe](../guest/pic_single.asm) is built offline by
+`python3 tools/prepare_pic_single_fixture.py`. The checked
+[manifest](../fixtures/pic-single-manifest.json) pins source/license, assembler
+command, source/boot/image hashes, independently specified 64-byte results and
+guards, and the 2,000,000-slot budget. Source SHA-256 is
+`ab47345ed07671ebd106ccbda00dda6a072e5176dc45340fd95ba4517e77f07f`;
+image SHA-256 is
+`77111de5184e9c5f6d96b8e2cdb0a6a6edf0b594e3f1d3345cff8b7db73b0bb2`.
+README and CI include offline preparation. Generated media, source/license copies
+and manifest remain ignored under `fixtures/pic_single/`, outside `web/`.
+
+The guest programs one-shot PIT IRQ0 in single mode, entering real CPU interrupt
+handlers at vectors `20h` (normal EOI) and `28h` (AEOI, without issuing EOI).
+Guest-issued FDC READ ID then asserts the slave input. Master vector `27h`
+records master ISR/IRR=`80/00`, slave ISR/IRR=`00/08`, masks=`7F/F7` and master
+EOI status. With IF enabled, 1,000 iterations of PIC port reads retain exactly one
+local entry, no new master IRR and the original slave request. Only then does the
+guest poll the slave (`83h`, ISR=`08h`), read all seven FDC bytes and issue slave
+EOI. With quiescent inputs it restores cascade mode; a second READ ID enters
+vector `53h`, records ISR=`80/08`, clears slave ISR while master ISR remains
+`80h`, then clears master ISR. Both READ ID results are independently expected
+as `00 00 00 00 00 01 03`. Guest and hosts compare every result/guard byte.
+The host only mounts, steps, reads state/media and resets; it never fabricates
+PIC requests, vectors or result data.
+
+The identical image passed natively on VM and Ap, cold and after reset, and in
+production release-Wasm at `/` and `/pc98-rust/` on both profiles before/after
+reset. Each boot required guest `PIC SINGLE PASS` without `FAIL`, exact 64-byte
+results/guards, unchanged mounted media and no emulator errors within 2,000,000
+slots. Browser cases additionally rejected page/console errors. Native expected
+bytes are literal and independent of the manifest and implementation.
+
+| Check | Outcome |
+| --- | --- |
+| `python3 -m unittest discover -s tools -p test_fixture_fetch.py` | Passed: 7 cases |
+| All README offline `prepare_*_fixture.py` commands, including `python3 tools/prepare_pic_single_fixture.py` without manifest-update mode | Passed; checked source/image/result manifests reproduced |
+| `python3 tools/prepare_freedos.py`, `prepare_font_fixture.py`, `prepare_dos_apps.py`, `prepare_cpu_fixture.py`, `prepare_hdd_fixture.py`, `prepare_music_fixture.py`, `prepare_device_fixture.py` | Passed with pinned binaries, matching sources and notices; CPULEVEL/DEBUG primary downloads returned HTTP 503 and existing checksum-verified mirrors succeeded |
+| `python3 tools/build_font.py --check` | Passed |
+| `cargo test --locked --test pic single` | Passed: all 6 new cases |
+| `cargo test --locked --test pic --test core --test cpu386 --test pit --test fdc --test hdd --test sound86` | Passed: 263 cases (34 PIC, 49 core, 57 CPU386, 65 PIT, 26 FDC, 16 HDD, 16 sound86), zero failures/ignored |
+| `cargo test --locked` | Passed: 363 native tests, zero failures/ignored; doc-tests passed (0 cases) |
+| `cargo clippy --all-targets -- -D warnings` | Passed after the test-only precedence correction |
+| `cargo fmt --check`; `git diff --check` | Passed |
+| `npm ci`; `npx playwright install chromium` | Passed |
+| `npm test` | Production release-Wasm build and ten-asset publication audit passed; occupied port 8000 prevented browser startup, zero cases executed |
+| `npx playwright test --config target/pic-single-playwright.config.js` | Passed: 130 browser cases, zero failures/skips, 3.0 minutes |
+
+The equivalent isolated-port browser run used the same production release-Wasm
+artifact (462,303 bytes, SHA-256
+`f1729185f2eda3d7a97d273eb31a4c72f3ecb716248e8fdfdc43e5806129bc44`).
+Its ignored temporary config copies `playwright.config.js`, preserving both
+projects, all assertions, workers, timeouts and budgets. It resolves the test
+and server working directories to this worktree and changes only the server
+ports to 18091/18092. Server commands are
+`python3 -m http.server 18091 --bind 127.0.0.1 --directory web` and
+`python3 target/pic-single-serve-project.py`. The latter copies
+`tests/browser/serve_project.py`, changing only the resolved `web/` location and
+port 18092, preserving the temporary project symlink and root-asset rejection.
+The first temporary-config attempt used the config directory as the server
+working directory and ran zero cases; resolving that directory explicitly fixed
+startup. The existing port-8000 listener was left alone. Committed default ports
+are unchanged. All existing hardware, CPU interrupt-shadow, DOS/apps, VM,
+audio/storage and six-game assertions and budgets were preserved and passed in
+the complete browser suite.
+
+Local review covered the complete diff against the Issue, initialization-stage
+transitions, acknowledgement and physical input history, fixture provenance,
+independent expectations and identical native/browser image. No independent
+review, remote CI, PR or merge is claimed. No post-merge verification is required.
+
+PIC remains **partial**. Programmable ICW3 routing, SFNM, fuller level/spurious
+behavior, AEOI polling and concurrent polling/CPU acknowledgement remain
+outstanding; MCS-80/85 interrupt output remains outside this change. All 26
+inventory scopes retain their required work: **partial** cpu-v30, cpu386,
+protected-mode, fpu, memory, pic, pit, dma, rtc, keyboard, mouse, fdc, ide, gdc,
+egc, pegc, text-cg, display-timing, opn, opna, pcm86, bios, lio, integration;
+**implemented_unverified** grcg; **unimplemented** paging. None is verified.
+Protected execution, paging and numerical x87 remain required. These bounded
+probes and six-game regressions establish neither full hardware accuracy nor
+commercial compatibility.
