@@ -479,6 +479,8 @@ fn ide_verify_original_guest_before_and_after_reset() {
         .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
         .collect();
     assert_eq!(expected.len(), 1024);
+    // Independent held-input/cascade oracle, including two actual ISR entries.
+    assert_eq!(&expected[1..12], &[2, 0, 2, 0, 0, 2, 0, 1, 2, 2, 0x80]);
     let mut m = Machine::new(Profile::Pc9821ApDos);
     m.insert(2, image.clone(), "ide_verify.hdi").unwrap();
     for run in 0..2 {
@@ -514,4 +516,223 @@ fn ide_verify_original_guest_before_and_after_reset() {
         );
         println!("Ap IDE VERIFY boot {run}: {slots} slots");
     }
+}
+
+// Normal-EOI edge-triggered cascade, configured entirely through guest ports.
+fn ide_pic_init(m: &mut Machine) {
+    for (port, value) in [
+        (0, 0x11),
+        (8, 0x11),
+        (2, 8),
+        (10, 0x10),
+        (2, 0x80),
+        (10, 7),
+        (2, 1),
+        (10, 1),
+        (2, 0x7f),
+        (10, 0xfd),
+    ] {
+        m.bus.output(port, value);
+    }
+}
+fn ide_eoi(m: &mut Machine) {
+    m.bus.output(8, 0x20);
+    m.bus.output(0, 0x20);
+}
+fn ide_pic_state(m: &Machine, irr: u8, isr: u8, master_isr: u8) {
+    assert_eq!(m.bus.pics[1].irr, irr, "slave IRR");
+    assert_eq!(m.bus.pics[1].isr, isr, "slave ISR");
+    assert_eq!(m.bus.pics[0].isr, master_isr, "master ISR");
+}
+fn ide_held_silence(m: &mut Machine, isr: u8, master_isr: u8) {
+    for _ in 0..32 {
+        m.bus.tick(8);
+        ide_pic_state(m, 0, isr, master_isr);
+        assert_eq!(m.bus.irq(), None);
+    }
+}
+
+#[test]
+fn ide_edge_held_cpu_and_poll_acknowledgement() {
+    for poll in [false, true] {
+        for opcode in [0x40, 0x41] {
+            for error in [false, true] {
+                let mut m = verify_machine();
+                ide_pic_init(&mut m);
+                let address = if error {
+                    [0xfe, 1, 0, 0xe0]
+                } else {
+                    [7, 0, 0, 0xe0]
+                };
+                verify_issue(&mut m, opcode, 4, address);
+                m.bus.tick(8);
+                ide_pic_state(&m, 2, 0, 0);
+                assert_eq!(m.bus.pics[0].irr, 0x80);
+                assert_eq!(m.bus.input(0x74c), if error { 0x51 } else { 0x50 });
+                if poll {
+                    m.bus.output(0, 0x0c);
+                    assert_eq!(m.bus.input(0), 0x87);
+                    m.bus.output(8, 0x0c);
+                    assert_eq!(m.bus.input(8), 0x81);
+                } else {
+                    assert_eq!(m.bus.irq(), Some(0x11));
+                }
+                ide_held_silence(&mut m, 2, 0x80);
+                ide_eoi(&mut m);
+                ide_held_silence(&mut m, 0, 0);
+                // Only primary status drops INTRQ; another command is a real edge.
+                assert_eq!(m.bus.input(0x64e), if error { 0x51 } else { 0x50 });
+                verify_issue(&mut m, 0x40, 1, [7, 0, 0, 0xe0]);
+                m.bus.tick(8);
+                assert_eq!(m.bus.irq(), Some(0x11));
+                ide_pic_state(&m, 0, 2, 0x80);
+            }
+        }
+    }
+}
+
+#[test]
+fn ide_edge_masked_capture_and_new_edge_during_service() {
+    let mut m = verify_machine();
+    ide_pic_init(&mut m);
+    m.bus.output(10, 0xff);
+    verify_issue(&mut m, 0x40, 1, [7, 0, 0, 0xe0]);
+    m.bus.tick(8);
+    ide_pic_state(&m, 2, 0, 0);
+    assert_eq!(m.bus.pics[0].irr, 0);
+    assert_eq!(m.bus.irq(), None);
+    // Drop the source while masked: IRR must retain the captured edge.
+    assert_eq!(m.bus.input(0x64e), 0x50);
+    m.bus.output(10, 0xfd);
+    assert_eq!(m.bus.irq(), Some(0x11));
+    // A new edge is captured during service, but cannot preempt the same IRQ.
+    verify_issue(&mut m, 0x41, 1, [8, 0, 0, 0xe0]);
+    m.bus.tick(8);
+    ide_pic_state(&m, 2, 2, 0x80);
+    assert_eq!(m.bus.irq(), None);
+    ide_eoi(&mut m);
+    assert_eq!(m.bus.irq(), Some(0x11));
+    ide_pic_state(&m, 0, 2, 0x80);
+    ide_eoi(&mut m);
+    ide_held_silence(&mut m, 0, 0);
+}
+
+#[test]
+fn ide_edge_pic_initialization_while_held_requires_transition() {
+    let mut m = verify_machine();
+    ide_pic_init(&mut m);
+    verify_issue(&mut m, 0x40, 1, [7, 0, 0, 0xe0]);
+    m.bus.tick(8);
+    ide_pic_state(&m, 2, 0, 0);
+    ide_pic_init(&mut m);
+    ide_held_silence(&mut m, 0, 0);
+    // Consecutive nIEN operations without clocks still form a real output edge.
+    m.bus.output(0x74c, 2);
+    assert!(m.bus.ide.irq);
+    assert!(!m.bus.ide.irq_enabled());
+    m.bus.output(0x74c, 0);
+    assert!(m.bus.ide.irq_enabled());
+    ide_pic_state(&m, 2, 0, 0);
+    assert_eq!(m.bus.irq(), Some(0x11));
+}
+
+#[test]
+fn ide_edge_consecutive_status_nien_srst_and_machine_reset() {
+    let mut m = verify_machine();
+    ide_pic_init(&mut m);
+    verify_issue(&mut m, 0x40, 1, [7, 0, 0, 0xe0]);
+    assert_eq!(m.bus.irq(), Some(0x11));
+    ide_eoi(&mut m);
+    m.bus.output(0x74c, 2);
+    assert_eq!(m.bus.input(0x74c), 0x50);
+    assert!(m.bus.ide.irq);
+    m.bus.output(0x74c, 0);
+    assert_eq!(m.bus.irq(), Some(0x11));
+    ide_eoi(&mut m);
+    m.bus.output(0x74c, 2);
+    assert_eq!(m.bus.input(0x64e), 0x50);
+    assert!(!m.bus.ide.irq);
+    m.bus.output(0x74c, 0);
+    ide_held_silence(&mut m, 0, 0);
+    // Primary status followed immediately by command must also expose the edge.
+    verify_issue(&mut m, 0x41, 1, [7, 0, 0, 0xe0]);
+    assert_eq!(m.bus.irq(), Some(0x11));
+    ide_eoi(&mut m);
+    m.bus.output(0x74c, 4);
+    assert_eq!(m.bus.input(0x74c), 0x80);
+    assert!(!m.bus.ide.irq);
+    m.bus.output(0x74c, 0);
+    assert_eq!(m.bus.input(0x74c), 0x50);
+    ide_held_silence(&mut m, 0, 0);
+    verify_issue(&mut m, 0x40, 1, [7, 0, 0, 0xe0]);
+    assert_eq!(m.bus.irq(), Some(0x11));
+    m.reset();
+    assert!(!m.bus.ide.irq_enabled());
+    ide_pic_init(&mut m);
+    ide_held_silence(&mut m, 0, 0);
+    m.bus.output(0x74c, 0); // synthetic firmware normally uses nIEN
+    verify_issue(&mut m, 0x40, 1, [7, 0, 0, 0xe0]);
+    assert_eq!(m.bus.irq(), Some(0x11));
+}
+
+// Acknowledge status normally before consuming each PIO sector. The final byte
+// can raise the next IRQ without an intervening tick, including through 641h.
+#[test]
+fn ide_edge_identify_read_write_transfer_boundaries() {
+    let mut m = verify_machine();
+    ide_pic_init(&mut m);
+    m.bus.output(0x64e, 0xec);
+    ide_pic_state(&m, 2, 0, 0);
+    assert_eq!(m.bus.irq(), Some(0x11));
+    assert_eq!(m.bus.input(0x64e), 0x58);
+    ide_eoi(&mut m);
+    let id: Vec<_> = (0..512).map(|i| m.bus.input(0x640 + (i & 1))).collect();
+    assert_eq!(&id[120..124], &[0, 2, 0, 0]);
+    assert_eq!(m.bus.input(0x74c), 0x50);
+    ide_held_silence(&mut m, 0, 0);
+    let before = m.bus.ide.disk.as_ref().unwrap().bytes.clone();
+    verify_issue(&mut m, 0x20, 2, [7, 0, 0, 0xe0]);
+    let mut data = Vec::new();
+    for sector in 0..2 {
+        ide_pic_state(&m, 2, 0, 0);
+        assert_eq!(m.bus.irq(), Some(0x11));
+        assert_eq!(m.bus.input(0x64e), 0x58);
+        ide_eoi(&mut m);
+        for i in 0..512 {
+            data.push(m.bus.input(0x640 + (i & 1)));
+            if i < 511 {
+                ide_pic_state(&m, 0, 0, 0);
+            }
+        }
+        assert_eq!(m.bus.input(0x644), 1 - sector);
+        assert_eq!(m.bus.input(0x646), 8 + sector);
+    }
+    assert_eq!(data, before[4096 + 7 * 512..4096 + 9 * 512]);
+    assert_eq!(m.bus.ide.reads, 2);
+    ide_held_silence(&mut m, 0, 0);
+    verify_issue(&mut m, 0x30, 2, [9, 0, 0, 0xe0]);
+    assert_eq!(m.bus.input(0x64e), 0x58);
+    ide_pic_state(&m, 0, 0, 0); // WRITE initially requests data without an IRQ
+    for sector in 0..2 {
+        for i in 0..512 {
+            m.bus
+                .output(0x640 + (i & 1), data[sector * 512 + i as usize]);
+            if i < 511 {
+                ide_pic_state(&m, 0, 0, 0);
+            }
+        }
+        ide_pic_state(&m, 2, 0, 0);
+        assert_eq!(m.bus.irq(), Some(0x11));
+        assert_eq!(m.bus.input(0x64e), if sector == 0 { 0x58 } else { 0x50 });
+        ide_eoi(&mut m);
+        assert_eq!(m.bus.input(0x644), (1 - sector) as u8);
+        assert_eq!(m.bus.input(0x646), (10 + sector) as u8);
+        ide_held_silence(&mut m, 0, 0);
+    }
+    assert_eq!(m.bus.ide.writes, 2);
+    let disk = m.bus.ide.disk.as_ref().unwrap();
+    assert_eq!(disk.writes, 2);
+    let mut expected = before;
+    expected[4096 + 9 * 512..4096 + 11 * 512].copy_from_slice(&data);
+    assert_eq!(disk.bytes, expected);
 }

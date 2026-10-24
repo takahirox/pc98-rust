@@ -185,7 +185,9 @@ construction uses 2026-01-01 Thursday; reset preserves the RTC and fractional
 guest clocks. See the [hardware contract and remaining scope](docs/hardware.md#ap-calendar-read-path).
 
 The original MIT [IDE READ VERIFY probe](guest/ide_verify.asm) checks 40h/41h
-completion and first-error task-file results in CHS and LBA modes on Ap. Prepare
+completion and first-error task-file results in CHS and LBA modes on Ap, plus
+held-input IRQ silence after poll/CPU acknowledgement and normal EOIs. Two actual
+INT 11h handler entries check cascade ISR state and recovery on genuine edges. Prepare
 offline with `python3 tools/prepare_ide_verify_fixture.py`; run
 `cargo test --locked --test hdd ide_verify_`, `cargo test --locked --test hdd`,
 and `npm test`. Native and production-release Wasm tests boot the identical HDI

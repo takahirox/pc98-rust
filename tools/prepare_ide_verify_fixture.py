@@ -42,7 +42,8 @@ def expected_results():
                 cases.append({'opcode': hex(opcode), 'mode': mode, 'start': start,
                               'sectors': count, 'result_hex': bytes(result).hex()})
     result = bytearray([0xa5] * 1024)
-    result[1:9] = bytes([2, 2, 2, 0, 0, 2, 0, 1])
+    result[1:9] = bytes([2, 0, 2, 0, 0, 2, 0, 1])
+    result[9:12] = bytes([2, 2, 0x80])
     for i, case in enumerate(cases):
         result[16 + i * 8:24 + i * 8] = bytes.fromhex(case['result_hex'])
     return bytes(result), cases
@@ -74,16 +75,18 @@ def build(update=False):
         'firmware_sha256': sha(firmware),
         'specifications': [
             'Fujitsu MHC2032AT disk product manual, READ VERIFY, printed page 5-22: selected legacy last-success/first-error address and inclusive residual',
+            'Intel 8259A, initialization and Edge and Level Triggered Modes, printed pages 9 and 17: rising-edge capture; held input stays quiet after acknowledgement/EOI and initialization',
+            'T13/1321D revision 3 (ATA/ATAPI-5 working draft), sections 6.3, 7.3, 7.9 and 7.15: pending interrupt versus enabled INTRQ, alternate/primary status, nIEN and SRST',
             'T13/1321D revision 3, section 8.28: 40h/41h non-data, count zero=256, IDNF; normal outputs unspecified in that later draft',
         ],
         'host': 'Mount, reset, step and read outputs only; no guest result writes or IRQ injection',
         'result_address': '0x8000',
         'result_length': len(result),
         'result_hex': result.hex(),
-        'result_layout': '8000=a5; 8001..8007=PIC IR1 observations (2,2,2,0,0,2,0); 8008=1 successful IDENTIFY/read recovery; 8009..800f=a5; 8010..817f=46 eight-byte records (count,S,CL,CH,DH,error,status,data=ff); 8180..83ff=a5 guards',
+        'result_layout': '8000=a5; 8001..8007=PIC IR1 observations (2,0,2,0,0,2,0); 8008=1 successful IDENTIFY/read recovery; 8009=2 actual INT 11h entries; 800a=slave ISR 02; 800b=master ISR 80; 800c..800f=a5; 8010..817f=46 eight-byte records (count,S,CL,CH,DH,error,status,data=ff); 8180..83ff=a5 guards',
         'guards': 'Guest and hosts check every byte of the 1024-byte result/guard block; guest checks SP=7c00',
         'cases': cases,
-        'irq_contract': 'Alternate status retains device latch; PIC poll drains then IR1 relatches. Primary status clears device latch but leaves PIC IRR. Poll/EOI then no retrigger. nIEN suppresses new delivery and clearing nIEN exposes retained latch.',
+        'irq_contract': 'Alternate status retains pending state; held INTRQ stays quiet during service and after normal EOIs (128 guest polling iterations each). Poll and actual INT 11h acknowledge through the cascade. Primary status clears pending state but leaves captured PIC IRR. nIEN suppresses output without clearing pending state; a new enable edge delivers again. Two actual handler entries prove recovery, with slave/master ISR 02/80 and held-input silence before primary status acknowledgement.',
         'media': 'Unchanged image and zero writes; 17 PIO sector reads (16 boot sectors plus one guest recovery read); VERIFY transfers no data and never sets DRQ',
         'markers': ['IDE VERIFY PASS', 'IDE VERIFY FAIL'],
         'slot_budget': 500_000,

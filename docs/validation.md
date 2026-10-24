@@ -3595,3 +3595,139 @@ unchanged: 23 partial, GRCG implemented/unverified, paging and FPU unimplemented
 Protected execution, paging and basic x87 remain required future work. Limited
 probes and six-game reports establish neither complete hardware accuracy nor
 commercial compatibility. No post-merge verification is required by Issue #75.
+
+## Issue #77 Ap IDE IRQ edges (2026-10-24)
+
+Issue #77 corrects the Ap bank-zero master IDE input to slave PIC IR1. Bus input
+history now captures inactive-to-active enabled INTRQ independently of PIC
+IRR/ISR, including across PIC initialization. Clock sampling and immediate IDE
+port sampling cover primary status, nIEN, SRST, commands and READ/WRITE data
+boundaries. Machine reset recreates the device and its input history together.
+The ATA pending-state, task-file/data contracts, sound wiring and VM routing
+remain unchanged.
+
+Five original port/clock-driven Rust regressions configure a normal-EOI cascade
+through guest ports and generate requests using VERIFY, IDENTIFY and PIO
+transfers. They check CPU and master/slave poll acknowledgements, explicit
+IRR/ISR/vector outcomes, silence during service and after EOIs, masked capture,
+a new edge during service, PIC initialization while held, primary versus
+alternate status, retained pending state through nIEN, consecutive status/control
+operations without ticks, SRST and Machine reset recovery. Two-sector READ/WRITE
+coverage checks the final data-byte boundary without clocks, normal status
+acknowledgements, data, counters, task-file advancement and exact media changes.
+Both VERIFY opcodes have success/error held-input coverage; the existing matrix
+retains counts 1/2/255/256, CHS/LBA address and residual checks.
+
+The corrected original MIT guest retains all 46 VERIFY records, IDENTIFY/read
+recovery, SP/guard checks, unchanged media, zero writes and the 500,000-slot boot
+budget. It polls both PICs with normal EOIs, requires 128 guest polling iterations
+of silence during service and another 128 after EOIs, and proves recovery through
+nIEN and primary-status acknowledgement. Two actual INT 11h handler entries check
+slave/master ISR values 02h/80h and held-input silence before device
+acknowledgement. The independent builder oracle, checked provenance manifest and
+native/browser expected bytes now agree on this contract. Hosts only mount,
+reset, step and inspect outputs. The firmware source and hash are unchanged;
+no proprietary firmware or commercial guest was acquired.
+
+### Regression evidence
+
+Before changing `src/bus.rs` (its IDE routing was identical to evaluation baseline
+`d7834638d3ea130020bbbbb1549812a540955562`), the following corrected acceptance
+failed:
+
+- `cargo test --locked --test hdd ide_edge_held_cpu_and_poll_acknowledgement -- --nocapture`:
+  failed on the first held-input clock during service, slave IRR actual 2 versus
+  expected 0 after CPU acknowledgement.
+- `cargo test --locked --test hdd ide_verify_original_guest_before_and_after_reset -- --nocapture`:
+  failed with `IDE VERIFY FAIL` in the first poll acknowledgement's bounded
+  held-input silence check, after the full 46-record matrix completed. Prefix
+  bytes were `a5 02 a5...`, before recording the required quiet observation.
+
+With the input edge detector, both exact commands pass. Both native guest boots
+use 30,000 slots, preserve every result/guard byte and the HDI, and report exactly
+17 sector reads and zero writes. The fixture was rebuilt offline with
+`python3 tools/prepare_ide_verify_fixture.py --update-manifest`, then checked with
+`python3 tools/prepare_ide_verify_fixture.py`. Source, boot, image and synthetic
+firmware hashes and the explicit MIT license are recorded in the checked manifest.
+
+### Commands and results
+
+All README prerequisites were prepared in order:
+
+```sh
+python3 -m unittest discover -s tools -p test_fixture_fetch.py
+python3 tools/prepare_dma_fixture.py
+python3 tools/prepare_gdtr_fixture.py
+python3 tools/prepare_idtr_fixture.py
+python3 tools/prepare_smsw_fixture.py
+python3 tools/prepare_pic_fixture.py
+python3 tools/prepare_pic_smm_fixture.py
+python3 tools/prepare_pic_poll_fixture.py
+python3 tools/prepare_pit_mode2_fixture.py
+python3 tools/prepare_pit_mode3_fixture.py
+python3 tools/prepare_pit_mode0_fixture.py
+python3 tools/prepare_pit_mode0_rewrite_fixture.py
+python3 tools/prepare_pit_mode3_rewrite_fixture.py
+python3 tools/prepare_pit_counter_latch_fixture.py
+python3 tools/prepare_v30_bound_fixture.py
+python3 tools/prepare_v30_repc_fixture.py
+python3 tools/prepare_v30_nibble_mem_fixture.py
+python3 tools/prepare_v30_segment_irq_fixture.py
+python3 tools/prepare_ide_verify_fixture.py
+python3 tools/prepare_rtc_fixture.py
+python3 tools/prepare_opn_ch3_fixture.py
+python3 tools/prepare_opna_irq_fixture.py
+python3 tools/prepare_freedos.py
+python3 tools/prepare_font_fixture.py
+python3 tools/prepare_dos_apps.py
+python3 tools/prepare_cpu_fixture.py
+python3 tools/prepare_hdd_fixture.py
+python3 tools/prepare_music_fixture.py
+python3 tools/prepare_device_fixture.py
+npm ci
+npx playwright install chromium
+```
+
+All succeeded. CPULEVEL and DEBUG primary downloads returned HTTP 503; the
+existing pinned fallbacks succeeded with the original size/hash verification
+and matching licensed sources. No hashes or download policy were relaxed.
+
+| Command | Result |
+| --- | --- |
+| `cargo test --locked --test hdd --test pic --test sound86` | Passed: 15 HDD, 28 PIC, 16 sound tests (59 total) |
+| `cargo test --locked` | Passed: 313 integration tests, zero failed or ignored; unit/doc targets also passed |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `cargo fmt --check` | Passed |
+| `git diff --check` | Passed |
+| `npm test` | Production release-Wasm build and ten-asset publication check passed; browser servers could not start because port 8000 was occupied (`OSError: [Errno 48] Address already in use`) |
+| `npm test -- --config=.issue77-playwright.config.js` | Passed: release-Wasm (456,141 bytes), ten-asset publication check, all 106 browser cases at both roots, zero skipped, 1.4 minutes; all four IDE boots 30,000 slots |
+
+The temporary browser configuration below changes only server addresses to
+18770/18771. It imports all original timeouts, concurrency, projects and browser
+settings, preserves both `/` and `/pc98-rust/`, and retains every test and budget.
+The project server is the original script with only its port substituted. The
+temporary file was removed after validation; reproduce it at repository root:
+
+```js
+import config from './playwright.config.js';
+export default {
+  ...config,
+  projects: [
+    { ...config.projects[0], use: { ...config.projects[0].use, baseURL: 'http://127.0.0.1:18770/' } },
+    { ...config.projects[1], use: { ...config.projects[1].use, baseURL: 'http://127.0.0.1:18771/pc98-rust/' } },
+  ],
+  webServer: [
+    { ...config.webServer[0], command: 'python3 -m http.server 18770 --bind 127.0.0.1 --directory web', url: 'http://127.0.0.1:18770' },
+    { ...config.webServer[1], command: `python3 -c "from pathlib import Path; p = Path('tests/browser/serve_project.py').resolve(); exec(compile(p.read_text().replace('8001', '18771'), str(p), 'exec'), {'__name__': '__main__', '__file__': str(p)})"`, url: 'http://127.0.0.1:18771/pc98-rust/' },
+  ],
+};
+```
+
+A local review of the complete change found no blocking findings. No push, PR,
+merge, GitHub comment or remote CI execution was performed. No post-merge checks
+are required by this Issue. IDE remains partial; completed 256-sector PIO
+acceptance, broader READ/WRITE completion-address/error-residual coverage, reset,
+device selection and error interactions remain future work. All 26 inventory
+categories retain their scopes/statuses; protected execution, paging and basic
+x87 remain required. This probe and existing six-game checks do not establish
+full hardware accuracy or commercial compatibility.
