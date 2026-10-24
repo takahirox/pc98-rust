@@ -3769,3 +3769,155 @@ A read-only port check found port 8000 occupied, so browser validation used the
 same temporary configuration documented above (ports 18770/18771). Both roots,
 all tests, assertions, concurrency and budgets were retained. The temporary file
 was removed after validation. No push or merge was performed.
+
+## Issue #79 FDC non-DMA READ DATA
+
+Implemented the bounded SPECIFY ND=1 / MFM `46h` single-head N=1–3 read path on
+VM and Ap. Payload availability, deadlines and result transitions advance with
+guest clocks; port reads alone cannot manufacture time. The
+[hardware contract](hardware.md#fdc-non-dma-read-data) records the approximation
+and source derivation. ND=0 keeps the existing DMA read/write backend. FDC stays
+**partial**, with the non-goals and broader compatibility limits unchanged.
+
+### Regression and result oracle
+
+The initial raw-port payload/EXM regression was run against the untouched selected
+baseline before implementation. After command dispatch it failed with MSR `D0h`
+(result) instead of `70h` (non-DMA execution awaiting a byte). After implementation
+it passed. The final separate `nd_read_exposes_clocked_payload_vm` and
+`nd_read_exposes_clocked_payload_ap` cases were also copied into an isolated
+checkout of `ae6b96926ce9146de9dbdfd1269686b74ae3a643`: both failed, exit 101,
+with `90h` instead of `70h` immediately after command submission. Both pass on
+the implementation. The temporary baseline checkout was removed afterward.
+
+`tests/fdc.rs` drives raw commands, ports and clocks, using original patterned
+raw media and normal MFM D88 images built in the test. It covers:
+
+- Single and multiple sectors through EOT on each head independently, MT=0;
+  N=1–3 on D88 and N=2/3 on supported raw geometries. Every payload byte, complete
+  seven-byte record, memory guards and complete unchanged media are compared.
+- MSR through command submission, dispatch, pre-availability, available bytes,
+  between-byte gaps and every result read; early data reads, repeated MSR reads
+  and wrong-direction writes cannot consume payload or begin another command.
+- Equivalent tick partitions, including one-clock partitions and a batch crossing
+  dispatch, availability and overrun. Service at 103 clocks succeeds; the exact
+  104-clock deadline terminates. A late read preserves the next arrival boundary.
+- Masked channel 2 and disabled DMA controller, retained current/base address and
+  count, mode, bank, masks, unrelated sticky TC and shared byte pointer. Base
+  retention is observed by advancing a clone through auto-init. Clearing ND
+  restores successful DMA reads and writes with exact memory/result checks.
+- Data request acknowledgement, PIC ISR/EOI state, held-request silence after
+  acknowledgement/EOI, later byte requests and distinct EOT/overrun result IRQs.
+  Results acknowledge on their first read. Recovery begins at payload byte zero.
+- Missing media/initial sector/later sector, wrong cylinder, unsupported ND
+  variants and PIO writes, reset while a byte is ready or results are undrained,
+  fresh SPECIFY/READ recovery, and host eject while a byte is available.
+
+For EOT without TC, the oracle is `ST0=40h|head<<2|drive`, `ST1=80h`, `ST2=0`,
+then the last sector's C/H/R/N. This combines the EOT stop condition, EN status
+and sector-ID result definition. The [NEC READ DATA functional description and
+Table 2](https://www.scribd.com/document/1067140199/UPD765) explicitly limit that
+table's C+1/R=1 EOT row to **processor termination**, so this path does not use
+it. Successful TC status remains distinct; existing DMA result expectations were
+preserved. See also the [NEC status definitions](https://hxc2001.com/download/datasheet/floppy/thirdparty/FDC/NEC/UPD765_Datasheet_OCRed.pdf#page=10).
+
+### Original guest and provenance
+
+`guest/fdc_pio.asm` is original MIT assembly. The offline builder
+`python3 tools/prepare_fdc_pio_fixture.py` checks the committed
+[manifest](../fixtures/fdc-pio-manifest.json), assembles the 1,024-byte IPL sector
+and generates a patterned 1,261,568-byte floppy outside `web/`. It copies original
+source, synthetic firmware source, license and manifest beside the generated
+image. No proprietary firmware, DOS or acquired guest binary is involved.
+
+The guest masks DMA channel 2, disables the DMA controller, selects `0094h=18h`,
+sends SPECIFY ND=1, and reads sectors 2–3 using raw `46h`. An actual INT 13h
+handler distinguishes execution bytes from the separate result request using
+EXM, collects every byte, records slave/master ISRs, and sends normal EOIs to
+both PICs. Before emitting `FDC PIO PASS`, guest code checks all payload bytes,
+64 result/guard bytes, the full `8040h..8FFFh` guard region, trailing guards and
+SP=`7C00h`. Hosts only mount, step, inspect and reset.
+
+The manifest pins source SHA-256
+`cc3b218726beb95ce9ca047587b25e154def59cd397ed040a5e21026127e4f04`,
+image `7c2e1aa598c19078511a824728e521e813a45c4f3267723f1839bcb0ba1ba450`,
+synthetic firmware `64a9985dc777a515780515f4453320f9aedcdd44659b3f9622cad47712baddf8`,
+boot and firmware-source hashes, assembly command, exact result bytes and payload
+hash. The data record contains 2,048 actual data IRQs, one result IRQ, ISR
+aggregates `08h/80h`, payload end `9800h`, EOT result
+`40 80 00 00 00 03 03`, result MSRs `D0 D0 80`, and post-EOI ISRs `00 00`.
+Native and browser checks compare complete unchanged media and require zero
+writes, exact results, complete payload, guards and no guest/core/browser error.
+Each native VM/Ap boot before/after reset completed in **71,000 scheduler slots**,
+well within the unchanged **2,000,000-slot** budget.
+
+### Local execution, 2026-10-24
+
+All README prerequisite builders and checksum-pinned legal fixture preparations
+were run, including the original CPU/PIC/PIT/DMA/RTC/FM/IDE probes, FreeDOS,
+DOS/apps, font, CPU, HDD, music and device fixtures. The Python fixture-fetch
+unit tests passed. Some primary fixture downloads returned HTTP 503; the existing
+checksum-pinned fallback sources completed preparation successfully. `npm ci`
+and `npx playwright install chromium` succeeded.
+
+The first complete native run passed 321 tests. Review then added explicit VM/Ap
+baseline cases, a distinct overrun-result IRQ recovery check, and a safe missing-
+media data access with a missing-later-sector/eject regression. The focused
+combined core/DMA/FDC/PIC run passes 98 tests (49+11+10+28). An additional focused
+unsupported-command run covers deleted read/write, format and scan rejection.
+The complete native suite and production release Wasm/browser suite were rerun
+on the final implementation after that review fix.
+
+The default `npm test` invocation built and checked the production Wasm/publication
+tree successfully but stopped before running tests because the configured server
+port was occupied (`OSError: [Errno 48] Address already in use`). A temporary
+configuration changed only loopback ports to 18079/18080 and worker count to two;
+the two serving paths, test assertions, timeouts and guest budgets were retained.
+`npm test -- --config=.issue79-playwright.config.js` then passed all **110** browser
+cases (106 existing + 4 new) in 3.4 minutes. All eight new browser boots (VM/Ap ×
+root/project path × before/after reset) completed in **71,000 slots** with exact
+results, payload and guards, no guest/core/browser errors, complete unchanged
+exported media and zero writes. The temporary configuration/server copy was
+removed after validation. No existing DOS/apps/VM/audio, IDE-edge, or six-game
+regression source, assertion or budget was changed.
+
+Final check outcomes (all exit 0 except the explicitly recorded baseline failures
+and default-port startup failure):
+
+| Check | Outcome |
+| --- | --- |
+| `python3 -m unittest discover -s tools -p test_fixture_fetch.py` | 7 passed |
+| README fixture preparation commands, plus `python3 tools/prepare_fdc_pio_fixture.py` | All completed; checked original/licensed provenance and reproducible hashes |
+| `cargo test --locked --test fdc --test core --test dma --test pic` | 98 passed: FDC 10, core 49, DMA 11, PIC 28 |
+| `cargo test --locked --test fdc errors_unsupported_commands_and_reset_recover_without_stale_payload -- --exact` | Passed after adding deleted-data/format/scan rejection cases |
+| `cargo test --locked` (final implementation) | 324 passed; zero failures, ignored or filtered tests |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `cargo fmt --check` | Passed |
+| `git diff --check` and `git diff --cached --check` | Passed, including newly staged files |
+| `npm ci`; `npx playwright install chromium` | Passed |
+| `npm test` | Build/site checks passed; browser startup blocked by an occupied default port; zero tests executed |
+| `npm test -- --config=.issue79-playwright.config.js` (isolated ports, first and final implementation runs) | Both passed all 110 cases in 3.4 minutes each; production release Wasm and both serving paths |
+
+The final run again required 71,000 slots for each of the eight browser probe
+boots. All final results, payloads, guards, media exports, zero-write assertions
+and error checks passed. The final native run includes all ten new FDC cases.
+
+All 26 inventory categories retain their existing scope/status:
+
+| Status | Categories |
+| --- | --- |
+| partial | cpu-v30, cpu386, protected-mode, memory, pic, pit, dma, rtc, keyboard, mouse, fdc, ide, gdc, egc, pegc, text-cg, display-timing, opn, opna, pcm86, bios, lio, integration |
+| unimplemented | paging, fpu |
+| implemented_unverified | grcg |
+
+Local diff review checked the command/status lifecycle, deadlines and overshoot,
+interrupt edges and PIC acknowledgement/EOI separation, DMA isolation, EOT oracle,
+source-built probe and unchanged existing regressions. The media-eject access
+finding was fixed and covered by a regression before the final validation run.
+This node performs implementation and local validation only: PR creation, remote
+CI, independent PR review, push and merge were not performed, as requested by the
+execution instruction. Repository-required PR review/revisions remain for the
+subsequent PR workflow before merge. No post-merge verification is required by
+this Issue. Limited probes establish this subset, without a full FDC hardware
+accuracy or commercial compatibility claim; protected execution, paging and basic
+x87 remain required work.

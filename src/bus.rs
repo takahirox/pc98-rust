@@ -14,6 +14,7 @@ pub struct Bus {
     slave_int: bool,
     sound_irq: bool,
     ide_irq: bool,
+    fdc_irq: bool,
     pub pit: Pit,
     pub rtc: crate::rtc::Rtc,
     pub opn: crate::sound::Opn,
@@ -94,6 +95,7 @@ impl Bus {
             slave_int: false,
             sound_irq: false,
             ide_irq: false,
+            fdc_irq: false,
             pit: Pit::default(),
             rtc: crate::rtc::Rtc::default(),
             opn: crate::sound::Opn::default(),
@@ -349,19 +351,82 @@ impl Bus {
         if !self.keyboard.fifo.is_empty() {
             self.pics[0].request(1)
         }
+        self.tick_fdc(cycles);
+        self.sync_cascade();
+    }
+    fn tick_fdc(&mut self, mut cycles: u32) {
         if self.fdc.pending {
             if self.fdc.delay > cycles {
-                self.fdc.delay -= cycles
+                self.fdc.delay -= cycles;
+                return;
             } else {
+                cycles -= self.fdc.delay;
                 self.fdc.pending = false;
                 let irq = matches!(self.fdc.command[0] & 31, 5 | 6 | 7 | 15 | 10);
                 self.finish_fdc();
-                if irq {
-                    self.pics[1].request(3);
+                if irq && self.fdc.pio.is_none() {
+                    self.fdc.irq = true;
                 }
+                self.sync_fdc_irq();
             }
         }
-        self.sync_cascade();
+        while let Some(mut read) = self.fdc.pio.take() {
+            if cycles < read.delay {
+                read.delay -= cycles;
+                self.fdc.pio = Some(read);
+                break;
+            }
+            cycles -= read.delay;
+            if read.ready {
+                self.end_fdc_read(&read, 0x10); // unserviced byte: OR
+                break;
+            }
+            if read.pos == read.len {
+                if read.r == read.eot {
+                    self.end_fdc_read(&read, 0x80); // EOT without TC: EN
+                    break;
+                }
+                read.r += 1;
+                if let Some(s) = self.disks[read.drive as usize]
+                    .as_ref()
+                    .and_then(|disk| disk.sector(read.c, read.h, read.r, read.n))
+                {
+                    read.offset = s.offset;
+                    read.len = s.len;
+                    read.pos = 0;
+                } else {
+                    self.end_fdc_read(&read, 4);
+                    break;
+                }
+            }
+            read.ready = true;
+            read.delay = Fdc::SERVICE_CLOCKS;
+            self.fdc.pio = Some(read);
+            self.fdc.irq = true;
+            self.sync_fdc_irq();
+        }
+    }
+    fn end_fdc_read(&mut self, read: &FdcRead, st1: u8) {
+        // A held data request and the result request are distinct interrupt events.
+        self.fdc.irq = false;
+        self.sync_fdc_irq();
+        self.fdc.result.extend([
+            0x40 | read.drive | (read.h << 2),
+            st1,
+            0,
+            read.c,
+            read.h,
+            read.r,
+            read.n,
+        ]);
+        self.fdc.irq = true;
+        self.sync_fdc_irq();
+    }
+    fn sync_fdc_irq(&mut self) {
+        if self.fdc.irq && !self.fdc_irq {
+            self.pics[1].request(3);
+        }
+        self.fdc_irq = self.fdc.irq;
     }
     // Track the Ap IDE input independently of PIC IRR/ISR, including through
     // PIC initialization. Only an inactive-to-active transition captures IR1.
@@ -493,7 +558,36 @@ impl Bus {
             0x71 | 0x73 | 0x75 => self.pit.read(((p - 0x71) / 2) as usize),
             0x3fd9 | 0x3fdb | 0x3fdd => self.pit.read(((p - 0x3fd9) / 2) as usize),
             0x90 => self.fdc.status(),
-            0x92 => self.fdc.result.pop_front().unwrap_or(0x80),
+            0x92 => {
+                let value = if let Some(read) = self.fdc.pio.as_mut() {
+                    if !read.ready {
+                        return 0x80;
+                    }
+                    let value = self.disks[read.drive as usize]
+                        .as_ref()
+                        .and_then(|disk| disk.bytes.get(read.offset + read.pos))
+                        .copied();
+                    let Some(value) = value else {
+                        // Media can be removed/replaced between host steps.
+                        let read = self.fdc.pio.take().unwrap();
+                        self.end_fdc_read(&read, 4);
+                        return 0x80;
+                    };
+                    read.pos += 1;
+                    read.ready = false;
+                    // Preserve the arrival cadence, independent of service time.
+                    read.delay += Fdc::BYTE_CLOCKS - Fdc::SERVICE_CLOCKS;
+                    if read.pos == read.len {
+                        self.fdc.reads += 1;
+                    }
+                    value
+                } else {
+                    self.fdc.result.pop_front().unwrap_or(0x80)
+                };
+                self.fdc.irq = false;
+                self.sync_fdc_irq();
+                value
+            }
             0x94 => 0x40,
             0xbe => 1,
             0xa8 | 0xaa | 0xac | 0xae => {
@@ -696,7 +790,7 @@ impl Bus {
                 }
             }
             0x92 => {
-                if !self.fdc.pending && self.fdc.result.is_empty() {
+                if !self.fdc.pending && self.fdc.pio.is_none() && self.fdc.result.is_empty() {
                     self.fdc.command.push(v);
                     let count = Fdc::param_count(self.fdc.command[0]);
                     if self.fdc.command.len() == count {
@@ -714,7 +808,9 @@ impl Bus {
                         ..Default::default()
                     };
                     self.fdc.sense.extend([(0xc0, 0), (0xc1, 0)]);
-                    self.pics[1].request(3);
+                    self.sync_fdc_irq();
+                    self.fdc.irq = true;
+                    self.sync_fdc_irq();
                 }
             }
             0xa4 => self.display_page = v & 1,
@@ -797,7 +893,7 @@ impl Bus {
         let drive = p.get(1).copied().unwrap_or(0) & 3;
         let d = drive as usize;
         match op {
-            3 => {}
+            3 => self.fdc.non_dma = p[2] & 1 != 0,
             4 => self
                 .fdc
                 .result
@@ -819,11 +915,23 @@ impl Bus {
                 }
             }
             8 => {
+                self.fdc.irq = false;
                 let (st, c) = self.fdc.sense.pop_front().unwrap_or((0x80, 0));
                 self.fdc.result.extend([st, c]);
             }
             5 | 6 => {
                 let (c, h, mut r, n, eot) = (p[2], p[3], p[4], p[5], p[6]);
+                if self.fdc.non_dma
+                    && (p[0] != 0x46
+                        || !(1..=3).contains(&n)
+                        || h > 1
+                        || (p[1] >> 2) & 1 != h
+                        || r == 0
+                        || r > eot)
+                {
+                    self.fdc.result.push_back(0x80);
+                    return;
+                }
                 let mut st1 = 0;
                 let mut st0 = drive | (h << 2);
                 let write = op == 5;
@@ -838,6 +946,25 @@ impl Bus {
                     st1 = 2;
                 } else if self.fdc.cylinder[d] != c {
                     st0 |= 64;
+                    st1 = 4;
+                } else if self.fdc.non_dma {
+                    if let Some(s) = self.disks[d].as_ref().unwrap().sector(c, h, r, n) {
+                        self.fdc.pio = Some(FdcRead {
+                            drive,
+                            c,
+                            h,
+                            r,
+                            n,
+                            eot,
+                            offset: s.offset,
+                            len: s.len,
+                            pos: 0,
+                            ready: false,
+                            delay: Fdc::BYTE_CLOCKS,
+                        });
+                        return;
+                    }
+                    st0 |= 0x40;
                     st1 = 4;
                 } else if !self.dma.can_service(2) {
                     st0 |= 0x40;

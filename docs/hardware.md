@@ -461,7 +461,7 @@ this table is not a claim of complete chip emulation.
 | `A4,A6` | Display and CPU graphics page select | Two independent three-plane pages |
 | `7C,7E` | GRCG mode/tile writes | TDW and RMW, plane masks; no EGC |
 | `71,73,75,77`; `3FD9–3FDF` odd | 8253 channels, control/access modes, low/high writes, counter latches | Channel 0 IR0 / INT 08; channel 1 beep; VM input clock 1,996,800 Hz |
-| `90,92,94` | 2HD FDC status/FIFO/control, SPECIFY, sense status/interrupt, recalibrate, seek, read ID, READ/WRITE DATA through DMA, motor/DMA-enable gating | IR11 / INT 13; delayed command completion and seven-byte transfer results |
+| `90,92,94` | 2HD FDC status/FIFO/control, SPECIFY, sense status/interrupt, recalibrate, seek, read ID, READ/WRITE DATA through DMA, non-DMA READ DATA, board-control gating | IR11 / INT 13; delayed command completion and seven-byte transfer results |
 | `BE` | Fixed 1 MB floppy interface selection | No alternate 640 KB controller at C8/CA |
 | `40,5C,5E,64,6E` | Fixed system/display inputs and deterministic clock status | See `Bus::input`; VM has no RTC serial protocol |
 | `F0` | Private synthetic-firmware thunk ABI, accepted only from its ROM stubs | Not a guest DOS API or claim of a real VM hardware port |
@@ -794,7 +794,7 @@ Protected execution, paging and basic FPU remain required project goals.
 The hello source uses `OUT 3FDFh,AL`, an immediate-port encoding that truncates to
 `DFh`. That timer mirror is decoded too. PIT behavior beyond the subset above,
 DMA arbitration and request modes, precise FDC motor/rotation timing, FDC programmed
-I/O transfers, formatter/scanner commands, GDC vector/area drawing and all GDC
+I/O writes, formatter/scanner commands, GDC vector/area drawing and all GDC
 raster partitions are outside the tested subset. Unsupported FDC commands return
 an invalid-command result. No pretend FM register bank is implemented.
 
@@ -875,7 +875,7 @@ current/base address/count programming, modes, banks, masks, TC status and the
 shared byte pointer. Programming remains available while disabled. Reading
 `0011h` returns and clears status, rather than reading back the command.
 
-The atomic FDC backend samples eligibility at its scheduled service boundary,
+The DMA FDC backend samples eligibility at its scheduled service boundary,
 including command writes after submission but before service. A valid data
 command with DMA disabled follows the masked-channel no-service path: no payload
 or DMA progress, abnormal ST0 and ST1 overrun bit 4, seven result bytes and a
@@ -902,6 +902,49 @@ still require implementation or verification. Broader FDC commands and precise m
 outside this contract. Passing these checks establishes terminal-count reload,
 software master clear, controller disable and their existing FDC consumer, not complete hardware
 accuracy or commercial compatibility. Other hardware inventory requirements remain unchanged.
+
+## FDC non-DMA READ DATA
+
+On VM and Ap, SPECIFY (`03h`) retains ND (last parameter bit 0). With ND set,
+`46h` supports single-head MFM READ DATA (MT=SK=0), N=1–3, and ascending sectors
+through EOT on existing raw/D88 media. Select `0094h=18h`. Other ND read variants
+and PIO writes return invalid-command status; they never use DMA. Clearing ND
+restores the existing DMA reads/writes.
+
+Execution holds CB/EXM/DIO; RQM rises for one available byte. Reading `0092h`
+consumes that byte and lowers its request; MSR reads and wrong-direction writes
+preserve it. Result phase clears EXM, and all seven bytes must be drained before
+CB clears. Data and result requests use slave IR3/master IR7; normal PIC EOIs
+remain necessary. The first result read acknowledges the result request. This
+follows [NEC µPD765 processor interface and READ DATA](https://www.scribd.com/document/1067140199/UPD765)
+and [µPD765A/B Tables 2–4](https://hxc2001.com/download/datasheet/floppy/thirdparty/FDC/NEC/UPD765_Datasheet_OCRed.pdf).
+
+The deterministic approximation keeps the existing 160-clock command dispatch.
+The first byte follows 128 clocks later; subsequent arrivals remain 128 clocks
+apart, including across sector boundaries, independently of read time. A byte
+must be serviced before 104 further clocks expire. At 8 MHz these are the normal
+16 µs MFM byte interval and worst-case 13 µs service interval described in
+[NEC Application Note 8, PDF page 2](https://hxc2001.com/download/datasheet/floppy/thirdparty/FDC/NEC/uPD765_App_Note_Mar79.pdf).
+Equal deadlines expire before a subsequent port read. Port accesses do not
+advance time. Tick overshoot crosses every event, including availability followed
+by timeout in the same tick. After the final consumed byte, the next byte boundary
+starts results. No DMA registers, shared pointer or TC state participate.
+
+An unserviced byte ends with abnormal ST0 and ST1.OR (`10h`); unavailable sectors
+use ST1.ND (`04h`). EOT without TC ends with abnormal ST0 (`40h | head<<2 | drive`),
+ST1.EN=`80h`, ST2=0 and the final sector's C/H/R/N. This derives from the EOT
+stop condition, EN definition and sector-ID result fields. NEC READ DATA Table 2
+explicitly describes **processor termination**; its C+1/R=1 EOT row is not used
+for this controller-terminated path. Existing successful DMA TC results remain
+unchanged. The probe pins `40 80 00 00 00 03 03` for sectors 2–3, head 0, N=3.
+
+[Issue #79 validation](validation.md#issue-79-fdc-non-dma-read-data) covers raw-port
+transitions and an original MIT interrupt-driven boot probe. FDC remains partial:
+PIO writes, MT/head switching, N=0/DTL, deleted-data/format/scan/diagnostic commands,
+full SPECIFY timing, TC/EOP injection, mechanical/flux timing, new formats, broad
+error fidelity and comprehensive external board controls remain outside this
+subset. Protected execution, paging and basic x87 remain required project work;
+these probes make no complete hardware or commercial compatibility claim.
 
 ## Ap IDE READ VERIFY
 

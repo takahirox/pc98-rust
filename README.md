@@ -92,6 +92,7 @@ python3 tools/prepare_smsw_fixture.py
 python3 tools/prepare_pic_fixture.py
 python3 tools/prepare_pic_smm_fixture.py
 python3 tools/prepare_pic_poll_fixture.py
+python3 tools/prepare_fdc_pio_fixture.py
 python3 tools/prepare_pit_mode2_fixture.py
 python3 tools/prepare_pit_mode3_fixture.py
 python3 tools/prepare_pit_mode0_fixture.py
@@ -384,6 +385,17 @@ preserving the earlier phases and their assertions. The
 [manifest](fixtures/dma-manifest.json) records the assembly command, license and
 source/image hashes. No DOS, proprietary ROM or game is required. See the
 [bounded DMA contract](docs/hardware.md#dma-terminal-count-and-auto-initialization).
+
+The original MIT [non-DMA FDC probe](guest/fdc_pio.asm) builds offline with
+`python3 tools/prepare_fdc_pio_fixture.py`. Run `cargo test --locked --test fdc`
+and `npm test`. VM and Ap boot the identical floppy before/after reset, natively
+and in release Wasm at both serving paths. Its actual INT 13h handler distinguishes
+2,048 data interrupts from the separate result interrupt, with DMA masked and
+disabled. Guest and hosts require exact payload, seven results, guards, unchanged
+media and zero writes within two million slots per boot. The checked
+[manifest](fixtures/fdc-pio-manifest.json) pins original source, assembly command,
+synthetic firmware/image hashes and expectations. See the
+[implemented subset and timing policy](docs/hardware.md#fdc-non-dma-read-data).
 
 `npm run build` checks reproducible media, compiles the real Rust/Wasm core and
 runs `npm run check:site`. The latter verifies a nonempty, compilable Wasm module
