@@ -272,7 +272,8 @@ fn soft_reset_retains_calendar_fraction_and_inflight_serial_interface() {
 fn bios_guest_int_iret_preserves_registers_flags_and_segment_offset_wrapping() {
     use pc98_rust::cpu::*;
     for offset in [0x200u16, 0xfffd] {
-        let mut m = seed(86, 11, 25, 6, 2, 23, 49);
+        let mut m = Machine::new(Profile::Pc9821ApDos);
+        load_calendar(&mut m.bus, true, &[0x49, 0x23, 0x02, 0x25, 0xb6, 0x86]);
         let es = 0x1000;
         for i in 0..8 {
             m.bus
@@ -377,5 +378,357 @@ fn original_rtc_boot_probe_before_and_after_reset() {
         assert_eq!(&m.bus.mem[0x8000..0x8040], expected.as_slice());
         assert_eq!(m.bus.disks[0].as_ref().unwrap().bytes, image);
         println!("Ap RTC boot {run}: {slots} slots");
+    }
+}
+
+fn load_calendar(b: &mut Bus, extended: bool, bytes: &[u8]) {
+    if extended {
+        serial_command(b, 1);
+    } else {
+        command(b, 1);
+    }
+    // Serial Shift is a 52-bit chain: calendar first, then the final command.
+    // Six calendar bytes alone leave four bits in the command register;
+    // the final command clocks complete the chain before STB.
+    for byte in bytes {
+        for bit in 0..8 {
+            let control = if extended { 7 } else { 1 } | ((byte >> bit & 1) << 5);
+            b.output(0x20, control);
+            b.output(0x20, control | 16);
+            b.output(0x20, control);
+        }
+    }
+    if extended {
+        serial_command(b, 2);
+    } else {
+        command(b, 2);
+    }
+}
+
+#[test]
+fn original_time_set_port_reproduction() {
+    let mut m = Machine::new(Profile::Pc9821ApDos);
+    load_calendar(&mut m.bus, false, &[0x59, 0x58, 0x23, 0x30, 0x46]);
+    assert_eq!(m.bus.rtc.snapshot(), [0x26, 0x46, 0x30, 0x23, 0x58, 0x59]);
+    m.bus.tick(24_000_000);
+    assert_eq!(m.bus.rtc.snapshot(), [0x26, 0x46, 0x30, 0x23, 0x58, 0x59]);
+    assert_eq!(m.bus.input(0x33), 0x39);
+    command(&mut m.bus, 0);
+    m.bus.tick(8_000_000);
+    assert_eq!(m.bus.rtc.snapshot(), [0x26, 0x46, 0x30, 0x23, 0x59, 0]);
+}
+
+#[test]
+fn time_set_forms_hold_data_and_independent_command_shifting() {
+    for extended in [false, true] {
+        for second in [0x48, 0x49] {
+            let mut m = Machine::new(Profile::Pc9821ApDos);
+            let bytes = [second, 0x23, 0x02, 0x25, 0xb6, 0x86];
+            load_calendar(&mut m.bus, extended, &bytes[..if extended { 6 } else { 5 }]);
+            let expected = [
+                if extended { 0x86 } else { 0x26 },
+                0xb6,
+                0x25,
+                2,
+                0x23,
+                second,
+            ];
+            assert_eq!(m.bus.rtc.snapshot(), expected);
+            let port = 0x38 | (second & 1);
+            assert_eq!(m.bus.input(0x33), port);
+            // Neither CLK edges nor changing the serial command register may
+            // displace held calendar data. Repeated high STB is not an edge.
+            m.bus.output(0x20, if extended { 15 } else { 10 });
+            for _ in 0..7 {
+                m.bus.output(0x20, if extended { 15 } else { 10 });
+                m.bus.tick(1_234_567);
+                assert_eq!(m.bus.input(0x33), port);
+            }
+            for input in [0, 32, 32, 0, 32, 0, 0, 32] {
+                m.bus.output(0x20, 7 | input);
+                m.bus.output(0x20, 23 | input);
+                m.bus.output(0x20, 23 | input);
+                m.bus.output(0x20, 7 | input);
+                assert_eq!(m.bus.input(0x33), port);
+            }
+            assert_eq!(m.bus.rtc.snapshot(), expected);
+            // Serial 0000 is framed independently while the data register holds.
+            // After release into Shift, the untouched stream must be exact.
+            if extended {
+                serial_command(&mut m.bus, 0);
+                serial_command(&mut m.bus, 1);
+                assert_eq!(
+                    read_bits(&mut m.bus, 7, 52),
+                    0x1_86_b6_25_02_23_00 | u64::from(second)
+                );
+            } else {
+                command(&mut m.bus, 1);
+                assert_eq!(
+                    read_bits(&mut m.bus, 1, 40),
+                    0xb6_25_02_23_00 | u64::from(second)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn guest_written_calendar_transitions_have_literal_serial_and_bios_oracles() {
+    for (extended, payload, before, after, stream) in [
+        (
+            false,
+            [0x59, 0x59, 0x23, 0x30, 0x46, 0],
+            [0x26, 0x46, 0x30, 0x23, 0x59, 0x59],
+            [0x26, 0x50, 1, 0, 0, 0],
+            0x50_01_00_00_00,
+        ),
+        (
+            true,
+            [0x59, 0x59, 0x23, 0x28, 0x21, 0x28],
+            [0x28, 0x21, 0x28, 0x23, 0x59, 0x59],
+            [0x28, 0x22, 0x29, 0, 0, 0],
+            0x1_28_22_29_00_00_00,
+        ),
+        (
+            true,
+            [0x59, 0x59, 0x23, 0x29, 0x22, 0x28],
+            [0x28, 0x22, 0x29, 0x23, 0x59, 0x59],
+            [0x28, 0x33, 1, 0, 0, 0],
+            0x1_28_33_01_00_00_00,
+        ),
+        (
+            true,
+            [0x59, 0x59, 0x23, 0x31, 0xc5, 0x99],
+            [0x99, 0xc5, 0x31, 0x23, 0x59, 0x59],
+            [0, 0x16, 1, 0, 0, 0],
+            0x1_00_16_01_00_00_00,
+        ),
+    ] {
+        for release in [0, 1, 3] {
+            let mut m = Machine::new(Profile::Pc9821ApDos);
+            load_calendar(
+                &mut m.bus,
+                extended,
+                &payload[..if extended { 6 } else { 5 }],
+            );
+            assert_eq!(m.bus.rtc.snapshot(), before);
+            m.bus.rtc.tick(u32::MAX);
+            assert_eq!(m.bus.rtc.snapshot(), before);
+            if extended {
+                serial_command(&mut m.bus, release);
+            } else {
+                command(&mut m.bus, release);
+            }
+            m.bus.tick(8_000_000);
+            assert_eq!(m.bus.rtc.snapshot(), after);
+            assert_eq!(capture(&mut m.bus, extended), stream);
+        }
+    }
+}
+
+// Independent divider oracle: free-running 64 Hz edge numbers continue through
+// hold/reset; a release starts counting 64 subsequent edges toward one second.
+// No production fraction/decoder or calendar arithmetic is used by this model.
+#[test]
+fn time_set_divider_keeps_lower_stages_across_entry_hold_release_and_reset() {
+    for phase in [0, 1, 124_999, 125_000, 3_999_999, 7_999_999] {
+        for duration in [0, 1, 124_999, 125_001, 8_000_001, u32::MAX] {
+            for extended in [false, true] {
+                for release in [0, 1, 3] {
+                    let mut m = Machine::new(Profile::Pc9821ApDos);
+                    m.bus.rtc.tick(phase);
+                    load_calendar(
+                        &mut m.bus,
+                        extended,
+                        &[0x21, 0x34, 0x12, 0x25, 0xb6, 0x86][..if extended { 6 } else { 5 }],
+                    );
+                    m.bus.rtc.tick(duration);
+                    m.reset(); // Retain hold, calendar, lower divider, data and pins.
+                    m.bus.rtc.tick(8_000_000);
+                    assert_eq!(m.bus.rtc.snapshot()[5], 0x21);
+                    assert_eq!(m.bus.input(0x33), 0x39);
+                    if extended {
+                        serial_command(&mut m.bus, 2);
+                    } else {
+                        command(&mut m.bus, 2);
+                    }
+                    assert_eq!(m.bus.rtc.snapshot()[5], 0x21);
+                    assert_eq!(m.bus.input(0x33), 0x39);
+                    if extended {
+                        serial_command(&mut m.bus, release);
+                    } else {
+                        command(&mut m.bus, release);
+                    }
+                    let total = u64::from(phase) + u64::from(duration) + 8_000_000;
+                    let release_edge = total / 125_000;
+                    let next_second_clock = (release_edge + 64) * 125_000;
+                    let remaining = (next_second_clock - total) as u32;
+                    // Check the half-second DATA OUT edge as well as carry.
+                    m.bus.rtc.tick(remaining - 4_000_001);
+                    if release != 1 {
+                        assert_eq!(m.bus.input(0x33), 0x38);
+                    }
+                    m.bus.rtc.tick(1);
+                    if release != 1 {
+                        assert_eq!(m.bus.input(0x33), 0x39);
+                    }
+                    m.bus.rtc.tick(3_999_999);
+                    assert_eq!(
+                        m.bus.rtc.snapshot()[5],
+                        0x21,
+                        "{phase} {duration} {extended} {release}"
+                    );
+                    m.bus.rtc.tick(1);
+                    assert_eq!(
+                        m.bus.rtc.snapshot()[5],
+                        0x22,
+                        "{phase} {duration} {extended} {release}"
+                    );
+                    if release != 1 {
+                        assert_eq!(m.bus.input(0x33), 0x38);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn tick_partition(b: &mut Bus, mut total: u64, chunks: &[u32]) {
+    let mut index = 0;
+    while total != 0 {
+        let n = total.min(u64::from(chunks[index % chunks.len()])) as u32;
+        b.rtc.tick(n);
+        total -= u64::from(n);
+        index += 1;
+    }
+}
+
+#[test]
+fn time_set_batch_sizes_and_unchanged_strobe_preserve_release_phase() {
+    for (held, partitions) in [
+        (
+            8_123_457,
+            vec![vec![8], vec![1, 123_457, 999_983], vec![u32::MAX]],
+        ),
+        (
+            u64::from(u32::MAX) * 2 + 124_999,
+            vec![vec![100_003], vec![17, 1_234_567, 333_333], vec![u32::MAX]],
+        ),
+    ] {
+        for chunks in partitions {
+            let mut m = Machine::new(Profile::Pc9821ApDos);
+            tick_partition(&mut m.bus, 7_999_999, &chunks);
+            load_calendar(&mut m.bus, true, &[0x20, 0, 0, 1, 0x14, 0x26]);
+            tick_partition(&mut m.bus, held, &chunks);
+            m.reset();
+            // Release into Register Hold and leave STB high. An unchanged high
+            // must not retrigger the command or alter the running phase.
+            serial_command(&mut m.bus, 0);
+            m.bus.output(0x20, 15);
+            let total = 7_999_999 + held;
+            let remaining = ((total / 125_000 + 64) * 125_000 - total) as u32;
+            tick_partition(&mut m.bus, u64::from(remaining - 1), &chunks);
+            m.bus.output(0x20, 15);
+            assert_eq!(m.bus.rtc.snapshot(), [0x26, 0x14, 1, 0, 0, 0x20]);
+            m.bus.rtc.tick(1);
+            assert_eq!(m.bus.rtc.snapshot(), [0x26, 0x14, 1, 0, 0, 0x21]);
+        }
+    }
+}
+
+#[test]
+fn malformed_time_set_keeps_calendar_and_still_holds_safely() {
+    let valid = [0x59, 0x58, 0x23, 0x25, 0xb6, 0x86];
+    for extended in [false, true] {
+        for (field, invalid) in [
+            (0, 0x6a),
+            (0, 0x60),
+            (1, 0x60),
+            (2, 0x24),
+            (3, 0),
+            (3, 0x31),
+            (4, 0),
+            (4, 0xd0),
+            (4, 0xb7),
+            (5, 0xfa),
+        ] {
+            if !extended && field == 5 {
+                continue;
+            }
+            let mut payload = valid;
+            payload[field] = invalid;
+            // November 31 is invalid even though its BCD representation is valid.
+            let mut m = Machine::new(Profile::Pc9821ApDos);
+            load_calendar(
+                &mut m.bus,
+                extended,
+                &payload[..if extended { 6 } else { 5 }],
+            );
+            m.bus.rtc.tick(u32::MAX);
+            assert_eq!(m.bus.rtc.snapshot(), [0x26, 0x14, 1, 0, 0, 0]);
+            if extended {
+                serial_command(&mut m.bus, 0);
+            } else {
+                command(&mut m.bus, 0);
+            }
+            m.bus.rtc.tick(8_000_000);
+            assert_eq!(m.bus.rtc.snapshot(), [0x26, 0x14, 1, 0, 0, 1]);
+        }
+    }
+    // Explicit February 29 is valid in parallel mode, even in stored year 26.
+    let mut m = Machine::new(Profile::Pc9821ApDos);
+    load_calendar(&mut m.bus, false, &[0x59, 0x59, 0x23, 0x29, 0x22]);
+    assert_eq!(m.bus.rtc.snapshot(), [0x26, 0x22, 0x29, 0x23, 0x59, 0x59]);
+}
+
+#[test]
+fn original_rtc_set_boot_probe_before_and_after_reset() {
+    let image = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/fixtures/rtc_set/rtc_set.hdm"
+    ))
+    .expect("run python3 tools/prepare_rtc_set_fixture.py");
+    let manifest = include_str!("../fixtures/rtc-set-manifest.json");
+    let hex = manifest
+        .split_once("\"result_hex\": \"")
+        .unwrap()
+        .1
+        .split('"')
+        .next()
+        .unwrap();
+    let expected: Vec<u8> = (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+        .collect();
+    let mut m = Machine::new(Profile::Pc9821ApDos);
+    m.insert(0, image.clone(), "rtc_set.hdm").unwrap();
+    for run in 0..2 {
+        if run != 0 {
+            m.reset();
+        }
+        let mut slots = 0;
+        while slots < 8_000_000 {
+            slots += m.step(1000);
+            assert!(m.error.is_none(), "{:?}", m.error);
+            let text = m.bus.text();
+            assert!(
+                !text.contains("FAIL"),
+                "boot {run}, {slots} slots: {text}; {:02x?}",
+                &m.bus.mem[0x8000..0x8080]
+            );
+            if text.contains("RTC SET PASS") {
+                break;
+            }
+        }
+        assert!(slots <= 8_000_000);
+        assert!(
+            m.bus.text().contains("RTC SET PASS"),
+            "{}; {:02x?}",
+            m.bus.text(),
+            &m.bus.mem[0x8000..0x8080]
+        );
+        assert_eq!(&m.bus.mem[0x8000..0x8080], expected.as_slice());
+        assert_eq!(m.bus.disks[0].as_ref().unwrap().bytes, image);
+        println!("Ap RTC Time Set boot {run}: {slots} slots");
     }
 }

@@ -4315,3 +4315,97 @@ first/interior requests. All 26 inventory categories retain their scopes and
 statuses: 23 partial, GRCG implemented_unverified, paging/FPU unimplemented,
 none verified. Protected mode, paging and basic x87 remain required; these
 bounded probes establish neither complete accuracy nor commercial compatibility.
+
+## Issue #87: Ap RTC Time Set/Counter Hold
+
+Implemented parallel `010` and serial `0010` through the existing `20h`/`33h`
+interface, following [NEC µPD4990A IC-1755, printed pp.4, 6–7 and Figures 1–5](https://www.renesas.com/en/document/dst/upd4990a-data-sheet).
+STB rising atomically loads a valid 40-bit calendar while retaining the stored
+year, or a 48-bit calendar including year. Time Set holds counter and calendar
+shift register, outputs the held LSB and permits independent command-register
+shifting. Commands 0/1/3 release it. Entry and release clear divider stages
+10–15 while preserving the lower 125,000-clock phase. Held time cannot create
+catch-up seconds. Machine reset retains calendar, held interface and lower phase.
+
+The original port reproduction was run before the production edit and failed:
+BIOS snapshot stayed `26 14 01 00 00 00` instead of the explicitly loaded
+`26 46 30 23 58 59`. It passes after implementation, holds for three guest
+seconds, then releases into the next minute. Tests cover both forms, all calendar
+fields, both LSB values, unrelated system-port bits, repeated control levels,
+held CLK activity, independent command shifts, complete 52-bit serial framing,
+and release with each command. Literal byte oracles cover month, serial leap-day
+and two-digit year transitions. The existing actual guest INT/ROM OUT/IRET test
+now uses a port-written date and still checks all registers, segments, flags,
+wrapped destinations and adjacent guards.
+
+The independent divider oracle counts free-running 64 Hz edges and requires the
+64th subsequent edge to carry a second. Initial phases are 0, 1, 124,999, 125,000,
+3,999,999 and 7,999,999 clocks; held durations include zero, boundary-adjacent
+values and `u32::MAX`. It checks half-second DATA OUT and second-carry boundaries,
+all releases, repeated Time Set and reset while held. A separate partition test
+compares 8-clock slots, irregular chunks and maximum-sized ticks, including more
+than two `u32::MAX` held batches. A temporary full-phase-reset mutation failed
+at phase=0, held=1, parallel release=0: expected seconds `22h`, observed `21h`.
+The mutation was restored. An initial test-harness run using hundreds of full-bus
+maximum ticks was stopped because unrelated audio sample generation made it
+unnecessarily slow; divider-only clock injections now isolate those arithmetic
+checks. Port controls and complete guest scheduler integration remain exercised.
+
+Malformed BCD, invalid ranges and impossible dates retain the entire previous
+calendar while applying Time Set hold/divider/output behavior. Tests include
+November 31, invalid month/weekday/year and malformed time bytes, without host
+panics. Parallel February 29 is accepted independently of stored year. This is an
+explicit emulator policy and does not assert undocumented silicon behavior.
+
+The original MIT [rtc_set source](../guest/rtc_set.asm) is assembled offline by
+`python3 tools/prepare_rtc_set_fixture.py`. Its
+[checked manifest](../fixtures/rtc-set-manifest.json) records source/license,
+assembly command, source/boot/image hashes, exact independent expected results,
+layout and the 8,000,000-slot budget. The guest itself sets year 26, performs a
+parallel January-to-February transition, serial leap-day transition and serial
+99-to-00 rollover, with release commands 0/1/3. Two guest delay loops each execute
+over 1,100,000 slots while held; guest CLK pulses and BIOS checks prove hold.
+It compares literal serial and BIOS bytes and guards before reporting PASS.
+The independent builder oracle is not extracted from that guest comparison table.
+
+Native and production release-Wasm hosts mount the identical SHA-256
+`4be346056f0c0f1bd1f1ce691decea3af853ec3ef246c84492ce6b214d018006`
+image, step, inspect and reset. Browser tests await the mounted media name before
+stepping. They require all 128 result/guard bytes, `RTC SET PASS`, unchanged media
+and no emulator/browser errors on cold and retained-state boots at both `/` and
+`/pc98-rust/`. No host patches RTC state or result bytes. Native boots took
+5,220,000 and 5,219,000 slots respectively. The existing RTC read/reset probe,
+manifest and 2,000,000-slot budget are preserved.
+
+All README fixture-preparation commands passed, including the new offline builder,
+legal checksum-pinned FreeDOS binaries and matching sources, original probes,
+DOS/apps, CPU, font, HDD, music and device fixtures. Fixture-fetch unit tests
+passed (7); `npm ci` reported zero vulnerabilities and Chromium installation
+passed. No commercial ROM or guest software was acquired. README preparation
+and the existing native/browser CI workflow include the new fixture.
+
+| Check | Outcome |
+| --- | --- |
+| `cargo test --locked --test rtc --test timer` | Passed: 19 RTC + 8 timer tests, 27 total, zero failures |
+| `cargo test --locked` | Passed: **348 native tests**, zero failures/ignored; doc-tests passed (0 cases) |
+| `cargo clippy --all-targets -- -D warnings` | Passed, including final test changes |
+| `cargo fmt --check`; `git diff --check` | Passed |
+| `npm test` | Production release-Wasm build and ten-asset publication audit passed (461,426-byte Wasm); occupied port 8000 prevented browser startup, zero cases executed |
+| `npm test -- --config=.issue87-playwright.config.js --workers=4` | Passed: **124 browser cases** (122 existing + 2 new), zero failures/skips, 3.4 minutes; production release-Wasm build and publication checks passed at both paths |
+
+The temporary browser config changed only server ports to 18870/18871 and used
+an otherwise identical copy of `serve_project.py` with its port changed. Both
+temporary files were removed after validation; the repository's default serving
+ports and test assertions/budgets are unchanged. Both new browser cases boot
+cold and after reset: all four boots took 5,220,000 / 5,219,000 slots, matching
+native counts, with exact results/guards, unchanged disk and no errors. Existing
+RTC read/reset browser boots remained 1,001,000 slots. All existing DOS/apps,
+VM/audio, FDC/DMA/PIC, IDE and six-game cases passed.
+
+RTC remains **partial**: BIOS setting services, TP/interval/IRQ/test controls,
+VM RTC behavior, host synchronization and broader acceptance are outstanding.
+The 26-category inventory remains 23 partial, GRCG `implemented_unverified`,
+paging/FPU unimplemented, none verified; protected mode, paging and basic x87
+remain required. Limited probes and existing six-game regressions establish
+neither full hardware accuracy nor commercial compatibility. No independent
+review, remote CI or post-merge verification is claimed.

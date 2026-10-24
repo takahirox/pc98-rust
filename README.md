@@ -108,6 +108,7 @@ python3 tools/prepare_v30_nibble_mem_fixture.py
 python3 tools/prepare_v30_segment_irq_fixture.py
 python3 tools/prepare_ide_verify_fixture.py
 python3 tools/prepare_rtc_fixture.py
+python3 tools/prepare_rtc_set_fixture.py
 python3 tools/prepare_opn_ch3_fixture.py
 python3 tools/prepare_opna_irq_fixture.py
 # Fetch checksum-pinned guest binaries AND matching complete source archives.
@@ -187,6 +188,21 @@ before and after reset. Each boot must report `RTC CALENDAR PASS`, match all
 64 result/guard bytes and preserve disk bytes within 2,000,000 slots. Cold
 construction uses 2026-01-01 Thursday; reset preserves the RTC and fractional
 guest clocks. See the [hardware contract and remaining scope](docs/hardware.md#ap-calendar-read-path).
+
+The original MIT [Time Set probe](guest/rtc_set.asm) programs both parallel and
+serial calendars through ports, waits over a second while held, then releases
+with commands 0/1/3 and compares literal serial/BIOS results across a month,
+leap day and two-digit year transition. Build offline with
+`python3 tools/prepare_rtc_set_fixture.py`; the
+[checked manifest](fixtures/rtc-set-manifest.json) pins license, assembly command,
+source/boot/image hashes, result layout and independent expected bytes. Native
+RTC tests and production release-Wasm browser tests boot the identical image
+cold and after reset at both roots, requiring `RTC SET PASS`, all 128 result and
+guard bytes, unchanged media and no errors within 8,000,000 slots per boot.
+Hosts only mount, step, inspect and reset; browser tests await completed mounting.
+Generated assets stay outside `web/`. Time Set entry/release resets only divider
+stages 10–15; the lower stages keep running. See the
+[validation evidence](docs/validation.md#issue-87-ap-rtc-time-setcounter-hold).
 
 The original MIT [IDE READ VERIFY probe](guest/ide_verify.asm) checks 40h/41h
 completion and first-error task-file results in CHS and LBA modes on Ap, plus

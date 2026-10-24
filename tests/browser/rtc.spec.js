@@ -20,6 +20,7 @@ for (const [profile, name] of [['1', 'Ap']]) {
     const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/rtc-manifest.json', import.meta.url)));
     expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
     await page.locator('#file').setInputFiles({ name: 'rtc.hdm', mimeType: 'application/octet-stream', buffer: image });
+    await expect(page.locator('#media-name')).toHaveText('rtc.hdm');
     for (let run = 0; run < 2; run++) {
       if (run) await page.locator('#reset').click();
       const expected = [...Buffer.from(run ? manifest.reset_result_hex : manifest.result_hex, 'hex')];
