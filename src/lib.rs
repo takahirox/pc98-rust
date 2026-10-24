@@ -56,7 +56,7 @@ impl Machine {
             return Err("only two floppy drives".into());
         }
         let disk = Disk::parse(bytes, name)?;
-        self.bus.disks[drive] = Some(disk);
+        self.bus.mount_floppy(drive, Some(disk));
         if drive == 0 {
             self.bus.boot_hdd = false;
         }
@@ -161,7 +161,9 @@ mod wasm {
     #[no_mangle]
     pub extern "C" fn eject(drive: usize) {
         if drive < 2 {
-            MACHINE.with(|m| m.borrow_mut().bus.disks[drive] = None)
+            MACHINE.with(|m| {
+                m.borrow_mut().bus.mount_floppy(drive, None);
+            })
         } else if drive == 2 {
             MACHINE.with(|m| m.borrow_mut().bus.ide.mount(None))
         }

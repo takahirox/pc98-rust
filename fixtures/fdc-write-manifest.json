@@ -1,0 +1,45 @@
+{
+  "source": "guest/fdc_write.asm",
+  "license": "MIT; original source, synthetic firmware source and LICENSE copied alongside image",
+  "assembly": "nasm -f bin guest/fdc_write.asm -o fdc_write.bin",
+  "source_sha256": "11da53bb2a6a8812c13a9b918059ee4554df047718ae1c2993b50bbae166dbc4",
+  "boot_sha256": "c048e733c5fde9bc0daa51589257b650f8c211ef555e0825b5cd410aef4958fe",
+  "image": "fixtures/fdc_write/fdc_write.hdm",
+  "image_sha256": "6d55b40fdd59f2be67e038cefcec94cf3c356df352b46b2aace8f1d95dd50f5f",
+  "expected_media_sha256": "c545c108ffb87258530848eb3e850ca6a67859970b32113980834ef75f3ff9b1",
+  "firmware_source": "guest/firmware.asm",
+  "firmware_source_sha256": "3dc8969cddb750912c267ee5012dce2382cfe1b23115d0eb5c22e87a66ebc4db",
+  "firmware_sha256": "64a9985dc777a515780515f4453320f9aedcdd44659b3f9622cad47712baddf8",
+  "geometry": "77 cylinders, 2 heads, 8 sectors, 1024 bytes per sector",
+  "profiles": [
+    "VM",
+    "Ap"
+  ],
+  "provenance": "Original source-built bare-metal probe; no acquired binary, commercial ROM, DOS or copied emulator implementation",
+  "contract": "Guest SPECIFY ND=1, single-sector MFM WRITE DATA R=EOT=2 with DTL=1, then PIO READ DATA readback; DMA masked AND controller disabled; actual INT 13h handlers supply/collect all bytes, record real PIC ISRs, EOI both PICs; guest checks both results, source/readback/guards and SP before PASS",
+  "specifications": [
+    "NEC uPD765 specification, processor interface and READ DATA functional description; Table 2 applies only to processor/TC termination",
+    "NEC uPD765A/B Tables 2-4: EXM/DIO/RQM/CB, ST0 abnormal, ST1 EN/OR, result order",
+    "NEC Application Note 8, page 2: MFM normal 16 us byte interval, worst-case 13 us service time"
+  ],
+  "result_address": "0x8000",
+  "result_length": 128,
+  "result_hex": "a50100040880009401a5a5a5a5a5a5a540800000000203a5d0d0800000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a50100040880009801a5a5a5a5a5a5a540800000000203a5d0d0800000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+  "result_layout": "Two 64-byte records at 8000/8040: +1=done; +2 word=1024 byte IRQs; +4/5=slave/master ISR aggregates 08/80; +6 word=9400/9800 end pointer; +8=1 separate result IRQ; +10h..16h=40 80 00 00 00 02 03; +18h..1ch=MSR before/after first/after last result and post-EOI ISRs d0 d0 80 00 00; padding A5",
+  "payload_address": "0x9000",
+  "payload_length": 1024,
+  "readback_address": "0x9400",
+  "payload_sha256": "cd417888dc7526c348912ea4eb4b6754892f7186f320a0fd94816577187044ae",
+  "payload_pattern": "(29 * i + 71) & 255 for i in range(1024)",
+  "guards": "Record A5 padding, entire 8080..8fff and 9800..980f remain A5; guest and hosts compare all guards, source 9000..93ff and readback 9400..97ff",
+  "termination": "EOT without TC: abnormal ST0=40, ST1.EN=80, ST2=0, final sector ID 00 00 02 03; not the C+1/R=1 processor-termination row",
+  "markers": [
+    "FDC WRITE PASS",
+    "FDC WRITE FAIL"
+  ],
+  "host": "Mount, step, inspect and reset only; no host-supplied guest results or IRQs",
+  "media": "Only bytes 1024..2047 become the independent payload; one sector write per boot; all other image bytes unchanged",
+  "slot_budget": 2000000,
+  "reset": "Identical image/result/source/readback/guards before/after reset; media retains the first boot write, guest writes same payload again",
+  "distribution": "Test only; excluded from web/"
+}

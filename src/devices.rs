@@ -777,18 +777,19 @@ pub struct Fdc {
     pub pending: bool,
     pub delay: u32,
     pub(crate) non_dma: bool,
-    pub(crate) pio: Option<FdcRead>,
+    pub(crate) pio: Option<FdcPio>,
     pub(crate) irq: bool,
 }
 // One sector at a time; the bus resolves the next CHRN against mounted media.
 #[derive(Clone)]
-pub(crate) struct FdcRead {
+pub(crate) struct FdcPio {
     pub drive: u8,
     pub c: u8,
     pub h: u8,
     pub r: u8,
     pub n: u8,
     pub eot: u8,
+    pub write: bool,
     pub offset: usize,
     pub len: usize,
     pub pos: usize,
@@ -806,11 +807,15 @@ impl Fdc {
     }
     pub fn status(&self) -> u8 {
         if let Some(pio) = &self.pio {
-            return 0x70 | if pio.ready { 0x80 } else { 0 };
+            return (if pio.write { 0x30 } else { 0x70 }) | if pio.ready { 0x80 } else { 0 };
         }
         if self.pending {
-            return if self.non_dma && self.command[0] & 31 == 6 {
-                0x70
+            return if self.non_dma && matches!(self.command[0] & 31, 5 | 6) {
+                if self.command[0] & 31 == 5 {
+                    0x30
+                } else {
+                    0x70
+                }
             } else {
                 0x90
             };
