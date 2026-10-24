@@ -74,11 +74,12 @@ implemented in VM. LOCK has no bus-contention effect in this single-CPU machine.
 The selectable Ap profile extends this same decoder with 32-bit operands and
 addresses, SIB, FS/GS and selected 386/486 real-mode integer instructions. It checks
 64 KiB segment limits and delivers guest exceptions; it does not provide protected
-mode, DPMI or an FPU. See the [exact Ap CPU coverage and independent DOS diagnostic](dos-compatibility.md#issue-9-cpu-coverage-and-independent-guest-evidence).
+mode, DPMI or numerical FPU execution. See the [exact Ap CPU coverage and independent DOS diagnostic](dos-compatibility.md#issue-9-cpu-coverage-and-independent-guest-evidence).
 VM retains the V30 behavior described above.
 Ap also provides the [real-mode GDTR](#ap-real-mode-gdtr) and
 [IDTR prerequisites](#ap-real-mode-idtr), plus
-[SMSW status readback](#ap-real-mode-smsw) below.
+[SMSW status readback](#ap-real-mode-smsw) and
+[bounded x87 initialization/readback](#ap-x87-environment-initialization) below.
 
 An instruction or one REP element consumes one 8-clock scheduling slot. This is a
 deterministic work/cycle model, **not instruction-cycle accuracy**. Firmware FDC
@@ -236,6 +237,49 @@ VM exclusions above. Protected execution, paging and basic x87 retain their
 fixed required scope. These bounded probes establish neither full hardware
 accuracy nor commercial compatibility.
 
+## Ap x87 environment initialization
+
+Ap implements only `DB E3` FNINIT, `D9 /7` memory FNSTCW, `DD /7`
+memory FNSTSW and `DF E0` FNSTSW AX in real mode. The environment belongs to
+one CPU. FNINIT sets control `037Fh`, status `0000h`, tags `FFFFh` (all empty),
+and clears instruction/data pointers, selectors and last opcode. Stack data is
+not modeled or zeroed. Stores read current words, always write two bytes, and
+preserve EAX's upper half for AX. Integer flags and other registers are preserved.
+These forms never check pending numerical exceptions and never replace saved
+pointers or opcode with their own addresses. The stores' undefined x87 condition
+bits are preserved as a deterministic emulator policy, not a hardware guarantee.
+See Intel's [SDM Volume 2A, printed pp. 3-395–396 and 3-438–443](https://cdrdv2-public.intel.com/782150/253666-sdm-vol-2a.pdf).
+
+Either CR0.EM or CR0.TS causes restartable exception 7. LOCK causes exception 6.
+Memory offsets outside `0000h..FFFFh`, including a word starting at `FFFFh`, cause
+exception 13 **even for SS**. This deliberately follows the target-era
+[Intel486 PRM, printed pp. 26-97–98, 26-132 and 26-135–136](https://manuals.plus/m/d86207aaebd9b10464f2058efc61559e6141d3b072db100e89bfe17c8187e143),
+rather than the modern SDM's SS-overrun table. Both bytes are checked before any
+write; normal bus A20 mapping and ROM protection still apply. Fault frames use
+the first prefix and the current IDTR. No simultaneous-fault priority is promised.
+
+Cold construction deterministically supplies initialized metadata. `Machine::reset`
+models RESET without BIST and **retains** this environment until guest FNINIT;
+Intel486 PRM §19.2.3 distinguishes that reset from BIST/FNINIT initialization.
+This policy does not claim hardware power-up metadata is defined.
+
+The original MIT [guest probe](../guest/fpu_init.asm), offline
+[builder](../tools/prepare_fpu_init_fixture.py) and hash-pinned
+[manifest](../fixtures/fpu_init-manifest.json) check all four forms, prefixes,
+exact widths/guards, boundary stores, guest #GP/#UD repair and IRET/retry.
+Native and production release-Wasm browsers boot the same image cold and after
+reset at `/` and `/pc98-rust/`, within 2,000,000 slots. Native tests additionally
+seed every field and independently exercise EM/TS and relocated delivery.
+
+FPU inventory status is **partial**, with no scope verified. Stack/load/store
+operations, arithmetic/comparisons/conversions, rounding/precision, other control
+and environment operations, numerical exceptions, WAIT/FWAIT completion and
+NE/IRQ routing remain required. Other valid x87 forms stop explicitly unsupported.
+VM coprocessor behavior, Ap CPUID rejection and optional FPU-detection fixture
+adaptations remain unchanged. Protected execution, paging and other inventory
+gaps remain required; these limited probes establish neither complete hardware
+accuracy nor commercial compatibility.
+
 ## Ap real-mode SMSW
 
 Ap implements `0F 01 /4` SMSW from one CPU-local machine-status word representing
@@ -274,7 +318,7 @@ or host error, exact results and unchanged disk bytes. Generated fixtures and
 license/source copies stay outside publication assets.
 
 This adds readback only. Guest status writers, MOV control-register instructions,
-LMSW, CLTS, protected execution, paging and x87 execution remain unimplemented.
+LMSW, CLTS, protected execution, paging and numerical x87 execution remain unimplemented.
 No whole inventory category is promoted to verified by this bounded acceptance.
 
 ## Ap real-mode GDTR

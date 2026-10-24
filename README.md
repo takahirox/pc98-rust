@@ -26,7 +26,8 @@ Issue #11 adds guest INT 1F extended-memory access, IDE HDD boot and persistence
 aligned EGC raster operations, PEGC packed 256-color video, bus mouse input,
 sequenced ADV98 music through a guest PMD driver, and OPNA/86 PCM subsets.
 See [device contracts, fixtures and unsupported features](docs/ap-devices.md).
-Protected mode, DPMI, FPU and full 486 fidelity are not implemented.
+Protected mode, DPMI, numerical FPU execution and full 486 fidelity are not implemented.
+Ap provides only bounded x87 environment initialization and control/status readback.
 See [guest provenance, commands and exact profile limits](docs/dos-compatibility.md).
 
 ## Build and play
@@ -89,6 +90,7 @@ python3 tools/prepare_dma_fixture.py
 python3 tools/prepare_gdtr_fixture.py
 python3 tools/prepare_idtr_fixture.py
 python3 tools/prepare_smsw_fixture.py
+python3 tools/prepare_fpu_init_fixture.py
 python3 tools/prepare_pic_fixture.py
 python3 tools/prepare_pic_smm_fixture.py
 python3 tools/prepare_pic_poll_fixture.py
@@ -361,6 +363,16 @@ release Wasm at both URL roots, before and after reset. Each boot requires
 before enabling and one afterward, exact guards, unchanged disk bytes, no error
 or `FAIL`, and completion within two million slots. Its offline
 [manifest](fixtures/pic-smm-manifest.json) pins provenance, hashes and results.
+
+The original MIT [x87 boot probe](guest/fpu_init.asm) checks FNINIT and
+non-waiting control/status readback, fixed two-byte stores, prefixes, guards and
+guest exception repair. Prepare it offline with
+`python3 tools/prepare_fpu_init_fixture.py`; run
+`cargo test --locked --test fpu --test cpu386 --test core` and `npm test`.
+Native and production release-Wasm browsers boot the same
+[hash-pinned image](fixtures/fpu_init-manifest.json) cold and after reset at both
+URL roots within 2,000,000 slots. See the [bounded x87 contract](docs/hardware.md#ap-x87-environment-initialization).
+FPU remains partial; numerical execution and WAIT/NE/IRQ behavior remain required.
 
 The original MIT [SMSW boot probe](guest/smsw.asm) checks CPU-local reset status,
 register upper halves, exact two-byte stores, addressing and guest-handled

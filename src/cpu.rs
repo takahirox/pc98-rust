@@ -21,6 +21,34 @@ pub const ES: usize = 0;
 pub const CS: usize = 1;
 pub const SS: usize = 2;
 pub const DS: usize = 3;
+/// Bounded x87 environment metadata. Stack data and numerical execution remain
+/// unimplemented. Cold construction deterministically uses FNINIT metadata;
+/// RESET without BIST retains it (Intel486 PRM 19.2.3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Fpu {
+    pub control: u16,
+    pub status: u16,
+    pub tag: u16,
+    pub instruction_pointer: u32,
+    pub instruction_selector: u16,
+    pub data_pointer: u32,
+    pub data_selector: u16,
+    pub last_opcode: u16,
+}
+impl Default for Fpu {
+    fn default() -> Self {
+        Self {
+            control: 0x037f,
+            status: 0,
+            tag: 0xffff,
+            instruction_pointer: 0,
+            instruction_selector: 0,
+            data_pointer: 0,
+            data_selector: 0,
+            last_opcode: 0,
+        }
+    }
+}
 #[derive(Clone, Debug)]
 pub struct Cpu {
     /// Low words stay public for the firmware and existing native callers.
@@ -29,9 +57,10 @@ pub struct Cpu {
     /// Upper words of EAX through EDI; byte/word writes preserve these.
     pub upper: [u16; 8],
     pub extra_segments: [u16; 2], // FS, GS
-    /// CR0 low word for SMSW only. Reset: ET set, other/reserved bits zero.
+    /// CR0 low word for SMSW and x87 EM/TS checks. Reset: ET set.
     /// Guest status writers and protected execution are not implemented.
     pub machine_status: u16,
+    pub fpu: Fpu,
     /// Emulator reset policy: zero limit/base (hardware power-up GDTR is undefined).
     pub gdtr_limit: u16,
     /// Linear metadata; never masked by A20 or validated against installed RAM.
@@ -75,6 +104,7 @@ impl Default for Cpu {
             upper: [0; 8],
             extra_segments: [0; 2],
             machine_status: 0x0010,
+            fpu: Fpu::default(),
             gdtr_limit: 0,
             gdtr_base: 0,
             idtr_limit: 0x03ff,
@@ -1016,6 +1046,42 @@ impl Cpu {
             return Err(ExecError::Fault(6));
         }
         match op {
+            0xd9 | 0xdb | 0xdd | 0xdf if b.profile == crate::Profile::Pc9821ApDos => {
+                let m = self.fetch(b)?;
+                let memory_store = matches!(op, 0xd9 | 0xdd) && m < 0xc0 && (m >> 3) & 7 == 7;
+                if !memory_store && !matches!((op, m), (0xdb, 0xe3) | (0xdf, 0xe0)) {
+                    return Err(ExecError::Unsupported(format!(
+                        "unimplemented x87 opcode {op:02x} {m:02x}"
+                    )));
+                }
+                // Non-waiting forms still check EM/TS, but never pending
+                // numerical exceptions. No instruction/data pointer updates.
+                if self.machine_status & 0x000c != 0 {
+                    return Err(ExecError::Fault(7));
+                }
+                if memory_store {
+                    let Operand::Mem(s, off) = self.decode(b, m, ov)? else {
+                        unreachable!();
+                    };
+                    // Intel486 real-address contract: #GP even for SS, unlike
+                    // the modern SDM. Preflight the entire fixed-width store.
+                    if off > 0xfffe {
+                        return Err(ExecError::Fault(13));
+                    }
+                    let value = if op == 0xd9 {
+                        self.fpu.control
+                    } else {
+                        self.fpu.status
+                    };
+                    self.write_mem(b, s, off, value as u32, 2)?;
+                } else if op == 0xdb {
+                    self.fpu = Fpu::default();
+                } else {
+                    self.r[AX] = self.fpu.status;
+                }
+                // Preserve architecturally undefined store condition bits as
+                // a deterministic policy; do not claim hardware guarantees.
+            }
             0x00..=0x3d if op & 7 <= 5 => {
                 let kind = op >> 3;
                 let w = op & 1 != 0;

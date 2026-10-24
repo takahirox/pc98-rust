@@ -67,7 +67,11 @@ impl Machine {
         let hdd = self.bus.ide.disk.take();
         let boot_hdd = self.bus.boot_hdd;
         let rtc = std::mem::take(&mut self.bus.rtc);
-        self.cpu = Cpu::default();
+        // RESET without BIST retains the x87 environment (Intel486 PRM 19.2.3).
+        self.cpu = Cpu {
+            fpu: self.cpu.fpu,
+            ..Cpu::default()
+        };
         if self.bus.profile == Profile::Pc9821ApDos {
             self.cpu.flags = 2;
         }
