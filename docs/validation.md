@@ -4857,3 +4857,171 @@ pegc, text-cg, display-timing, opn, opna, pcm86, bios, lio, integration;
 Protected execution, paging and basic numerical x87 remain required. Bounded
 probes and six-game regressions establish neither full hardware accuracy nor
 commercial compatibility.
+
+
+## Issue #97: Ap i486 control-register reads (2026-10-28)
+
+[Issue #97](https://github.com/takahirox/pc98-rust/issues/97) is implemented by
+original Rust `0F 20 /r` decoding and one full-width CR0 shared with SMSW and x87
+EM/TS checks. CR0 resets to 60000010h; CR2/CR3 have independent 32-bit state and
+explicit zero-reset policy. The [hardware contract](hardware.md#ap-real-mode-control-register-reads)
+identifies the independent Intel 1992 PRM sections, reset figure, prefix rules,
+undefined-flag preservation policy, accepted selectors and unsupported facilities.
+No emulator implementation was consulted or copied. Protected mode, paging,
+DPMI, numerical x87 and control-register writes remain outside this change.
+
+### Reproduction and automated evidence
+
+Before modifying `src/cpu.rs` at upstream commit
+`8163adda1cd704daf16036aa00cfa849ca634a72`, the independently authored MIT
+`mov_cr_minimal_register_reproduction` test executed literal `0F 20 C0` through
+`Cpu::step`, starting with EAX=ABCDEF01h and nontrivial flags. This command exited
+101 with `unimplemented i486 opcode 0F 20`:
+
+```sh
+cargo test --locked --test mov_cr mov_cr_minimal_register_reproduction
+```
+
+The same probe passes after implementation, requires EAX=60000010h, preserved
+flags and IP=1003h, then executes the following NOP and requires IP=1004h.
+It contains no code extracted from third-party media.
+
+Six native instruction/guest tests cover CR0/2/3 × all eight GPR destinations,
+nonzero upper halves, full high CR0 bits, 66/67, all segment overrides, F2/F3,
+repeated/mixed prefixes, register/segment/table/FPU/flags/RAM/I/O preservation,
+all invalid ModR/M bytes and LOCK on every ModR/M, reserved CR selectors,
+relocated IDT/nonzero CS, exact six-byte #UD frames with first-prefix restart,
+guest IRET/retry, 15/16-byte limits, CS boundary fetches, post-instruction TF,
+SMSW/x87 agreement, independent CPU state and reset. Existing SMSW and x87 tests
+now inspect `cr0`; SMSW expected stores remain exactly two bytes. The old Ap
+ADD4S isolation test now requires #UD for its invalid memory control-register
+encoding and still proves there is no V30 arithmetic in Ap.
+
+The original MIT [boot guest](../guest/mov_cr.asm) executes real instructions,
+checks all eight CR0 destinations including ESP, CR2/3 zero readback, SMSW,
+prefixes, flags, three guest #UD frames and repair/IRET/retry before printing
+`MOV CR PASS`. Its [checked manifest](../fixtures/mov-cr-manifest.json) pins
+source/license, assembly command, source/boot/image SHA-256 and all 128 literal
+result/guard bytes. Image SHA-256:
+`c5e2a9ebb71a152b867a76d16e0fb0e31f16af35a6d6af8ad81f06cedab07fe5`.
+Native and actual production-release Rust/Wasm tests mount the same disk, boot
+cold and after reset, require exact results and unchanged media, no FAIL/core
+error, and finish within 2,000,000 slots per boot. Browser tests exercise both
+`/` and `/pc98-rust/`, verify WebAssembly.Memory and image hash, await completed
+mounting and reject page errors. Hosts only mount, step, inspect and reset;
+there are no substituted CPU results. CI prepares the fixture offline.
+
+The synthetic headless regression executes a valid CR0 read, 200 NOPs, then an
+intentionally unsupported `0F 22 DC`. It requires the exact pre-failure CS:IP,
+prefixes, ModR/M, CR3/ESP decoding and CR0 state, a maximum 100-slot tail and a
+separate maximum 16-event control-register history retaining the earlier read.
+This validates local diagnostics without distributing any restricted code.
+That deliberately constructed write is not evidence about the reported HDD.
+
+### Commands and results
+
+Environment: Darwin arm64; native Homebrew Rust/Cargo 1.94.0, production rustup
+Rust 1.99.0, Python 3.13.13, NASM 3.02, Node 26.12.1, locked Playwright 1.56.1
+Chromium. The complete documented prerequisite sequence below passed (seven
+fetch-tool tests and all existing source/image manifests reproduced). CPULEVEL
+and DEBUG primary URLs returned HTTP 503; existing checksum-pinned mirrors
+succeeded without weakening source/license/hash checks.
+
+```sh
+python3 -m unittest discover -s tools -p test_fixture_fetch.py
+python3 tools/prepare_dma_fixture.py
+python3 tools/prepare_gdtr_fixture.py
+python3 tools/prepare_idtr_fixture.py
+python3 tools/prepare_smsw_fixture.py
+python3 tools/prepare_fpu_init_fixture.py
+python3 tools/prepare_pic_fixture.py
+python3 tools/prepare_pic_smm_fixture.py
+python3 tools/prepare_pic_poll_fixture.py
+python3 tools/prepare_pic_single_fixture.py
+python3 tools/prepare_fdc_pio_fixture.py
+python3 tools/prepare_fdc_write_fixture.py
+python3 tools/prepare_fdc_write_multi_fixture.py
+python3 tools/prepare_fdc_bios_fixture.py
+python3 tools/prepare_pit_mode2_fixture.py
+python3 tools/prepare_pit_mode3_fixture.py
+python3 tools/prepare_pit_mode0_fixture.py
+python3 tools/prepare_pit_mode4_fixture.py
+python3 tools/prepare_pit_mode0_rewrite_fixture.py
+python3 tools/prepare_pit_mode3_rewrite_fixture.py
+python3 tools/prepare_pit_counter_latch_fixture.py
+python3 tools/prepare_v30_bound_fixture.py
+python3 tools/prepare_v30_repc_fixture.py
+python3 tools/prepare_v30_nibble_mem_fixture.py
+python3 tools/prepare_v30_add4s_fixture.py
+python3 tools/prepare_v30_segment_irq_fixture.py
+python3 tools/prepare_ide_verify_fixture.py
+python3 tools/prepare_rtc_fixture.py
+python3 tools/prepare_rtc_set_fixture.py
+python3 tools/prepare_opn_ch3_fixture.py
+python3 tools/prepare_opna_irq_fixture.py
+python3 tools/prepare_freedos.py
+python3 tools/prepare_font_fixture.py
+python3 tools/prepare_dos_apps.py
+python3 tools/prepare_cpu_fixture.py
+python3 tools/prepare_hdd_fixture.py
+python3 tools/prepare_music_fixture.py
+python3 tools/prepare_device_fixture.py
+python3 tools/build_font.py --check
+python3 tools/prepare_mov_cr_fixture.py --update-manifest
+python3 tools/prepare_mov_cr_fixture.py
+```
+
+The first MOV preparation created the original manifest; ordinary preparation
+then verified it offline. Generated test media and copied licenses/sources stay
+in ignored `fixtures/` directories outside `web/`.
+
+| Exact command | Outcome |
+| --- | --- |
+| `cargo run --locked --bin headless -- fixtures/mov_cr/mov_cr.hdm 100000 --ap` | Passed; guest `MOV CR PASS`, 1,131 instructions, one FDC read, zero writes |
+| `cargo test --locked --test mov_cr --test headless_trace` | Passed; six instruction/guest tests and one local-trace regression |
+| `cargo test --locked --test headless_trace` | Passed after adding separate control-event retention |
+| `cargo test --locked` | Passed; 394 native tests, none skipped, plus unit/doc harnesses |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `cargo fmt --check` | Passed |
+| `npm ci` | Passed; locked dependencies, zero vulnerabilities |
+| `npx playwright install chromium` | Passed |
+| `npm test` | Production Wasm/media/font/site checks passed; browser server could not bind occupied default port |
+| `npm test -- --config=.gitweave-playwright.config.js` | Passed: 138 Chromium tests, zero skipped, in 2.0 minutes; production Wasm 463,162 bytes and ten-asset publication audit passed |
+| `git diff --check` | Passed |
+
+Initial native regression execution exposed the old Ap ADD4S unsupported-error
+expectation and a test-side SMSW width inference after replacing the status
+field. Both were corrected; native checks above pass. The first alternate-port
+browser run passed all 136 existing tests; both new cases failed on a mistyped
+media-label selector. It was corrected to `#media-name` before the final full run.
+
+The temporary `.gitweave-playwright.config.js` imported the checked-in config,
+changing only the root server command/URL to port 18000 and the project server
+command/URL to port 18001. Both projects, all tests, assertions, workers and
+budgets were retained. Root serving used
+`python3 -m http.server 18000 --bind 127.0.0.1 --directory web`;
+`python3 target/issue97/serve_project.py` was a temporary copy of the checked-in
+project server with only this worktree's absolute `web/` path and port 18001
+substituted. It retained the project symlink and root-asset rejection. The
+existing listeners were left untouched; the temporary config was removed after
+validation. This run needs no live website or post-merge deployment.
+
+### Scope and optional private validation
+
+Review checked implementation, all new/modified fixtures and tests, full-width
+readback/reset, prefix/exception contracts, VM isolation, CI preparation and the
+publication allowlist. The ten-asset publication audit excludes test media;
+no third-party HDD, game assets, proprietary BIOS/font, emulation dependency,
+external emulator/chip code or broader hardware implementation was introduced.
+The CPU remains the original Rust implementation. Hardware inventory categories
+are not promoted by this bounded instruction acceptance.
+
+The original `aliceY3.hdi` was not available; its optional private retest was
+**not performed**. Its exact instruction/ModR/M and any subsequent blocker are
+unknown. This change does not claim complete game boot or playability. The
+[local diagnostic procedure](dos-compatibility.md#diagnose-a-local-hdd-control-register-failure)
+records tested commit, private hash/geometry/profile and bounded instruction
+metadata while keeping restricted media and raw traces outside Git and hosted
+artifacts. Actual new requirements for CR writes/protected execution/paging or
+other hardware must be recorded in a separate `task` Issue. No such requirement
+was established from private media here. No post-merge verification is required.

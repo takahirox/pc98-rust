@@ -1778,7 +1778,7 @@ fn smsw_preserved(c: &Cpu, saved: &Cpu) {
         (c.idtr_limit, c.idtr_base),
         (saved.idtr_limit, saved.idtr_base)
     );
-    assert_eq!(c.machine_status, saved.machine_status);
+    assert_eq!(c.cr0, saved.cr0);
     assert_eq!(c.shutdown, saved.shutdown);
     assert_eq!(c.halted, saved.halted);
 }
@@ -1824,7 +1824,7 @@ fn smsw_memory_sizes_sib_segments_unaligned_and_exact_width() {
                 code.extend_from_slice(&[0x0f, 0x01]);
                 code.extend_from_slice(encoding);
                 let (mut c, mut b) = cpu(&code);
-                c.machine_status = status; // Host-only state variation proves CPU-local readback.
+                c.cr0 = status; // Host-only state variation proves CPU-local readback.
                 c.s[DS] = 0x3000;
                 c.s[ES] = 0x4000;
                 c.s[SS] = 0x5000;
@@ -1844,7 +1844,7 @@ fn smsw_memory_sizes_sib_segments_unaligned_and_exact_width() {
                 b.mem[address - 1..address + 5].fill(0xa5);
                 let saved = c.clone();
                 let mut expected = b.mem.clone();
-                expected[address..address + 2].copy_from_slice(&status.to_le_bytes());
+                expected[address..address + 2].copy_from_slice(&(status as u16).to_le_bytes());
                 c.step(&mut b).unwrap();
                 assert_eq!(b.mem, expected, "{code:02x?}");
                 assert_eq!(c.r, saved.r);
@@ -1915,7 +1915,7 @@ fn smsw_limits_gp_even_for_ss_atomic_frame_and_iret_retry() {
                     ]);
                     assert_eq!(b.mem, expected); // Only the six-byte exception frame changed.
                     assert_eq!(c.reg32(reg), offset);
-                    assert_eq!(c.machine_status, saved.machine_status);
+                    assert_eq!(c.cr0, saved.cr0);
                     assert_eq!(c.flags_upper, saved.flags_upper);
                     b.mem[c.ip as usize] = 0xcf;
                     c.set_reg32(reg, 0x4001);
@@ -2005,7 +2005,7 @@ fn smsw_bus_a20_rom_cpu_isolation_and_machine_reset_readback() {
     c.step(&mut b).unwrap();
     assert_eq!(&b.mem[0xf001f..0xf0025], &[0xa5; 6]);
     let (mut other, mut other_bus) = cpu(&[0x0f, 0x01, 0xe0]);
-    c.machine_status = 0xa53f;
+    c.cr0 = 0xa53f;
     other.step(&mut other_bus).unwrap();
     assert_eq!(other.r[AX], 0x10);
     c.ip = 0x1000;
@@ -2015,14 +2015,14 @@ fn smsw_bus_a20_rom_cpu_isolation_and_machine_reset_readback() {
     let mut m = Machine::new(Profile::Pc9821ApDos);
     m.cpu = c;
     m.reset();
-    assert_eq!(m.cpu.machine_status, 0x10);
+    assert_eq!(m.cpu.cr0, 0x60000010);
     m.cpu.s = [0; 4];
     m.cpu.ip = 0x1000;
     m.cpu.set_reg32(AX, 0xdeadffff);
     m.bus.mem[0x1000..0x1004].copy_from_slice(&[0x66, 0x0f, 0x01, 0xe0]);
     m.cpu.step(&mut m.bus).unwrap();
     assert_eq!(m.cpu.reg32(AX), 0xdead0010);
-    assert_eq!(other.machine_status, 0x10);
+    assert_eq!(other.cr0, 0x60000010);
 }
 
 #[test]
@@ -2411,7 +2411,7 @@ fn ap_v30_segment_irq_non_ss_forms_remain_immediately_interruptible() {
 }
 
 #[test]
-fn ap_v30_add4s_retains_i486_diagnostic_without_arithmetic() {
+fn ap_v30_add4s_bytes_are_invalid_i486_memory_control_read() {
     for prefix in [None, Some(0x26), Some(0x2e), Some(0x36), Some(0x3e)] {
         let mut code: Vec<u8> = prefix.into_iter().collect();
         code.extend([0x0f, 0x20, 0x90]);
@@ -2422,14 +2422,15 @@ fn ap_v30_add4s_retains_i486_diagnostic_without_arithmetic() {
         c.flags = 2 | CF | ZF | AF | OF | SF | PF | DF;
         b.mem[0x3000] = 0x09;
         b.mem[0x4000] = 1;
-        let before = c.clone();
-        let ram = b.mem.clone();
+        let mut before = c.clone();
+        let mut ram = b.mem.clone();
         let graphics = b.graphics.clone();
-        // Emulator limitation for the i486 control-register family, not #UD.
-        assert_eq!(
-            c.step(&mut b).unwrap_err(),
-            "unimplemented i486 opcode 0F 20"
-        );
+        // Ap decodes 90h as an invalid memory ModR/M for MOV r32,CR2.
+        // VM's ADD4S remains a different, two-byte instruction.
+        c.step(&mut b).unwrap();
+        fault(&c, &b, 6, 0x1000);
+        before.r[SP] -= 6;
+        ram[0x8ffa..0x9000].copy_from_slice(&[0, 0x10, 0, 0, 0xd7, 0x0c]);
         assert_eq!(c.r, before.r);
         assert_eq!(c.upper, before.upper);
         assert_eq!(c.s, before.s);

@@ -1,0 +1,21 @@
+{
+  "source": "guest/mov_cr.asm",
+  "license": "MIT; LICENSE and original assembly copied alongside image",
+  "assembly": "nasm -f bin guest/mov_cr.asm -o mov_cr.bin",
+  "source_sha256": "aad5e793c39e5e425c2d4f40821b68ebf2c676c2f5b165aa2cf7a932f691dcc4",
+  "boot_sha256": "452418241c8961d569397d9bf957b1414e5c9cb78a166d74f64097bb07bdfa03",
+  "image": "fixtures/mov_cr/mov_cr.hdm",
+  "image_sha256": "c5e2a9ebb71a152b867a76d16e0fb0e31f16af35a6d6af8ad81f06cedab07fe5",
+  "geometry": "77 cylinders, 2 heads, 8 sectors, 1024 bytes per sector",
+  "profile": "Ap real mode; no DOS, proprietary ROM or emulator code",
+  "contract": "i486 CR0 60000010h to all eight full GPRs including ESP; CR2/CR3 zero reset policy; SMSW 0010h; preserved FLAGS; size/segment/REP prefixes; LOCK, CR4 and memory encoding #UD; exact six-byte first-prefix frames; guest repair/IRET/retry; cold boot and Machine reset",
+  "result_address": "0x8000",
+  "result_length": 128,
+  "result_hex": "a510000060a5a5a5a510000060a5a5a5a510000060a5a5a5a510000060a5a5a5a510000060a5a5a5a510000060a5a5a5a510000060a5a5a5a510000060a5a5a5a500000000a5a5a5a500000000a5a5a5a51000a5a5a5a5a5a5d708a5a5a5a5a5a503a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+  "markers": [
+    "MOV CR PASS",
+    "MOV CR FAIL"
+  ],
+  "slot_budget": 2000000,
+  "distribution": "Test only; excluded from web/"
+}

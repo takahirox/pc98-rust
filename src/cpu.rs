@@ -57,9 +57,13 @@ pub struct Cpu {
     /// Upper words of EAX through EDI; byte/word writes preserve these.
     pub upper: [u16; 8],
     pub extra_segments: [u16; 2], // FS, GS
-    /// CR0 low word for SMSW and x87 EM/TS checks. Reset: ET set.
-    /// Guest status writers and protected execution are not implemented.
-    pub machine_status: u16,
+    /// i486 CR0: reset CD/NW/ET set; PE/PG clear. Shared by MOV, SMSW and x87.
+    /// Guest control-register writers and protected execution are not implemented.
+    pub cr0: u32,
+    /// CR2/CR3 use deterministic zero on reset (emulator policy).
+    /// No paging, page-fault updates, CR3 translation or guest writers exist.
+    pub cr2: u32,
+    pub cr3: u32,
     pub fpu: Fpu,
     /// Emulator reset policy: zero limit/base (hardware power-up GDTR is undefined).
     pub gdtr_limit: u16,
@@ -103,7 +107,9 @@ impl Default for Cpu {
             s: [0, 0xffff, 0, 0],
             upper: [0; 8],
             extra_segments: [0; 2],
-            machine_status: 0x0010,
+            cr0: 0x60000010,
+            cr2: 0,
+            cr3: 0,
             fpu: Fpu::default(),
             gdtr_limit: 0,
             gdtr_base: 0,
@@ -694,6 +700,22 @@ impl Cpu {
             return Err(ExecError::Fault(6));
         }
         match op {
+            0x20 => {
+                let m = self.fetch(b)?;
+                if m >> 6 != 3 {
+                    return Err(ExecError::Fault(6));
+                }
+                let value = match (m >> 3) & 7 {
+                    0 => self.cr0,
+                    2 => self.cr2,
+                    3 => self.cr3,
+                    _ => return Err(ExecError::Fault(6)),
+                };
+                // Intel486 PRM (1992) pp. 26-212–213: always a full 32-bit GPR,
+                // independent of size overrides. Arithmetic flags are undefined
+                // there; preserve all flags as our deterministic policy.
+                self.set_reg32((m & 7) as usize, value);
+            }
             0x01 => {
                 let m = self.fetch(b)?;
                 let kind = (m >> 3) & 7;
@@ -701,7 +723,7 @@ impl Cpu {
                     match self.decode(b, m, ov)? {
                         // Undefined upper bits in operand32 register form are
                         // preserved as a deterministic emulator policy.
-                        Operand::Reg(r) => self.r[r] = self.machine_status,
+                        Operand::Reg(r) => self.r[r] = self.cr0 as u16,
                         Operand::Mem(s, off) => {
                             // Intel486 real-address SMSW table: #GP even for SS.
                             // Preflight both bytes before any bus write. The modern
@@ -711,7 +733,7 @@ impl Cpu {
                             }
                             let address = self.segment(s) as usize * 16 + off as usize;
                             for (i, value) in
-                                self.machine_status.to_le_bytes().into_iter().enumerate()
+                                (self.cr0 as u16).to_le_bytes().into_iter().enumerate()
                             {
                                 b.write(address + i, value);
                             }
@@ -1056,7 +1078,7 @@ impl Cpu {
                 }
                 // Non-waiting forms still check EM/TS, but never pending
                 // numerical exceptions. No instruction/data pointer updates.
-                if self.machine_status & 0x000c != 0 {
+                if self.cr0 & 0x000c != 0 {
                     return Err(ExecError::Fault(7));
                 }
                 if memory_store {

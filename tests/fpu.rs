@@ -59,7 +59,7 @@ fn preserved(c: &Cpu, saved: &Cpu) {
     assert_eq!(c.extra_segments, saved.extra_segments);
     assert_eq!(c.flags, saved.flags);
     assert_eq!(c.flags_upper, saved.flags_upper);
-    assert_eq!(c.machine_status, saved.machine_status);
+    assert_eq!(c.cr0, saved.cr0);
     assert_eq!(
         (c.gdtr_limit, c.gdtr_base),
         (saved.gdtr_limit, saved.gdtr_base)
@@ -293,7 +293,7 @@ fn em_ts_and_lock_all_forms_default_and_relocated_vectors_retry() {
                 b.mem[entry..entry + 4].copy_from_slice(&[0, 1, 0, 2]); // 0200:0100
                 b.mem[0x2100] = 0xcf;
                 c.fpu = seeded();
-                c.machine_status = status;
+                c.cr0 = status;
                 c.flags = 2 | CF | PF | AF | ZF | SF | DF | OF;
                 c.set_reg32(AX, 0xdead1234);
                 c.r[BX] = 0x4001;
@@ -310,7 +310,7 @@ fn em_ts_and_lock_all_forms_default_and_relocated_vectors_retry() {
                 if locked {
                     b.mem[0x1004] = 0x3e;
                 } else {
-                    c.machine_status = 0x10;
+                    c.cr0 = 0x10;
                 }
                 c.step(&mut b).unwrap(); // IRET to first prefix.
                 assert_eq!(
