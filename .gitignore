@@ -37,3 +37,4 @@ __pycache__/
 /fixtures/fpu_init/
 /fixtures/pic_single/
 /fixtures/v30_add4s/
+/fixtures/mov_cr/

@@ -150,9 +150,9 @@ Each byte uses existing CPU memory helpers and Bus mappings, including separate
 16-bit source/destination offset wrapping, 20-bit physical wrapping, ROM read/write
 protection and ordinary planar VRAM with accelerators disabled. Disjoint buffers
 and exact aliasing are tested. Ap still takes its separate i486 extended decoder
-and reports `unimplemented i486 opcode 0F 20` without arithmetic side effects;
-that is an emulator limitation for the control-register family, not an architectural
-#UD claim.
+and interprets `0F 20` as [MOV from a control register](#ap-real-mode-control-register-reads).
+For example, the following `90h` byte is an invalid memory ModR/M and raises
+restartable #UD without packed-BCD arithmetic side effects.
 
 The independent base-100 Rust oracle exhausts all 100×100 one-byte operand pairs
 with both incoming CF states and covers every documented CL with deterministic
@@ -331,10 +331,65 @@ adaptations remain unchanged. Protected execution, paging and other inventory
 gaps remain required; these limited probes establish neither complete hardware
 accuracy nor commercial compatibility.
 
+## Ap real-mode control-register reads
+
+Ap implements `0F 20 /r` for **CR0, CR2 and CR3** with **ModR/M.mod = 3**.
+The r/m field selects any of EAX, ECX, EDX, EBX, **ESP**, EBP, ESI or EDI.
+Every accepted transfer replaces all 32 bits, even with default 16-bit operands
+or `66h`. `67h` and segment overrides have no operand address to change; no SIB,
+displacement, RAM operand or I/O is accessed. Size/segment prefixes follow the
+existing decoder policy: repeated size overrides apply once, final segment wins.
+F2/F3 are ignored, including mixed repeat prefixes. LOCK raises guest **#UD (6)**,
+as do memory encodings and CR1/CR4/CR5/CR6/CR7. CR4 is outside this original i486
+register set; later CPU features are not advertised.
+
+The independent specification is Intel's
+[1992 Intel486 Programmer's Reference Manual](https://bitsavers.trailing-edge.com/components/intel/80486/1992_Intel_486_Programmers_Reference_Manual.pdf):
+MOV special registers, printed **26-212–213** (PDF 710–711), specifies selectors,
+32-bit width and register encoding; **9.9.6** specifies invalid operand/LOCK #UD;
+REP notes, printed **26-246** (PDF 744), say repeat prefixes are ignored on
+non-string instructions. Its MOV entry leaves OF/SF/ZF/AF/PF/CF undefined;
+**preserving every flag is our deterministic policy**. All other GPRs, segments,
+table registers, x87 metadata, RAM and I/O remain unchanged. Existing TF delivery
+still traps after the instruction at its next IP. There is no interrupt shadow.
+
+One `u32` **CR0** replaces the previous `u16 machine_status`. Construction and
+Machine reset expose **60000010h**, with CD/NW/ET set and PE/PG/MP/EM/TS/NE clear,
+following the **1992** manual's §10.1/Figure 10-2, printed **10-2** (PDF 252).
+The 1990 edition's figure differs; the later figure supplies the selected reset
+contract. Reserved bits are zero by emulator policy. SMSW still reads only 0010h
+and x87 checks EM/TS from that same CR0. ET does not imply numerical FPU support;
+CD/NW readback adds no cache simulation. **CR2/CR3 reset to zero by explicit
+emulator policy**; their reset values are not specified in that PRM's reset table.
+They are independent 32-bit CPU metadata, not generated values: there are no guest
+writers, page-fault updates, translation tables or TLB effects. Native-only state
+variation tests prove full-width readback and isolation; guests see reset state.
+
+Instructions are limited to 15 bytes and the existing real-mode CS limit.
+Invalid forms deliver the existing six-byte real-mode exception frame without
+an error code, with the first prefix as the restart address. Guest repair and
+IRET retry are tested. VM keeps its V30 decoder: `0F 20` is the two-byte ADD4S,
+so its next byte is not consumed as a control-register ModR/M.
+
+The original MIT [native boot guest](../guest/mov_cr.asm), prepared offline with
+`python3 tools/prepare_mov_cr_fixture.py`, executes these opcodes itself. Its
+[manifest](../fixtures/mov-cr-manifest.json) pins source/boot/disk hashes, license,
+assembly command, exact 128 result/guard bytes and a two-million-slot bound.
+Native and production Rust/Wasm tests boot the same disk cold and after reset,
+at both `/` and `/pc98-rust/`, requiring `MOV CR PASS`, no FAIL/errors, exact
+results and unchanged media. Hosts only mount, step, inspect and reset.
+Generated disks and source/license copies stay outside `web/`.
+
+`0F 22` writes, LMSW, CLTS, protected execution, paging, DPMI and numerical x87
+remain unimplemented. There is no filename-specific behavior or complete HDD,
+game boot or playability claim. See the
+[private HDD diagnostic procedure](dos-compatibility.md#diagnose-a-local-hdd-control-register-failure).
+
 ## Ap real-mode SMSW
 
-Ap implements `0F 01 /4` SMSW from one CPU-local machine-status word representing
-CR0 bits 15:0. Construction and Machine reset expose **0010h**: ET set;
+Ap implements `0F 01 /4` SMSW from bits 15:0 of the same full-width CPU-local
+CR0 used by [MOV control-register reads](#ap-real-mode-control-register-reads) and
+x87 EM/TS checks. Construction and Machine reset expose **0010h**: ET set;
 PE, MP, EM, TS and NE clear. Reserved low-word bits are zero by explicit emulator
 policy. This follows [Intel486 PRM §10.1, Figure 10-2](https://manuals.plus/m/d86207aaebd9b10464f2058efc61559e6141d3b072db100e89bfe17c8187e143).
 ET readback does not establish working x87 support.
@@ -368,8 +423,8 @@ with browser coverage at `/` and `/pc98-rust/`. They require `SMSW PASS`, no `FA
 or host error, exact results and unchanged disk bytes. Generated fixtures and
 license/source copies stay outside publication assets.
 
-This adds readback only. Guest status writers, MOV control-register instructions,
-LMSW, CLTS, protected execution, paging and numerical x87 execution remain unimplemented.
+This adds readback only. Guest status writers, MOV to control registers, LMSW,
+CLTS, protected execution, paging and numerical x87 execution remain unimplemented.
 No whole inventory category is promoted to verified by this bounded acceptance.
 
 ## Ap real-mode GDTR

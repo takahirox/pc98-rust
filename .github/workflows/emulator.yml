@@ -26,6 +26,7 @@ jobs:
       - run: python3 tools/prepare_gdtr_fixture.py
       - run: python3 tools/prepare_idtr_fixture.py
       - run: python3 tools/prepare_smsw_fixture.py
+      - run: python3 tools/prepare_mov_cr_fixture.py
       - run: python3 tools/prepare_fpu_init_fixture.py
       - run: python3 tools/prepare_pic_fixture.py
       - run: python3 tools/prepare_pic_smm_fixture.py

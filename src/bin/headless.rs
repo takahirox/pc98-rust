@@ -1,4 +1,68 @@
-use pc98_rust::Machine;
+use pc98_rust::{bus::Bus, cpu::Cpu, Machine, Profile};
+use std::collections::VecDeque;
+
+// Read-only, bounded instruction metadata for local debugging. Never dump guest
+// code beyond opcode/ModR/M or dereference a decoded memory operand.
+fn instruction_diagnostic(c: &Cpu, b: &Bus) -> (String, bool) {
+    let ap = b.profile == Profile::Pc9821ApDos;
+    let mut offset = c.ip;
+    let mut count = 0;
+    let mut next = || {
+        if count == 15 || (ap && offset > 0xffff) {
+            return None;
+        }
+        let value = b.read(c.s[1] as usize * 16 + offset as usize);
+        offset = offset.wrapping_add(1);
+        if !ap {
+            offset &= 0xffff;
+        }
+        count += 1;
+        Some(value)
+    };
+    let mut prefixes = Vec::new();
+    let opcode = loop {
+        match next() {
+            Some(p)
+                if matches!(
+                    p,
+                    0x26 | 0x2e | 0x36 | 0x3e | 0x64 | 0x65 | 0xf0 | 0xf2 | 0xf3
+                ) || (ap && matches!(p, 0x66 | 0x67)) =>
+            {
+                prefixes.push(p)
+            }
+            value => break value,
+        }
+    };
+    let mut operation = opcode.map_or_else(|| "<fetch-limit>".into(), |op| format!("{op:02x}"));
+    let mut control = false;
+    if opcode == Some(0x0f) {
+        if let Some(ext) = next() {
+            operation.push_str(&format!(" {ext:02x}"));
+            if ap && matches!(ext, 0x20 | 0x22) {
+                control = true;
+                if let Some(m) = next() {
+                    let names = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
+                    operation.push_str(&format!(
+                        " modrm={m:02x} mod={} cr={} gpr={}",
+                        m >> 6,
+                        (m >> 3) & 7,
+                        names[(m & 7) as usize]
+                    ));
+                } else {
+                    operation.push_str(" modrm=<fetch-limit>");
+                }
+            }
+        }
+    }
+    let registers: Vec<_> = (0..8).map(|r| c.reg32(r)).collect();
+    (format!(
+        "{:04x}:{:08x} opcode={} prefixes={:02x?} operand={} address={} gpr={:08x?} seg={:04x?} fs_gs={:04x?} flags={:04x}{:04x} cr0={:08x} cr2={:08x} cr3={:08x}",
+        c.s[1], c.ip, operation, prefixes,
+        if ap && prefixes.contains(&0x66) {32} else {16},
+        if ap && prefixes.contains(&0x67) {32} else {16},
+        registers, c.s, c.extra_segments, c.flags_upper, c.flags, c.cr0, c.cr2, c.cr3
+    ), control)
+}
 fn main() {
     let args: Vec<_> = std::env::args().collect();
     let path = args
@@ -25,33 +89,51 @@ fn main() {
         .map(|v| v.parse().unwrap())
         .unwrap_or(1_000_000u64);
     let trace = args.iter().any(|a| a == "trace");
-    let mut old_text = String::new();
-    for i in 0..steps {
-        if trace && i + 100 > steps {
+    let mut history = VecDeque::with_capacity(100);
+    let mut control_history = VecDeque::with_capacity(16);
+    if trace {
+        eprintln!(
+            "profile={:?} instruction-history=100 control-history=16 (opcode/ModR/M only)",
+            m.bus.profile
+        );
+        if let Some(disk) = &m.bus.ide.disk {
             eprintln!(
-                "{:04x}:{:04x} {:02x?} r={:04x?} s={:04x?} f={:04x}",
-                m.cpu.s[1],
-                m.cpu.ip,
-                (0..8)
-                    .map(|n| m
-                        .bus
-                        .read(m.cpu.s[1] as usize * 16 + m.cpu.ip.wrapping_add(n) as usize))
-                    .collect::<Vec<_>>(),
-                m.cpu.r,
-                m.cpu.s,
-                m.cpu.flags
+                "format=HDI bytes={} geometry={}x{}x{} sector=512",
+                disk.bytes.len(),
+                disk.cylinders,
+                disk.heads,
+                disk.sectors
             );
         }
-        m.step(1);
-        if i % 100_000 == 0 {
-            let text = m.bus.text();
-            if trace && text != old_text {
-                eprintln!("{text}");
-                old_text = text;
-            }
+    }
+    for i in 0..steps {
+        if trace {
+            m.step_with_observer(1, |cpu, bus| {
+                if history.len() == 100 {
+                    history.pop_front();
+                }
+                let (diagnostic, control) = instruction_diagnostic(cpu, bus);
+                if control {
+                    if control_history.len() == 16 {
+                        control_history.pop_front();
+                    }
+                    control_history.push_back(format!("control-slot={i} {diagnostic}"));
+                }
+                history.push_back(format!("slot={i} {diagnostic}"));
+            });
+        } else {
+            m.step(1);
         }
         if m.error.is_some() {
             break;
+        }
+    }
+    if trace {
+        for record in control_history {
+            eprintln!("{record}");
+        }
+        for record in history {
+            eprintln!("{record}");
         }
     }
     println!("{}", m.bus.text());
