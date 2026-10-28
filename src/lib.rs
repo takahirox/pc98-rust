@@ -84,12 +84,22 @@ impl Machine {
         firmware::initialize(&mut self.bus);
     }
     pub fn step(&mut self, budget: u32) -> u32 {
+        self.step_with_observer(budget, |_, _| {})
+    }
+    /// Step with a read-only callback before each instruction, after IRQ delivery.
+    pub fn step_with_observer(
+        &mut self,
+        budget: u32,
+        mut before_instruction: impl FnMut(&Cpu, &Bus),
+    ) -> u32 {
         let mut done = 0;
         for _ in 0..budget.min(100_000) {
             if self.error.is_some() {
                 break;
             }
-            let mut result = self.cpu.step(&mut self.bus);
+            let mut result = self
+                .cpu
+                .step_with_observer(&mut self.bus, &mut before_instruction);
             if self.bus.firmware_request {
                 self.bus.firmware_request = false;
                 if result.is_ok() {

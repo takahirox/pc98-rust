@@ -108,19 +108,22 @@ fn main() {
     }
     for i in 0..steps {
         if trace {
-            if history.len() == 100 {
-                history.pop_front();
-            }
-            let (diagnostic, control) = instruction_diagnostic(&m.cpu, &m.bus);
-            if control {
-                if control_history.len() == 16 {
-                    control_history.pop_front();
+            m.step_with_observer(1, |cpu, bus| {
+                if history.len() == 100 {
+                    history.pop_front();
                 }
-                control_history.push_back(format!("control-slot={i} {diagnostic}"));
-            }
-            history.push_back(format!("slot={i} {diagnostic}"));
+                let (diagnostic, control) = instruction_diagnostic(cpu, bus);
+                if control {
+                    if control_history.len() == 16 {
+                        control_history.pop_front();
+                    }
+                    control_history.push_back(format!("control-slot={i} {diagnostic}"));
+                }
+                history.push_back(format!("slot={i} {diagnostic}"));
+            });
+        } else {
+            m.step(1);
         }
-        m.step(1);
         if m.error.is_some() {
             break;
         }

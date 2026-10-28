@@ -651,6 +651,16 @@ impl Cpu {
         }
     }
     pub fn step(&mut self, b: &mut Bus) -> Result<(), String> {
+        self.step_with_observer(b, |_, _| {})
+    }
+    /// Observe the instruction about to execute, after pending IRQ delivery.
+    /// Halted/shutdown slots and failed interrupt delivery do not fetch an
+    /// instruction and therefore do not invoke the read-only observer.
+    pub fn step_with_observer(
+        &mut self,
+        b: &mut Bus,
+        mut before_instruction: impl FnMut(&Cpu, &Bus),
+    ) -> Result<(), String> {
         if self.shutdown {
             return Ok(());
         }
@@ -665,6 +675,9 @@ impl Cpu {
         }
         if self.inhibit > 0 {
             self.inhibit -= 1;
+        }
+        if !self.halted {
+            before_instruction(self, b);
         }
         // Restore architectural registers for restartable real-mode faults.
         let saved = self.clone();
