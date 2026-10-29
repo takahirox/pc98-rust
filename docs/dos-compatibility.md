@@ -392,3 +392,9 @@ features outside the documented protected/paging subset, extended DOS or another
 device, record the exact requirement for a separate `task` Issue. The original
 protected probe proves its CPU path, not a requirement or playability of the private game. Do not fake these
 facilities or treat opcode support as a claim of complete game compatibility.
+
+For no-host-error hangs or question-like glyphs, start with the compact
+[`--progress` observations and legal HDD shell control](hdd-boot-investigation.md).
+The cleared disk already passes the `FAT Kernel GO!` handoff on the baseline,
+including a transient NUL/fallback background, and reaches responsive FreeCOM.
+This does not identify or fix the reported private image's persistent hang.

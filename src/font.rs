@@ -5,7 +5,17 @@ pub fn row(ch: u8, y: u8) -> u8 {
     if !(1..15).contains(&y) {
         return 0;
     }
-    let pattern = match ch.to_ascii_uppercase() {
+    let pattern = ank_pattern(ch).unwrap_or([31, 17, 5, 4, 4, 0, 4]);
+    pattern[((y - 1) / 2) as usize] << 2
+}
+
+/// Whether the original ANK font has this code, rather than its fallback glyph.
+pub fn ank_supported(ch: u8) -> bool {
+    ank_pattern(ch).is_some()
+}
+
+fn ank_pattern(ch: u8) -> Option<[u8; 7]> {
+    Some(match ch.to_ascii_uppercase() {
         b'A' => [14, 17, 17, 31, 17, 17, 17],
         b'B' => [30, 17, 17, 30, 17, 17, 30],
         b'C' => [14, 17, 16, 16, 16, 17, 14],
@@ -66,9 +76,8 @@ pub fn row(ch: u8, y: u8) -> u8 {
         b'"' => [10, 10, 0, 0, 0, 0, 0],
         b'\'' => [4, 4, 0, 0, 0, 0, 0],
         b' ' => [0; 7],
-        _ => [31, 17, 5, 4, 4, 0, 4],
-    };
-    pattern[((y - 1) / 2) as usize] << 2
+        _ => return None,
+    })
 }
 
 /// JIS row/cell lookup. Rows are 16-bit MSB-first, left byte then right byte.

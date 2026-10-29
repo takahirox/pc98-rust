@@ -129,6 +129,7 @@ python3 tools/prepare_opna_irq_fixture.py
 # Fetch checksum-pinned guest binaries AND matching complete source archives.
 # This makes a minimal GPL guest disk; it downloads no emulator code.
 python3 tools/prepare_freedos.py
+python3 tools/prepare_freedos_hdd_fixture.py
 python3 tools/prepare_font_fixture.py
 python3 tools/prepare_dos_apps.py
 python3 tools/prepare_cpu_fixture.py
@@ -162,6 +163,12 @@ the primary download fails. Every source uses the original SHA-256 and size
 checks before caching; existing cached archives are verified for offline reuse.
 The canonical provenance URLs, source archives and audited image manifests remain
 the same.
+
+The [Issue #111 HDD investigation](docs/hdd-boot-investigation.md) provides an
+independent GPL FreeDOS HDD shell control, exact kernel-handoff acceptance and
+`headless --progress --ap` summaries for silent loops and raw text-VRAM glyph
+selection. It does not establish a fix for private `aliceY3.hdi`; that image was
+not obtained or retested and game playability remains unconfirmed.
 
 The original MIT [CLTS probe](guest/clts.asm) checks CR0.TS/#NM recovery in real
 and protected mode, all four supported x87 metadata forms, WAIT MP/TS and EM

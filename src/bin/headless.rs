@@ -1,3 +1,5 @@
+#[path = "headless/observations.rs"]
+mod observations;
 use pc98_rust::{bus::Bus, cpu::Cpu, Machine, Profile};
 use std::collections::VecDeque;
 
@@ -136,7 +138,7 @@ fn main() {
     let args: Vec<_> = std::env::args().collect();
     let path = args
         .get(1)
-        .expect("usage: headless IMAGE [STEP_BUDGET] [trace] [--ap]");
+        .expect("usage: headless IMAGE [STEP_BUDGET] [trace] [--progress] [--ap]");
     let mut m = Machine::new(if args.iter().any(|a| a == "--ap") {
         pc98_rust::Profile::Pc9821ApDos
     } else {
@@ -158,13 +160,19 @@ fn main() {
         .map(|v| v.parse().unwrap())
         .unwrap_or(1_000_000u64);
     let trace = args.iter().any(|a| a == "trace");
+    let progress = args.iter().any(|a| a == "--progress");
+    let mut observations = observations::Progress::default();
+    let interval = steps.div_ceil(16).max(1);
+    let mut slots = 0;
     let mut history = VecDeque::with_capacity(100);
     let mut control_history: VecDeque<String> = VecDeque::with_capacity(16);
     let mut pending_control = false;
-    if trace {
+    if trace || progress {
         eprintln!(
-            "profile={:?} instruction-history=100 control-history=16 (opcode/ModR/M only)",
-            m.bus.profile
+            "profile={:?} instruction-history={} control-history={} progress-window=4096",
+            m.bus.profile,
+            if trace { 100 } else { 0 },
+            if trace { 16 } else { 0 }
         );
         if let Some(disk) = &m.bus.ide.disk {
             eprintln!(
@@ -179,8 +187,14 @@ fn main() {
     for i in 0..steps {
         let previous_retired = m.cpu.retired;
         let mut observed_control = false;
-        if trace {
+        if trace || progress {
             m.step_with_observer(1, |cpu, bus| {
+                if progress {
+                    observations.observe(cpu, bus);
+                }
+                if !trace {
+                    return;
+                }
                 if history.len() == 100 {
                     history.pop_front();
                 }
@@ -202,6 +216,10 @@ fn main() {
             });
         } else {
             m.step(1);
+        }
+        slots += 1;
+        if progress && slots % interval == 0 && slots < steps && m.error.is_none() {
+            eprintln!("{}", observations.report(slots, &m.cpu, &m.bus));
         }
         if trace && observed_control {
             if let Some(last) = control_history.back_mut() {
@@ -243,8 +261,26 @@ fn main() {
             eprintln!("{record}");
         }
     }
-    println!("{}", m.bus.text());
-    println!("instructions={} cycles={} fdc_reads={} fdc_writes={} beep={} edges={} pc={:04x}:{:04x} ports={:x?}",m.cpu.retired,m.bus.cycles,m.bus.fdc.reads,m.bus.fdc.writes,m.bus.beep,m.bus.beep_edges,m.cpu.s[1],m.cpu.ip,m.bus.unknown_ports);
+    if progress {
+        eprintln!("{}", observations.report(slots, &m.cpu, &m.bus));
+        for record in observations.disk_history() {
+            eprintln!("{record}");
+        }
+        eprintln!("{}", observations::text_summary(&m.bus));
+        eprintln!(
+            "stop={} (budget exhaustion is not proof of guest progress)",
+            if m.error.is_some() {
+                "host-error"
+            } else {
+                "budget"
+            }
+        );
+    } else {
+        println!("{}", m.bus.text());
+    }
+    if !progress {
+        println!("instructions={} cycles={} fdc_reads={} fdc_writes={} beep={} edges={} pc={:04x}:{:04x} ports={:x?}",m.cpu.retired,m.bus.cycles,m.bus.fdc.reads,m.bus.fdc.writes,m.bus.beep,m.bus.beep_edges,m.cpu.s[1],m.cpu.ip,m.bus.unknown_ports);
+    }
     if let Some(e) = m.error {
         eprintln!("{e}");
         std::process::exit(1)

@@ -361,3 +361,188 @@ fn vm86_trace_retains_cpl_vm_frame_tss_gate_and_fault_metadata_with_fixed_bounds
             <= 100
     );
 }
+
+// Original bytes only. The summary flag must diagnose a live CPU loop without
+// exposing decoded screen text or producing an unbounded instruction history.
+fn progress_guest(name: &str, code: &[u8], hdd: bool) -> (String, String) {
+    let mut image = if hdd {
+        let mut image = vec![0; 4096 + 2 * 512];
+        for (at, value) in [
+            (8, 4096u32),
+            (12, 1024),
+            (16, 512),
+            (20, 2),
+            (24, 1),
+            (28, 1),
+        ] {
+            image[at..at + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        image
+    } else {
+        vec![0; 1_261_568]
+    };
+    let at = if hdd { 4096 } else { 0 };
+    image[at..at + code.len()].copy_from_slice(code);
+    let path = std::env::temp_dir().join(format!(
+        "pc98-progress-{name}-{}.{}",
+        std::process::id(),
+        if hdd { "hdi" } else { "hdm" }
+    ));
+    std::fs::write(&path, image).unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_headless"))
+        .arg(&path)
+        .args(["10000", "--progress", "--ap"])
+        .output()
+        .unwrap();
+    std::fs::remove_file(path).unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let diagnostic = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(
+        diagnostic
+            .lines()
+            .filter(|l| l.starts_with("progress "))
+            .count(),
+        16
+    );
+    assert!(!diagnostic.lines().any(|l| l.starts_with("slot=")));
+    assert!(diagnostic.contains("stop=budget"));
+    assert!(diagnostic.contains("budget exhaustion is not proof of guest progress"));
+    (diagnostic, String::from_utf8(output.stdout).unwrap())
+}
+
+#[test]
+fn progress_distinguishes_silent_loop_raw_literal_fallback_and_jis_without_acknowledging_ide() {
+    let mut code = vec![
+        0xfa, // CLI, so a timer cannot move the PC out of this loop.
+        0xb8, 0x00, 0xa0, 0x8e, 0xc0, // ES=A000h
+        0x31, 0xff, 0xb9, 0x00, 0x08, // DI=0, CX=2048
+        0xb8, 0x20, 0x00, 0xf3, 0xab, // clear text to spaces using guest REP STOSW
+        0x26, 0xc7, 0x06, 0, 0, 0x3f, 0, // literal question mark
+        0x26, 0xc7, 0x06, 2, 0, 1, 0, // unsupported ANK -> fallback
+        0x26, 0xc7, 0x06, 4, 0, 4, 0x4f, // JIS 244F, left half
+        0x26, 0xc7, 0x06, 6, 0, 0x84, 0x4f, // right half
+    ];
+    // Issue a PIO read of sector 1 and leave its data/INTRQ pending. A diagnostic
+    // read of status would clear INTRQ, and a data read would move the cursor.
+    for (port, value) in [
+        (0x644u16, 1),
+        (0x646, 1),
+        (0x648, 0),
+        (0x64a, 0),
+        (0x64c, 0xe0),
+        (0x64e, 0x20),
+    ] {
+        code.extend([0xba, port as u8, (port >> 8) as u8, 0xb0, value, 0xee]);
+    }
+    code.extend([0xeb, 0xfe]);
+    let (diagnostic, stdout) = progress_guest("cells-ide", &code, true);
+    assert!(
+        stdout.is_empty(),
+        "summary mode must not decode guest screen text"
+    );
+    let last = diagnostic
+        .lines()
+        .rfind(|l| l.starts_with("progress "))
+        .unwrap();
+    assert!(last.contains("window=4096 unique=1 repeats=4095"), "{last}");
+    assert!(last.contains("pe=0 vm=0 pg=0"));
+    assert!(last.contains("faults=0"));
+    // Firmware may acknowledge a timer before the guest's CLI. No additional
+    // IRQ may enter during its masked loop/halt after the first report.
+    let first = diagnostic
+        .lines()
+        .find(|l| l.starts_with("progress "))
+        .unwrap();
+    let irq = |line: &str| {
+        line.split("irq-acks=")
+            .nth(1)
+            .unwrap()
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .to_owned()
+    };
+    assert_eq!(irq(first), irq(last));
+    assert!(
+        diagnostic.contains("literal-3f=1 ank-fallback=1 jis=2 invalid-jis=0"),
+        "{diagnostic}"
+    );
+    assert!(diagnostic.contains("3f/00/e1/00:1"));
+    assert!(diagnostic.contains("01/00/e1/00:1"));
+    assert!(diagnostic.contains("04/4f/e1/00:1"));
+    assert!(diagnostic.contains("reads=2 writes=0 status=58 error=00 count=1"));
+    assert!(diagnostic.contains("remaining=1 lba=1 cursor=0 irq=true"));
+    assert!(
+        diagnostic.contains(
+            "bios-disk ax=0680 bytes=512 cx=0000 dx=0000 buffer=1fc0:0000 returned-ah=00"
+        ),
+        "{diagnostic}"
+    );
+    assert!(
+        diagnostic
+            .lines()
+            .filter(|l| l.starts_with("bios-disk "))
+            .count()
+            <= 16
+    );
+}
+
+#[test]
+fn progress_counts_repeated_same_vector_faults_and_separates_hlt_from_loop() {
+    // IVT #UD handler at 1FC0:0080 just IRETs, retrying the same invalid opcode.
+    let mut code = vec![
+        0xfa, 0x31, 0xc0, 0x8e, 0xc0, 0x26, 0xc7, 0x06, 0x18, 0, 0x80, 0, 0x8c, 0xc8, 0x26, 0xa3,
+        0x1a, 0, 0x0f, 0x0b,
+    ];
+    code.resize(0x80, 0x90);
+    code.push(0xcf);
+    let (diagnostic, _) = progress_guest("fault", &code, false);
+    let last = diagnostic
+        .lines()
+        .rfind(|l| l.starts_with("progress "))
+        .unwrap();
+    assert!(last.contains("unique=2 repeats=4094"), "{last}");
+    assert!(last.contains("last-fault=Some((6, 0))"));
+    let faults: u64 = last
+        .split("faults=")
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(
+        faults > 4000,
+        "historical last_fault alone cannot count repeated faults: {last}"
+    );
+    let (diagnostic, _) = progress_guest("halt", &[0xfa, 0xf4], false);
+    let last = diagnostic
+        .lines()
+        .rfind(|l| l.starts_with("progress "))
+        .unwrap();
+    assert!(
+        last.contains("halted=true shutdown=false faults=0"),
+        "{last}"
+    );
+    // Firmware may acknowledge a timer before the guest's CLI. No additional
+    // IRQ may enter during its masked loop/halt after the first report.
+    let first = diagnostic
+        .lines()
+        .find(|l| l.starts_with("progress "))
+        .unwrap();
+    let irq = |line: &str| {
+        line.split("irq-acks=")
+            .nth(1)
+            .unwrap()
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .to_owned()
+    };
+    assert_eq!(irq(first), irq(last));
+}
