@@ -1592,6 +1592,19 @@ impl Cpu {
                 let src = Operand::Mem(ov.unwrap_or(DS), self.index(SI));
                 let dst = Operand::Mem(ES, self.index(DI));
                 let a = self.get(b, Operand::Reg(0), w)?;
+                if matches!(op & 0xfe, 0xa4 | 0xa6) {
+                    // Validate both full operands before either bus read: a
+                    // source read can change device latches even if ES faults.
+                    self.check_mem(b, ov.unwrap_or(DS), self.index(SI), self.bytes(w))?;
+                    self.check_access(
+                        b,
+                        ES,
+                        self.index(DI),
+                        self.bytes(w),
+                        op & 0xfe == 0xa4,
+                        false,
+                    )?;
+                }
                 match op & 0xfe {
                     0xa4 => {
                         let v = self.get(b, src, w)?;

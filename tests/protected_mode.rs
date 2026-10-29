@@ -954,3 +954,81 @@ fn rejected_memory_read_modify_write_preserves_egc_source_and_pattern_latches() 
         }
     }
 }
+
+#[test]
+fn rejected_movs_and_cmps_preserve_egc_source_and_pattern_latches() {
+    for opcode in [0xa4, 0xa6] {
+        for bytes in [1usize, 2, 4] {
+            for failure in ["destination access", "destination limit", "source limit"] {
+                for repeat in [false, true] {
+                    let mut code = vec![];
+                    if repeat {
+                        code.push(0xf3);
+                    }
+                    if bytes == 2 {
+                        code.push(0x66);
+                    }
+                    code.push(opcode | u8::from(bytes != 1));
+                    let (mut c, mut b) = protected(&code, true, true);
+                    c.segment_caches[DS].as_mut().unwrap().base = 0xa8000;
+                    match failure {
+                        "destination access" if opcode == 0xa4 => {
+                            c.segment_caches[ES].as_mut().unwrap().access = 0x91;
+                        }
+                        "destination access" => {
+                            c.segment_caches[ES].as_mut().unwrap().access = 0;
+                        }
+                        _ => {
+                            let segment = if failure == "source limit" { DS } else { ES };
+                            // Start inside the segment but let the final byte exceed
+                            // its limit (or start outside for the byte instruction).
+                            let offset = if bytes == 1 { 1 } else { 0 };
+                            c.set_reg32(if segment == DS { SI } else { DI }, offset);
+                            c.segment_caches[segment].as_mut().unwrap().limit =
+                                bytes.saturating_sub(2) as u32;
+                        }
+                    }
+                    c.set_reg32(CX, 2);
+                    c.flags = 2 | CF;
+                    let registers = [c.reg32(SI), c.reg32(DI), c.reg32(CX), c.reg32(AX)];
+                    b.egc.enabled = true;
+                    b.grcg_mode = 0x80;
+                    b.egc.registers[2] = 0x29f0; // reads load source and pattern
+                    for plane in 0..4 {
+                        b.graphics[plane * 0x8000..plane * 0x8000 + 4].copy_from_slice(&[
+                            0x12 + plane as u8,
+                            0x34,
+                            0x56,
+                            0x78,
+                        ]);
+                    }
+                    let graphics = b.graphics.clone();
+                    let memory = b.mem.clone();
+                    c.step(&mut b).unwrap();
+                    fault_frame(&c, &b, 13, 0);
+                    assert_eq!(
+                        [c.reg32(SI), c.reg32(DI), c.reg32(CX), c.reg32(AX)],
+                        registers
+                    );
+                    assert_eq!(b.mem[0x17ffc], (2 | CF) as u8);
+                    assert_eq!(b.graphics, graphics);
+                    assert_eq!(&b.mem[0x20000..0x50000], &memory[0x20000..0x50000]);
+                    // Observe both latch lanes through writes, without another
+                    // VRAM read that could overwrite evidence of a rejected read.
+                    for (rop, offset) in [(0x28f0, 0x10), (0x3000, 0x12)] {
+                        b.egc.registers[2] = rop;
+                        b.write(0xa8000 + offset, 0xff);
+                        b.write(0xa8001 + offset, 0xff);
+                        for plane in 0..4 {
+                            assert_eq!(
+                                &b.graphics[plane * 0x8000 + offset..plane * 0x8000 + offset + 2],
+                                &[0, 0],
+                                "opcode={code:02x?} failure={failure} ROP={rop:04x} plane={plane}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
