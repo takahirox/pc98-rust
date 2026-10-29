@@ -100,13 +100,36 @@ fn instruction_diagnostic(c: &Cpu, b: &Bus) -> (String, bool) {
             }
         }
     }
+    if ap && c.protected_mode() && opcode == Some(0xcf) {
+        control = true;
+        let operand32 = c.segment_cache(1).big() ^ prefixes.contains(&0x66);
+        operation.push_str(&format!(
+            " IRET frame(ss,sp,bytes,in-bounds)={:?}",
+            c.iret_frame_metadata(b, operand32)
+        ));
+    }
+    if ap && c.protected_mode() && matches!(opcode, Some(0xcc..=0xce)) {
+        control = true;
+    }
+    let vm86_metadata = if ap {
+        format!(
+            " pe={} pg={} vm={} ss0_esp0={:?} vm86_gate={:?}",
+            u8::from(c.protected_mode()),
+            u8::from(c.paging_enabled()),
+            u8::from(c.vm86()),
+            c.monitor_stack_metadata(b),
+            c.last_vm86_gate
+        )
+    } else {
+        String::new()
+    };
     let registers: Vec<_> = (0..8).map(|r| c.reg32(r)).collect();
     (format!(
-        "{:04x}:{:08x} opcode={} prefixes={:02x?} operand={} address={} gpr={:08x?} seg={:04x?} fs_gs={:04x?} flags={:04x}{:04x} cr0={:08x} cr2={:08x} cr3={:08x} mode={} cpl={} gdt={:08x}/{:04x} idt={:08x}/{:04x} caches={:?} ldtr={:04x} tr={:04x} tss={:?} fault={:?}",
+        "{:04x}:{:08x} opcode={} prefixes={:02x?} operand={} address={} gpr={:08x?} seg={:04x?} fs_gs={:04x?} flags={:04x}{:04x} cr0={:08x} cr2={:08x} cr3={:08x} mode={} cpl={} gdt={:08x}/{:04x} idt={:08x}/{:04x} caches={:?} ldtr={:04x} tr={:04x} tss={:?} fault={:?}{}",
         c.s[1], c.ip, operation, prefixes,
         if ap && (c.segment_cache(1).big() ^ prefixes.contains(&0x66)) {32} else {16},
         if ap && (c.segment_cache(1).big() ^ prefixes.contains(&0x67)) {32} else {16},
-        registers, c.s, c.extra_segments, c.flags_upper, c.flags, c.cr0, c.cr2, c.cr3, if c.protected_mode() {"protected"} else {"real"}, c.cpl, c.gdtr_base, c.gdtr_limit, c.idtr_base, c.idtr_limit, c.segment_caches, c.ldtr, c.tr, c.tr_cache, c.last_fault
+        registers, c.s, c.extra_segments, c.flags_upper, c.flags, c.cr0, c.cr2, c.cr3, if c.protected_mode() {"protected"} else {"real"}, c.cpl, c.gdtr_base, c.gdtr_limit, c.idtr_base, c.idtr_limit, c.segment_caches, c.ldtr, c.tr, c.tr_cache, c.last_fault, vm86_metadata
     ), control)
 }
 fn main() {

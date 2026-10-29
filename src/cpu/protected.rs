@@ -137,7 +137,12 @@ impl Cpu {
         let raw = self.read_system::<8>(b, address)?;
         Ok((SegmentCache::parse(raw), address))
     }
-    fn accessed(&self, b: &mut Bus, d: SegmentCache, address: u32) -> ExecResult<SegmentCache> {
+    pub(super) fn accessed(
+        &self,
+        b: &mut Bus,
+        d: SegmentCache,
+        address: u32,
+    ) -> ExecResult<SegmentCache> {
         if d.access & 1 == 0 {
             self.write_system_byte(b, address.wrapping_add(5), d.access | 1)?;
         }
@@ -147,6 +152,10 @@ impl Cpu {
         })
     }
     pub(super) fn load_segment(&mut self, b: &mut Bus, s: usize, selector: u16) -> ExecResult<()> {
+        if self.vm86() {
+            self.load_vm86_segment(s, selector);
+            return Ok(());
+        }
         if !self.protected_mode() {
             self.set_segment(s, selector);
             // Real-address loads replace base while retaining cached limits/B.
@@ -246,7 +255,7 @@ impl Cpu {
         returning: bool,
     ) -> ExecResult<()> {
         let off = if self.operand32 { off } else { off & 0xffff };
-        let target = if self.protected_mode() {
+        let target = if self.protected_mode() && !self.vm86() {
             Some(self.code_target(b, selector, off, returning)?)
         } else {
             if off > 0xffff {
@@ -262,6 +271,8 @@ impl Cpu {
         if let Some((d, address)) = target {
             self.segment_caches[CS] = Some(self.accessed(b, d, address)?);
             self.s[CS] = (selector & !3) | self.cpl as u16;
+        } else if self.vm86() {
+            self.load_vm86_segment(CS, selector);
         } else {
             self.reload_real_code(selector);
         }
@@ -339,6 +350,9 @@ impl Cpu {
             } else {
                 0
             };
+        if self.vm86() {
+            return self.vm86_interrupt(b, n, source, error, selector, off, kind);
+        }
         if self.cpl != 0 {
             let (target, _) = self.descriptor(b, selector & !3).map_err(|e| match e {
                 ExecError::ProtectedFault(n, code) => ExecError::ProtectedFault(n, code | external),
@@ -417,7 +431,7 @@ impl Cpu {
         // a fault during #DF still shuts down immediately below.
         for _ in 0..4 {
             let saved = self.clone();
-            if self.paging_enabled() {
+            if self.protected_mode() || self.paging_enabled() {
                 b.begin_cpu_memory();
             }
             let delivery = self.protected_interrupt(b, vector, source, code);
@@ -526,7 +540,7 @@ impl Cpu {
         Ok(())
     }
     pub(super) fn system_group0(&mut self, b: &mut Bus, ov: Option<usize>) -> ExecResult<()> {
-        if !self.protected_mode() {
+        if !self.protected_mode() || self.vm86() {
             return Err(ExecError::Fault(6));
         }
         let m = self.fetch(b)?;

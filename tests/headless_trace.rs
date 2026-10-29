@@ -328,3 +328,36 @@ fn bounded_clts_trace_records_actual_ts_transition_and_fault_result() {
         );
     }
 }
+
+#[test]
+fn vm86_trace_retains_cpl_vm_frame_tss_gate_and_fault_metadata_with_fixed_bounds() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_headless"))
+        .args(["fixtures/vm86/vm86.hdm", "100000", "trace", "--ap"])
+        .output()
+        .unwrap();
+    let diagnostic = String::from_utf8(output.stderr).unwrap();
+    assert!(output.status.success(), "{diagnostic}");
+    assert!(String::from_utf8(output.stdout)
+        .unwrap()
+        .contains("VM86 PASS"));
+    assert!(diagnostic.contains("cpl=3"));
+    assert!(diagnostic.contains("pe=1 pg=1 vm=1"));
+    assert!(diagnostic.contains("IRET frame(ss,sp,bytes,in-bounds)=(16, 98268, 36, true)"));
+    assert!(diagnostic.contains("ss0_esp0=Some((16, 98304))"));
+    assert!(diagnostic.contains("vm86_gate=Some((32, 14, 8,"));
+    assert!(diagnostic.contains("fault=Some((14, 7))"));
+    assert!(
+        diagnostic
+            .lines()
+            .filter(|l| l.starts_with("control-slot="))
+            .count()
+            <= 16
+    );
+    assert!(
+        diagnostic
+            .lines()
+            .filter(|l| l.starts_with("slot="))
+            .count()
+            <= 100
+    );
+}

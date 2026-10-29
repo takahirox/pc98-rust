@@ -99,6 +99,7 @@ python3 tools/prepare_protected_mode_fixture.py
 python3 tools/prepare_task_register_fixture.py
 python3 tools/prepare_clts_fixture.py
 python3 tools/prepare_paging_fixture.py
+python3 tools/prepare_vm86_fixture.py
 python3 tools/prepare_fpu_init_fixture.py
 python3 tools/prepare_pic_fixture.py
 python3 tools/prepare_pic_smm_fixture.py
@@ -195,6 +196,16 @@ PE and PG now commit; the PG variant then shuts down on its missing page tables,
 cold and after reset. See the
 [write contract](docs/hardware.md#ap-real-mode-control-register-writes) and
 [validation evidence](docs/control-register-writes-validation.md).
+The original MIT [VM86 monitor/guest](guest/vm86.asm) verifies CPL0 IRETD entry,
+CPL3 execution with PE still set, PG=0 and nonidentity PG=1, protected guest
+TSS interrupt/trap handlers, user #PF recovery, IOPL/bitmap checks and PIC/PIT IRQs.
+Prepare offline with `python3 tools/prepare_vm86_fixture.py`; run
+`cargo test --locked --lib --test vm86 --test dma --test headless_trace` and
+`npm test`. The [manifest](fixtures/vm86-manifest.json) pins source/license/media
+and exact context/guards; see [capabilities and limits](docs/protected-mode.md#i486-virtual-8086-mode-issue-109)
+and [validation](docs/vm86-validation.md). This does not establish DOS-extender,
+Windows or commercial-game compatibility. Private `aliceY3.hdi`: **not retested**.
+
 The original MIT [paging guest](guest/paging.asm) executes nonidentity code,
 data and stack pages, checks a guest #PF handler's PTE repair and IRETD retry,
 TLB/INVLPG/CR3 coherence, 16/32-bit protected code and PG disable. Its

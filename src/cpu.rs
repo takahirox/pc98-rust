@@ -2,6 +2,7 @@
 use crate::bus::Bus;
 mod paging;
 mod protected;
+mod vm86;
 pub use paging::Paging;
 use protected::GateSource;
 pub use protected::SegmentCache;
@@ -78,6 +79,9 @@ pub struct Cpu {
     /// None is the emulator's uninitialized reset state, not a fabricated TSS.
     pub tr_cache: Option<SegmentCache>,
     pub last_fault: Option<(u8, u32)>,
+    /// Last successful VM86 gate: vector, gate type, target CS:EIP, SS0:ESP0.
+    /// Bounded CPU metadata for opt-in tracing; no guest instruction bypass.
+    pub last_vm86_gate: Option<(u8, u8, u16, u32, u16, u32)>,
     /// CR2/CR3 use deterministic zero on reset (emulator policy).
     /// CR2 records the last page-fault linear address; CR3 selects physical tables.
     pub cr2: u32,
@@ -135,6 +139,7 @@ impl Default for Cpu {
             tr: 0,
             tr_cache: None,
             last_fault: None,
+            last_vm86_gate: None,
             cr2: 0,
             cr3: 0,
             paging: Paging::default(),
@@ -659,14 +664,22 @@ impl Cpu {
         Ok(())
     }
     fn load_flags(&mut self, b: &Bus, value: u32) {
+        let old = self.flags;
+        let vm = self.flags_upper & 2;
         self.flags = if b.profile == crate::Profile::Pc9801Vm {
             (value as u16 & 0x0fd5) | 0xf002
         } else {
             (value as u16 & 0x7fd5) | 2
         };
+        if self.protected_mode() && self.cpl != 0 {
+            self.flags = (self.flags & !0x3000) | (old & 0x3000);
+            if self.cpl > ((old >> 12) & 3) as u8 {
+                self.flags = (self.flags & !IF) | (old & IF);
+            }
+        }
         if self.operand32 {
-            self.flags_upper = ((value >> 16) as u16) & 4;
-        } // AC only; no VM86/CPUID.
+            self.flags_upper = (((value >> 16) as u16) & 4) | vm;
+        }
     }
     fn input_width(&self, b: &mut Bus, port: u16, w: bool) -> u32 {
         let mut v = 0;
@@ -734,7 +747,7 @@ impl Cpu {
         }
         // Restore architectural registers for restartable instruction faults.
         let saved = self.clone();
-        if self.paging_enabled() {
+        if self.protected_mode() || self.paging_enabled() {
             b.begin_cpu_memory();
         }
         let execution = self.execute(b);
@@ -799,7 +812,7 @@ impl Cpu {
     }
     fn extended(&mut self, b: &mut Bus, ov: Option<usize>) -> ExecResult<()> {
         let op = self.fetch(b)?;
-        if self.protected_mode() && self.cpl != 0 && !matches!(op, 0x01 | 0x06) {
+        if self.protected_mode() && !self.vm86() && self.cpl != 0 && !matches!(op, 0x01 | 0x06) {
             return Err(ExecError::Unsupported(format!(
                 "unsupported protected execution CPL={}; only ring 0 is implemented",
                 self.cpl
@@ -811,6 +824,15 @@ impl Cpu {
         }
         match op {
             0x00 => self.system_group0(b, ov)?,
+            0x02 | 0x03 if self.vm86() => return Err(ExecError::Fault(6)),
+            0x08 | 0x09 if self.vm86() => return Err(ExecError::Fault(13)),
+            0x21 | 0x23 | 0x24 | 0x26 if self.vm86() => {
+                let m = self.fetch(b)?;
+                if m >> 6 != 3 || (matches!(op, 0x24 | 0x26) && (m >> 3) & 7 < 3) {
+                    return Err(ExecError::Fault(6));
+                }
+                return Err(ExecError::Fault(13));
+            }
             0x06 => {
                 // Intel486 PRM CLTS, p.26-55: no ModR/M, real mode or CPL0;
                 // clear only TS. In particular, EM and the hidden caches survive.
@@ -831,6 +853,9 @@ impl Cpu {
                     3 => self.cr3,
                     _ => return Err(ExecError::Fault(6)),
                 };
+                if self.protected_mode() && self.cpl != 0 {
+                    return Err(ExecError::Fault(13));
+                }
                 // Intel486 PRM (1992) pp. 26-212–213: always a full 32-bit GPR,
                 // independent of size overrides. Arithmetic flags are undefined
                 // there; preserve all flags as our deterministic policy.
@@ -900,7 +925,10 @@ impl Cpu {
                     self.paging.invalidate(self.linear(s, off) as u32);
                     return Ok(());
                 }
-                if self.protected_mode() && self.cpl != 0 {
+                if self.vm86() && matches!(kind, 2 | 3 | 6) {
+                    return Err(ExecError::Fault(13));
+                }
+                if self.protected_mode() && !self.vm86() && self.cpl != 0 {
                     return Err(ExecError::Unsupported(
                         "unsupported protected system instruction outside CPL0".into(),
                     ));
@@ -1227,6 +1255,7 @@ impl Cpu {
         // Decode CLTS at any CPL so privilege violations become guest #GP(0),
         // without enabling general execution outside the bounded ring-0 core.
         if self.protected_mode()
+            && !self.vm86()
             && self.cpl != 0
             && (op != 0x0f || b.profile != crate::Profile::Pc9821ApDos)
         {
@@ -1453,6 +1482,9 @@ impl Cpu {
                 }
             }
             0x63 if b.profile == crate::Profile::Pc9821ApDos => {
+                if self.vm86() {
+                    return Err(ExecError::Fault(6));
+                }
                 if self.protected_mode() {
                     return Err(ExecError::Unsupported(
                         "unsupported protected ARPL privilege instruction".into(),
@@ -1657,6 +1689,7 @@ impl Cpu {
                 }
             }
             0x9c => {
+                self.check_vm86_iopl()?;
                 let v = if b.profile == crate::Profile::Pc9801Vm {
                     (self.flags | 0xf002) as u32
                 } else {
@@ -1665,6 +1698,7 @@ impl Cpu {
                 self.push(b, v)?;
             }
             0x9d => {
+                self.check_vm86_iopl()?;
                 let v = self.pop(b)?;
                 self.load_flags(b, v);
             }
@@ -1690,6 +1724,9 @@ impl Cpu {
                 let w = op & 1 != 0;
                 if rep != 0 && self.index(CX) == 0 {
                     return Ok(());
+                }
+                if matches!(op, 0x6c..=0x6f) {
+                    self.check_io(b, self.r[DX], self.bytes(w))?;
                 }
                 let src = Operand::Mem(ov.unwrap_or(DS), self.index(SI));
                 let dst = Operand::Mem(ES, self.index(DI));
@@ -1871,6 +1908,7 @@ impl Cpu {
             0xcc => self.deliver_interrupt(b, 3)?,
             0xcd => {
                 let n = self.fetch(b)?;
+                self.check_vm86_iopl()?;
                 self.deliver_interrupt(b, n)?;
             }
             0xce => {
@@ -1878,27 +1916,7 @@ impl Cpu {
                     self.deliver_interrupt(b, 4)?
                 }
             }
-            0xcf => {
-                if self.protected_mode() && self.flags & 0x4000 != 0 {
-                    return Err(ExecError::Unsupported(
-                        "unsupported protected IRET.NT hardware task return".into(),
-                    ));
-                }
-                self.check_stack_sequence(b, 3, false)?;
-                let off = self.pop(b)?;
-                let seg = self.pop(b)? as u16;
-                let v = self.pop(b)?;
-                if self.protected_mode() && self.operand32 && v & 0x20000 != 0 {
-                    return Err(ExecError::Unsupported(
-                        "unsupported protected IRET virtual-8086 return".into(),
-                    ));
-                }
-                self.far_transfer(b, seg, off, false, true)?;
-                self.load_flags(b, v);
-                if self.protected_mode() && self.operand32 {
-                    self.flags_upper = ((v >> 16) as u16) & 5;
-                }
-            }
+            0xcf => self.iret(b)?,
             0xd4 | 0xd5 => {
                 let encoded_radix = self.fetch(b)?;
                 let radix = if b.profile == crate::Profile::Pc9801Vm {
@@ -1952,6 +1970,7 @@ impl Cpu {
                 } else {
                     self.r[DX]
                 };
+                self.check_io(b, p, self.bytes(w))?;
                 if op & 2 == 0 {
                     let v = self.input_width(b, p, w);
                     self.put(b, Operand::Reg(0), v, w)?;
@@ -1977,7 +1996,12 @@ impl Cpu {
                 let d = self.fetch(b)? as i8 as u32;
                 self.branch(self.ip.wrapping_add(d))?;
             }
-            0xf4 => self.halted = true,
+            0xf4 => {
+                if self.protected_mode() && self.cpl != 0 {
+                    return Err(ExecError::Fault(13));
+                }
+                self.halted = true;
+            }
             0xf5 => self.flags ^= CF,
             0xf6 | 0xf7 => {
                 let w = op & 1 != 0;
@@ -2076,8 +2100,12 @@ impl Cpu {
             }
             0xf8 => self.flags &= !CF,
             0xf9 => self.flags |= CF,
-            0xfa => self.flags &= !IF,
+            0xfa => {
+                self.check_interrupt_privilege()?;
+                self.flags &= !IF;
+            }
             0xfb => {
+                self.check_interrupt_privilege()?;
                 self.flags |= IF;
                 self.inhibit = 1;
             }

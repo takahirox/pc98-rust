@@ -342,8 +342,9 @@ accuracy nor commercial compatibility.
 `0F 06` CLTS clears only CR0.TS (bit 3) in real mode and at protected CPL0.
 There is no ModR/M, immediate, memory access, flag update or cache reload.
 Size and segment overrides do not affect the operation; LOCK raises #UD.
-Other CPLs receive #GP(0) through the existing event machinery; general user
-execution and TSS-based privilege-stack transitions remain unsupported.
+Other CPLs receive #GP(0) through the existing event machinery; general protected
+user execution remains unsupported; VM86 now has TSS privilege-stack
+transitions as described below.
 MOV CR0, SMSW, LMSW and x87 all observe this same CR0. LMSW can set TS;
 CLTS leaves EM/MP/ET and every other bit intact. Reset clears TS/EM.
 LTR initializes the task register without performing a task switch or setting TS.
@@ -471,6 +472,25 @@ logic. Generated media/source/license copies stay outside `web/`.
 See [Issue #99 validation evidence](control-register-writes-validation.md) and the
 [bounded local trace procedure](dos-compatibility.md#diagnose-a-local-hdd-control-register-failure).
 
+## Ap i486 VM86
+
+Issue #109 adds original native-Rust VM86 with CR0.PE=1, architectural CPL3,
+16-bit segment caches, operand/address overrides and optional 4 KiB paging.
+CPL0 IRETD restores the complete nine-dword context. VM86 interrupts, exceptions
+and PIC/PIT IRQs switch through guest 32-bit TSS SS0:ESP0 into protected CPL0
+handlers; guest IRETD returns. User/supervisor permissions, #PF/CR2/retry, WP,
+A/D, PC-98 MMIO and physical DMA share the existing bus/paging subsystem.
+IOPL protects flags/INT; all VM86 port I/O checks the guest TSS bitmap, including
+at IOPL3, before peripheral effects. No Pentium CR4.VME/PVI extensions are added.
+
+See the [precise contract and limits](protected-mode.md#i486-virtual-8086-mode-issue-109)
+and [independent validation](vm86-validation.md). The original MIT boot guest
+prints `VM86 PASS` after PG=0 and nonidentity PG=1 execution, guest monitor
+fault recovery and real hardware interrupts. Tests cover cold boot and reset,
+native Rust and production Wasm at both serving roots. General protected
+ring-3 applications, hardware tasks, DPMI/Windows and numerical x87 remain
+unsupported; the private HDD is **not retested**.
+
 ## Ap i486 paging
 
 Issue #107 implements original-Rust two-level 32-bit **4 KiB pages**, including
@@ -568,12 +588,11 @@ We choose the explicit full-base store operation in the
 not the older truncated-base interpretation. The real-address exception contract
 also agrees with the [SDM SGDT exception table](https://cdrdv2-public.intel.com/782151/253667-sdm-vol-2b.pdf).
 
-`0F 01 /4` through `/7` remain explicit unsupported errors. VM keeps its V30
-decoder. LIDT/SIDT are documented below. These prerequisites add no CR0/PE
-transitions, descriptor
-lookup/validation or caches, privilege changes, paging, task switching, FPU or
-Windows support. Protected mode remains unimplemented; CPU386 and integration
-remain partial.
+The original GDTR prerequisite was limited to real mode. Subsequent work adds
+SMSW/LMSW, INVLPG, protected descriptors, paging and VM86 as documented in the
+[protected-mode contract](protected-mode.md). The VM profile keeps its V30
+decoder. LIDT/SIDT are documented below; hardware tasks, numerical x87 and
+Windows support remain outside these table-register primitives.
 
 The original MIT [boot probe](../guest/gdtr.asm) builds offline with
 `python3 tools/prepare_gdtr_fixture.py`. Its [manifest](../fixtures/gdtr-manifest.json)
