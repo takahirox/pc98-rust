@@ -100,7 +100,7 @@ fn descriptor_parsing_granularity_base_and_default_size() {
 }
 
 #[test]
-fn entering_pe_keeps_real_segment_cache_until_far_jump_and_atomic_pg_failure() {
+fn entering_pe_keeps_real_segment_cache_until_far_jump_and_paging_enable() {
     let mut b = Bus::new(Profile::Pc9821ApDos);
     let mut c = Cpu {
         s: [0x3000, 0x1000, 0x4000, 0x2000],
@@ -127,13 +127,12 @@ fn entering_pe_keeps_real_segment_cache_until_far_jump_and_atomic_pg_failure() {
     assert_eq!(b.mem[0x500d], 0x9b); // accessed bit set only on successful load
     b.mem[0x90100..0x90103].copy_from_slice(&[0x0f, 0x22, 0xc0]);
     c.set_reg32(AX, 0xe0000011);
-    let saved = format!("{c:?}");
+    let cache = c.segment_caches;
     let memory = b.mem.clone();
-    assert!(c
-        .step(&mut b)
-        .unwrap_err()
-        .contains("unsupported paging transition"));
-    assert_eq!(format!("{c:?}"), saved);
+    c.step(&mut b).unwrap();
+    assert_eq!(c.cr0, 0xe0000011);
+    assert!(c.paging_enabled());
+    assert_eq!(c.segment_caches, cache);
     assert_eq!(b.mem, memory);
 }
 
@@ -751,7 +750,7 @@ fn full_width_fetch_wrap_and_indirect_far_pointer_overflow_are_bounded() {
         attributes: 0xc0,
     });
     c.ip = 0xffff_fffd;
-    c.set_reg32(AX, 0xe0000011);
+    c.set_reg32(AX, 0x60000051); // undefined bit 6: retain a rejected-write diagnostic
     b.mem[0x10000..0x10003].copy_from_slice(&[0x0f, 0x22, 0xc0]);
     let error = c.step(&mut b).unwrap_err();
     assert!(error.contains("CS:IP=0008:fffffffd"), "{error}");

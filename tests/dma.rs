@@ -402,6 +402,55 @@ fn command(m: &mut Machine, write: bool, sector: u8, len: usize) {
 }
 
 #[test]
+fn fdc_dma_remains_physical_while_cpu_uses_a_nonidentity_page() {
+    use pc98_rust::cpu::{Cpu, SegmentCache, AX, CS};
+    let image: Vec<u8> = (0..1_261_568).map(|i| (i * 13 + 7) as u8).collect();
+    for write in [false, true] {
+        let mut m = Machine::new(Profile::Pc9821ApDos);
+        m.insert(0, image.clone(), "original.hdm").unwrap();
+        m.bus.output(2, 0x7f);
+        m.bus.output(10, 0xf7);
+        m.bus.output(0x94, 0x18);
+        for (address, value) in [(0x10000, 0x11003u32), (0x11004, 0x1003), (0x11008, 0x3003)] {
+            m.bus.mem[address..address + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        m.bus.mem[0x1000..0x1005].copy_from_slice(&[0xa1, 0, 0x20, 0, 0]);
+        m.bus.mem[0x2000..0x2400].fill(0x5a);
+        m.bus.mem[0x3000..0x3400].fill(0xa5);
+        m.cpu = Cpu {
+            cr0: 0x80000011,
+            cr3: 0x10000,
+            s: [0; 4],
+            ip: 0x1000,
+            flags: 2,
+            ..Cpu::default()
+        };
+        m.cpu.segment_caches[CS] = Some(SegmentCache {
+            base: 0,
+            limit: 0xffff,
+            access: 0x9b,
+            attributes: 0x40,
+        });
+        m.cpu.step(&mut m.bus).unwrap();
+        assert_eq!(m.cpu.reg32(AX), 0xa5a5a5a5);
+        program_fdc_dma(&mut m, 1024, write);
+        command(&mut m, write, 2, 1024);
+        if write {
+            assert_eq!(
+                &m.bus.disks[0].as_ref().unwrap().bytes[1024..2048],
+                &[0x5a; 1024]
+            );
+        } else {
+            assert_eq!(&m.bus.mem[0x2000..0x2400], &image[1024..2048]);
+        }
+        assert_eq!(&m.bus.mem[0x3000..0x3400], &[0xa5; 1024]);
+        m.cpu.ip = 0x1000;
+        m.cpu.step(&mut m.bus).unwrap();
+        assert_eq!(m.cpu.reg32(AX), 0xa5a5a5a5);
+    }
+}
+
+#[test]
 fn raw_fdc_reuses_auto_init_for_consecutive_reads_and_writes() {
     let image: Vec<u8> = (0..1_261_568)
         .map(|i| ((i / 1024) * 37 + i % 1024 * 13) as u8)

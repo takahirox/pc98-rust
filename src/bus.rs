@@ -50,6 +50,14 @@ pub struct Bus {
     pub unknown_ports: std::collections::BTreeSet<u16>,
     pub firmware_request: bool,
     pub(crate) interval: Option<crate::firmware::IntervalTimer>,
+    // Only CPU paging execution uses this journal. DMA and devices continue to
+    // call the physical bus outside an instruction, with no virtual addresses.
+    memory_transaction: Option<MemoryTransaction>,
+}
+struct MemoryTransaction {
+    undo: Vec<(bool, usize, u8)>, // graphics vs ordinary memory
+    egc: crate::egc::Egc,
+    pegc_banks: [u8; 2],
 }
 impl Default for Bus {
     fn default() -> Self {
@@ -57,6 +65,55 @@ impl Default for Bus {
     }
 }
 impl Bus {
+    pub(crate) fn begin_cpu_memory(&mut self) {
+        assert!(self.memory_transaction.is_none());
+        self.memory_transaction = Some(MemoryTransaction {
+            undo: Vec::new(),
+            egc: self.egc.clone(),
+            pegc_banks: self.pegc_banks,
+        });
+    }
+    pub(crate) fn finish_cpu_memory(&mut self, commit: bool) {
+        if let Some(transaction) = self.memory_transaction.take() {
+            if !commit {
+                for (graphics, index, value) in transaction.undo.into_iter().rev() {
+                    if graphics {
+                        self.graphics[index] = value;
+                    } else {
+                        self.mem[index] = value;
+                    }
+                }
+                self.egc = transaction.egc;
+                self.pegc_banks = transaction.pegc_banks;
+            }
+        }
+    }
+    // Accessed bits may remain set after a fault. Do not roll these hardware
+    // observations back with the instruction's stores. Dirty uses normal writes.
+    pub(crate) fn page_accessed(&mut self, address: u32) {
+        let index = self.address(address as usize);
+        self.mem[index] |= 0x20;
+        if let Some(transaction) = &mut self.memory_transaction {
+            for (graphics, saved_index, value) in &mut transaction.undo {
+                if !*graphics && *saved_index == index {
+                    *value |= 0x20;
+                }
+            }
+        }
+    }
+    fn remember_memory(&mut self, graphics: bool, index: usize) {
+        if let Some(transaction) = &mut self.memory_transaction {
+            transaction.undo.push((
+                graphics,
+                index,
+                if graphics {
+                    self.graphics[index]
+                } else {
+                    self.mem[index]
+                },
+            ));
+        }
+    }
     /// Replace or eject floppy media, terminating execution tied to the old disk.
     pub fn mount_floppy(&mut self, drive: usize, disk: Option<Disk>) -> Option<Disk> {
         let previous = std::mem::replace(&mut self.disks[drive], disk);
@@ -85,6 +142,7 @@ impl Bus {
         Self {
             profile,
             boot_hdd: false,
+            memory_transaction: None,
             a20: false,
             cg_code: [0; 2],
             cg_line: 0,
@@ -266,7 +324,9 @@ impl Bus {
             match a {
                 0xa8000..=0xb7fff => {
                     let window = (a - 0xa8000) / 0x8000;
-                    self.graphics[self.pegc_banks[window] as usize * 0x8000 + (a & 0x7fff)] = v;
+                    let index = self.pegc_banks[window] as usize * 0x8000 + (a & 0x7fff);
+                    self.remember_memory(true, index);
+                    self.graphics[index] = v;
                     return;
                 }
                 0xe0004 | 0xe0006 => {
@@ -279,6 +339,11 @@ impl Bus {
         }
         if let Some(off) = self.graphics_offset(a) {
             let base = self.cpu_page as usize * self.page_bytes();
+            // One planar write may affect every plane. Snapshot before EGC/GRCG
+            // transforms, preserving the actual read/write ordering on success.
+            for plane in 0..self.profile.planes() {
+                self.remember_memory(true, base + plane * 0x8000 + (off & 0x7fff));
+            }
             if self.egc.enabled && self.grcg_mode & 128 != 0 {
                 let data =
                     std::array::from_fn(|p| self.graphics[base + p * 0x8000 + (off & 0x7fff)]);
@@ -303,8 +368,14 @@ impl Bus {
             return;
         }
         match a {
-            0..=0xa2fff => self.mem[a] = v,
-            0x100000..=0x3fffff if self.profile == Profile::Pc9821ApDos => self.mem[a] = v,
+            0..=0xa2fff => {
+                self.remember_memory(false, a);
+                self.mem[a] = v;
+            }
+            0x100000..=0x3fffff if self.profile == Profile::Pc9821ApDos => {
+                self.remember_memory(false, a);
+                self.mem[a] = v;
+            }
             _ => {}
         }
     }

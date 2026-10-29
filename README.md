@@ -26,9 +26,9 @@ Issue #11 adds guest INT 1F extended-memory access, IDE HDD boot and persistence
 aligned EGC raster operations, PEGC packed 256-color video, bus mouse input,
 sequenced ADV98 music through a guest PMD driver, and OPNA/86 PCM subsets.
 See [device contracts, fixtures and unsupported features](docs/ap-devices.md).
-Ap also supports a [paging-disabled ring-0 protected-mode subset](docs/protected-mode.md),
+Ap also supports a [ring-0 protected-mode and 4 KiB paging subset](docs/protected-mode.md),
 including 16/32-bit segments, GDT/LDT, IDT gates and return to real mode.
-Paging, privilege transitions, task switching, DPMI, numerical FPU execution and
+Privilege transitions, task switching, DPMI, numerical FPU execution and
 full 486 fidelity remain unsupported.
 Ap provides only bounded x87 environment initialization and control/status readback.
 See [guest provenance, commands and exact profile limits](docs/dos-compatibility.md).
@@ -98,6 +98,7 @@ python3 tools/prepare_mov_cr_write_fixture.py
 python3 tools/prepare_protected_mode_fixture.py
 python3 tools/prepare_task_register_fixture.py
 python3 tools/prepare_clts_fixture.py
+python3 tools/prepare_paging_fixture.py
 python3 tools/prepare_fpu_init_fixture.py
 python3 tools/prepare_pic_fixture.py
 python3 tools/prepare_pic_smm_fixture.py
@@ -174,7 +175,7 @@ and retains TR across PE exit/reentry. Prepare it offline with
 `python3 tools/prepare_task_register_fixture.py`. Native and production-Wasm
 browser checks run the identical [hash-pinned disk](fixtures/task-register-manifest.json)
 cold/reset at both roots. See the [initialization contract and focused roadmap](docs/protected-mode.md#task-register-initialization-issue-103);
-hardware tasks, privilege/TSS stack switches and paging remain unsupported.
+hardware tasks and privilege/TSS stack switches remain unsupported.
 
 The original MIT [control-register probe](guest/mov_cr.asm) exercises Ap
 `0F 20` reads, all eight 32-bit destinations including ESP, CR0/SMSW agreement,
@@ -190,9 +191,19 @@ source GPRs, CR0/CR2/CR3 round trips, FLAGS/guards and guest #UD/#GP repair/retr
 Prepare with `python3 tools/prepare_mov_cr_write_fixture.py`; run
 `cargo test --locked --test mov_cr_write --test headless_trace` and `npm test`.
 Its [manifest](fixtures/mov-cr-write-manifest.json) also pins PE and PE+PG images;
-PE now commits, while paging stops atomically, cold and after reset. See the
+PE and PG now commit; the PG variant then shuts down on its missing page tables,
+cold and after reset. See the
 [write contract](docs/hardware.md#ap-real-mode-control-register-writes) and
 [validation evidence](docs/control-register-writes-validation.md).
+The original MIT [paging guest](guest/paging.asm) executes nonidentity code,
+data and stack pages, checks a guest #PF handler's PTE repair and IRETD retry,
+TLB/INVLPG/CR3 coherence, 16/32-bit protected code and PG disable. Its
+[manifest](fixtures/paging-manifest.json) pins source/media and exact guards.
+Prepare with `python3 tools/prepare_paging_fixture.py`; run
+`cargo test --locked --lib --test paging --test dma` and `npm test` for native
+and production-Wasm Chromium cold/reset at both roots. See the [paging contract](docs/protected-mode.md#i486-4-kib-paging-issue-107)
+and [validation evidence](docs/paging-validation.md). No private HDD is needed.
+
 The original MIT [protected-mode guest](guest/protected_mode.asm) enters 16-bit
 then 32-bit protected code, handles a software interrupt, recoverable #GP and
 hardware PIC/PIT IRQ0, accesses extended RAM and PC-98 ports, and returns to real

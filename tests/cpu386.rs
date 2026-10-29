@@ -987,15 +987,21 @@ fn gdtr_bus_mapping_a20_rom_and_independent_reset_state() {
 
 #[test]
 fn gdtr_other_group_operations_and_vm_remain_explicitly_unsupported() {
-    for kind in [5, 7] {
-        let (mut c, mut b) = cpu(&[0x0f, 0x01, (kind << 3) | 6, 0, 0x40]);
-        assert!(c
-            .step(&mut b)
-            .unwrap_err()
-            .contains("unimplemented i486 opcode 0F 01"));
-    }
-    for modrm in [0x16, 0x26, 0xe0] {
-        // LGDT and both SMSW destination forms.
+    let (mut c, mut b) = cpu(&[0x0f, 0x01, (5 << 3) | 6, 0, 0x40]);
+    assert!(c
+        .step(&mut b)
+        .unwrap_err()
+        .contains("unimplemented i486 opcode 0F 01"));
+    // Ap INVLPG in real mode has no operand access or observable paging state.
+    let (mut c, mut b) = cpu(&[0x0f, 0x01, 0x3e, 0, 0x40]);
+    let memory = b.mem.clone();
+    let flags = c.flags;
+    let ip = c.ip;
+    c.step(&mut b).unwrap();
+    assert_eq!((c.ip, c.flags), (ip + 5, flags));
+    assert_eq!(b.mem, memory);
+    for modrm in [0x16, 0x26, 0xe0, 0x3e] {
+        // LGDT, both SMSW destination forms and INVLPG remain unavailable on V30.
         let (mut c, mut b) = cpu(&[0x0f, 0x01, modrm, 0, 0x40]);
         b.profile = Profile::Pc9801Vm;
         assert!(c

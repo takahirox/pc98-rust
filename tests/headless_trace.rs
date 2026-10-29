@@ -171,10 +171,14 @@ fn trace_distinguishes_real_mode_setup_from_a_requested_transition() {
         "{diagnostic}"
     );
     assert!(
-        diagnostic.contains("next-attempt=<stopped>"),
+        diagnostic.contains("next-attempt=1fc0:00000016 opcode=<fetch-limit>"),
         "{diagnostic}"
     );
-    assert!(diagnostic.contains("CS:IP=1fc0:00000010 opcode=0f 22 modrm=c0 CR0 GPR=eax old=60000010 written=e0000011 PE=1 PG=1 next-ip=00000016; write not committed"),"{diagnostic}");
+    assert!(
+        diagnostic.contains("protected page fault delivery failed"),
+        "{diagnostic}"
+    );
+    assert!(diagnostic.contains("triple fault/shutdown"), "{diagnostic}");
 }
 
 #[test]

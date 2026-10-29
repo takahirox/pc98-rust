@@ -33,7 +33,7 @@
       "boot_sha256": "d405dca39cbf0a8b30b75291052196d3d4acf6a5686020052c52efe48fd47650",
       "image_sha256": "69aa3ee146449c95ef5e4d2a0f444bc651c7e64aed7001d8f9408417fa8b5915",
       "written": "e0000011",
-      "expected": "atomic unsupported paging error",
+      "expected": "commit paging, then bounded triple-fault shutdown: no page tables installed",
       "cs_ip": "1fc0:00000007",
       "next_ip": "0000000d",
       "opcode_modrm": "66 67 65 0f 22 c0"

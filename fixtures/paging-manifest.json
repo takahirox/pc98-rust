@@ -1,0 +1,20 @@
+{
+  "source": "guest/paging.asm",
+  "license": "MIT; LICENSE and original assembly copied alongside image",
+  "assembly": "nasm -f bin guest/paging.asm -o paging.bin",
+  "source_sha256": "97ea9a3d52338fa94549ec5ecef52cab58295481762f80dac251bcb26d6752ae",
+  "boot_sha256": "4cdba1eafaa1c9cc5b16e8a19c69a9b08a7c0f7f966922f4cc080ac005dfdd35",
+  "image": "fixtures/paging/paging.hdm",
+  "image_sha256": "6541b4c1072a1f92401f76f0efb0a71f6ad08a51f16da46084345c14c5fae4c2",
+  "geometry": "77 cylinders, 2 heads, 8 sectors, 1024 bytes per sector",
+  "contract": "Original ring-0 nonidentity code/data/stack, physical two-level tables, PG on/off, CR0/CR3/CR2/SMSW, guest #PF frame validation and IRETD retry, stale TLB/INVLPG/CR3 reload, 16/32-bit code and guards, cold/reset",
+  "result_address": "0x8000",
+  "result_length": 64,
+  "result_hex": "a501a5a5110001e0180001000030400044332211bebafeca11000160a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+  "markers": [
+    "PAGING PASS",
+    "PAGING FAIL"
+  ],
+  "slot_budget": 2000000,
+  "distribution": "Test only; excluded from web/"
+}
