@@ -15,7 +15,8 @@ Both profiles support bounded [8259A normal-EOI software polling](hardware.md#82
 including two separate reads and EOIs for the fixed cascade while IF is clear.
 The original PIT/FDC boot probe is hardware acceptance evidence, not an expanded
 DOS/application or commercial compatibility claim. PIC and protected mode remain
-partial; privilege transitions and numerical x87 remain unsupported.
+partial; VM86 monitor transitions are implemented, while general protected
+privilege transitions and numerical x87 remain unsupported.
 Physical hardware fidelity remains bounded by the documented unsupported subsets.
 Historical PR #8/#10 validation records below describe their earlier checkpoints.
 
@@ -24,6 +25,20 @@ PC-98 DOS applications now execute their actual x86 code under the pinned guest
 FreeDOS kernel and FreeCOM: ADV98's Japanese adventure sample and 98VIDEOP. There
 is no application-name recognition, host INT 21h implementation, host font
 rasterization, host game logic, or substitution of application graphics.
+
+## VM86 compatibility evidence (Issue #109)
+
+Ap supports CPL0 IRETD into CPL3 VM86 while PE remains set, in PG=0 and PG=1.
+The [original MIT monitor/guest](../guest/vm86.asm) exercises actual guest
+instructions, protected TSS-based interrupt/trap handlers, recoverable user
+page faults, IOPL/bitmap checks and real PIC/PIT IRQs. It produces `VM86 PASS`
+and exact context/results/guards, with disk preservation, cold and after reset.
+The same pinned media runs natively and in production Wasm at both URL roots.
+See the [contract and i486 limits](protected-mode.md#i486-virtual-8086-mode-issue-109)
+and [validation record](vm86-validation.md). General protected user applications,
+hardware task switching, full DOS extenders/DPMI, Windows and numerical x87
+remain unsupported. Private `aliceY3.hdi`: **not retested**; no claim is made
+about its actual frame, next blocker or playability.
 
 ## Paging compatibility evidence (Issue #107)
 
@@ -44,7 +59,7 @@ proprietary ROM/font, game content or foreign emulator core is needed.
 
 The independent fixtures demonstrate the paging boundary and recovery. They
 supply no evidence about the private game's next instruction. Existing independent
-privilege/task-switch and numerical-FPU diagnostic tests remain separate follow-up
+general protected privilege/task-switch and numerical-FPU diagnostic tests remain separate follow-up
 subsystems; no new private-HDD incompatibility has been demonstrated here.
 
 ## Reproduce and use
@@ -145,7 +160,7 @@ complete reproduction of those specifications.
 
 | Area | Implemented and tested | Remaining limits |
 | --- | --- | --- |
-| CPU | Original shared 8/16/32-bit real-mode interpreter; 66/67 overrides, EAX–EDI, FS/GS, ModR/M/SIB, dword ALU/stack/strings/control flow/I/O, selected 386/486 integer 0F instructions, EFLAGS AC, restartable #DE/#BR/#UD/#NM/#SS/#GP/#PF and #DB traps. The [ring-0 protected-mode subset](protected-mode.md) adds cached GDT/LDT descriptors, 16/32-bit code/stacks, IDT gates, STR/LTR with cached 16/32-bit TSS initialization, checked addresses and real-mode return. LGDT/SGDT and LIDT/SIDT provide the [GDTR](hardware.md#ap-real-mode-gdtr) and [IDTR prerequisites](hardware.md#ap-real-mode-idtr); Ap supports relocated real-mode vectors, table-limit exception 8 and bounded shutdown when that entry is unavailable. Ap provides bounded [x87 FNINIT and non-waiting control/status readback](hardware.md#ap-x87-environment-initialization), with CLTS/TS and WAIT MP/TS checks, without arithmetic or pending numeric exception completion. Ap retains masked shift counts and encoded AAM/AAD radix; V30 behavior remains selected by VM | No privilege transitions, hardware task switching, TSS stack/I/O-bitmap use, PSE/PAE, DPMI, numerical FPU execution, CPUID, general system/debug-register instructions or complete 486 ISA/timing. Cached segment state is retained on PE exit; full unreal-mode guest/BIOS compatibility is unverified. Explicit invalid encodings fault; valid unimplemented instructions stop with a diagnostic. See CPU coverage below |
+| CPU | Original shared 8/16/32-bit real-mode interpreter; 66/67 overrides, EAX–EDI, FS/GS, ModR/M/SIB, dword ALU/stack/strings/control flow/I/O, selected 386/486 integer 0F instructions, EFLAGS AC, restartable #DE/#BR/#UD/#NM/#SS/#GP/#PF and #DB traps. The [ring-0 protected-mode subset](protected-mode.md) adds cached GDT/LDT descriptors, 16/32-bit code/stacks, IDT gates, STR/LTR with cached 16/32-bit TSS initialization, checked addresses and real-mode return. [VM86](protected-mode.md#i486-virtual-8086-mode-issue-109) adds CPL3 execution, TSS monitor stacks, IOPL and I/O bitmaps with optional user paging. LGDT/SGDT and LIDT/SIDT provide the [GDTR](hardware.md#ap-real-mode-gdtr) and [IDTR prerequisites](hardware.md#ap-real-mode-idtr); Ap supports relocated real-mode vectors, table-limit exception 8 and bounded shutdown when that entry is unavailable. Ap provides bounded [x87 FNINIT and non-waiting control/status readback](hardware.md#ap-x87-environment-initialization), with CLTS/TS and WAIT MP/TS checks, without arithmetic or pending numeric exception completion. Ap retains masked shift counts and encoded AAM/AAD radix; V30 behavior remains selected by VM | No general protected privilege transitions, hardware task switching, PSE/PAE, DPMI, numerical FPU execution, CPUID, general system/debug-register instructions or complete 486 ISA/timing. Cached segment state is retained on PE exit; full unreal-mode guest/BIOS compatibility is unverified. Explicit invalid encodings fault; valid unimplemented instructions stop with a diagnostic. See CPU coverage below |
 | RAM | 640 KiB conventional plus 3 MiB at physical 100000–3FFFFF; BWA 401h reports 24 × 128 KiB; holes and firmware retain PC-98 mapping | HMA is reachable with A20 enabled, including dword accesses. Address override does not enlarge the real-mode 64 KiB segment limit, and INT 1F/90 now provides validated byte copies to extended RAM. XMS/EMS managers remain absent; selected guests need conventional RAM and/or this BIOS service |
 | A20 | PC-98 F2 write enables A20; F6=02/03 enables/disables; F2/F6 read bit 0 reports masked state; reset masks it | No IBM port 92 or AT keyboard-controller gate. F0 remains the private synthetic-firmware trap, not an emulated CPU reset port |
 | Bitmap | Two four-plane 128 KiB pages; B/R/G at A8000/B0000/B8000, intensity at E0000; independent CPU/display pages; analog palette 16 × 12-bit RGB; four-plane GRCG TDW/RMW/TCR | Aligned EGC raster operations and 512 KiB PEGC packed 256-color storage/windows/palette are now tested by independent DEBUG; see the device audit. No arbitrary EGC shifts, PEGC planar mode, 480-line mode or GDC vector engine |
@@ -223,7 +238,8 @@ listed above remain blocking findings for any claim to finish the whole Issue.
 No external approval or human-only test blocks continued implementation.
 
 The [TR/TSS initialization contract and clustered roadmap](protected-mode.md#task-register-initialization-issue-103)
-separate STR/LTR from hardware tasks, privilege/TSS stacks, I/O bitmaps and paging.
+separate STR/LTR initialization from hardware tasks and general privilege transfers.
+VM86 TSS stack/bitmap use and paging have independent validation.
 The original `task_register.asm` guest is hash-pinned and tested cold/reset through
 the native and production Wasm interpreters; it requires no private HDD.
 

@@ -323,7 +323,7 @@ fn rejected_far_call_and_interrupt_preflight_entire_stack_without_partial_mutati
 }
 
 #[test]
-fn unsupported_task_privilege_vm86_and_ldt_diagnostics_are_bounded() {
+fn task_privilege_ldt_boundaries_and_vm86_entry_are_distinct() {
     let (mut arpl, mut arpl_bus) = protected(&[0x63, 0xc0], true, true);
     assert!(arpl
         .step(&mut arpl_bus)
@@ -341,7 +341,10 @@ fn unsupported_task_privilege_vm86_and_ldt_diagnostics_are_bounded() {
     for (i, v) in [0x1000u32, 8, 0x20002].into_iter().enumerate() {
         b.mem[0x18000 + i * 4..0x18004 + i * 4].copy_from_slice(&v.to_le_bytes());
     }
-    assert!(c.step(&mut b).unwrap_err().contains("virtual-8086"));
+    c.step(&mut b).unwrap();
+    assert!(c.vm86());
+    assert_eq!(c.cpl, 3); // raw VM86 CS=8 is not a protected selector/RPL
+    assert_eq!(c.cr0 & 1, 1);
     let (mut c, mut b) = protected(&[0x8e, 0xd8], true, true);
     c.r[AX] = 4;
     c.step(&mut b).unwrap();

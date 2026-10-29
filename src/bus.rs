@@ -50,7 +50,7 @@ pub struct Bus {
     pub unknown_ports: std::collections::BTreeSet<u16>,
     pub firmware_request: bool,
     pub(crate) interval: Option<crate::firmware::IntervalTimer>,
-    // Only CPU paging execution uses this journal. DMA and devices continue to
+    // Protected CPU execution uses this journal. DMA and devices continue to
     // call the physical bus outside an instruction, with no virtual addresses.
     memory_transaction: Option<MemoryTransaction>,
 }

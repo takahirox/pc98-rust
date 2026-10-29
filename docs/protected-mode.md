@@ -1,13 +1,14 @@
-# Ap protected mode and i486 paging (Issues #101, #103, #107)
+# Ap protected mode, paging and VM86 (Issues #101, #103, #107, #109)
 
-PC-9821Ap DOS now executes an original-Rust ring-0 protected subset with
+PC-9821Ap DOS executes an original-Rust ring-0 protected subset and
+[VM86 entry/execution/monitor returns](#i486-virtual-8086-mode-issue-109) with
 CR0.PE=1, with paging disabled or the [4 KiB paging subsystem](#i486-4-kib-paging-issue-107) enabled. The default VM/V30 decoder and devices retain their
 existing behavior. This is bounded CPU capability evidence, not a claim that a
 DOS extender, operating system or commercial game works.
 
 The contracts were independently checked against Intel's
 [80386 PRM](https://pdos.csail.mit.edu/6.828/2018/readings/i386.pdf), chapters
-6 (descriptors/protection), 9 (interrupts), 14 (real-mode return), 16 (sizes),
+6 (descriptors/protection), 9 (interrupts), 14 (real-mode return), 15 (VM86), 16 (sizes),
 17 (instruction operations), and the 1992 Intel486 PRM CR0 contract cited in
 [hardware.md](hardware.md#ap-real-mode-control-register-writes). Intel also
 publishes its [architecture manuals](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
@@ -75,6 +76,64 @@ font dump or guest host-execution mechanism was used. Cargo dependencies are unc
   Only opcode/ModR/M and CPU metadata are read;
   no surrounding guest code or operand memory is dumped.
 
+## i486 virtual-8086 mode (Issue #109)
+
+The original [VM86 module](../src/cpu/vm86.rs) keeps CR0.PE set. CPL0 IRETD
+preflights a complete contiguous 36-byte frame: EIP, CS, EFLAGS, ESP, SS, ES,
+DS, FS, GS, in ascending stack order. EIP must fit 16 bits. Segment slots use
+their low words as raw 8086 values, including zero; no GDT lookup or CS.RPL
+restriction applies. VM=1 takes effect only on operand32 IRET at CPL0.
+Every VM86 cache has base `selector << 4`, limit FFFFh and 16-bit defaults;
+ESP retains all 32 bits while stack accesses use SP. Overrides use the shared
+interpreter and retain segment bounds. VM86 far transfers and segment loads
+preserve CPL3. A word IRET cannot enter VM86; a VM86 IRET stays in VM86.
+
+32-bit nonconforming CPL0 interrupt/trap gates use cached busy 32-bit TR/TSS
+SS0:ESP0. TSS field bounds/type, target code and stack selectors, presence,
+DPL/RPL, complete frame spans and paging permissions are checked. Entry saves
+GS/FS/DS/ES, old SS/ESP, EFLAGS/CS/EIP, then an error code when applicable.
+Thus saved EIP begins the same nine-dword layout used by IRETD. Handlers see
+null ES/DS/FS/GS and VM/TF/NT/RF clear; interrupt gates additionally clear IF.
+Fault frames save the first-prefix EIP and RF, with the existing #DF matrix
+and bounded shutdown. Both PG states journal CPU RAM/VRAM writes and graphics
+latches on rejected instructions/deliveries. A/D follows the paging contract.
+All handlers and retries execute guest Rust-interpreted instructions.
+
+VM86 instruction/data/stack accesses use user paging; descriptor, TSS and bitmap
+accesses use supervisor paging. CR0.WP never makes a user write to a read-only
+page legal. Nonidentity mappings and cross-page fetch/operands work; page walks
+and physical DMA retain the physical bus. RAM/ROM, text/graphics VRAM and
+peripheral ports retain PC-98 mapping rather than an IBM PC substitute.
+
+CLI/STI, PUSHF/POPF, IRET and INT n require IOPL=3 in VM86; otherwise #GP(0)
+precedes stack/device access. INT3/INTO retain IDT/DPL handling without that
+IOPL restriction. HLT, MOV CR, CLTS, LGDT/LIDT/LMSW and INVLPG fault at CPL3.
+Protected-only selector operations fault #UD in VM86. PUSHFD masks RF/VM;
+POPF and VM86 IRET cannot change IOPL or VM. POPFD can load AC; IRETD can
+restore RF. There is no CR4/VME/PVI, VIF/VIP or interrupt redirection extension.
+LOCK follows i386/i486 encoding rules without the 286 IOPL restriction.
+
+VM86 IN/OUT/INS/OUTS always consult the 32-bit TSS bitmap, even at IOPL=3.
+Each check reads two bitmap bytes as on i486 and tests every width bit before
+any port access or string-memory read. Missing/short/16-bit TSS maps and denied
+bits raise #GP(0). A map byte beyond the TSS limit denies access; software must
+provide the final FFh sentinel, which denies word/dword port wrap at FFFFh.
+Bus cycles retain the existing byte decomposition and port wrapping if software
+clears sentinel bits. REP executes restartable individual elements. INS preflights
+the full destination before consuming input. CPL0 protected I/O remains direct.
+
+The opt-in headless trace retains 100 instructions and 16 control events. It
+includes PE/PG/VM/CPL, bounded IRET frame span metadata, ordinary-RAM TSS
+SS0:ESP0 and the last successful VM86 gate tuple. Trace reads never mutate
+pages, TLB or device latches or dump stacks/guest code beyond opcode/ModR/M.
+
+General protected ring-3 tasks, hardware task switching, 16-bit VM86 gates,
+DPMI/Windows, numerical x87 and alignment-check/debug hardware completeness
+remain outside this contract. No proprietary image is needed for acceptance.
+The [original source](../guest/vm86.asm), [hash-pinned manifest](../fixtures/vm86-manifest.json),
+[native tests](../tests/vm86.rs) and [validation record](vm86-validation.md)
+provide independent evidence. Private `aliceY3.hdi`: **not retested**.
+
 ## i486 4 KiB paging (Issue #107)
 
 The original [paging module](../src/cpu/paging.rs) implements two-level 32-bit
@@ -99,7 +158,7 @@ The 486 WP and PCD/PWT rules take precedence over the older 386 contract.
 | Physical bus | Page walks bypass CPU translation; final frames and all walk cycles retain PC-98 A20 decoding; RAM, text/graphics, ROM write protection and unmapped reads retain existing bus behavior; actual FDC DMA reads/writes remain physical |
 | Reserved entries | Nonpresent entries are wholly software-owned. Present bits 7/8, reserved in the selected 486 contract, stop with a bounded diagnostic; no PSE/PAT/global semantics or fabricated reserved-bit #PF. PDE bit 6 is undefined and preserved; software bits 9–11 are preserved |
 | Table storage boundary | Directory/table words must resolve to ordinary writable physical RAM. ROM, graphics/MMIO or absent table storage stops before a walk read or A/D mutation at that location. The physical PC-98 bus exposes no page-fault/bus-error signal for such storage; no synthetic guest #PF is invented |
-| Out of scope | PSE/PAE/NX/global pages, privilege changes, TSS stack/I/O bitmap and task switching, VM86, DPMI, DOS extenders, Windows, numeric x87, data-cache cycles/external cache signals. INVD/WBINVD retain unsupported-instruction diagnostics |
+| Out of scope | PSE/PAE/NX/global pages, general protected privilege changes, hardware task switching, DPMI, DOS extenders, Windows, numeric x87, data-cache cycles/external cache signals. INVD/WBINVD retain unsupported-instruction diagnostics |
 
 Paged instructions and each exception-delivery attempt journal memory changes.
 On rejection, CPU registers/TLB return to the instruction snapshot, RAM/graphics
@@ -155,7 +214,8 @@ bits 31:16, and LTR ignores source bits 31:16. The 67 prefix selects effective
 address size independently, including SIB and full offsets; segment overrides
 use the existing caches and complete word-span/access checks. LOCK raises #UD
 before any operand read/write; group-0 /6 and /7 are invalid and raise #UD.
-Real-mode STR/LTR raise #UD. VM keeps its separate V30 `0F 00` interpretation.
+Real-mode and VM86 STR/LTR raise #UD. The VM machine profile keeps its
+separate V30 `0F 00` interpretation.
 Flags and unrelated registers/memory are preserved.
 
 The independent specifications are the
@@ -167,9 +227,9 @@ printed pp. **26-209 (LTR), 26-274 (STR), 7-1–7-6 (TSS/TR), 10-1–10-3
 [§9.8.10](https://pdos.csail.mit.edu/6.828/2018/readings/i386/s09_08.htm).
 The 486 §7.3 sentence calling STR privileged conflicts with its §4.2 table and
 instruction exception table; STR has no CPL check. LTR requires CPL 0 before
-reading its source. The interpreter retains its general **ring-0-only execution**
-boundary; this change does not enable user-mode execution. A handler-level test
-checks the architectural CPL distinction independently of that boundary.
+reading its source. General protected execution remains bounded to CPL0;
+VM86 raises #UD for these protected-only instructions. A handler-level test
+checks the architectural CPL distinction independently of that execution boundary.
 
 LTR requires a non-null **GDT** selector and an available system TSS descriptor:
 type 1 for a 16-bit TSS, type 9 for a 32-bit TSS. Null raises #GP(0); TI=1,
@@ -189,7 +249,8 @@ inclusive limit 103) minimum sizes apply when **switching tasks**, not when
 loading TR. LTR caches even a shorter descriptor; imposing #TS/#GP on that load
 would invent an exception absent from the target-era LTR contract. Tests cover
 both proper minimum-sized descriptors and shorter cached limits, as well as
-page granularity. Actual task use remains explicitly unsupported.
+page granularity. Hardware task switching remains explicitly unsupported; VM86 stack/bitmap
+use checks the bounds of the fields it actually accesses.
 
 STR reads the visible selector without consulting the GDT or TSS. Changing the
 GDT, clearing its busy bit, reloading GDTR or leaving/reentering PE does not
@@ -232,15 +293,14 @@ npm test
 
 ## Explicit unsupported paths
 
-Only CPL 0 execution and same-ring transfers are accepted. Privilege returns,
-call gates, task gates/switches and IRET task/virtual-8086
-returns stop with named protected-mode diagnostics and the restart CPU state.
-Invalid direct code/stack privilege combinations raise architectural faults.
-No selected fixture needs a privilege change or TSS-based stack switch.
-Native tests explicitly check these diagnostic paths without mutating guest memory.
-Descriptor-query instructions outside LLDT/SLDT, ARPL, debug-register handling,
-NMI/debug-breakpoint machinery, virtual-8086 execution, DPMI, DOS extenders,
-Windows and Windows drivers are not implemented here. Existing x87 initialization
+Protected CPL0 and VM86 CPL3 execution are accepted. VM86 enters protected
+CPL0 handlers through 32-bit interrupt/trap gates and returns through IRETD.
+General protected outer-ring returns, call gates, task gates/switches and
+protected IRET.NT retain named diagnostics and the restart CPU state.
+Invalid code/stack privilege combinations raise architectural faults.
+Descriptor queries outside LLDT/SLDT, ARPL, debug-register execution,
+NMI/debug-breakpoint machinery, DPMI, DOS extenders, Windows and Windows drivers
+remain outside the implemented subsystem. Existing x87 initialization
 and metadata stores work through protected segments; CLTS and WAIT MP/TS checks
 are implemented. Arithmetic and pending numeric exception completion remain
 unsupported. Synthetic real-mode BIOS services are explicitly rejected
@@ -263,26 +323,31 @@ real-guest requirement and creates no speculative Issues.
 | --- | --- | --- |
 | **TR/TSS initialization (implemented)** | `system_group0`, `load_task_register`; `tests/protected_mode.rs` LTR/STR matrix and original boot; `task-register.spec.js` cold/reset | Available 16/32-bit descriptors, visible/cache retention, busy updates, selector faults, 66/67, A20; Intel PRM ch.7 and LTR/STR entries. |
 | **Descriptor queries and privilege prerequisites** | Group-0 VERR/VERW stop as descriptor queries; 0F 02 LAR / 03 LSL remain unimplemented in `extended`; ARPL has a named boundary. LLDT/SLDT already work in ring 0. | One original query guest with readable/writable/conforming/system descriptors, DPL/RPL/ZF, invalid/null selectors, LDT and size overrides; Intel PRM ch.6/17. Useful as a cluster, not successive guessed opcodes. |
-| **Privilege gates and TSS stacks** | `code_target` rejects call gates and privilege returns; `protected_interrupt` rejects a privilege/TSS stack switch. General execution outside CPL0 stops. Initialization does not authorize a ring change. | Coordinated CPL3↔0 interrupt/trap/call-gate and RETF/IRET guests, 16/32-bit SS:SP/ESP TSS fields, complete frame preflight, #TS/#SS/#NP/#GP, IOPL/CLI/STI/POPF, segment invalidation; PRM ch.6/8/9. Implement access rules and all return paths together. |
+| **Privilege gates and TSS stacks** | VM86 -> CPL0 32-bit gates and guest TSS SS0:ESP0 are implemented with full saved context. General protected outer-ring execution, call gates and privilege returns retain their boundaries. | Coordinated CPL3↔0 interrupt/trap/call-gate and RETF/IRET guests, 16/32-bit SS:SP/ESP TSS fields, complete frame preflight, #TS/#SS/#NP/#GP, IOPL/CLI/STI/POPF, segment invalidation; PRM ch.6/8/9. Implement access rules and all return paths together. |
 | **Hardware tasks, task gates and nested return** | `code_target` names direct hardware task switch vs task gate; IDT task gates stop in `protected_interrupt`; IRET.NT stops **before reading a normal frame**. Loaded-TR rejection tests assert intact CPU/RAM. | Original 16/32-bit TSS CALL/JMP/IDT gate/IRET.NT chain with busy/backlink/NT/TS semantics, minimum limits, saved/loaded state, exception ordering and atomicity; PRM ch.7, §9.8.10, ch.21 and instruction operations. No fake host-side task switch. |
-| **I/O protection and virtual-8086** | Ring-0 I/O uses existing PC-98 ports; no TSS bitmap is consulted. IRET virtual-8086 return has its own boundary. No nonzero-CPL execution is enabled. | After the privilege milestone, an original IOPL/bitmap guest covering scalar and string I/O, bitmap limits/terminator and denied-access side effects, followed by independent VM86 entry/interrupt/return fixtures; PRM ch.8/15. |
+| **I/O protection and virtual-8086 (implemented)** | See the Issue #109 contract above, original boot guest, native matrices and production-Wasm tests. CPL0 I/O remains unrestricted. | IOPL-sensitive flags/INT, scalar/string bitmap checks, limits/sentinel, denied-side-effect guards, IRETD, guest monitor handlers and PIC/PIT IRQ; Intel486 PRM ch.8/9/23. |
 | **CR0.TS / #NM coordination (implemented)** | `extended` CLTS, all ESC EM/TS checks, WAIT MP/TS checks; original `clts.asm`, native CLTS/FPU/trace matrices and `clts.spec.js` cold/reset. | TS-only clear, fault/IRET retry and independent EM rejection; see the [source audit and validation](clts-validation.md). No task switch or numerical FPU is implied. |
 | **Debug and remaining cache/system operations** | 0F 21/23 debug-register moves, 0F 24/26 test-register moves, INVD/WBINVD remain unsupported extended forms. INVLPG is implemented with paging. | Coordinated DR/#DB/RF/GD and NMI fixtures only on evidence; data-cache signals remain a separate memory-system boundary. Numerical x87 remains separate. |
-| **Paging (implemented bounded subset)** | [Issue #107 contract](#i486-4-kib-paging-issue-107): 4 KiB two-level translation, WP, CR2/#PF, TLB/INVLPG; original native/Wasm guest. | No PSE/PAE/NX, ring-3 execution or cache-cycle fidelity; tables require ordinary writable physical RAM. Task switching and privilege stacks remain separate. |
+| **Paging (implemented bounded subset)** | [Issue #107 contract](#i486-4-kib-paging-issue-107): 4 KiB two-level translation, WP, CR2/#PF, TLB/INVLPG; original native/Wasm guest. | No PSE/PAE/NX, general protected ring-3 execution or cache-cycle fidelity; tables require ordinary writable physical RAM. VM86 uses user paging and supervisor monitor references; hardware tasks remain separate. |
 
 For a private local retest, use the offline headless command in
 [the local HDD diagnostic procedure](dos-compatibility.md#diagnose-a-local-hdd-control-register-failure).
 STR/LTR records now include names, opcode/ModR/M and CS:EIP, TR/cache, and, for
 register-source LTR, candidate selector/descriptor metadata. Memory sources are
 not dereferenced by tracing. Unsupported protected stops include TR/cache and
-name task switches, gates, privilege/TSS stacks, IRET.NT and paging separately.
+name task switches, gates, general protected privilege/TSS stacks, IRET.NT and paging separately; VM86
+adds successful gate and SS0:ESP0 metadata.
 The 100-instruction / 16-control-event bounds still apply; older events can be
 evicted. Share only the first blocker and a brief CPU metadata excerpt, never
 the image, a memory dump or surrounding disassembly. The private `aliceY3.hdi`
 was unavailable and **not tested**. Initialization success promises no game or
 DOS-extender compatibility.
 
-## Adjacent system-instruction source audit (Issue #105)
+## Historical adjacent system-instruction source audit (Issue #105)
+
+This table records the Issue #105 checkpoint. Issue #107 added paging;
+[Issue #109](#i486-virtual-8086-mode-issue-109) supersedes the VM86, IOPL and
+TSS privilege-stack limitations in these historical rows.
 
 The table separates architectural validity from implemented coverage. Architecture
 sources are Intel's [80386 PRM system instruction inventory](https://www.scs.stanford.edu/05au-cs240c/lab/i386/s04_02.htm)
