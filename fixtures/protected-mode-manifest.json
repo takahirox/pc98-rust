@@ -2,7 +2,7 @@
   "source": "guest/protected_mode.asm",
   "license": "MIT; LICENSE and original assembly copied alongside image",
   "assembly": "nasm -f bin guest/protected_mode.asm -o protected_mode.bin",
-  "source_sha256": "1b3c8d4ec2ef0040e09f702c1f6a38fb7ed937968da8da6e154e0fbb44ec7ae5",
+  "source_sha256": "27583d5021d26ee88b4fe1b7142dcf9ca7343a9c869f2399a5ee203a83bd6415",
   "boot_sha256": "a34bbfbde29654c0dc61da81bff310714436cffb5cb528498658e73246ce4d76",
   "image": "fixtures/protected_mode/protected_mode.hdm",
   "image_sha256": "7d02a3ed1de4fc556b82548477dfa500d46bbaa0add196634eb73eca58f55873",

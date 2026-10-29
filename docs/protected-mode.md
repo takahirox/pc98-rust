@@ -46,6 +46,8 @@ font dump or guest host-execution mechanism was used. Cargo dependencies are unc
   override independently, and repeated prefixes do not toggle repeatedly.
   EIP and effective offsets may exceed 64 KiB. SS.B independently chooses SP or
   ESP, including pushes/pops, ENTER/LEAVE, interrupt frames and POP [ESP].
+  ENTER selects and wraps its BP/EBP frame-chain reads by operand size,
+  independently of SS.B and the address-size override (Intel PRM, page 295).
   Near/far JMP/CALL/RET, segment MOV/POP, LES/LDS/LSS/LFS/LGS and IRET/IRETD use
   cached attributes and validate destination descriptors before committing.
   Linear base+offset wraps at 32 bits and goes directly to the existing PC-98
@@ -98,6 +100,9 @@ The wholly original MIT [assembly](../guest/protected_mode.asm) is a single
 [checked manifest](../fixtures/protected-mode-manifest.json) pins source, boot
 and disk SHA-256, assembler command, license, result bytes and budget. Preparation
 also copies source/LICENSE beside generated media, outside `web/`.
+The guest spells `SMSW EAX` explicitly in 32-bit code: NASM 2.16.01 emits an
+extra `66` for `SMSW AX`, while 3.02 omits it. The explicit form produces
+identical boot/image bytes with both assemblers and retains manifest verification.
 
 ```sh
 python3 tools/prepare_protected_mode_fixture.py
@@ -191,6 +196,42 @@ explicit PE/PG outcome metadata.
   tests/browser/mov-cr.spec.js`: **8 passed** against that final artifact.
   Both serving roots and cold/reset runs check exact results/guards and disk
   preservation. The temporary config was removed after the tests.
+
+### Review-fix validation (Issue #101)
+
+The fixture was rebuilt and manifest-verified with both NASM 2.16.01 and 3.02.
+Their boot binaries compare byte for byte, with the same boot/image hashes as
+before the fix; only the assembly source hash changed. The ENTER regression
+failed before the fix for operand16/SS.B=1 and now checks both mismatched sizes,
+BP wraparound, `67` independence, complete frame bytes and memory guards.
+The real-mode regression also requires #SS for an EBP chain beyond the SS limit.
+
+The fixture, native and build acceptance commands in
+[emulator.yml](../.github/workflows/emulator.yml) passed in an isolated
+Ubuntu 24.04 arm64 container with the distribution's NASM 2.16.01, Node 22.21.1
+and stable Rust 1.99.1, using this worktree's source files:
+
+- All fixture preparation and manifest checks passed, including the protected guest.
+- `cargo test --locked`: **426 passed, 0 failed, 0 ignored** across 28 suites.
+- `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check`: passed.
+- Release Wasm build and publication audit: passed, 10 approved assets.
+
+The container's Chromium run stalled and Docker became unresponsive; it did not
+complete the browser suite. Browser verification was moved to the native host
+with two workers and unused serving ports, preserving both paths and test code.
+All fixture preparations and `cargo test --locked` also passed on the host
+(426 tests). `npm run build` passed the release build and publication audit
+(10 assets, valid 495293-byte Wasm). The temporary Playwright config imported the
+checked config, selected two workers and changed only serving ports to
+18190/18191; its project server retained the `web/` symlink at `/pc98-rust/`.
+The first host browser run had 143 passes and a VM ADD4S boot failure/timeout;
+`npx playwright test --config .issue101-playwright.config.js --last-failed`
+then passed that case cold and after reset.
+A subsequent full `npx playwright test --config .issue101-playwright.config.js`
+passed **144 tests in 7.1 minutes**, including the protected guest cold/reset
+at both paths, against the same release artifact. The temporary config/server
+were removed and `git diff --check` passed. No GitHub-hosted workflow was
+triggered from this worktree-only revision; no push or merge was performed.
 
 Review covered the source Issue's bounded subset, descriptor/stack preflight and
 fault restart, diagnostic restrictions, preserved V30 decoding, fixture provenance,

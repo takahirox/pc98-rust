@@ -59,7 +59,9 @@ mov byte [0x8001], 0x16
 jmp dword 0x10:BOOT+pm32
 bits 32
 pm32:
-smsw ax
+; Spell the register width explicitly: NASM 2.x/3.x differ on SMSW AX's 66.
+; Only AX is tested below, but EAX gives the same encoding on both versions.
+smsw eax
 test ax, 1
 jz fail32
 mov eax, cr0

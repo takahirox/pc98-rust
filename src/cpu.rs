@@ -1695,20 +1695,17 @@ impl Cpu {
                 );
                 self.check_access(b, SS, allocated, bytes, true, false)?;
                 let original_bp = self.get(b, Operand::Reg(BP), true)?;
-                // SS.B chooses the frame-chain address size independently of 66/67.
-                let chain_bp = if self.segment_cache(SS).big() {
-                    self.reg32(BP)
-                } else {
-                    self.r[BP] as u32
-                };
+                // Operand size chooses BP/EBP and its wrapping; SS.B only
+                // chooses SP/ESP for the pushes and allocation. 67 has no effect.
+                let chain_mask = self.mask(true);
                 for i in 1..level {
-                    let bp = self.stack_offset(chain_bp.wrapping_sub(bytes * i as u32));
+                    let bp = original_bp.wrapping_sub(bytes * i as u32) & chain_mask;
                     self.check_mem(b, SS, bp, bytes)?;
                 }
                 self.push(b, original_bp)?;
                 let frame = self.get(b, Operand::Reg(SP), true)?;
                 for i in 1..level {
-                    let bp = self.stack_offset(chain_bp.wrapping_sub(bytes * i as u32));
+                    let bp = original_bp.wrapping_sub(bytes * i as u32) & chain_mask;
                     let v = self.read_mem(b, SS, bp, bytes)?;
                     self.push(b, v)?;
                 }

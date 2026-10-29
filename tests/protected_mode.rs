@@ -592,6 +592,62 @@ fn external_idt_failure_has_ext_bit_and_iret_restores_rf() {
 }
 
 #[test]
+fn enter_frame_chain_uses_operand_size_independently_of_stack_size() {
+    for operand32 in [false, true] {
+        for stack_big in [false, true] {
+            // CS.D=1; 66 selects BP/word entries, 67 must not affect ENTER.
+            for address_override in [false, true] {
+                for old_bp in [0x18100u32, 0x20002] {
+                    let mut code = vec![];
+                    if !operand32 {
+                        code.push(0x66);
+                    }
+                    if address_override {
+                        code.push(0x67);
+                    }
+                    code.extend([0xc8, 0x10, 0, 3]); // two chain entries, then frame pointer
+                    let (mut c, mut b) = protected(&code, true, stack_big);
+                    c.set_reg32(BP, old_bp);
+                    let bytes = if operand32 { 4 } else { 2 };
+                    let mask = if operand32 { u32::MAX } else { 0xffff };
+                    let stack_top = if stack_big { 0x18000 } else { 0x8000 };
+                    let frame = 0x18000 - bytes;
+                    // Distinct entries above/below 64 KiB detect wrong width selection.
+                    b.mem[0x7fe0..0x8001].fill(0xa5);
+                    b.mem[0x17fe0..0x18001].fill(0xa5);
+                    for (i, value) in [(1, 0x12345678u32), (2, 0x87654321)] {
+                        let offset = (old_bp.wrapping_sub(bytes * i) & mask) as usize;
+                        b.mem[offset..offset + bytes as usize]
+                            .copy_from_slice(&value.to_le_bytes()[..bytes as usize]);
+                    }
+                    let mut expected = b.mem.clone();
+                    for (i, value) in [old_bp, 0x12345678, 0x87654321, frame]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        let offset = (stack_top - bytes * (i as u32 + 1)) as usize;
+                        expected[offset..offset + bytes as usize]
+                            .copy_from_slice(&value.to_le_bytes()[..bytes as usize]);
+                    }
+                    c.step(&mut b).unwrap();
+                    assert_eq!(c.last_fault, None);
+                    assert_eq!(c.reg32(SP), 0x18000 - bytes * 4 - 0x10);
+                    assert_eq!(
+                        c.reg32(BP),
+                        if operand32 {
+                            frame
+                        } else {
+                            (old_bp & 0xffff0000) | (frame & 0xffff)
+                        }
+                    );
+                    assert!(b.mem == expected, "ENTER frame/guards differ: operand32={operand32} SS.B={stack_big} EBP={old_bp:#x}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn protected_enter_leave_pop_esp_and_segment_reload_paths() {
     for level in [0u8, 2] {
         let (mut c, mut b) = protected(&[0xc8, 0x10, 0, level, 0xc9], true, true);

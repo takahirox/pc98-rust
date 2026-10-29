@@ -351,15 +351,15 @@ fn segment_pushes_preserve_upper_stack_bytes_and_check_only_the_selector() {
 }
 
 #[test]
-fn nested_dword_enter_traverses_bp_on_a_word_stack() {
+fn nested_dword_enter_traverses_ebp_on_a_word_stack() {
     // Both operand and address overrides leave the real-mode stack size at 16.
     for code in [&[0x66, 0xc8, 0, 0, 3][..], &[0x67, 0x66, 0xc8, 0, 0, 3][..]] {
-        for bp in [0x17000u32, 0x10000] {
+        for bp in [0x7000u32, 0x10000] {
             let (mut c, mut b) = cpu(code);
             c.s[SS] = 0x2000;
             c.set_reg32(BP, bp);
-            let first = Cpu::phys(c.s[SS], (bp as u16).wrapping_sub(4));
-            let second = Cpu::phys(c.s[SS], (bp as u16).wrapping_sub(8));
+            let first = Cpu::phys(c.s[SS], 0) + (bp - 4) as usize;
+            let second = Cpu::phys(c.s[SS], 0) + (bp - 8) as usize;
             b.mem[first..first + 4].copy_from_slice(&0x12345678u32.to_le_bytes());
             b.mem[second..second + 4].copy_from_slice(&0x9abcdef0u32.to_le_bytes());
             c.step(&mut b).unwrap();
@@ -373,6 +373,20 @@ fn nested_dword_enter_traverses_bp_on_a_word_stack() {
                 .collect();
             assert_eq!(&b.mem[frame..frame + 16], expected.as_slice());
         }
+        // A 32-bit chain above the real-mode SS limit must fault, not read
+        // the low 16-bit alias. Only the real-mode #SS frame may be written.
+        let (mut c, mut b) = cpu(code);
+        c.s[SS] = 0x2000;
+        c.set_reg32(BP, 0x17000);
+        let mut expected = b.mem.clone();
+        let frame = Cpu::phys(c.s[SS], 0x8ffa);
+        expected[frame..frame + 6].copy_from_slice(&[0, 0x10, 0, 0, 2, 0]);
+        c.step(&mut b).unwrap();
+        assert_eq!((c.ip, c.r[SP], c.reg32(BP)), (0x20c0, 0x8ffa, 0x17000));
+        assert!(
+            b.mem == expected,
+            "rejected ENTER changed memory outside #SS frame"
+        );
     }
 }
 
