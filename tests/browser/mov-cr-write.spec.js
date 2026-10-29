@@ -39,7 +39,7 @@ test('Ap: MOV CR WRITE from all GPRs, CR0/CR3 readback and guest fault repair be
 });
 
 for (const name of ['pe_pg']) {
-  test(`Ap: ${name} transition stops explicitly before commit, cold and after reset`, async ({ page }) => {
+  test(`Ap: ${name} transition without page tables commits then shuts down, cold and after reset`, async ({ page }) => {
     const time = new Date('2026-01-01T00:00:00Z');
     await page.clock.install({ time });
     await page.clock.pauseAt(time);
@@ -57,9 +57,8 @@ for (const name of ['pe_pg']) {
       if (run) await page.locator('#reset').click();
       await page.evaluate(() => { pc98.core.step(10000); pc98.core.audio_clear(); });
       const error = await page.evaluate(() => pc98.stats().error);
-      expect(error).toContain('unsupported paging transition');
-      expect(error).toContain(`CS:IP=${variant.cs_ip} opcode=0f 22 modrm=c0 CR0 GPR=eax old=60000010 written=${variant.written}`);
-      expect(error).toContain(`PE=1 PG=${name === 'pe_pg' ? 1 : 0} next-ip=${variant.next_ip}; write not committed`);
+      expect(error).toContain('protected page fault delivery failed');
+      expect(error).toContain('triple fault/shutdown');
       expect(await page.evaluate(() => pc98.core.step(10000))).toBe(0);
       expect(await page.evaluate(() => pc98.stats().error)).toBe(error);
       expect(await page.evaluate(() => pc98.text())).not.toContain('PASS');

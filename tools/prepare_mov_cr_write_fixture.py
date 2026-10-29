@@ -43,7 +43,7 @@ def build(update=False):
             'boot_sha256': sha(variant_boot),
             'image_sha256': sha(variant_image),
             'written': f'{value:08x}',
-            'expected': 'commit PE and halt with cached real-mode segments' if name == 'pe' else 'atomic unsupported paging error',
+            'expected': 'commit PE and halt with cached real-mode segments' if name == 'pe' else 'commit paging, then bounded triple-fault shutdown: no page tables installed',
             'cs_ip': '1fc0:00000007',
             'next_ip': '0000000d',
             'opcode_modrm': '66 67 65 0f 22 c0',

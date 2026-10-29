@@ -1,6 +1,8 @@
-//! Original V30 and bounded paging-disabled i486 interpreter. Instructions never delegate to a host emulator.
+//! Original V30 and bounded i486 interpreter. Instructions never delegate to a host emulator.
 use crate::bus::Bus;
+mod paging;
 mod protected;
+pub use paging::Paging;
 use protected::GateSource;
 pub use protected::SegmentCache;
 pub const CF: u16 = 1;
@@ -61,7 +63,7 @@ pub struct Cpu {
     pub upper: [u16; 8],
     pub extra_segments: [u16; 2], // FS, GS
     /// i486 CR0: reset CD/NW/ET set; PE/PG clear. Shared by MOV, SMSW and x87.
-    /// Paging is unsupported; PE enables descriptor and protected gate semantics.
+    /// PE enables segmentation; PG enables two-level 4 KiB page translation.
     pub cr0: u32,
     /// Hidden state in ES/CS/SS/DS/FS/GS order. None derives conventional
     /// real-mode state from the public selector, preserving native callers.
@@ -77,9 +79,11 @@ pub struct Cpu {
     pub tr_cache: Option<SegmentCache>,
     pub last_fault: Option<(u8, u32)>,
     /// CR2/CR3 use deterministic zero on reset (emulator policy).
-    /// Guest-writable metadata; no paging, page-fault updates or translation exists.
+    /// CR2 records the last page-fault linear address; CR3 selects physical tables.
     pub cr2: u32,
     pub cr3: u32,
+    #[doc(hidden)]
+    pub paging: Paging,
     pub fpu: Fpu,
     /// Emulator reset policy: zero limit/base (hardware power-up GDTR is undefined).
     pub gdtr_limit: u16,
@@ -133,6 +137,7 @@ impl Default for Cpu {
             last_fault: None,
             cr2: 0,
             cr3: 0,
+            paging: Paging::default(),
             fpu: Fpu::default(),
             gdtr_limit: 0,
             gdtr_base: 0,
@@ -160,6 +165,10 @@ enum ExecError {
     ControlWriteRejected(String),
     Fault(u8),
     ProtectedFault(u8, u32),
+    PageFault {
+        linear: u32,
+        code: u32,
+    },
     Unsupported(String),
 }
 type ExecResult<T> = Result<T, ExecError>;
@@ -229,12 +238,19 @@ impl Cpu {
             _ => u32::MAX,
         }
     }
-    fn fetch(&mut self, b: &Bus) -> ExecResult<u8> {
+    fn fetch(&mut self, b: &mut Bus) -> ExecResult<u8> {
         if b.profile == crate::Profile::Pc9821ApDos && self.instruction_bytes >= 15 {
             return Err(ExecError::Fault(13));
         }
         self.check_access(b, CS, self.ip, 1, false, true)?;
-        let v = b.read(self.linear(CS, self.ip));
+        let physical = self.translate(
+            b,
+            self.linear(CS, self.ip) as u32,
+            false,
+            self.cpl == 3,
+            false,
+        )?;
+        let v = b.read(physical as usize);
         self.ip = self.ip.wrapping_add(1);
         if b.profile == crate::Profile::Pc9801Vm {
             self.ip &= 0xffff;
@@ -242,11 +258,11 @@ impl Cpu {
         self.instruction_bytes += 1;
         Ok(v)
     }
-    fn word(&mut self, b: &Bus) -> ExecResult<u16> {
+    fn word(&mut self, b: &mut Bus) -> ExecResult<u16> {
         let l = self.fetch(b)?;
         Ok(l as u16 | ((self.fetch(b)? as u16) << 8))
     }
-    fn immediate(&mut self, b: &Bus, w: bool) -> ExecResult<u32> {
+    fn immediate(&mut self, b: &mut Bus, w: bool) -> ExecResult<u32> {
         if !w {
             return Ok(self.fetch(b)? as u32);
         }
@@ -257,10 +273,10 @@ impl Cpu {
             0
         })
     }
-    fn check_mem(&self, b: &Bus, s: usize, off: u32, bytes: u32) -> ExecResult<()> {
+    fn check_mem(&self, b: &mut Bus, s: usize, off: u32, bytes: u32) -> ExecResult<()> {
         self.check_access(b, s, off, bytes, false, false)
     }
-    fn read_mem(&self, b: &Bus, s: usize, off: u32, bytes: u32) -> ExecResult<u32> {
+    fn read_mem(&self, b: &mut Bus, s: usize, off: u32, bytes: u32) -> ExecResult<u32> {
         self.check_mem(b, s, off, bytes)?;
         let mut v = 0;
         for i in 0..bytes {
@@ -269,7 +285,9 @@ impl Cpu {
             } else {
                 off + i
             };
-            v |= (b.read(self.linear(s, a)) as u32) << (i * 8);
+            let physical =
+                self.translate(b, self.linear(s, a) as u32, false, self.cpl == 3, false)?;
+            v |= (b.read(physical as usize) as u32) << (i * 8);
         }
         Ok(v)
     }
@@ -281,7 +299,9 @@ impl Cpu {
             } else {
                 off + i
             };
-            b.write(self.linear(s, a), (v >> (i * 8)) as u8);
+            let physical =
+                self.translate(b, self.linear(s, a) as u32, true, self.cpl == 3, true)?;
+            b.write(physical as usize, (v >> (i * 8)) as u8);
         }
         Ok(())
     }
@@ -291,7 +311,7 @@ impl Cpu {
         self.set_stack_pointer(sp);
         Ok(())
     }
-    fn pop_width(&mut self, b: &Bus, bytes: u32) -> ExecResult<u32> {
+    fn pop_width(&mut self, b: &mut Bus, bytes: u32) -> ExecResult<u32> {
         let v = self.read_mem(b, SS, self.stack_pointer(), bytes)?;
         self.set_stack_pointer(self.stack_pointer().wrapping_add(bytes));
         Ok(v)
@@ -306,7 +326,7 @@ impl Cpu {
         self.set_stack_pointer(sp);
         Ok(())
     }
-    fn pop(&mut self, b: &Bus) -> ExecResult<u32> {
+    fn pop(&mut self, b: &mut Bus) -> ExecResult<u32> {
         self.pop_width(b, self.bytes(true))
     }
     fn deliver_interrupt(&mut self, b: &mut Bus, n: u8) -> ExecResult<()> {
@@ -431,7 +451,7 @@ impl Cpu {
         self.szp(v as u32, w);
         v as u32
     }
-    fn decode(&mut self, b: &Bus, m: u8, ov: Option<usize>) -> ExecResult<Operand> {
+    fn decode(&mut self, b: &mut Bus, m: u8, ov: Option<usize>) -> ExecResult<Operand> {
         let mode = m >> 6;
         let rm = (m & 7) as usize;
         if mode == 3 {
@@ -492,11 +512,11 @@ impl Cpu {
             base.wrapping_add(disp) as u32,
         ))
     }
-    fn dword(&mut self, b: &Bus) -> ExecResult<u32> {
+    fn dword(&mut self, b: &mut Bus) -> ExecResult<u32> {
         let l = self.word(b)? as u32;
         Ok(l | ((self.word(b)? as u32) << 16))
     }
-    fn get(&self, b: &Bus, o: Operand, w: bool) -> ExecResult<u32> {
+    fn get(&self, b: &mut Bus, o: Operand, w: bool) -> ExecResult<u32> {
         match o {
             Operand::Reg(r) => Ok(if !w {
                 self.byte(r) as u32
@@ -508,7 +528,7 @@ impl Cpu {
             Operand::Mem(s, a) => self.read_mem(b, s, a, self.bytes(w)),
         }
     }
-    fn get_modify(&self, b: &Bus, o: Operand, w: bool) -> ExecResult<u32> {
+    fn get_modify(&self, b: &mut Bus, o: Operand, w: bool) -> ExecResult<u32> {
         // Preflight the full write span before any operand bus read: reads of
         // memory-mapped devices (for example EGC VRAM) can change device latches.
         if let Operand::Mem(s, a) = o {
@@ -625,7 +645,7 @@ impl Cpu {
             _ => value as i32 as i64,
         }
     }
-    fn check_stack_sequence(&self, b: &Bus, count: u32, push: bool) -> ExecResult<()> {
+    fn check_stack_sequence(&self, b: &mut Bus, count: u32, push: bool) -> ExecResult<()> {
         let bytes = self.bytes(true);
         for i in 0..count {
             let delta = if push { (i + 1) * bytes } else { i * bytes };
@@ -712,9 +732,14 @@ impl Cpu {
         if !self.halted {
             before_instruction(self, b);
         }
-        // Restore architectural registers for restartable real-mode faults.
+        // Restore architectural registers for restartable instruction faults.
         let saved = self.clone();
-        match self.execute(b) {
+        if self.paging_enabled() {
+            b.begin_cpu_memory();
+        }
+        let execution = self.execute(b);
+        b.finish_cpu_memory(execution.is_ok());
+        match execution {
             Ok(()) => {
                 if b.profile == crate::Profile::Pc9821ApDos
                     && saved.flags & TF != 0
@@ -736,6 +761,12 @@ impl Cpu {
                         return Err("invalid V30 instruction".into())
                     }
                     ExecError::Fault(n) => n,
+                    ExecError::PageFault { linear, code } => {
+                        *self = saved;
+                        self.cr2 = linear;
+                        return self.protected_event(b, 14, Some(code), GateSource::Fault)
+                            .map_err(|e| format!("protected page fault delivery failed CR2={:08x} error={code:08x}: {e:?}", self.cr2));
+                    }
                     ExecError::ProtectedFault(n, code) => {
                         *self = saved;
                         return self.protected_event(b, n, Some(code), GateSource::Fault)
@@ -748,7 +779,7 @@ impl Cpu {
                     ExecError::Unsupported(message) => {
                         if saved.protected_mode() {
                             *self = saved;
-                            return Err(format!("{message}; PE=1 PG=0 CS:EIP={:04x}:{:08x} CPL={} CR0={:08x} GDT={:08x}/{:04x} IDT={:08x}/{:04x} TR={:04x} TSS={:?}", self.s[CS], self.ip, self.cpl, self.cr0, self.gdtr_base, self.gdtr_limit, self.idtr_base, self.idtr_limit, self.tr, self.tr_cache));
+                            return Err(format!("{message}; PE=1 PG={} CS:EIP={:04x}:{:08x} CPL={} CR0={:08x} GDT={:08x}/{:04x} IDT={:08x}/{:04x} TR={:04x} TSS={:?}", u8::from(self.paging_enabled()), self.s[CS], self.ip, self.cpl, self.cr0, self.gdtr_base, self.gdtr_limit, self.idtr_base, self.idtr_limit, self.tr, self.tr_cache));
                         }
                         return Err(message);
                     }
@@ -768,7 +799,7 @@ impl Cpu {
     }
     fn extended(&mut self, b: &mut Bus, ov: Option<usize>) -> ExecResult<()> {
         let op = self.fetch(b)?;
-        if self.protected_mode() && self.cpl != 0 && op != 0x06 {
+        if self.protected_mode() && self.cpl != 0 && !matches!(op, 0x01 | 0x06) {
             return Err(ExecError::Unsupported(format!(
                 "unsupported protected execution CPL={}; only ring 0 is implemented",
                 self.cpl
@@ -823,8 +854,6 @@ impl Cpu {
                     };
                     let reason = if reserved != 0 {
                         Some("undefined reserved-bit write")
-                    } else if selector == 0 && written & 0x80000000 != 0 {
-                        Some("unsupported paging transition")
                     } else {
                         None
                     };
@@ -845,7 +874,10 @@ impl Cpu {
                         // ET is hardwired to 1 on the selected Intel486.
                         0 => self.commit_cr0(written),
                         2 => self.cr2 = written,
-                        3 => self.cr3 = written,
+                        3 => {
+                            self.cr3 = written;
+                            self.paging.flush();
+                        }
                         _ => unreachable!(),
                     }
                 }
@@ -853,6 +885,26 @@ impl Cpu {
             0x01 => {
                 let m = self.fetch(b)?;
                 let kind = (m >> 3) & 7;
+                if kind == 7 {
+                    if m >> 6 == 3 {
+                        return Err(ExecError::Fault(6));
+                    }
+                    if self.protected_mode() && self.cpl != 0 {
+                        return Err(ExecError::Fault(13));
+                    }
+                    let Operand::Mem(s, off) = self.decode(b, m, ov)? else {
+                        unreachable!()
+                    };
+                    // Address calculation only: no operand read or page walk,
+                    // including nonpresent pages and offsets beyond segment limit.
+                    self.paging.invalidate(self.linear(s, off) as u32);
+                    return Ok(());
+                }
+                if self.protected_mode() && self.cpl != 0 {
+                    return Err(ExecError::Unsupported(
+                        "unsupported protected system instruction outside CPL0".into(),
+                    ));
+                }
                 if kind == 4 {
                     match self.decode(b, m, ov)? {
                         // Undefined upper bits in operand32 register form are
@@ -1343,7 +1395,10 @@ impl Cpu {
                 self.put(b, o, out, true)?;
                 self.flags = (self.flags & !CF) | cf;
             }
-            0x50..=0x57 => self.push(b, self.get(b, Operand::Reg((op & 7) as usize), true)?)?,
+            0x50..=0x57 => {
+                let value = self.get(b, Operand::Reg((op & 7) as usize), true)?;
+                self.push(b, value)?;
+            }
             0x58..=0x5f => {
                 let v = self.pop(b)?;
                 self.put(b, Operand::Reg((op & 7) as usize), v, true)?;
@@ -1352,14 +1407,12 @@ impl Cpu {
                 let sp = self.get(b, Operand::Reg(SP), true)?;
                 self.check_stack_sequence(b, 8, true)?;
                 for i in [AX, CX, DX, BX, SP, BP, SI, DI] {
-                    self.push(
-                        b,
-                        if i == SP {
-                            sp
-                        } else {
-                            self.get(b, Operand::Reg(i), true)?
-                        },
-                    )?;
+                    let value = if i == SP {
+                        sp
+                    } else {
+                        self.get(b, Operand::Reg(i), true)?
+                    };
+                    self.push(b, value)?;
                 }
             }
             0x61 => {
@@ -1629,7 +1682,8 @@ impl Cpu {
                     let v = self.get(b, o, w)?;
                     self.put(b, Operand::Reg(0), v, w)?
                 } else {
-                    self.put(b, o, self.get(b, Operand::Reg(0), w)?, w)?
+                    let value = self.get(b, Operand::Reg(0), w)?;
+                    self.put(b, o, value, w)?
                 }
             }
             0xa4..=0xa7 | 0xaa..=0xaf | 0x6c..=0x6f => {

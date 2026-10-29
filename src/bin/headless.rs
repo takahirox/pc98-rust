@@ -11,7 +11,7 @@ fn instruction_diagnostic(c: &Cpu, b: &Bus) -> (String, bool) {
         if count == 15 || (ap && offset > c.segment_cache(1).limit) {
             return None;
         }
-        let value = b.read(c.segment_cache(1).base.wrapping_add(offset) as usize);
+        let value = c.diagnostic_code_byte(b, offset)?;
         offset = offset.wrapping_add(1);
         if !ap {
             offset &= 0xffff;

@@ -7,15 +7,15 @@ including reset MSW 0010h and restartable faults, and
 [32-bit CR0/CR2/CR3 reads](hardware.md#ap-real-mode-control-register-reads) and
 [MOV writes](hardware.md#ap-real-mode-control-register-writes).
 CR0 resets to 60000010h, with PE/PG clear. Ap supports the
-[paging-disabled ring-0 protected subset](protected-mode.md): real → protected
+[ring-0 protected subset](protected-mode.md): real → protected
 16/32-bit → real, GDT/LDT caches, IDT gates and checked PC-98 bus accesses.
-PG requests stop atomically; PE is never forced clear to continue. ET readback
+Valid PG requests enable [4 KiB paging](protected-mode.md#i486-4-kib-paging-issue-107); PE is never forced clear to continue. ET readback
 does not imply numerical x87 support.
 Both profiles support bounded [8259A normal-EOI software polling](hardware.md#8259a-ocw3-normal-eoi-polling),
 including two separate reads and EOIs for the fixed cascade while IF is clear.
 The original PIT/FDC boot probe is hardware acceptance evidence, not an expanded
 DOS/application or commercial compatibility claim. PIC and protected mode remain
-partial; privilege transitions, paging and numerical x87 remain unsupported.
+partial; privilege transitions and numerical x87 remain unsupported.
 Physical hardware fidelity remains bounded by the documented unsupported subsets.
 Historical PR #8/#10 validation records below describe their earlier checkpoints.
 
@@ -24,6 +24,28 @@ PC-98 DOS applications now execute their actual x86 code under the pinned guest
 FreeDOS kernel and FreeCOM: ADV98's Japanese adventure sample and 98VIDEOP. There
 is no application-name recognition, host INT 21h implementation, host font
 rasterization, host game logic, or substitution of application graphics.
+
+## Paging compatibility evidence (Issue #107)
+
+| Implemented and automatically tested | Unsupported / unverified |
+| --- | --- |
+| 32-bit two-level 4 KiB translation of nonidentity code/data/stack and protected tables | PSE/PAE/NX, general ring-3 execution, privilege/TSS task switching |
+| CR0.PG enable/disable, physical CR3 base, CR2/#PF, WP and A/D accounting | Data-cache timing and INVD/WBINVD; reserved present paging flags stop diagnostically |
+| Guest page-table repair and IRETD retry, TLB/INVLPG/CR3 invalidation, physical DMA | Complete DOS-extender, DPMI, Windows or commercial-game compatibility |
+| MIT boot fixture in native Rust and production Wasm Chromium, both roots, cold/reset | Private `aliceY3.hdi`: **not retested**; no next blocker inferred |
+
+See the [paging contract](protected-mode.md#i486-4-kib-paging-issue-107) and
+[exact commands and evidence](paging-validation.md). Prepare the redistributable
+fixture with `python3 tools/prepare_paging_fixture.py`; run
+`cargo test --locked --lib --test paging --test dma` and `npm test` after all
+README fixture preparations. Page tables require ordinary writable physical RAM;
+translated operands retain PC-98 RAM/device/ROM/A20 behavior. No private disk,
+proprietary ROM/font, game content or foreign emulator core is needed.
+
+The independent fixtures demonstrate the paging boundary and recovery. They
+supply no evidence about the private game's next instruction. Existing independent
+privilege/task-switch and numerical-FPU diagnostic tests remain separate follow-up
+subsystems; no new private-HDD incompatibility has been demonstrated here.
 
 ## Reproduce and use
 
@@ -123,7 +145,7 @@ complete reproduction of those specifications.
 
 | Area | Implemented and tested | Remaining limits |
 | --- | --- | --- |
-| CPU | Original shared 8/16/32-bit real-mode interpreter; 66/67 overrides, EAX–EDI, FS/GS, ModR/M/SIB, dword ALU/stack/strings/control flow/I/O, selected 386/486 integer 0F instructions, EFLAGS AC, restartable #DE/#BR/#UD/#NM/#SS/#GP and #DB traps. The [ring-0 protected-mode subset](protected-mode.md) adds cached GDT/LDT descriptors, 16/32-bit code/stacks, IDT gates, STR/LTR with cached 16/32-bit TSS initialization, checked addresses and real-mode return. LGDT/SGDT and LIDT/SIDT provide the [GDTR](hardware.md#ap-real-mode-gdtr) and [IDTR prerequisites](hardware.md#ap-real-mode-idtr); Ap supports relocated real-mode vectors, table-limit exception 8 and bounded shutdown when that entry is unavailable. Ap provides bounded [x87 FNINIT and non-waiting control/status readback](hardware.md#ap-x87-environment-initialization), with CLTS/TS and WAIT MP/TS checks, without arithmetic or pending numeric exception completion. Ap retains masked shift counts and encoded AAM/AAD radix; V30 behavior remains selected by VM | No privilege transitions, hardware task switching, TSS stack/I/O-bitmap use, paging, DPMI, numerical FPU execution, CPUID, general system/debug-register instructions or complete 486 ISA/timing. Cached segment state is retained on PE exit; full unreal-mode guest/BIOS compatibility is unverified. Explicit invalid encodings fault; valid unimplemented instructions stop with a diagnostic. See CPU coverage below |
+| CPU | Original shared 8/16/32-bit real-mode interpreter; 66/67 overrides, EAX–EDI, FS/GS, ModR/M/SIB, dword ALU/stack/strings/control flow/I/O, selected 386/486 integer 0F instructions, EFLAGS AC, restartable #DE/#BR/#UD/#NM/#SS/#GP/#PF and #DB traps. The [ring-0 protected-mode subset](protected-mode.md) adds cached GDT/LDT descriptors, 16/32-bit code/stacks, IDT gates, STR/LTR with cached 16/32-bit TSS initialization, checked addresses and real-mode return. LGDT/SGDT and LIDT/SIDT provide the [GDTR](hardware.md#ap-real-mode-gdtr) and [IDTR prerequisites](hardware.md#ap-real-mode-idtr); Ap supports relocated real-mode vectors, table-limit exception 8 and bounded shutdown when that entry is unavailable. Ap provides bounded [x87 FNINIT and non-waiting control/status readback](hardware.md#ap-x87-environment-initialization), with CLTS/TS and WAIT MP/TS checks, without arithmetic or pending numeric exception completion. Ap retains masked shift counts and encoded AAM/AAD radix; V30 behavior remains selected by VM | No privilege transitions, hardware task switching, TSS stack/I/O-bitmap use, PSE/PAE, DPMI, numerical FPU execution, CPUID, general system/debug-register instructions or complete 486 ISA/timing. Cached segment state is retained on PE exit; full unreal-mode guest/BIOS compatibility is unverified. Explicit invalid encodings fault; valid unimplemented instructions stop with a diagnostic. See CPU coverage below |
 | RAM | 640 KiB conventional plus 3 MiB at physical 100000–3FFFFF; BWA 401h reports 24 × 128 KiB; holes and firmware retain PC-98 mapping | HMA is reachable with A20 enabled, including dword accesses. Address override does not enlarge the real-mode 64 KiB segment limit, and INT 1F/90 now provides validated byte copies to extended RAM. XMS/EMS managers remain absent; selected guests need conventional RAM and/or this BIOS service |
 | A20 | PC-98 F2 write enables A20; F6=02/03 enables/disables; F2/F6 read bit 0 reports masked state; reset masks it | No IBM port 92 or AT keyboard-controller gate. F0 remains the private synthetic-firmware trap, not an emulated CPU reset port |
 | Bitmap | Two four-plane 128 KiB pages; B/R/G at A8000/B0000/B8000, intensity at E0000; independent CPU/display pages; analog palette 16 × 12-bit RGB; four-plane GRCG TDW/RMW/TCR | Aligned EGC raster operations and 512 KiB PEGC packed 256-color storage/windows/palette are now tested by independent DEBUG; see the device audit. No arbitrary EGC shifts, PEGC planar mode, 480-line mode or GDC vector engine |
@@ -350,7 +372,7 @@ also reach these bytes. A later stop may be unrelated; compare the next exact lo
 and opcode. Summarize only brief opcode/ModR/M metadata and bounded findings when
 reporting evidence; never upload restricted media, game code or detailed raw
 traces to Git, CI, Issues, PRs or Pages. If an actual local run next requires
-features outside the documented protected subset, paging, extended DOS or another
+features outside the documented protected/paging subset, extended DOS or another
 device, record the exact requirement for a separate `task` Issue. The original
 protected probe proves its CPU path, not a requirement or playability of the private game. Do not fake these
 facilities or treat opcode support as a claim of complete game compatibility.

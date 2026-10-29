@@ -174,7 +174,7 @@ fn invalid_cr0_combinations_gp_before_mutation_and_iret_retry() {
 
 #[test]
 fn reserved_bits_and_modes_are_precise_atomic_diagnostics() {
-    let mut cases = vec![(0, 0xe0000011, "unsupported paging")];
+    let mut cases = Vec::new();
     for bit in 0..32 {
         if (1u32 << bit) & 0xe005003f == 0 {
             cases.push((0, 0x60000010 | 1 << bit, "undefined reserved-bit"));
@@ -342,7 +342,7 @@ fn original_mit_boot_probe_cold_and_reset() {
 }
 
 #[test]
-fn original_transition_boots_stop_before_commit_and_stay_stopped() {
+fn original_transition_without_page_tables_commits_then_shuts_down() {
     for (name, value) in [("pe_pg", 0xe0000011)] {
         let image = std::fs::read(format!("fixtures/mov_cr_write/{name}.hdm")).unwrap();
         let mut m = Machine::new(Profile::Pc9821ApDos);
@@ -353,14 +353,17 @@ fn original_transition_boots_stop_before_commit_and_stay_stopped() {
             }
             m.step(10000);
             let error = m.error.as_ref().unwrap();
-            assert!(error.contains("unsupported paging transition"), "{error}");
-            assert!(error.contains("CS:IP=1fc0:00000007"), "{error}");
             assert!(
-                error.contains(&format!("old=60000010 written={value:08x}")),
+                error.contains("protected page fault delivery failed"),
                 "{error}"
             );
-            assert_eq!((m.cpu.cr0, m.cpu.cr2, m.cpu.cr3), (0x60000010, 0, 0));
-            assert_eq!((m.cpu.s[CS], m.cpu.ip, m.cpu.reg32(AX)), (0x1fc0, 7, value));
+            assert!(error.contains("triple fault/shutdown"), "{error}");
+            assert_eq!((m.cpu.cr0, m.cpu.cr3), (value, 0));
+            assert_eq!(
+                (m.cpu.s[CS], m.cpu.ip, m.cpu.reg32(AX)),
+                (0x1fc0, 13, value)
+            );
+            assert!(m.cpu.shutdown);
             let saved = format!("{:?}", m.cpu);
             let memory = m.bus.mem.clone();
             assert_eq!(m.step(100), 0);

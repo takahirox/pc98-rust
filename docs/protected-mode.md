@@ -1,7 +1,7 @@
-# Ap paging-disabled protected mode (Issues #101, #103)
+# Ap protected mode and i486 paging (Issues #101, #103, #107)
 
 PC-9821Ap DOS now executes an original-Rust ring-0 protected subset with
-CR0.PE=1 and CR0.PG=0. The default VM/V30 decoder and devices retain their
+CR0.PE=1, with paging disabled or the [4 KiB paging subsystem](#i486-4-kib-paging-issue-107) enabled. The default VM/V30 decoder and devices retain their
 existing behavior. This is bounded CPU capability evidence, not a claim that a
 DOS extender, operating system or commercial game works.
 
@@ -17,12 +17,11 @@ font dump or guest host-execution mechanism was used. Cargo dependencies are unc
 ## Implemented contract
 
 - **CR0:** a valid MOV CR0 PE enable commits, with ET fixed at 1. CR0 readback,
-  SMSW and existing x87 EM/TS checks share that state. CR2/CR3 retain their
-  existing metadata semantics. LMSW changes low control bits but cannot clear
+  SMSW and existing x87 EM/TS checks share that state. CR3 selects physical
+  paging tables; CR2 records the last faulting linear address. LMSW changes low control bits but cannot clear
   an already set PE. PG without PE and NW without CD raise #GP before mutation.
-  Any otherwise valid PG=1 request terminates with `unsupported paging transition`;
-  reserved writes retain their explicit undefined-bit diagnostic. Both terminal
-  write rejections restore the complete CPU snapshot and leave the bus unchanged.
+  Valid PE=1/PG=1 enables translation; PG toggles flush the TLB and retain
+  segment caches. Reserved writes retain their atomic undefined-bit diagnostic.
 - **Transition window:** PE changes protection checks without replacing hidden
   CS/SS/data attributes. A far transfer reloads CS from the descriptor table.
   Clearing PE retains caches until segment reloads; a real data load changes
@@ -50,8 +49,8 @@ font dump or guest host-execution mechanism was used. Cargo dependencies are unc
   independently of SS.B and the address-size override (Intel PRM, page 295).
   Near/far JMP/CALL/RET, segment MOV/POP, LES/LDS/LSS/LFS/LGS and IRET/IRETD use
   cached attributes and validate destination descriptors before committing.
-  Linear base+offset wraps at 32 bits and goes directly to the existing PC-98
-  physical bus, including 4 MiB RAM, device windows, ROM write protection and
+  Linear base+offset wraps at 32 bits and, after paging when enabled, reaches
+  the existing PC-98 physical bus, including 4 MiB RAM, device windows, ROM write protection and
   the F2/F6 A20 latch. No IBM AT/VGA addressing or port assumptions are added.
 - **Interrupts and faults:** same-ring 286/386 interrupt and trap gates, with
   gate-selected word/dword EIP/CS/(E)FLAGS frames independent of CS.D and SS.B.
@@ -75,6 +74,78 @@ font dump or guest host-execution mechanism was used. Cargo dependencies are unc
   LTR source. STR/LTR share the bounded control history and next-attempt capture.
   Only opcode/ModR/M and CPU metadata are read;
   no surrounding guest code or operand memory is dumped.
+
+## i486 4 KiB paging (Issue #107)
+
+The original [paging module](../src/cpu/paging.rs) implements two-level 32-bit
+translation after segmentation. Its independent sources are the
+[1992 Intel486 PRM](https://manuals.plus/m/d86207aaebd9b10464f2058efc61559e6141d3b072db100e89bfe17c8187e143),
+§§5.3, 6.8, 9.9.8/14, 4.1.3, and the INVLPG entry (26-172), plus Intel's
+[80386 paging description](https://pdos.csail.mit.edu/6.828/2018/readings/i386/s05_02.htm)
+and [exception description](https://pdos.csail.mit.edu/6.828/2018/readings/i386/s09_08.htm).
+The 486 WP and PCD/PWT rules take precedence over the older 386 contract.
+
+| Feature | Implemented behavior / explicit boundary |
+| --- | --- |
+| Address assembly | CR3[31:12] physical directory; linear[31:22] PDE, [21:12] PTE, [11:0] offset; 32-bit linear wrap; every affected page checked |
+| CR0/CR3 | Existing reserved/fixed-bit and PG-requires-PE/NW-requires-CD checks; PG enable/disable retains segment caches and flushes TLB; every MOV CR3 flushes even on same-value reload; PCD/PWT retained without data-cache claims |
+| CPU references | Instruction bytes, all shared operand/stack/RMW/string helpers, GDT/LDT/IDT reads, descriptor accessed/busy updates and interrupt/fault frames translate; system-table references use supervisor permission independently of CPL |
+| Permissions | Present at both levels; RW and US combine across both levels; CPL 0–2 are supervisor, CPL 3 is user; WP=1 enforces supervisor read-only protection, WP=0 permits supervisor writes; full nonzero-CPL execution remains unsupported |
+| A/D | Physical A updates on walks, including a present PDE before an absent PTE; both PDE A and PTE A are set on page-protection faults (Intel486 PRM §9.9.14); D before an actual write, after full operand preflight, stays clear on rejected writes; no PDE D updates; software flags preserved |
+| Faults | #PF(14), CR2 = exact first inaccessible linear byte; only P/W/U error bits, including instruction reads (no modern instruction-fetch/NX or RSVD bit); protected 16/32-bit frame and first-prefix IRET/IRETD retry |
+| Nested delivery | Contributory→PF remains serial; PF→contributory/PF and contributory→contributory become #DF(0); failed #DF delivery shuts down; other chains retain a three-attempt bound; a fault fetching handler instructions is a new instruction fault |
+| TLB | Original 32-slot direct-mapped cache of frame, combined permissions, PTE address and D state; no cached nonpresent entries; guest table edits do not invalidate it; replacement is deterministic emulator policy, not exact 486 associativity/cycles |
+| INVLPG | `0F 01 /7` calculates the overridden segment/effective address and invalidates that linear page; no operand access or page walk; register/LOCK #UD, nonzero protected CPL #GP; no-op if no entry or PG=0 |
+| Physical bus | Page walks bypass CPU translation; final frames and all walk cycles retain PC-98 A20 decoding; RAM, text/graphics, ROM write protection and unmapped reads retain existing bus behavior; actual FDC DMA reads/writes remain physical |
+| Reserved entries | Nonpresent entries are wholly software-owned. Present bits 7/8, reserved in the selected 486 contract, stop with a bounded diagnostic; no PSE/PAT/global semantics or fabricated reserved-bit #PF. PDE bit 6 is undefined and preserved; software bits 9–11 are preserved |
+| Table storage boundary | Directory/table words must resolve to ordinary writable physical RAM. ROM, graphics/MMIO or absent table storage stops before a walk read or A/D mutation at that location. The physical PC-98 bus exposes no page-fault/bus-error signal for such storage; no synthetic guest #PF is invented |
+| Out of scope | PSE/PAE/NX/global pages, privilege changes, TSS stack/I/O bitmap and task switching, VM86, DPMI, DOS extenders, Windows, numeric x87, data-cache cycles/external cache signals. INVD/WBINVD retain unsupported-instruction diagnostics |
+
+Paged instructions and each exception-delivery attempt journal memory changes.
+On rejection, CPU registers/TLB return to the instruction snapshot, RAM/graphics
+stores and EGC source/pattern latches roll back, and PEGC bank latches restore.
+Successful operations preserve the existing bus read/write order. Observed page
+Accessed bits may remain set on a fault; rejected stores do not leave Dirty bits
+or partial operand writes. REP still commits one element per step, preserving
+completed elements and restarting only the faulting element. String input
+preflights its destination before consuming a port value. No device scheduler or
+DMA transfer runs inside a CPU instruction's journal.
+
+Clearing guest A/D bits does not clear the corresponding cached state. Software
+must invalidate before expecting new accounting. A cached clean mapping's first
+write sets D in its remembered physical PTE; later writes do not restore a D bit
+cleared without invalidation. Page permissions, including changed CR0.WP, are
+checked on every TLB hit. Fault rollback may evict newly filled entries; no
+architectural promise is made about TLB retention/replacement across faults.
+The bounded trace uses a read-only translation lookup, without A/D/TLB changes
+or graphics latch reads, so enabling diagnostics does not change guest paging.
+
+The MIT [boot guest](../guest/paging.asm) enables PG with identity transition
+code, then jumps to nonidentity code at linear 00400000h (physical 00100000h).
+Its data and stack also use different frames. A guest #PF handler validates
+error/CR2/CS:EIP/RF, repairs a missing PTE, invalidates, and IRETD retries the
+original store. It checks stale mappings, INVLPG, CR3 reload, 16-bit code with
+66/67, stack/data guards and PG disable before printing `PAGING PASS`.
+The [manifest](../fixtures/paging-manifest.json) pins source, boot, disk, license,
+exact 64-byte results and the slot bound. Browser JavaScript only mounts, steps
+the production Rust/Wasm core, inspects results and resets.
+
+```sh
+python3 tools/prepare_paging_fixture.py
+cargo test --locked --lib --test paging --test dma
+cargo run --locked --bin headless -- fixtures/paging/paging.hdm 50000 --ap
+# After every README fixture producer, run the full native and browser checks:
+cargo test --locked
+cargo clippy --all-targets -- -D warnings
+cargo fmt --check
+npm test
+```
+
+[Validation and baseline reproduction](paging-validation.md) record the actual
+commands/results, serving-port override and private-HDD nonvalidation. Existing
+independently reproduced task/privilege and numeric-FPU boundaries remain grouped
+follow-ups in this document's roadmap. No subsequent private-HDD blocker was
+observed or inferred, and no Windows or game-playability claim is made.
 
 ## Task-register initialization (Issue #103)
 
@@ -139,7 +210,7 @@ as `LTR descriptor bus access` before any descriptor read or write. These limits
 do not synthesize an architectural protection/page fault or claim a busy update
 succeeded. STR memory writes retain ordinary bus/device semantics after segment
 preflight. Tests verify rejected spans, descriptor-boundary crossings and EGC
-source/pattern latches, including A20 aliases. Paging is still unavailable.
+source/pattern latches, including A20 aliases. With paging, these checks use translated physical bytes.
 
 The wholly original MIT [guest](../guest/task_register.asm) executes real →
 16-bit protected → 32-bit protected → real → protected → real code. It loads both
@@ -168,7 +239,7 @@ Invalid direct code/stack privilege combinations raise architectural faults.
 No selected fixture needs a privilege change or TSS-based stack switch.
 Native tests explicitly check these diagnostic paths without mutating guest memory.
 Descriptor-query instructions outside LLDT/SLDT, ARPL, debug-register handling,
-NMI/debug-breakpoint machinery, paging, virtual-8086 execution, DPMI, DOS extenders,
+NMI/debug-breakpoint machinery, virtual-8086 execution, DPMI, DOS extenders,
 Windows and Windows drivers are not implemented here. Existing x87 initialization
 and metadata stores work through protected segments; CLTS and WAIT MP/TS checks
 are implemented. Arithmetic and pending numeric exception completion remain
@@ -196,8 +267,8 @@ real-guest requirement and creates no speculative Issues.
 | **Hardware tasks, task gates and nested return** | `code_target` names direct hardware task switch vs task gate; IDT task gates stop in `protected_interrupt`; IRET.NT stops **before reading a normal frame**. Loaded-TR rejection tests assert intact CPU/RAM. | Original 16/32-bit TSS CALL/JMP/IDT gate/IRET.NT chain with busy/backlink/NT/TS semantics, minimum limits, saved/loaded state, exception ordering and atomicity; PRM ch.7, §9.8.10, ch.21 and instruction operations. No fake host-side task switch. |
 | **I/O protection and virtual-8086** | Ring-0 I/O uses existing PC-98 ports; no TSS bitmap is consulted. IRET virtual-8086 return has its own boundary. No nonzero-CPL execution is enabled. | After the privilege milestone, an original IOPL/bitmap guest covering scalar and string I/O, bitmap limits/terminator and denied-access side effects, followed by independent VM86 entry/interrupt/return fixtures; PRM ch.8/15. |
 | **CR0.TS / #NM coordination (implemented)** | `extended` CLTS, all ESC EM/TS checks, WAIT MP/TS checks; original `clts.asm`, native CLTS/FPU/trace matrices and `clts.spec.js` cold/reset. | TS-only clear, fault/IRET retry and independent EM rejection; see the [source audit and validation](clts-validation.md). No task switch or numerical FPU is implied. |
-| **Debug and remaining cache/system operations** | 0F 21/23 debug-register moves, 0F 24/26 test-register moves, INVD/WBINVD and INVLPG remain unsupported extended/group forms. | Coordinated DR/#DB/RF/GD and NMI fixtures only on evidence; cache/TLB instructions belong with memory management. Numerical x87 remains separate. |
-| **Paging** | MOV CR0 PG requests stop before mutation; CR2/CR3 remain metadata. Existing MOV-CR-write tests retain PE+PG rejection. | Independent page translation/protection/fault/CR2/TLB and restart fixtures, including descriptor/TSS accesses, after a dedicated design; PRM ch.5/9 and Intel486 paging chapters. TR loading proves no paging support. |
+| **Debug and remaining cache/system operations** | 0F 21/23 debug-register moves, 0F 24/26 test-register moves, INVD/WBINVD remain unsupported extended forms. INVLPG is implemented with paging. | Coordinated DR/#DB/RF/GD and NMI fixtures only on evidence; data-cache signals remain a separate memory-system boundary. Numerical x87 remains separate. |
+| **Paging (implemented bounded subset)** | [Issue #107 contract](#i486-4-kib-paging-issue-107): 4 KiB two-level translation, WP, CR2/#PF, TLB/INVLPG; original native/Wasm guest. | No PSE/PAE/NX, ring-3 execution or cache-cycle fidelity; tables require ordinary writable physical RAM. Task switching and privilege stacks remain separate. |
 
 For a private local retest, use the offline headless command in
 [the local HDD diagnostic procedure](dos-compatibility.md#diagnose-a-local-hdd-control-register-failure).
@@ -224,11 +295,11 @@ coverage, not a claim that every edge was independently executed on hardware.
 | --- | --- | --- |
 | CLTS `0F 06`: real mode; protected CPL0; LOCK #UD | `extended`; [CLTS matrix](../tests/clts.rs), handler privilege matrix in `cpu/protected.rs`, original boot and [browser](../tests/browser/clts.spec.js) | Nonzero-CPL decoding is allowed only to deliver its privilege/encoding fault. General user execution, VM86 and privilege-stack delivery remain unavailable. Reserved REP is ignored by decoder policy. |
 | SMSW `0F 01 /4`: real/protected, unprivileged; LMSW `/6`: real/protected CPL0 | `extended`; [CPU386 SMSW tests](../tests/cpu386.rs), CLTS readback/lifecycle guest | LMSW changes only low four bits and cannot clear PE. SMSW stores a word; undefined register upper bits preserved by policy. General nonzero-CPL execution stops before SMSW/LMSW; mixed fault priorities are not exhaustively covered. |
-| MOV CR0/2/3 `0F 20/22`: real/protected CPL0, register operand, always 32 bits | `extended`, `commit_cr0`; [reads](../tests/mov_cr.rs), [writes](../tests/mov_cr_write.rs), CPU386 and CLTS matrices | Unsupported CR selectors/memory encodings #UD. Reserved writes stop atomically; PG stops before mutation. Invalid PG/PE and NW/CD combinations #GP. Other privilege checks rely on the ring-0 execution boundary; CR2/3 are metadata, not paging. |
+| MOV CR0/2/3 `0F 20/22`: real/protected CPL0, register operand, always 32 bits | `extended`, `commit_cr0`; [reads](../tests/mov_cr.rs), [writes](../tests/mov_cr_write.rs), CPU386 and CLTS matrices | Unsupported CR selectors/memory encodings #UD. Reserved writes stop atomically; PG enables translation. Invalid PG/PE and NW/CD combinations #GP. Other privilege checks rely on the ring-0 execution boundary; CR2/#PF and physical CR3 tables follow the [paging contract](#i486-4-kib-paging-issue-107). |
 | SGDT/SIDT `0F 01 /0,/1`: real/protected, unprivileged; LGDT/LIDT `/2,/3`: real/protected CPL0; memory only | `extended`; CPU386 GDTR/IDTR matrices, protected boot/IRQ tests | Six-byte preflight, target-era 24/32-bit base and size/segment cases covered. Nonzero-CPL user execution remains unavailable. Unaligned CPL3 #AC and exhaustive competing exceptions are untested. |
 | SLDT/STR `0F 00 /0,/1`: protected only, unprivileged; LLDT/LTR `/2,/3`: protected CPL0 | `system_group0`, `load_task_register`; [protected tests](../tests/protected_mode.rs), task-register boot/browser | LTR marks available TSS busy and caches metadata; it does not switch tasks or set TS. STR always writes a word. LLDT/LDT are bounded and SLDT uses the generic register writer: its operand32 upper-word policy lacks a dedicated target-era regression. General CPL>0 execution is unavailable. |
 | VERR/VERW `/4,/5`, LAR/LSL `0F 02/03`, ARPL `63`: protected-only queries/selector adjustment, not CPL0-only | Group-0 queries stop by name; LAR/LSL stop as unimplemented extended opcodes; ARPL names its boundary and #UD in real mode | No ZF/access-rights/limit semantics. Group-0 real-mode #UD is covered; LAR/LSL real-mode #UD is still an unsupported diagnostic, not an implemented instruction contract. No dedicated successful query fixture. |
-| MOV DR `0F 21/23`, MOV test registers `0F 24/26`: privileged; INVD/WBINVD `0F 08/09` and INVLPG `0F 01 /7`: privileged i486 memory-system operations | No execution handler; named unimplemented extended/group stops | DR/GD/#DB, test registers, external cache signals and TLB effects absent. No success coverage. Do not emulate these by returning arbitrary registers or silently accepting flushes. |
+| MOV DR `0F 21/23`, MOV test registers `0F 24/26`: privileged; INVD/WBINVD `0F 08/09` are privileged i486 memory-system operations | No execution handler; named unimplemented extended/group stops | DR/GD/#DB, test registers, and external cache signals absent. INVLPG has a separate paging implementation. No success coverage. Do not emulate these by returning arbitrary registers or silently accepting flushes. |
 | CLI/STI, HLT, PUSHF/POPF, IN/OUT and strings: real/protected with IOPL/privilege rules | `execute`; existing CPU, PIC/PIT, DOS and device suites at real mode/CPL0 | IOPL checks and TSS I/O bitmap are not implemented. Nonzero-CPL execution stops; this cannot be represented as full protected I/O protection. |
 | Far CALL/JMP/RET, INT/IRET, task gates and IRET.NT | `far_transfer`, `code_target`, `protected_event`; protected/TSS/IRQ matrices | Same-ring code and IDT gates implemented. Hardware tasks, privilege gates/stacks, nested task return and VM86 stop explicitly. No automatic task-switch TS setting exists because no hardware task switch executes. |
 | FNINIT, FNSTCW, FNSTSW memory/AX; WAIT | `execute`; [FPU](../tests/fpu.rs), CLTS and original real/protected boot | EM/TS #NM for all ESC; MP+TS #NM for WAIT. No pending numerical completion, #MF/NE/IRQ routing, numerical stack data or arithmetic. Unsupported numerical operations still stop after TS/EM are removed. Reset clears TS/EM and retains existing environment metadata by the documented reset policy. |
@@ -245,7 +316,7 @@ planning boundary, with these priorities when an original guest establishes need
    selected by the next reproducible blocker. WAIT numeric completion belongs
    with FPU error routing, not a fabricated successful WAIT.
 3. Hardware tasks/backlinks/busy/NT/TS and privilege stacks as complete transition
-   chains; paging/CR2/TLB/cache operations as a separate memory-management design.
+   chains; data-cache signals/timing remain separate from the implemented paging/TLB subsystem.
 
 These priorities describe dependencies, not a prediction of the private HDD's
 next instruction. The new original guest requires only CLTS/TS/#NM. No larger
@@ -300,7 +371,7 @@ actual production release Rust/Wasm at `/` and `/pc98-rust/` with no substitute
 JavaScript CPU. Native tests also assert protected CS.D states, EIP > FFFFh,
 PIC ISR, saved fault metadata, final cache/base/default size, CR0, GDTR and IDTR.
 
-## Validation record
+## Historical Issue #101 validation record
 
 The baseline is checkpoint `7b227425f5bfd90c01e985157a7ec0f35e016fa9`.
 An isolated `git archive HEAD` copy of that unchanged source was compiled and
@@ -318,7 +389,7 @@ The final disk SHA-256 is
 source/boot hashes and all reproduction data are in the checked manifest.
 The old control-write default guest/image remains unchanged. Its PE-only
 variant now commits and halts in the preserved-cache transition window; PE+PG
-continues to stop atomically. Tests and manifest distinguish these outcomes.
+now commits and faults on its missing page tables, ending in bounded shutdown. Issue #107 supersedes the earlier PG rejection. Tests and manifest distinguish these outcomes.
 Historical [Issue #99 evidence](control-register-writes-validation.md) records
 the earlier rejection rather than the current protected capability.
 

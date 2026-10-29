@@ -1,4 +1,4 @@
-//! Original paging-disabled i386/i486 segmentation and same-ring gate delivery.
+//! Original i386/i486 segmentation and same-ring gate delivery.
 //! Contracts: Intel 80386 PRM chapters 6, 9, 14, 16; Intel486 PRM MOV CR.
 use super::*;
 
@@ -78,6 +78,9 @@ impl Cpu {
             }
             self.cpl = 0;
         }
+        if (self.cr0 ^ value) & 0x80000000 != 0 {
+            self.paging.flush();
+        }
         self.cr0 = value | 0x10; // Intel486 ET is hardwired.
     }
     pub(super) fn linear(&self, s: usize, off: u32) -> usize {
@@ -85,7 +88,7 @@ impl Cpu {
     }
     pub(super) fn check_access(
         &self,
-        b: &Bus,
+        b: &mut Bus,
         s: usize,
         off: u32,
         bytes: u32,
@@ -108,6 +111,7 @@ impl Cpu {
         {
             return Err(ExecError::Fault(fault));
         }
+        self.check_pages(b, self.linear(s, off) as u32, bytes, write, self.cpl == 3)?;
         Ok(())
     }
     /// Resolve a complete descriptor span before fetching any bus bytes.
@@ -128,19 +132,19 @@ impl Cpu {
         Ok(base.wrapping_add(index))
     }
     /// Fetch descriptor bytes through the same PC-98 physical/A20 bus as operands.
-    pub(super) fn descriptor(&self, b: &Bus, selector: u16) -> ExecResult<(SegmentCache, u32)> {
+    pub(super) fn descriptor(&self, b: &mut Bus, selector: u16) -> ExecResult<(SegmentCache, u32)> {
         let address = self.descriptor_address(selector)?;
-        let raw = std::array::from_fn(|i| b.read(address.wrapping_add(i as u32) as usize));
+        let raw = self.read_system::<8>(b, address)?;
         Ok((SegmentCache::parse(raw), address))
     }
-    fn accessed(b: &mut Bus, d: SegmentCache, address: u32) -> SegmentCache {
+    fn accessed(&self, b: &mut Bus, d: SegmentCache, address: u32) -> ExecResult<SegmentCache> {
         if d.access & 1 == 0 {
-            b.write(address.wrapping_add(5) as usize, d.access | 1);
+            self.write_system_byte(b, address.wrapping_add(5), d.access | 1)?;
         }
-        SegmentCache {
+        Ok(SegmentCache {
             access: d.access | 1,
             ..d
-        }
+        })
     }
     pub(super) fn load_segment(&mut self, b: &mut Bus, s: usize, selector: u16) -> ExecResult<()> {
         if !self.protected_mode() {
@@ -182,14 +186,14 @@ impl Cpu {
                 error,
             ));
         }
-        let d = Self::accessed(b, d, address);
+        let d = self.accessed(b, d, address)?;
         self.set_segment(s, selector);
         self.segment_caches[s] = Some(d);
         Ok(())
     }
     pub(super) fn code_target(
         &self,
-        b: &Bus,
+        b: &mut Bus,
         selector: u16,
         off: u32,
         returning: bool,
@@ -256,7 +260,7 @@ impl Cpu {
             self.push(b, self.ip)?;
         }
         if let Some((d, address)) = target {
-            self.segment_caches[CS] = Some(Self::accessed(b, d, address));
+            self.segment_caches[CS] = Some(self.accessed(b, d, address)?);
             self.s[CS] = (selector & !3) | self.cpl as u16;
         } else {
             self.reload_real_code(selector);
@@ -311,9 +315,7 @@ impl Cpu {
         if entry + 7 > self.idtr_limit as u32 {
             return Err(ExecError::ProtectedFault(13, idt_error));
         }
-        let raw: [u8; 8] = std::array::from_fn(|i| {
-            b.read(self.idtr_base.wrapping_add(entry).wrapping_add(i as u32) as usize)
-        });
+        let raw = self.read_system::<8>(b, self.idtr_base.wrapping_add(entry))?;
         let access = raw[5];
         let kind = access & 31;
         if kind == 5 {
@@ -383,7 +385,7 @@ impl Cpu {
         if let Some(error) = error {
             self.push_width(b, error, bytes)?;
         }
-        self.segment_caches[CS] = Some(Self::accessed(b, d, address));
+        self.segment_caches[CS] = Some(self.accessed(b, d, address)?);
         self.s[CS] = (selector & !3) | self.cpl as u16;
         self.ip = off;
         self.flags &= !(TF | 0x4000); // NT, TF cleared for both gate kinds.
@@ -409,10 +411,30 @@ impl Cpu {
         let mut vector = n;
         let mut code = error;
         let mut source = source;
-        for _ in 0..3 {
-            match self.protected_interrupt(b, vector, source, code) {
+        // Intel486 PRM 9.9.8: a benign fault may become contributory, then
+        // #PF, then #DF. Attempt all four deliveries, including #DF itself.
+        // Delivery only raises contributory faults or #PF in this subset;
+        // a fault during #DF still shuts down immediately below.
+        for _ in 0..4 {
+            let saved = self.clone();
+            if self.paging_enabled() {
+                b.begin_cpu_memory();
+            }
+            let delivery = self.protected_interrupt(b, vector, source, code);
+            b.finish_cpu_memory(delivery.is_ok());
+            if delivery.is_err() {
+                *self = saved;
+            }
+            match delivery {
                 Ok(()) => return Ok(()),
-                Err(e @ (ExecError::Fault(_) | ExecError::ProtectedFault(_, _))) => {
+                Err(
+                    e @ (ExecError::Fault(_)
+                    | ExecError::ProtectedFault(_, _)
+                    | ExecError::PageFault { .. }),
+                ) => {
+                    if let ExecError::PageFault { linear, .. } = e {
+                        self.cr2 = linear;
+                    }
                     if vector == 8 && source == GateSource::Fault {
                         self.shutdown = true;
                         return Err(ExecError::Unsupported(format!(
@@ -422,9 +444,13 @@ impl Cpu {
                     let (next, next_code) = match e {
                         ExecError::Fault(n) => (n, 0),
                         ExecError::ProtectedFault(n, code) => (n, code),
+                        ExecError::PageFault { code, .. } => (14, code),
                         _ => unreachable!(),
                     };
-                    if source == GateSource::Fault && contributory(vector) && contributory(next) {
+                    if source == GateSource::Fault
+                        && ((contributory(vector) && contributory(next))
+                            || (vector == 14 && (contributory(next) || next == 14)))
+                    {
                         vector = 8;
                         code = Some(0);
                     } else {
@@ -448,10 +474,15 @@ impl Cpu {
             return None;
         }
         let address = self.descriptor_address(selector).ok()?;
-        if !(0..8).all(|i| b.is_plain_ram(address.wrapping_add(i))) {
-            return None;
+        let mut raw = [0; 8];
+        for (i, byte) in raw.iter_mut().enumerate() {
+            let physical = self.peek_translation(b, address.wrapping_add(i as u32))?;
+            if !b.is_plain_ram(physical) {
+                return None;
+            }
+            *byte = b.read(physical as usize);
         }
-        self.descriptor(b, selector).ok().map(|(d, _)| d)
+        Some(SegmentCache::parse(raw))
     }
     fn load_task_register(&mut self, b: &mut Bus, selector: u16, m: u8) -> ExecResult<()> {
         let error = (selector & !3) as u32;
@@ -464,7 +495,13 @@ impl Cpu {
         // The physical bus has no write faults: ROM ignores writes and device
         // reads may change latches. Stop before *any* such access rather than
         // pretend a descriptor became busy or perform a partial device RMW.
-        if !(0..8).all(|i| b.is_plain_ram(address.wrapping_add(i))) {
+        self.check_pages(b, address, 8, false, false)?;
+        let mut plain = true;
+        for i in 0..8 {
+            let physical = self.translate(b, address.wrapping_add(i), false, false, false)?;
+            plain &= b.is_plain_ram(physical);
+        }
+        if !plain {
             return Err(ExecError::Unsupported(format!(
                 "unsupported protected LTR descriptor bus access opcode=0f 00 modrm={m:02x} selector={selector:04x} descriptor={address:08x}; requires writable ordinary RAM"
             )));
@@ -480,7 +517,7 @@ impl Cpu {
         // size checks belong to a task switch (Intel PRM 7.2/9.8.10), not LTR.
         // All fallible checks precede the busy write and the cache/selector
         // commit. One interpreter instruction is indivisible to our bus/IRQs.
-        b.write(address.wrapping_add(5) as usize, d.access | 2);
+        self.write_system_byte(b, address.wrapping_add(5), d.access | 2)?;
         self.tr = selector;
         self.tr_cache = Some(SegmentCache {
             access: d.access | 2,
@@ -539,7 +576,18 @@ impl Cpu {
                     Operand::Reg(r) => self.r[r],
                     Operand::Mem(s, a) => {
                         self.check_mem(b, s, a, 2)?;
-                        if (0..2).any(|i| b.read_has_side_effects(self.linear(s, a + i) as u32)) {
+                        let mut side_effects = false;
+                        for i in 0..2 {
+                            let physical = self.translate(
+                                b,
+                                self.linear(s, a + i) as u32,
+                                false,
+                                self.cpl == 3,
+                                false,
+                            )?;
+                            side_effects |= b.read_has_side_effects(physical);
+                        }
+                        if side_effects {
                             return Err(ExecError::Unsupported(format!(
                                 "unsupported protected LTR source bus access opcode=0f 00 modrm={m:02x}; side-effecting device read"
                             )));

@@ -1,6 +1,7 @@
 //! Original EGC aligned raster subset, from UNDOCUMENTED 9801/9821 io_egc.txt.
 use std::cell::Cell;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Egc {
     pub enabled: bool,
     pub registers: [u16; 8],

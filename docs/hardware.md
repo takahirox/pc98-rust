@@ -3,7 +3,7 @@
 This document describes the preserved VM default. The new selectable
 [Ap DOS subset, independent guests and exact limits](dos-compatibility.md) are
 documented separately; it does not implement a complete PC-9821.
-Issue #101 adds the [current paging-disabled protected-mode contract](protected-mode.md).
+Issues #101/#107 add the [current protected-mode and 4 KiB paging contract](protected-mode.md).
 This supersedes earlier prerequisite-only protected-mode boundaries below.
 The [Issue #11 device audit](ap-devices.md) describes the Ap-only IDE, memory,
 EGC/PEGC and sound additions and their guest fixtures. The port table below
@@ -77,7 +77,7 @@ implemented in VM. LOCK has no bus-contention effect in this single-CPU machine.
 The selectable Ap profile extends this same decoder with 32-bit operands and
 addresses, SIB, FS/GS and selected 386/486 integer instructions. It checks cached
 segment limits and delivers guest exceptions, including the documented
-[paging-disabled ring-0 protected subset](protected-mode.md). Paging, privilege
+[ring-0 protected subset and paging](protected-mode.md). Privilege
 transitions, DPMI and numerical FPU execution remain unsupported. See the [exact Ap CPU coverage and independent DOS diagnostic](dos-compatibility.md#issue-9-cpu-coverage-and-independent-guest-evidence).
 VM retains the V30 behavior described above.
 Ap also provides the [real-mode GDTR](#ap-real-mode-gdtr) and
@@ -383,8 +383,8 @@ contract. Reserved bits are zero by emulator policy. SMSW reads bits 15:0 (0010h
 reset), and x87 checks EM/TS from that same CR0. ET does not imply numerical FPU support;
 CD/NW readback adds no cache simulation. **CR2/CR3 reset to zero by explicit
 emulator policy**; their reset values are not specified in that PRM's reset table.
-They are independent CPU metadata with guest MOV writers as described below;
-there are no page-fault updates, translation tables or TLB effects.
+Guest MOV writers share these registers with the [paging subsystem](#ap-i486-paging):
+CR2 receives page-fault addresses and CR3 selects physical tables and flushes the TLB.
 
 Instructions are limited to 15 bytes and the existing real-mode CS limit.
 Invalid forms deliver the existing six-byte real-mode exception frame without
@@ -401,9 +401,9 @@ at both `/` and `/pc98-rust/`, requiring `MOV CR PASS`, no FAIL/errors, exact
 results and unchanged media. Hosts only mount, step, inspect and reset.
 Generated disks and source/license copies stay outside `web/`.
 
-The [paging-disabled protected subset](protected-mode.md) extends MOV CR reads
-and writes into ring 0 and adds LMSW. CLTS, paging, DPMI and numerical x87 remain
-unimplemented. `0F 22` writes are described below. There is no
+The [protected subset](protected-mode.md) extends MOV CR reads
+and writes into ring 0 and adds LMSW, CLTS and 4 KiB paging. DPMI and numerical
+x87 remain unimplemented. `0F 22` writes are described below. There is no
 filename-specific behavior or complete HDD, game boot or playability claim. See the
 [private HDD diagnostic procedure](dos-compatibility.md#diagnose-a-local-hdd-control-register-failure).
 
@@ -429,12 +429,13 @@ not later CR4/Pentium rules.
   bits must remain zero. Real-mode-safe values commit atomically and SMSW and
   existing x87 EM/TS checks immediately see the same CR0. AM/WP have no effect in
   real mode; cache controls remain metadata in this core without a cache model.
-- **CR2:** stores all 32 source bits and reads them back unchanged. It does not
-  enable paging or generate a page fault.
+- **CR2:** stores all 32 source bits and reads them back unchanged, until a
+  page fault replaces them with its faulting linear address.
 - **CR3:** accepts the page-directory base (bits 31:12), PCD (4) and PWT (3),
-  mask FFFFF018h. It is metadata while paging is disabled, with no RAM lookup,
-  address masking to installed memory, translation or TLB to flush. Reserved low
-  bits must remain zero. CR2/CR3 reset remains deterministic zero by policy.
+  mask FFFFF018h. Every MOV CR3 flushes the TLB, including same-value reloads.
+  While PG=1 its base selects physical two-level page tables. No address masking
+  to installed memory is added. Reserved low bits must remain zero. CR2/CR3
+  reset remains deterministic zero by policy.
 
 PG=1 with PE=0, or NW=1 with CD=0, raises restartable **#GP (13)** before mutation.
 As with existing Ap real-mode exceptions, the frame has FLAGS/CS/first-prefix IP,
@@ -445,14 +446,13 @@ before a control register changes. TF traps after a successful write at the next
 The PRM requires software to preserve reserved bits and does not specify a useful
 result for violations. This core explicitly **stops with an undefined reserved-bit
 write diagnostic**, rather than inventing #GP or silently masking them. A valid
-CR0 request with **PG=1, PE=1** stops with an **unsupported paging transition**
-error. Neither rejected case commits a write,
-advances IP, retires the instruction, delivers a spurious guest fault, or changes
-GPRs/flags/segments/FPU/RAM. The error contains first-prefix CS:IP, opcode/ModR/M,
-CR/GPR, old/written value, requested PE/PG and sequential next IP. Machine execution
-stays stopped until reset. **PE=1, PG=0 now commits**, preserving hidden segment
-state until reload and enabling the [protected execution semantics](protected-mode.md).
-Clearing PE is supported for the documented return sequence; paging is unsupported.
+CR0 request with **PG=1, PE=1** now commits and enables real page translation.
+The reserved-write diagnostic contains first-prefix CS:IP, opcode/ModR/M,
+CR/GPR, old/written value, requested PE/PG and sequential next IP, without
+retiring or partially mutating the rejected instruction. **PE=1, PG=0** retains
+segmentation without paging. Disabling PG flushes the TLB and restores unpaged
+linear-to-physical addressing while preserving cached segment state. Clearing
+PE requires PG=0. See [Ap i486 paging](#ap-i486-paging) for the exact limits.
 
 The original MIT [write probe](../guest/mov_cr_write.asm) and
 [manifest](../fixtures/mov-cr-write-manifest.json) pin source, boot/image hashes,
@@ -462,13 +462,38 @@ Prepare with `python3 tools/prepare_mov_cr_write_fixture.py`, then run
 The default guest verifies all eight CR2 source GPRs, CR3 from ESP, CR0/SMSW,
 flags and #UD/#GP repair/IRET/retry itself. Two `-DMODE` builds request PE and PE+PG
 respectively: PE commits and halts in the cached real-segment transition window;
-PE+PG stops atomically. Neither diagnostic probe prints PASS. Native and actual
+PE+PG commits, then its deliberately missing tables cause bounded triple-fault
+shutdown. Neither diagnostic probe prints PASS. Native and actual
 release-Wasm Chromium checks run
 the same images cold and after reset, at both serving roots, without host guest
 logic. Generated media/source/license copies stay outside `web/`.
 
 See [Issue #99 validation evidence](control-register-writes-validation.md) and the
 [bounded local trace procedure](dos-compatibility.md#diagnose-a-local-hdd-control-register-failure).
+
+## Ap i486 paging
+
+Issue #107 implements original-Rust two-level 32-bit **4 KiB pages**, including
+nonidentity instruction, operand, stack, GDT/LDT/IDT and TSS-descriptor accesses.
+Physical page walks and final frames retain the PC-98 bus/A20 decode. DMA stays
+physical. [Detailed contract and tests](protected-mode.md#i486-4-kib-paging-issue-107)
+and [validation evidence](paging-validation.md) distinguish this from full 486/OS support.
+
+| Feature | Current behavior |
+| --- | --- |
+| CR0.PG, CR3, CR2 | Real translations; PG transitions and every CR3 write flush TLB; #PF updates CR2 |
+| Present/RW/US, CR0.WP, A/D | Both levels checked; system references are supervisor; only actual writes set Dirty |
+| #PF/IRET and nested delivery | Three 486 error bits, first-prefix restart, journaled RAM/graphics, bounded #DF/shutdown |
+| TLB/INVLPG | Original 32-slot cache; guest table edits stay stale until eviction/invalidation; no negative entries |
+| Physical bus | Existing RAM/MMIO/ROM/A20 behavior; tables themselves require writable ordinary RAM |
+| Unsupported | PSE, PAE, NX/global pages, general CPL3/privilege switching, TSS task switching and data-cache cycle fidelity; INVD/WBINVD still stop honestly |
+
+Prepare with `python3 tools/prepare_paging_fixture.py`; run
+`cargo test --locked --lib --test paging --test dma` and the complete `npm test`.
+The MIT guest prints `PAGING PASS` after nonidentity execution, guest #PF repair,
+16/32-bit protected code, TLB checks and PG disable; native and production Wasm
+Chromium checks exercise cold boot and reset at both roots. The private HDD was
+**not retested**; there is no game or DOS-extender compatibility claim.
 
 ## Ap real-mode SMSW
 
@@ -509,8 +534,8 @@ or host error, exact results and unchanged disk bytes. Generated fixtures and
 license/source copies stay outside publication assets.
 
 This SMSW milestone added readback only. Subsequent work implements MOV CR
-writes and the [protected subset including LMSW](protected-mode.md). CLTS,
-paging and numerical x87 execution remain unimplemented.
+writes and the [protected subset including LMSW, CLTS and paging](protected-mode.md).
+Numerical x87 execution remains unimplemented.
 No whole inventory category is promoted to verified by this bounded acceptance.
 
 ## Ap real-mode GDTR
