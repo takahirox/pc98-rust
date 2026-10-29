@@ -1,0 +1,22 @@
+{
+  "source": "guest/protected_mode.asm",
+  "license": "MIT; LICENSE and original assembly copied alongside image",
+  "assembly": "nasm -f bin guest/protected_mode.asm -o protected_mode.bin",
+  "source_sha256": "27583d5021d26ee88b4fe1b7142dcf9ca7343a9c869f2399a5ee203a83bd6415",
+  "boot_sha256": "a34bbfbde29654c0dc61da81bff310714436cffb5cb528498658e73246ce4d76",
+  "image": "fixtures/protected_mode/protected_mode.hdm",
+  "image_sha256": "7d02a3ed1de4fc556b82548477dfa500d46bbaa0add196634eb73eca58f55873",
+  "geometry": "77 cylinders, 2 heads, 8 sectors, 1024 bytes per sector",
+  "contract": "Real -> PE 16-bit -> PE 32-bit -> PE 16-bit -> real; GDT/LDT, all six segments, EIP/ESP above 64 KiB, 66/67, near/far CALL/RET, IDT INT/GP repair/IRETD, PC-98 A20 and mapped RAM, PIC/PIT IRQ0 IF gating/ISR/EOI, guards, cold/reset",
+  "result_address": "0x8000",
+  "result_length": 64,
+  "result_hex": "a516010101a5a5a5a532323232a5a5a5a567a5a5a5a5a5a5a5554e46a5a5a5a5a552a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+  "extended_address": "0x210001",
+  "extended_hex": "cdab3412",
+  "markers": [
+    "PROTECTED MODE PASS",
+    "PROTECTED MODE FAIL"
+  ],
+  "slot_budget": 2000000,
+  "distribution": "Test only; excluded from web/"
+}

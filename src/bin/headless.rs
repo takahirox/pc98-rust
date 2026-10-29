@@ -8,10 +8,10 @@ fn instruction_diagnostic(c: &Cpu, b: &Bus) -> (String, bool) {
     let mut offset = c.ip;
     let mut count = 0;
     let mut next = || {
-        if count == 15 || (ap && offset > 0xffff) {
+        if count == 15 || (ap && offset > c.segment_cache(1).limit) {
             return None;
         }
-        let value = b.read(c.s[1] as usize * 16 + offset as usize);
+        let value = b.read(c.segment_cache(1).base.wrapping_add(offset) as usize);
         offset = offset.wrapping_add(1);
         if !ap {
             offset &= 0xffff;
@@ -78,11 +78,11 @@ fn instruction_diagnostic(c: &Cpu, b: &Bus) -> (String, bool) {
     }
     let registers: Vec<_> = (0..8).map(|r| c.reg32(r)).collect();
     (format!(
-        "{:04x}:{:08x} opcode={} prefixes={:02x?} operand={} address={} gpr={:08x?} seg={:04x?} fs_gs={:04x?} flags={:04x}{:04x} cr0={:08x} cr2={:08x} cr3={:08x}",
+        "{:04x}:{:08x} opcode={} prefixes={:02x?} operand={} address={} gpr={:08x?} seg={:04x?} fs_gs={:04x?} flags={:04x}{:04x} cr0={:08x} cr2={:08x} cr3={:08x} mode={} cpl={} gdt={:08x}/{:04x} idt={:08x}/{:04x} caches={:?} ldtr={:04x} fault={:?}",
         c.s[1], c.ip, operation, prefixes,
-        if ap && prefixes.contains(&0x66) {32} else {16},
-        if ap && prefixes.contains(&0x67) {32} else {16},
-        registers, c.s, c.extra_segments, c.flags_upper, c.flags, c.cr0, c.cr2, c.cr3
+        if ap && (c.segment_cache(1).big() ^ prefixes.contains(&0x66)) {32} else {16},
+        if ap && (c.segment_cache(1).big() ^ prefixes.contains(&0x67)) {32} else {16},
+        registers, c.s, c.extra_segments, c.flags_upper, c.flags, c.cr0, c.cr2, c.cr3, if c.protected_mode() {"protected"} else {"real"}, c.cpl, c.gdtr_base, c.gdtr_limit, c.idtr_base, c.idtr_limit, c.segment_caches, c.ldtr, c.last_fault
     ), control)
 }
 fn main() {

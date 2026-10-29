@@ -139,10 +139,10 @@ fn trace_captures_supported_control_read_at_irq_handler_entry() {
 
 #[test]
 fn trace_distinguishes_real_mode_setup_from_a_requested_transition() {
-    // Guest writes CR2, runs NOP, then requests PE in CR0. Only original bytes.
+    // Guest writes CR2, runs NOP, then requests PE+PG in CR0. Only original bytes.
     let mut image = vec![0; 1_261_568];
     let code = [
-        0x66, 0xb8, 0xef, 0xbe, 0xad, 0xde, 0x0f, 0x22, 0xd0, 0x90, 0x66, 0xb8, 0x11, 0, 0, 0x60,
+        0x66, 0xb8, 0xef, 0xbe, 0xad, 0xde, 0x0f, 0x22, 0xd0, 0x90, 0x66, 0xb8, 0x11, 0, 0, 0xe0,
         0x66, 0x67, 0x65, 0x0f, 0x22, 0xc0, 0xf4,
     ];
     image[..code.len()].copy_from_slice(&code);
@@ -166,7 +166,7 @@ fn trace_distinguishes_real_mode_setup_from_a_requested_transition() {
     );
     assert!(
         diagnostic.contains(
-            "cr=0 gpr=eax old=60000010 written=60000011 PE=0->1 PG=0->0 prefixes=[66, 67, 65]"
+            "cr=0 gpr=eax old=60000010 written=e0000011 PE=0->1 PG=0->1 prefixes=[66, 67, 65]"
         ),
         "{diagnostic}"
     );
@@ -174,5 +174,41 @@ fn trace_distinguishes_real_mode_setup_from_a_requested_transition() {
         diagnostic.contains("next-attempt=<stopped>"),
         "{diagnostic}"
     );
-    assert!(diagnostic.contains("CS:IP=1fc0:00000010 opcode=0f 22 modrm=c0 CR0 GPR=eax old=60000010 written=60000011 PE=1 PG=0 next-ip=00000016; write not committed"),"{diagnostic}");
+    assert!(diagnostic.contains("CS:IP=1fc0:00000010 opcode=0f 22 modrm=c0 CR0 GPR=eax old=60000010 written=e0000011 PE=1 PG=1 next-ip=00000016; write not committed"),"{diagnostic}");
+}
+
+#[test]
+fn protected_round_trip_trace_retains_modes_caches_tables_and_fault() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_headless"))
+        .args([
+            "fixtures/protected_mode/protected_mode.hdm",
+            "10000",
+            "trace",
+            "--ap",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("PROTECTED MODE PASS"));
+    let trace = String::from_utf8(output.stderr).unwrap();
+    assert!(trace.contains("PE=0->1 PG=0->0"));
+    assert!(trace.contains("PE=1->0 PG=0->0"));
+    assert!(trace.contains("mode=protected cpl=0"));
+    assert!(trace.contains("mode=real cpl=0"));
+    assert!(trace.contains("caches=[Some(SegmentCache"));
+    assert!(trace.contains("fault=Some((13, 64))"));
+    assert!(trace.contains("gdt=0001f"));
+    assert!(trace.contains("idt=00009000/0187"));
+    assert!(
+        trace
+            .lines()
+            .filter(|s| s.starts_with("control-slot="))
+            .count()
+            <= 16
+    );
+    assert!(trace.lines().filter(|s| s.starts_with("slot=")).count() <= 100);
 }

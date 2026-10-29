@@ -1,5 +1,8 @@
-//! Original V30 and bounded i486 real-mode interpreter. Instructions never delegate to a host emulator.
+//! Original V30 and bounded paging-disabled i486 interpreter. Instructions never delegate to a host emulator.
 use crate::bus::Bus;
+mod protected;
+use protected::GateSource;
+pub use protected::SegmentCache;
 pub const CF: u16 = 1;
 pub const PF: u16 = 4;
 pub const AF: u16 = 16;
@@ -58,8 +61,15 @@ pub struct Cpu {
     pub upper: [u16; 8],
     pub extra_segments: [u16; 2], // FS, GS
     /// i486 CR0: reset CD/NW/ET set; PE/PG clear. Shared by MOV, SMSW and x87.
-    /// MOV writers accept real-mode-safe state; protected execution is unsupported.
+    /// Paging is unsupported; PE enables descriptor and protected gate semantics.
     pub cr0: u32,
+    /// Hidden state in ES/CS/SS/DS/FS/GS order. None derives conventional
+    /// real-mode state from the public selector, preserving native callers.
+    pub segment_caches: [Option<SegmentCache>; 6],
+    pub cpl: u8,
+    pub ldtr: u16,
+    pub ldtr_cache: Option<SegmentCache>,
+    pub last_fault: Option<(u8, u32)>,
     /// CR2/CR3 use deterministic zero on reset (emulator policy).
     /// Guest-writable metadata; no paging, page-fault updates or translation exists.
     pub cr2: u32,
@@ -69,11 +79,11 @@ pub struct Cpu {
     pub gdtr_limit: u16,
     /// Linear metadata; never masked by A20 or validated against installed RAM.
     pub gdtr_base: u32,
-    /// Real-mode interrupt table; reset matches i486 architectural state.
+    /// Interrupt table (real vectors or protected gates); architectural reset.
     pub idtr_limit: u16,
     /// Unmasked linear metadata, independent of installed memory and A20.
     pub idtr_base: u32,
-    /// Terminal IDT-limit shutdown; only reset resumes execution.
+    /// Terminal IDT/triple-fault shutdown; only reset resumes execution.
     pub shutdown: bool,
     pub ip: u32,
     pub flags_upper: u16,
@@ -108,6 +118,11 @@ impl Default for Cpu {
             upper: [0; 8],
             extra_segments: [0; 2],
             cr0: 0x60000010,
+            segment_caches: [None; 6],
+            cpl: 0,
+            ldtr: 0,
+            ldtr_cache: None,
+            last_fault: None,
             cr2: 0,
             cr3: 0,
             fpu: Fpu::default(),
@@ -136,6 +151,7 @@ enum ExecError {
     /// Control writes reject undefined/unsupported state before any mutation.
     ControlWriteRejected(String),
     Fault(u8),
+    ProtectedFault(u8, u32),
     Unsupported(String),
 }
 type ExecResult<T> = Result<T, ExecError>;
@@ -206,12 +222,11 @@ impl Cpu {
         }
     }
     fn fetch(&mut self, b: &Bus) -> ExecResult<u8> {
-        if b.profile == crate::Profile::Pc9821ApDos
-            && (self.ip > 0xffff || self.instruction_bytes >= 15)
-        {
+        if b.profile == crate::Profile::Pc9821ApDos && self.instruction_bytes >= 15 {
             return Err(ExecError::Fault(13));
         }
-        let v = b.read(self.s[CS] as usize * 16 + self.ip as usize);
+        self.check_access(b, CS, self.ip, 1, false, true)?;
+        let v = b.read(self.linear(CS, self.ip));
         self.ip = self.ip.wrapping_add(1);
         if b.profile == crate::Profile::Pc9801Vm {
             self.ip &= 0xffff;
@@ -235,10 +250,7 @@ impl Cpu {
         })
     }
     fn check_mem(&self, b: &Bus, s: usize, off: u32, bytes: u32) -> ExecResult<()> {
-        if b.profile == crate::Profile::Pc9821ApDos && (off > 0xffff || bytes - 1 > 0xffff - off) {
-            return Err(ExecError::Fault(if s == SS { 12 } else { 13 }));
-        }
-        Ok(())
+        self.check_access(b, s, off, bytes, false, false)
     }
     fn read_mem(&self, b: &Bus, s: usize, off: u32, bytes: u32) -> ExecResult<u32> {
         self.check_mem(b, s, off, bytes)?;
@@ -249,34 +261,31 @@ impl Cpu {
             } else {
                 off + i
             };
-            v |= (b.read(self.segment(s) as usize * 16 + a as usize) as u32) << (i * 8);
+            v |= (b.read(self.linear(s, a)) as u32) << (i * 8);
         }
         Ok(v)
     }
     fn write_mem(&self, b: &mut Bus, s: usize, off: u32, v: u32, bytes: u32) -> ExecResult<()> {
-        self.check_mem(b, s, off, bytes)?;
+        self.check_access(b, s, off, bytes, true, false)?;
         for i in 0..bytes {
             let a = if b.profile == crate::Profile::Pc9801Vm {
                 (off + i) & 0xffff
             } else {
                 off + i
             };
-            b.write(
-                self.segment(s) as usize * 16 + a as usize,
-                (v >> (i * 8)) as u8,
-            );
+            b.write(self.linear(s, a), (v >> (i * 8)) as u8);
         }
         Ok(())
     }
     fn push_width(&mut self, b: &mut Bus, v: u32, bytes: u32) -> ExecResult<()> {
-        let sp = self.r[SP].wrapping_sub(bytes as u16);
-        self.write_mem(b, SS, sp as u32, v, bytes)?;
-        self.r[SP] = sp;
+        let sp = self.stack_offset(self.stack_pointer().wrapping_sub(bytes));
+        self.write_mem(b, SS, sp, v, bytes)?;
+        self.set_stack_pointer(sp);
         Ok(())
     }
     fn pop_width(&mut self, b: &Bus, bytes: u32) -> ExecResult<u32> {
-        let v = self.read_mem(b, SS, self.r[SP] as u32, bytes)?;
-        self.r[SP] = self.r[SP].wrapping_add(bytes as u16);
+        let v = self.read_mem(b, SS, self.stack_pointer(), bytes)?;
+        self.set_stack_pointer(self.stack_pointer().wrapping_add(bytes));
         Ok(v)
     }
     fn push(&mut self, b: &mut Bus, v: u32) -> ExecResult<()> {
@@ -284,9 +293,9 @@ impl Cpu {
     }
     fn push_segment(&mut self, b: &mut Bus, s: usize) -> ExecResult<()> {
         // i486 selector pushes reserve the operand size but only access a word.
-        let sp = self.r[SP].wrapping_sub(self.bytes(true) as u16);
-        self.write_mem(b, SS, sp as u32, self.segment(s) as u32, 2)?;
-        self.r[SP] = sp;
+        let sp = self.stack_offset(self.stack_pointer().wrapping_sub(self.bytes(true)));
+        self.write_mem(b, SS, sp, self.segment(s) as u32, 2)?;
+        self.set_stack_pointer(sp);
         Ok(())
     }
     fn pop(&mut self, b: &Bus) -> ExecResult<u32> {
@@ -295,6 +304,9 @@ impl Cpu {
     fn deliver_interrupt(&mut self, b: &mut Bus, n: u8) -> ExecResult<()> {
         if self.shutdown {
             return Ok(());
+        }
+        if self.protected_mode() {
+            return self.protected_interrupt(b, n, GateSource::Software, None);
         }
         let entry = n as u32 * 4;
         let base = if b.profile == crate::Profile::Pc9821ApDos {
@@ -318,7 +330,7 @@ impl Cpu {
             self.check_mem(
                 b,
                 SS,
-                self.r[SP].wrapping_sub((i * bytes) as u16) as u32,
+                self.stack_offset(self.stack_pointer().wrapping_sub(i * bytes)),
                 bytes,
             )?;
         }
@@ -329,7 +341,7 @@ impl Cpu {
         self.flags_upper &= !4; // Real-mode interrupt/exception entry clears AC.
         self.trap_suppressed = true;
         self.ip = u16::from_le_bytes([vector[0], vector[1]]) as u32;
-        self.s[CS] = u16::from_le_bytes([vector[2], vector[3]]);
+        self.reload_real_code(u16::from_le_bytes([vector[2], vector[3]]));
         self.halted = false;
         Ok(())
     }
@@ -337,6 +349,9 @@ impl Cpu {
     // INT uses deliver_interrupt directly so step restores the faulting prefix IP
     // before attempting #DF. This is a bounded IDT-limit path, not nested-fault emulation.
     fn deliver_event(&mut self, b: &mut Bus, n: u8) -> ExecResult<()> {
+        if self.protected_mode() {
+            return self.protected_event(b, n, None, GateSource::External);
+        }
         match self.deliver_interrupt(b, n) {
             Err(ExecError::Fault(8)) => match self.deliver_interrupt(b, 8) {
                 Err(ExecError::Fault(8)) => {
@@ -349,10 +364,10 @@ impl Cpu {
             result => result,
         }
     }
-    /// Inject a real-mode interrupt with a six-byte frame from a native caller.
+    /// Inject an external interrupt using the current real/protected table format.
     pub fn interrupt(&mut self, b: &mut Bus, n: u8) -> Result<(), String> {
         self.deliver_event(b, n)
-            .map_err(|_| "invalid real-mode interrupt stack".to_string())
+            .map_err(|e| format!("interrupt delivery failed: {e:?}"))
     }
     fn flag(&mut self, f: u16, on: bool) {
         if on {
@@ -485,6 +500,14 @@ impl Cpu {
             Operand::Mem(s, a) => self.read_mem(b, s, a, self.bytes(w)),
         }
     }
+    fn get_modify(&self, b: &Bus, o: Operand, w: bool) -> ExecResult<u32> {
+        // Preflight the full write span before any operand bus read: reads of
+        // memory-mapped devices (for example EGC VRAM) can change device latches.
+        if let Operand::Mem(s, a) = o {
+            self.check_access(b, s, a, self.bytes(w), true, false)?;
+        }
+        self.get(b, o, w)
+    }
     fn put(&mut self, b: &mut Bus, o: Operand, v: u32, w: bool) -> ExecResult<()> {
         match o {
             Operand::Reg(r) => {
@@ -520,7 +543,7 @@ impl Cpu {
         } else {
             target & 0xffff
         };
-        if target > 0xffff {
+        if target > self.segment_cache(CS).limit {
             return Err(ExecError::Fault(13));
         }
         self.ip = target;
@@ -597,13 +620,13 @@ impl Cpu {
     fn check_stack_sequence(&self, b: &Bus, count: u32, push: bool) -> ExecResult<()> {
         let bytes = self.bytes(true);
         for i in 0..count {
-            let delta = if push { (i + 1) * bytes } else { i * bytes } as u16;
-            let off = if push {
-                self.r[SP].wrapping_sub(delta)
+            let delta = if push { (i + 1) * bytes } else { i * bytes };
+            let off = self.stack_offset(if push {
+                self.stack_pointer().wrapping_sub(delta)
             } else {
-                self.r[SP].wrapping_add(delta)
-            };
-            self.check_mem(b, SS, off as u32, bytes)?;
+                self.stack_pointer().wrapping_add(delta)
+            });
+            self.check_access(b, SS, off, bytes, push, false)?;
         }
         Ok(())
     }
@@ -629,13 +652,13 @@ impl Cpu {
             b.output(port.wrapping_add(i as u16), (value >> (i * 8)) as u8);
         }
     }
-    fn load_pointer(&mut self, b: &Bus, o: Operand, reg: usize, seg: usize) -> ExecResult<()> {
+    fn load_pointer(&mut self, b: &mut Bus, o: Operand, reg: usize, seg: usize) -> ExecResult<()> {
         if let Operand::Mem(s, a) = o {
             self.check_mem(b, s, a, self.bytes(true) + 2)?;
             let off = self.get(b, o, true)?;
             let segment = self.read_mem(b, s, a + self.bytes(true), 2)?;
+            self.load_segment(b, seg, segment as u16)?;
             self.put_register(reg, off);
-            self.set_segment(seg, segment as u16);
             if seg == SS {
                 self.inhibit = 1;
                 self.trap_suppressed = true;
@@ -669,7 +692,7 @@ impl Cpu {
         if self.flags & IF != 0 && self.inhibit == 0 {
             if let Some(n) = b.irq() {
                 self.deliver_event(b, n)
-                    .map_err(|_| "invalid real-mode interrupt stack".to_string())?;
+                    .map_err(|e| format!("interrupt delivery failed: {e:?}"))?;
             }
         }
         if self.shutdown {
@@ -689,8 +712,13 @@ impl Cpu {
                     && saved.flags & TF != 0
                     && !self.trap_suppressed
                 {
-                    self.deliver_event(b, 1)
-                        .map_err(|_| "invalid single-step interrupt stack".to_string())?;
+                    if self.protected_mode() {
+                        self.protected_event(b, 1, None, GateSource::Trap)
+                            .map_err(|e| format!("protected single-step delivery failed: {e:?}"))?;
+                    } else {
+                        self.deliver_event(b, 1)
+                            .map_err(|_| "invalid single-step interrupt stack".to_string())?;
+                    }
                 }
                 Ok(())
             }
@@ -700,13 +728,30 @@ impl Cpu {
                         return Err("invalid V30 instruction".into())
                     }
                     ExecError::Fault(n) => n,
+                    ExecError::ProtectedFault(n, code) => {
+                        *self = saved;
+                        return self.protected_event(b, n, Some(code), GateSource::Fault)
+                            .map_err(|e| format!("protected fault delivery failed vector={n} error={code:08x}: {e:?}"));
+                    }
                     ExecError::ControlWriteRejected(message) => {
                         *self = saved;
                         return Err(message);
                     }
-                    ExecError::Unsupported(message) => return Err(message),
+                    ExecError::Unsupported(message) => {
+                        if saved.protected_mode() {
+                            *self = saved;
+                            return Err(format!("{message}; PE=1 PG=0 CS:EIP={:04x}:{:08x} CPL={} CR0={:08x} GDT={:08x}/{:04x} IDT={:08x}/{:04x}", self.s[CS], self.ip, self.cpl, self.cr0, self.gdtr_base, self.gdtr_limit, self.idtr_base, self.idtr_limit));
+                        }
+                        return Err(message);
+                    }
                 };
                 *self = saved;
+                if self.protected_mode() {
+                    let error = matches!(vector, 8 | 10..=14 | 17).then_some(0);
+                    self.last_fault = Some((vector, error.unwrap_or(0)));
+                    return self.protected_event(b, vector, error, GateSource::Fault)
+                        .map_err(|e| format!("protected fault delivery failed vector={vector} error={error:?}: {e:?}"));
+                }
                 self.deliver_event(b, vector)
                     .map_err(|_| "fault while delivering real-mode exception".to_string())
             }
@@ -719,6 +764,7 @@ impl Cpu {
             return Err(ExecError::Fault(6));
         }
         match op {
+            0x00 => self.system_group0(b, ov)?,
             0x20 | 0x22 => {
                 let m = self.fetch(b)?;
                 if m >> 6 != 3 {
@@ -753,8 +799,8 @@ impl Cpu {
                     };
                     let reason = if reserved != 0 {
                         Some("undefined reserved-bit write")
-                    } else if selector == 0 && written & 0x80000001 != 0 {
-                        Some("unsupported protected execution/paging transition")
+                    } else if selector == 0 && written & 0x80000000 != 0 {
+                        Some("unsupported paging transition")
                     } else {
                         None
                     };
@@ -766,14 +812,14 @@ impl Cpu {
                         };
                         return Err(ExecError::ControlWriteRejected(format!(
                             "{reason}: CS:IP={:04x}:{:08x} opcode=0f 22 modrm={m:02x} CR{selector} GPR={} old={value:08x} written={written:08x}{mode} next-ip={:08x}; write not committed",
-                            self.s[CS], self.ip - self.instruction_bytes as u32,
+                            self.s[CS], self.ip.wrapping_sub(self.instruction_bytes as u32),
                             ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"][(m & 7) as usize],
                             self.ip
                         )));
                     }
                     match selector {
                         // ET is hardwired to 1 on the selected Intel486.
-                        0 => self.cr0 = written | 0x10,
+                        0 => self.commit_cr0(written),
                         2 => self.cr2 = written,
                         3 => self.cr3 = written,
                         _ => unreachable!(),
@@ -789,20 +835,21 @@ impl Cpu {
                         // preserved as a deterministic emulator policy.
                         Operand::Reg(r) => self.r[r] = self.cr0 as u16,
                         Operand::Mem(s, off) => {
-                            // Intel486 real-address SMSW table: #GP even for SS.
-                            // Preflight both bytes before any bus write. The modern
-                            // SDM instead specifies #SS for SS overruns.
-                            if off > 0xfffe {
+                            if !self.protected_mode() && off > 0xfffe {
                                 return Err(ExecError::Fault(13));
                             }
-                            let address = self.segment(s) as usize * 16 + off as usize;
-                            for (i, value) in
-                                (self.cr0 as u16).to_le_bytes().into_iter().enumerate()
-                            {
-                                b.write(address + i, value);
-                            }
+                            self.write_mem(b, s, off, self.cr0, 2)?;
                         }
                     }
+                    return Ok(());
+                }
+                if kind == 6 {
+                    let o = self.decode(b, m, ov)?;
+                    let value = match o {
+                        Operand::Reg(r) => self.r[r] as u32,
+                        Operand::Mem(s, a) => self.read_mem(b, s, a, 2)?,
+                    };
+                    self.commit_cr0((self.cr0 & !15) | (value & 15) | (self.cr0 & 1));
                     return Ok(());
                 }
                 if !matches!(kind, 0..=3) {
@@ -813,17 +860,17 @@ impl Cpu {
                 let Operand::Mem(s, off) = self.decode(b, m, ov)? else {
                     return Err(ExecError::Fault(6));
                 };
-                // i486 real-address contract for these six-byte operands is #GP,
-                // including SS. Preflight before any table-register change or bus write.
-                if off > 0xfffa {
+                // Real-address 486 table operands fault #GP, including SS;
+                // protected operands use ordinary descriptor access checks.
+                if !self.protected_mode() && off > 0xfffa {
                     return Err(ExecError::Fault(13));
                 }
-                let address = self.segment(s) as usize * 16 + off as usize;
+                self.check_access(b, s, off, 6, kind < 2, false)?;
                 if kind >= 2 {
-                    let limit = b.read16(address);
-                    let mut base = 0;
-                    for i in 0..if self.operand32 { 4 } else { 3 } {
-                        base |= (b.read(address + 2 + i) as u32) << (8 * i);
+                    let limit = self.read_mem(b, s, off, 2)? as u16;
+                    let mut base = self.read_mem(b, s, off + 2, 4)?;
+                    if !self.operand32 {
+                        base &= 0xffffff;
                     }
                     if kind == 2 {
                         self.gdtr_limit = limit;
@@ -833,20 +880,16 @@ impl Cpu {
                         self.idtr_base = base;
                     }
                 } else {
-                    // Full base with either operand size: explicit SDM SGDT/SIDT
-                    // operation, despite older compatibility text (docs/hardware.md).
                     let (limit, base) = if kind == 0 {
                         (self.gdtr_limit, self.gdtr_base)
                     } else {
                         (self.idtr_limit, self.idtr_base)
                     };
-                    let limit = limit.to_le_bytes();
-                    let base = base.to_le_bytes();
-                    for (i, value) in limit.into_iter().chain(base).enumerate() {
-                        b.write(address + i, value);
-                    }
+                    self.write_mem(b, s, off, limit as u32, 2)?;
+                    self.write_mem(b, s, off + 2, base, 4)?;
                 }
             }
+
             0x80..=0x8f => {
                 let d = self.immediate(b, true)?;
                 if self.cond(op & 15) {
@@ -861,7 +904,7 @@ impl Cpu {
             0xa0 | 0xa8 => self.push_segment(b, if op == 0xa0 { 4 } else { 5 })?,
             0xa1 | 0xa9 => {
                 let v = self.pop(b)? as u16;
-                self.set_segment(if op == 0xa1 { 4 } else { 5 }, v);
+                self.load_segment(b, if op == 0xa1 { 4 } else { 5 }, v)?;
             }
             0xb2 | 0xb4 | 0xb5 => {
                 let m = self.fetch(b)?;
@@ -964,7 +1007,11 @@ impl Cpu {
                     }
                 }
                 let bit = 1u32 << (index & (bits - 1));
-                let v = self.get(b, o, true)?;
+                let v = if kind == 0 {
+                    self.get(b, o, true)?
+                } else {
+                    self.get_modify(b, o, true)?
+                };
                 self.flag(CF, v & bit != 0);
                 let out = match kind {
                     1 => v | bit,
@@ -984,7 +1031,7 @@ impl Cpu {
                 } else {
                     self.byte(1)
                 }) & 31;
-                let dst = self.get(b, o, true)?;
+                let dst = self.get_modify(b, o, true)?;
                 let src = self.get(b, Operand::Reg(((m >> 3) & 7) as usize), true)?;
                 if n != 0 {
                     let bits = self.bytes(true) * 8;
@@ -1015,7 +1062,7 @@ impl Cpu {
                 let m = self.fetch(b)?;
                 let o = self.decode(b, m, ov)?;
                 let reg = Operand::Reg(((m >> 3) & 7) as usize);
-                let dst = self.get(b, o, w)?;
+                let dst = self.get_modify(b, o, w)?;
                 let src = self.get(b, reg, w)?;
                 if op & 0x40 != 0 {
                     let result = self.alu(0, dst, src, w);
@@ -1026,6 +1073,8 @@ impl Cpu {
                     if self.flags & ZF != 0 {
                         self.put(b, o, src, w)?;
                     } else {
+                        // CMPXCHG performs a destination write cycle on mismatch too.
+                        self.put(b, o, dst, w)?;
                         self.put(b, Operand::Reg(AX), dst, w)?;
                     }
                 }
@@ -1050,10 +1099,18 @@ impl Cpu {
         if self.halted {
             return Ok(());
         }
+        if self.protected_mode() && self.cpl != 0 {
+            return Err(ExecError::Unsupported(format!(
+                "unsupported protected execution CPL={}; only ring 0 is implemented",
+                self.cpl
+            )));
+        }
         let start = self.ip;
+        self.flags_upper &= !1; // RF suppresses one instruction, then clears (IRET can reload it).
         self.instruction_bytes = 0;
-        self.operand32 = false;
-        self.address32 = false;
+        let default32 = b.profile == crate::Profile::Pc9821ApDos && self.segment_cache(CS).big();
+        self.operand32 = default32;
+        self.address32 = default32;
         self.lock_prefix = false;
         self.trap_suppressed = false;
         let mut ov = None;
@@ -1069,8 +1126,8 @@ impl Cpu {
                 0x64 | 0x65 if b.profile == crate::Profile::Pc9821ApDos => {
                     ov = Some((c - 0x60) as usize)
                 }
-                0x66 if b.profile == crate::Profile::Pc9821ApDos => self.operand32 = true,
-                0x67 if b.profile == crate::Profile::Pc9821ApDos => self.address32 = true,
+                0x66 if b.profile == crate::Profile::Pc9821ApDos => self.operand32 = !default32,
+                0x67 if b.profile == crate::Profile::Pc9821ApDos => self.address32 = !default32,
                 0x64 | 0x65 | 0xf2 | 0xf3 => {
                     if rep != 0 && rep != c && (matches!(rep, 0x64 | 0x65) || c < 0x66) {
                         return Err(
@@ -1151,7 +1208,7 @@ impl Cpu {
                     };
                     // Intel486 real-address contract: #GP even for SS, unlike
                     // the modern SDM. Preflight the entire fixed-width store.
-                    if off > 0xfffe {
+                    if !self.protected_mode() && off > 0xfffe {
                         return Err(ExecError::Fault(13));
                     }
                     let value = if op == 0xd9 {
@@ -1176,7 +1233,12 @@ impl Cpu {
                     let rm = self.decode(b, m, ov)?;
                     let reg = Operand::Reg(((m >> 3) & 7) as usize);
                     let (dst, src) = if op & 2 == 0 { (rm, reg) } else { (reg, rm) };
-                    let v = self.alu(kind, self.get(b, dst, w)?, self.get(b, src, w)?, w);
+                    let a = if kind == 7 {
+                        self.get(b, dst, w)?
+                    } else {
+                        self.get_modify(b, dst, w)?
+                    };
+                    let v = self.alu(kind, a, self.get(b, src, w)?, w);
                     if kind != 7 {
                         self.put(b, dst, v, w)?;
                     }
@@ -1191,7 +1253,8 @@ impl Cpu {
             0x06 | 0x0e | 0x16 | 0x1e => self.push_segment(b, (op >> 3) as usize)?,
             0x07 | 0x17 | 0x1f => {
                 let r = (op >> 3) as usize;
-                self.s[r] = self.pop(b)? as u16;
+                let value = self.pop(b)? as u16;
+                self.load_segment(b, r, value)?;
                 if b.profile == crate::Profile::Pc9801Vm || r == SS {
                     self.inhibit = 1;
                 }
@@ -1306,7 +1369,14 @@ impl Cpu {
                     return Err(ExecError::Fault(6));
                 }
             }
-            0x63 if b.profile == crate::Profile::Pc9821ApDos => return Err(ExecError::Fault(6)),
+            0x63 if b.profile == crate::Profile::Pc9821ApDos => {
+                if self.protected_mode() {
+                    return Err(ExecError::Unsupported(
+                        "unsupported protected ARPL privilege instruction".into(),
+                    ));
+                }
+                return Err(ExecError::Fault(6));
+            }
             0x68 | 0x6a => {
                 let v = if op == 0x68 {
                     self.immediate(b, true)?
@@ -1318,13 +1388,15 @@ impl Cpu {
             0x69 | 0x6b => {
                 let m = self.fetch(b)?;
                 let o = self.decode(b, m, ov)?;
-                let a = self.signed(self.get(b, o, true)?, true);
                 let c = if op == 0x69 {
                     let v = self.immediate(b, true)?;
                     self.signed(v, true)
                 } else {
                     self.fetch(b)? as i8 as i64
                 };
+                // Decode the whole instruction before a device-backed operand
+                // read, so a truncated immediate cannot change device latches.
+                let a = self.signed(self.get(b, o, true)?, true);
                 let v = a * c;
                 self.put(b, Operand::Reg(((m >> 3) & 7) as usize), v as u32, true)?;
                 self.flag(CF, v != self.signed(v as u32, true));
@@ -1354,7 +1426,12 @@ impl Cpu {
                 if self.lock_prefix && kind == 7 {
                     return Err(ExecError::Fault(6));
                 }
-                let out = self.alu(kind, self.get(b, o, w)?, v, w);
+                let a = if kind == 7 {
+                    self.get(b, o, w)?
+                } else {
+                    self.get_modify(b, o, w)?
+                };
+                let out = self.alu(kind, a, v, w);
                 if kind != 7 {
                     self.put(b, o, out, w)?;
                 }
@@ -1375,7 +1452,7 @@ impl Cpu {
                 let m = self.fetch(b)?;
                 let o = self.decode(b, m, ov)?;
                 let reg = Operand::Reg(((m >> 3) & 7) as usize);
-                let a = self.get(b, o, w)?;
+                let a = self.get_modify(b, o, w)?;
                 let c = self.get(b, reg, w)?;
                 self.put(b, o, c, w)?;
                 self.put(b, reg, a, w)?;
@@ -1413,7 +1490,7 @@ impl Cpu {
                         Operand::Mem(seg, a) => self.read_mem(b, seg, a, 2)?,
                         Operand::Reg(r) => self.r[r] as u32,
                     };
-                    self.set_segment(s, value as u16);
+                    self.load_segment(b, s, value as u16)?;
                     if s == SS {
                         self.trap_suppressed = true;
                     }
@@ -1442,11 +1519,15 @@ impl Cpu {
                     return Err(ExecError::Fault(6));
                 }
                 // ESP-based addresses are calculated after incrementing the stack pointer.
-                let next_sp = self.r[SP].wrapping_add(self.bytes(true) as u16);
-                let old_sp = self.r[SP];
-                self.r[SP] = next_sp;
+                let next_sp = self.stack_pointer().wrapping_add(self.bytes(true));
+                let old_sp = self.stack_pointer();
+                self.set_stack_pointer(next_sp);
                 let o = self.decode(b, m, ov)?;
-                self.r[SP] = old_sp;
+                self.set_stack_pointer(old_sp);
+                // Validate the complete destination before a stack device read.
+                if let Operand::Mem(s, a) = o {
+                    self.check_access(b, s, a, self.bytes(true), true, false)?;
+                }
                 let v = self.pop(b)?;
                 self.put(b, o, v, true)?;
             }
@@ -1477,12 +1558,7 @@ impl Cpu {
             0x9a => {
                 let off = self.immediate(b, true)?;
                 let seg = self.word(b)?;
-                let ret = self.ip;
-                self.branch(off)?;
-                self.check_stack_sequence(b, 2, true)?;
-                self.push(b, self.s[CS] as u32)?;
-                self.push(b, ret)?;
-                self.s[CS] = seg;
+                self.far_transfer(b, seg, off, true, false)?;
             }
             0x9b => {}
             0x9c => {
@@ -1522,6 +1598,19 @@ impl Cpu {
                 let src = Operand::Mem(ov.unwrap_or(DS), self.index(SI));
                 let dst = Operand::Mem(ES, self.index(DI));
                 let a = self.get(b, Operand::Reg(0), w)?;
+                if matches!(op & 0xfe, 0xa4 | 0xa6) {
+                    // Validate both full operands before either bus read: a
+                    // source read can change device latches even if ES faults.
+                    self.check_mem(b, ov.unwrap_or(DS), self.index(SI), self.bytes(w))?;
+                    self.check_access(
+                        b,
+                        ES,
+                        self.index(DI),
+                        self.bytes(w),
+                        op & 0xfe == 0xa4,
+                        false,
+                    )?;
+                }
                 match op & 0xfe {
                     0xa4 => {
                         let v = self.get(b, src, w)?;
@@ -1539,7 +1628,7 @@ impl Cpu {
                         self.alu(7, a, self.get(b, dst, w)?, w);
                     }
                     0x6c => {
-                        self.check_mem(b, ES, self.index(DI), self.bytes(w))?;
+                        self.check_access(b, ES, self.index(DI), self.bytes(w), true, false)?;
                         let v = self.input_width(b, self.r[DX], w);
                         self.put(b, dst, v, w)?;
                     }
@@ -1603,17 +1692,24 @@ impl Cpu {
                 } else {
                     n
                 };
-                let v = self.shift((m >> 3) & 7, self.get(b, o, w)?, n, w);
+                let v = self.shift((m >> 3) & 7, self.get_modify(b, o, w)?, n, w);
                 self.put(b, o, v, w)?;
             }
             0xc2 | 0xc3 | 0xca | 0xcb => {
                 let n = if op & 1 == 0 { self.word(b)? } else { 0 };
-                let off = self.pop(b)?;
-                self.branch(off)?;
                 if op & 8 != 0 {
-                    self.s[CS] = self.pop(b)? as u16;
+                    // A missing selector slot must fault before reading an offset
+                    // from a device-backed stack, which can change device latches.
+                    self.check_stack_sequence(b, 2, false)?;
                 }
-                self.r[SP] = self.r[SP].wrapping_add(n);
+                let off = self.pop(b)?;
+                if op & 8 != 0 {
+                    let seg = self.pop(b)? as u16;
+                    self.far_transfer(b, seg, off, false, true)?;
+                } else {
+                    self.branch(off)?;
+                }
+                self.set_stack_pointer(self.stack_pointer().wrapping_add(n as u32));
             }
             0xc4 | 0xc5 => {
                 let m = self.fetch(b)?;
@@ -1640,17 +1736,24 @@ impl Cpu {
                 let level = self.fetch(b)? & 31;
                 self.check_stack_sequence(b, 1 + level as u32, true)?;
                 let bytes = self.bytes(true);
+                let allocated = self.stack_offset(
+                    self.stack_pointer()
+                        .wrapping_sub(bytes * (1 + level as u32))
+                        .wrapping_sub(size as u32),
+                );
+                self.check_access(b, SS, allocated, bytes, true, false)?;
                 let original_bp = self.get(b, Operand::Reg(BP), true)?;
-                // Stack address size stays 16-bit even with 66/67 overrides.
-                let chain_bp = self.r[BP];
+                // Operand size chooses BP/EBP and its wrapping; SS.B only
+                // chooses SP/ESP for the pushes and allocation. 67 has no effect.
+                let chain_mask = self.mask(true);
                 for i in 1..level {
-                    let bp = chain_bp.wrapping_sub((bytes * i as u32) as u16) as u32;
+                    let bp = original_bp.wrapping_sub(bytes * i as u32) & chain_mask;
                     self.check_mem(b, SS, bp, bytes)?;
                 }
                 self.push(b, original_bp)?;
                 let frame = self.get(b, Operand::Reg(SP), true)?;
                 for i in 1..level {
-                    let bp = chain_bp.wrapping_sub((bytes * i as u32) as u16) as u32;
+                    let bp = original_bp.wrapping_sub(bytes * i as u32) & chain_mask;
                     let v = self.read_mem(b, SS, bp, bytes)?;
                     self.push(b, v)?;
                 }
@@ -1658,10 +1761,14 @@ impl Cpu {
                     self.push(b, frame)?;
                 }
                 self.put(b, Operand::Reg(BP), frame, true)?;
-                self.r[SP] = self.r[SP].wrapping_sub(size);
+                self.set_stack_pointer(self.stack_pointer().wrapping_sub(size as u32));
             }
             0xc9 => {
-                self.r[SP] = self.r[BP];
+                self.set_stack_pointer(if self.segment_cache(SS).big() {
+                    self.reg32(BP)
+                } else {
+                    self.r[BP] as u32
+                });
                 let v = self.pop(b)?;
                 self.put(b, Operand::Reg(BP), v, true)?;
             }
@@ -1678,10 +1785,20 @@ impl Cpu {
             0xcf => {
                 self.check_stack_sequence(b, 3, false)?;
                 let off = self.pop(b)?;
-                self.branch(off)?;
-                self.s[CS] = self.pop(b)? as u16;
+                let seg = self.pop(b)? as u16;
                 let v = self.pop(b)?;
+                if self.protected_mode()
+                    && (self.flags & 0x4000 != 0 || (self.operand32 && v & 0x20000 != 0))
+                {
+                    return Err(ExecError::Unsupported(
+                        "unsupported protected IRET task/virtual-8086 return".into(),
+                    ));
+                }
+                self.far_transfer(b, seg, off, false, true)?;
                 self.load_flags(b, v);
+                if self.protected_mode() && self.operand32 {
+                    self.flags_upper = ((v >> 16) as u16) & 5;
+                }
             }
             0xd4 | 0xd5 => {
                 let encoded_radix = self.fetch(b)?;
@@ -1691,6 +1808,9 @@ impl Cpu {
                     encoded_radix
                 };
                 if op == 0xd4 && radix == 0 {
+                    if self.protected_mode() {
+                        return Err(ExecError::Fault(0));
+                    }
                     self.ip = start;
                     self.deliver_interrupt(b, 0)?;
                     return Ok(());
@@ -1752,8 +1872,7 @@ impl Cpu {
             0xea => {
                 let off = self.immediate(b, true)?;
                 let seg = self.word(b)?;
-                self.branch(off)?;
-                self.s[CS] = seg;
+                self.far_transfer(b, seg, off, false, false)?;
             }
             0xeb => {
                 let d = self.fetch(b)? as i8 as u32;
@@ -1771,11 +1890,20 @@ impl Cpu {
                 if m & 0x38 == 8 && b.profile == crate::Profile::Pc9821ApDos {
                     return Err(ExecError::Fault(6));
                 }
-                let v = self.get(b, o, w)?;
+                // Decode TEST completely before a device-backed operand read.
+                let immediate = if matches!((m >> 3) & 7, 0 | 1) {
+                    self.immediate(b, w)?
+                } else {
+                    0
+                };
+                let v = if matches!((m >> 3) & 7, 2 | 3) {
+                    self.get_modify(b, o, w)?
+                } else {
+                    self.get(b, o, w)?
+                };
                 match (m >> 3) & 7 {
                     0 | 1 => {
-                        let c = self.immediate(b, w)?;
-                        self.alu(4, v, c, w);
+                        self.alu(4, v, immediate, w);
                     }
                     2 => self.put(b, o, !v, w)?,
                     3 => {
@@ -1866,7 +1994,23 @@ impl Cpu {
                 if !w && m & 0x38 > 8 {
                     return Err(ExecError::Fault(6));
                 }
-                let v = self.get(b, o, w)?;
+                if matches!((m >> 3) & 7, 3 | 5) {
+                    if let Operand::Mem(s, a) = o {
+                        self.check_mem(b, s, a, self.bytes(true) + 2)?;
+                    }
+                }
+                match (m >> 3) & 7 {
+                    // CALL/PUSH must validate every stack slot before reading
+                    // an operand or far pointer that may change device latches.
+                    2 | 6 => self.check_stack_sequence(b, 1, true)?,
+                    3 if matches!(o, Operand::Mem(..)) => self.check_stack_sequence(b, 2, true)?,
+                    _ => {}
+                }
+                let v = if m & 0x38 <= 8 {
+                    self.get_modify(b, o, w)?
+                } else {
+                    self.get(b, o, w)?
+                };
                 match (m >> 3) & 7 {
                     0 | 1 => {
                         let cf = self.flags & CF;
@@ -1882,14 +2026,7 @@ impl Cpu {
                     3 | 5 => {
                         if let Operand::Mem(s, a) = o {
                             let seg = self.read_mem(b, s, a + self.bytes(true), 2)? as u16;
-                            let ret = self.ip;
-                            self.branch(v)?;
-                            if m & 0x38 == 0x18 {
-                                self.check_stack_sequence(b, 2, true)?;
-                                self.push(b, self.s[CS] as u32)?;
-                                self.push(b, ret)?;
-                            }
-                            self.s[CS] = seg;
+                            self.far_transfer(b, seg, v, m & 0x38 == 0x18, false)?;
                         } else {
                             return Err(ExecError::Fault(6));
                         }

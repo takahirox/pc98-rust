@@ -3,6 +3,8 @@
 This document describes the preserved VM default. The new selectable
 [Ap DOS subset, independent guests and exact limits](dos-compatibility.md) are
 documented separately; it does not implement a complete PC-9821.
+Issue #101 adds the [current paging-disabled protected-mode contract](protected-mode.md).
+This supersedes earlier prerequisite-only protected-mode boundaries below.
 The [Issue #11 device audit](ap-devices.md) describes the Ap-only IDE, memory,
 EGC/PEGC and sound additions and their guest fixtures. The port table below
 otherwise describes the preserved VM behavior; both profiles expose the PC-98
@@ -73,9 +75,10 @@ TF single-step traps, NMI, undocumented opcodes and later x86 extensions are not
 implemented in VM. LOCK has no bus-contention effect in this single-CPU machine.
 
 The selectable Ap profile extends this same decoder with 32-bit operands and
-addresses, SIB, FS/GS and selected 386/486 real-mode integer instructions. It checks
-64 KiB segment limits and delivers guest exceptions; it does not provide protected
-mode, DPMI or numerical FPU execution. See the [exact Ap CPU coverage and independent DOS diagnostic](dos-compatibility.md#issue-9-cpu-coverage-and-independent-guest-evidence).
+addresses, SIB, FS/GS and selected 386/486 integer instructions. It checks cached
+segment limits and delivers guest exceptions, including the documented
+[paging-disabled ring-0 protected subset](protected-mode.md). Paging, privilege
+transitions, DPMI and numerical FPU execution remain unsupported. See the [exact Ap CPU coverage and independent DOS diagnostic](dos-compatibility.md#issue-9-cpu-coverage-and-independent-guest-evidence).
 VM retains the V30 behavior described above.
 Ap also provides the [real-mode GDTR](#ap-real-mode-gdtr) and
 [IDTR prerequisites](#ap-real-mode-idtr), plus
@@ -379,8 +382,9 @@ at both `/` and `/pc98-rust/`, requiring `MOV CR PASS`, no FAIL/errors, exact
 results and unchanged media. Hosts only mount, step, inspect and reset.
 Generated disks and source/license copies stay outside `web/`.
 
-LMSW, CLTS, protected execution, paging, DPMI and numerical x87 remain
-unimplemented. Real-mode-safe `0F 22` writes are described below. There is no
+The [paging-disabled protected subset](protected-mode.md) extends MOV CR reads
+and writes into ring 0 and adds LMSW. CLTS, paging, DPMI and numerical x87 remain
+unimplemented. `0F 22` writes are described below. There is no
 filename-specific behavior or complete HDD, game boot or playability claim. See the
 [private HDD diagnostic procedure](dos-compatibility.md#diagnose-a-local-hdd-control-register-failure).
 
@@ -422,13 +426,14 @@ before a control register changes. TF traps after a successful write at the next
 The PRM requires software to preserve reserved bits and does not specify a useful
 result for violations. This core explicitly **stops with an undefined reserved-bit
 write diagnostic**, rather than inventing #GP or silently masking them. A valid
-CR0 request with **PE=1** (with or without PG) similarly stops with an **unsupported
-protected execution/paging transition** error. Neither case commits a write,
+CR0 request with **PG=1, PE=1** stops with an **unsupported paging transition**
+error. Neither rejected case commits a write,
 advances IP, retires the instruction, delivers a spurious guest fault, or changes
 GPRs/flags/segments/FPU/RAM. The error contains first-prefix CS:IP, opcode/ModR/M,
 CR/GPR, old/written value, requested PE/PG and sequential next IP. Machine execution
-stays stopped until reset. No segment-cache or interrupt-mode transition is faked.
-This is a diagnostic boundary, not protected-mode or paging support.
+stays stopped until reset. **PE=1, PG=0 now commits**, preserving hidden segment
+state until reload and enabling the [protected execution semantics](protected-mode.md).
+Clearing PE is supported for the documented return sequence; paging is unsupported.
 
 The original MIT [write probe](../guest/mov_cr_write.asm) and
 [manifest](../fixtures/mov-cr-write-manifest.json) pin source, boot/image hashes,
@@ -437,7 +442,9 @@ Prepare with `python3 tools/prepare_mov_cr_write_fixture.py`, then run
 `cargo test --locked --test mov_cr_write --test headless_trace` and `npm test`.
 The default guest verifies all eight CR2 source GPRs, CR3 from ESP, CR0/SMSW,
 flags and #UD/#GP repair/IRET/retry itself. Two `-DMODE` builds request PE and PE+PG
-and must stop without PASS. Native and actual release-Wasm Chromium checks run
+respectively: PE commits and halts in the cached real-segment transition window;
+PE+PG stops atomically. Neither diagnostic probe prints PASS. Native and actual
+release-Wasm Chromium checks run
 the same images cold and after reset, at both serving roots, without host guest
 logic. Generated media/source/license copies stay outside `web/`.
 
@@ -482,8 +489,9 @@ with browser coverage at `/` and `/pc98-rust/`. They require `SMSW PASS`, no `FA
 or host error, exact results and unchanged disk bytes. Generated fixtures and
 license/source copies stay outside publication assets.
 
-This adds readback only. Guest status writers, MOV to control registers, LMSW,
-CLTS, protected execution, paging and numerical x87 execution remain unimplemented.
+This SMSW milestone added readback only. Subsequent work implements MOV CR
+writes and the [protected subset including LMSW](protected-mode.md). CLTS,
+paging and numerical x87 execution remain unimplemented.
 No whole inventory category is promoted to verified by this bounded acceptance.
 
 ## Ap real-mode GDTR
@@ -579,9 +587,10 @@ records source/license, assembly, hashes, exact result/guard bytes and a maximum
 PASS without FAIL, exact bytes, unchanged disk data and terminal shutdown.
 Fixtures remain outside `web/`.
 
-Protected mode and CPU386 remain partial. CR0/PE transitions, protected gates,
-descriptor lookup/caches, privilege transitions, LDTR/TR, task switching, paging,
-x87, NMI, DPMI, and Windows compatibility remain outstanding. These probes do
+Protected mode and CPU386 remain partial. The [protected subset](protected-mode.md)
+implements CR0/PE transitions, same-ring gates and GDT/LDT descriptor caches.
+Privilege transitions, TR/task switching, paging, numerical x87, NMI, DPMI, and
+Windows compatibility remain outstanding. These probes do
 not establish full protected-mode accuracy or commercial software compatibility.
 
 ## Ap calendar read path

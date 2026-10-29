@@ -43,6 +43,7 @@ def build(update=False):
             'boot_sha256': sha(variant_boot),
             'image_sha256': sha(variant_image),
             'written': f'{value:08x}',
+            'expected': 'commit PE and halt with cached real-mode segments' if name == 'pe' else 'atomic unsupported paging error',
             'cs_ip': '1fc0:00000007',
             'next_ip': '0000000d',
             'opcode_modrm': '66 67 65 0f 22 c0',
@@ -63,7 +64,7 @@ def build(update=False):
         'result_hex': result.hex(),
         'markers': ['MOV CR WRITE PASS', 'MOV CR WRITE FAIL'],
         'slot_budget': 2_000_000,
-        'unsupported_transition_variants': variants,
+        'transition_variants': variants,
         'distribution': 'Test only; excluded from web/',
     }
     text = json.dumps(manifest, indent=2) + '\n'

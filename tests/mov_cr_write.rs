@@ -171,10 +171,7 @@ fn invalid_cr0_combinations_gp_before_mutation_and_iret_retry() {
 
 #[test]
 fn reserved_bits_and_modes_are_precise_atomic_diagnostics() {
-    let mut cases = vec![
-        (0, 0x60000011, "unsupported protected"),
-        (0, 0xe0000011, "unsupported protected"),
-    ];
+    let mut cases = vec![(0, 0xe0000011, "unsupported paging")];
     for bit in 0..32 {
         if (1u32 << bit) & 0xe005003f == 0 {
             cases.push((0, 0x60000010 | 1 << bit, "undefined reserved-bit"));
@@ -343,7 +340,7 @@ fn original_mit_boot_probe_cold_and_reset() {
 
 #[test]
 fn original_transition_boots_stop_before_commit_and_stay_stopped() {
-    for (name, value) in [("pe", 0x60000011), ("pe_pg", 0xe0000011)] {
+    for (name, value) in [("pe_pg", 0xe0000011)] {
         let image = std::fs::read(format!("fixtures/mov_cr_write/{name}.hdm")).unwrap();
         let mut m = Machine::new(Profile::Pc9821ApDos);
         m.insert(0, image, "transition.hdm").unwrap();
@@ -353,10 +350,7 @@ fn original_transition_boots_stop_before_commit_and_stay_stopped() {
             }
             m.step(10000);
             let error = m.error.as_ref().unwrap();
-            assert!(
-                error.contains("unsupported protected execution/paging transition"),
-                "{error}"
-            );
+            assert!(error.contains("unsupported paging transition"), "{error}");
             assert!(error.contains("CS:IP=1fc0:00000007"), "{error}");
             assert!(
                 error.contains(&format!("old=60000010 written={value:08x}")),
@@ -371,5 +365,26 @@ fn original_transition_boots_stop_before_commit_and_stay_stopped() {
             assert_eq!(m.bus.mem, memory);
             assert!(!m.bus.text().contains("PASS"));
         }
+    }
+}
+
+#[test]
+fn original_pe_only_transition_commits_and_halts_in_cached_segment_window() {
+    let image = std::fs::read("fixtures/mov_cr_write/pe.hdm").unwrap();
+    let mut m = Machine::new(Profile::Pc9821ApDos);
+    m.insert(0, image, "pe.hdm").unwrap();
+    for run in 0..2 {
+        if run == 1 {
+            m.reset();
+        }
+        m.step(10000);
+        assert!(m.error.is_none(), "{:?}", m.error);
+        assert!(m.cpu.halted);
+        assert_eq!(m.cpu.cr0, 0x60000011);
+        assert_eq!(
+            (m.cpu.s[CS], m.cpu.ip, m.cpu.segment_cache(CS).base),
+            (0x1fc0, 14, 0x1fc00)
+        );
+        assert!(!m.bus.text().contains("PASS"));
     }
 }

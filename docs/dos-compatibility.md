@@ -5,15 +5,17 @@ See the [current Ap device contracts, fixtures and acceptance evidence](ap-devic
 Ap also supports bounded [real-mode SMSW readback](hardware.md#ap-real-mode-smsw),
 including reset MSW 0010h and restartable faults, and
 [32-bit CR0/CR2/CR3 reads](hardware.md#ap-real-mode-control-register-reads) and
-[real-mode-safe MOV writes](hardware.md#ap-real-mode-control-register-writes).
-CR0 resets to 60000010h; PE/PG remain clear. ET readback does not imply numerical
-x87 support; protected execution and paging remain unimplemented. PE/PG requests
-stop explicitly before committing CR0; they are never forced clear to continue.
+[MOV writes](hardware.md#ap-real-mode-control-register-writes).
+CR0 resets to 60000010h, with PE/PG clear. Ap supports the
+[paging-disabled ring-0 protected subset](protected-mode.md): real → protected
+16/32-bit → real, GDT/LDT caches, IDT gates and checked PC-98 bus accesses.
+PG requests stop atomically; PE is never forced clear to continue. ET readback
+does not imply numerical x87 support.
 Both profiles support bounded [8259A normal-EOI software polling](hardware.md#8259a-ocw3-normal-eoi-polling),
 including two separate reads and EOIs for the fixed cascade while IF is clear.
 The original PIT/FDC boot probe is hardware acceptance evidence, not an expanded
-DOS/application or commercial compatibility claim. PIC remains partial; protected
-execution, paging and basic x87 remain required project work.
+DOS/application or commercial compatibility claim. PIC and protected mode remain
+partial; privilege transitions, paging and numerical x87 remain unsupported.
 Physical hardware fidelity remains bounded by the documented unsupported subsets.
 Historical PR #8/#10 validation records below describe their earlier checkpoints.
 
@@ -121,7 +123,7 @@ complete reproduction of those specifications.
 
 | Area | Implemented and tested | Remaining limits |
 | --- | --- | --- |
-| CPU | Original shared 8/16/32-bit real-mode interpreter; 66/67 overrides, EAX–EDI, FS/GS, ModR/M/SIB, dword ALU/stack/strings/control flow/I/O, selected 386/486 integer 0F instructions, EFLAGS AC, restartable #DE/#BR/#UD/#NM/#SS/#GP and #DB traps. Real-mode LGDT/SGDT and LIDT/SIDT provide the [GDTR](hardware.md#ap-real-mode-gdtr) and [IDTR prerequisites](hardware.md#ap-real-mode-idtr); Ap supports relocated real-mode vectors, table-limit exception 8 and bounded shutdown when that entry is unavailable. Ap provides bounded [x87 FNINIT and non-waiting control/status readback](hardware.md#ap-x87-environment-initialization), without arithmetic or WAIT completion. Ap retains masked shift counts and encoded AAM/AAD radix; V30 behavior remains selected by VM | No protected mode, unreal mode, paging, DPMI, numerical FPU execution, CPUID, other system/control/debug-register instructions or complete 486 ISA/timing. Explicit invalid encodings fault; valid unimplemented instructions stop with a diagnostic. See CPU coverage below |
+| CPU | Original shared 8/16/32-bit real-mode interpreter; 66/67 overrides, EAX–EDI, FS/GS, ModR/M/SIB, dword ALU/stack/strings/control flow/I/O, selected 386/486 integer 0F instructions, EFLAGS AC, restartable #DE/#BR/#UD/#NM/#SS/#GP and #DB traps. The [ring-0 protected-mode subset](protected-mode.md) adds cached GDT/LDT descriptors, 16/32-bit code/stacks, IDT gates, checked addresses and real-mode return. LGDT/SGDT and LIDT/SIDT provide the [GDTR](hardware.md#ap-real-mode-gdtr) and [IDTR prerequisites](hardware.md#ap-real-mode-idtr); Ap supports relocated real-mode vectors, table-limit exception 8 and bounded shutdown when that entry is unavailable. Ap provides bounded [x87 FNINIT and non-waiting control/status readback](hardware.md#ap-x87-environment-initialization), without arithmetic or WAIT completion. Ap retains masked shift counts and encoded AAM/AAD radix; V30 behavior remains selected by VM | No privilege transitions, TSS/task switching, paging, DPMI, numerical FPU execution, CPUID, general system/debug-register instructions or complete 486 ISA/timing. Cached segment state is retained on PE exit; full unreal-mode guest/BIOS compatibility is unverified. Explicit invalid encodings fault; valid unimplemented instructions stop with a diagnostic. See CPU coverage below |
 | RAM | 640 KiB conventional plus 3 MiB at physical 100000–3FFFFF; BWA 401h reports 24 × 128 KiB; holes and firmware retain PC-98 mapping | HMA is reachable with A20 enabled, including dword accesses. Address override does not enlarge the real-mode 64 KiB segment limit, and INT 1F/90 now provides validated byte copies to extended RAM. XMS/EMS managers remain absent; selected guests need conventional RAM and/or this BIOS service |
 | A20 | PC-98 F2 write enables A20; F6=02/03 enables/disables; F2/F6 read bit 0 reports masked state; reset masks it | No IBM port 92 or AT keyboard-controller gate. F0 remains the private synthetic-firmware trap, not an emulated CPU reset port |
 | Bitmap | Two four-plane 128 KiB pages; B/R/G at A8000/B0000/B8000, intensity at E0000; independent CPU/display pages; analog palette 16 × 12-bit RGB; four-plane GRCG TDW/RMW/TCR | Aligned EGC raster operations and 512 KiB PEGC packed 256-color storage/windows/palette are now tested by independent DEBUG; see the device audit. No arbitrary EGC shifts, PEGC planar mode, 480-line mode or GDC vector engine |
@@ -299,6 +301,8 @@ CRn selector, instruction validity nor the program's intended control flow.
 The original lawful local image was **not available and was not retested** for
 Issues #97/#99. The independent MIT probes reproduce the old missing opcodes and
 verify the implementation; they cannot establish that this HDD boots or plays.
+Issue #101 independently implements the reported PE=1/PG=0 capability with the
+original [protected-mode fixture](protected-mode.md). The private image remains untested.
 
 For a lawfully held local copy, select Ap and IDE/HDI boot, then capture a bounded
 local headless run. Keep the image, saves, detailed output and hashes in a private
@@ -316,7 +320,9 @@ The trace header records profile and parsed HDI byte count, C/H/S geometry and
 control-register events**, are kept in memory and printed on early error or
 budget end, including the pre-execution **CS:IP**,
 primary/extended opcode, bounded prefix list, effective operand/address-size
-attributes, all GPRs, segments/FS/GS, flags and CR0/CR2/CR3. For Ap `0F 20` and
+attributes, all GPRs, segments/FS/GS, flags and CR0/CR2/CR3. Protected-mode
+metadata includes mode, CPL, hidden segment caches, LDTR, GDT/IDT base/limit
+and the most recent fault vector/error code. For Ap `0F 20` and
 `0F 22`, it also records the following ModR/M, mod field, CRn selector and GPR
 name, without decoding a memory operand. Writes additionally record the old and
 intended value and CR0 PE/PG bits. Each retained control event includes the next
@@ -334,7 +340,7 @@ also reach these bytes. A later stop may be unrelated; compare the next exact lo
 and opcode. Summarize only brief opcode/ModR/M metadata and bounded findings when
 reporting evidence; never upload restricted media, game code or detailed raw
 traces to Git, CI, Issues, PRs or Pages. If an actual local run next requires
-protected mode, paging, extended DOS or another device, record the evidence and
-plan a separate `task` Issue. A synthetic transition probe proves only the explicit
-unsupported-mode boundary, not a requirement of the private game. Do not fake these
+features outside the documented protected subset, paging, extended DOS or another
+device, record the exact requirement for a separate `task` Issue. The original
+protected probe proves its CPU path, not a requirement or playability of the private game. Do not fake these
 facilities or treat opcode support as a claim of complete game compatibility.

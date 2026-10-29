@@ -351,15 +351,15 @@ fn segment_pushes_preserve_upper_stack_bytes_and_check_only_the_selector() {
 }
 
 #[test]
-fn nested_dword_enter_traverses_bp_on_a_word_stack() {
+fn nested_dword_enter_traverses_ebp_on_a_word_stack() {
     // Both operand and address overrides leave the real-mode stack size at 16.
     for code in [&[0x66, 0xc8, 0, 0, 3][..], &[0x67, 0x66, 0xc8, 0, 0, 3][..]] {
-        for bp in [0x17000u32, 0x10000] {
+        for bp in [0x7000u32, 0x10000] {
             let (mut c, mut b) = cpu(code);
             c.s[SS] = 0x2000;
             c.set_reg32(BP, bp);
-            let first = Cpu::phys(c.s[SS], (bp as u16).wrapping_sub(4));
-            let second = Cpu::phys(c.s[SS], (bp as u16).wrapping_sub(8));
+            let first = Cpu::phys(c.s[SS], 0) + (bp - 4) as usize;
+            let second = Cpu::phys(c.s[SS], 0) + (bp - 8) as usize;
             b.mem[first..first + 4].copy_from_slice(&0x12345678u32.to_le_bytes());
             b.mem[second..second + 4].copy_from_slice(&0x9abcdef0u32.to_le_bytes());
             c.step(&mut b).unwrap();
@@ -373,6 +373,20 @@ fn nested_dword_enter_traverses_bp_on_a_word_stack() {
                 .collect();
             assert_eq!(&b.mem[frame..frame + 16], expected.as_slice());
         }
+        // A 32-bit chain above the real-mode SS limit must fault, not read
+        // the low 16-bit alias. Only the real-mode #SS frame may be written.
+        let (mut c, mut b) = cpu(code);
+        c.s[SS] = 0x2000;
+        c.set_reg32(BP, 0x17000);
+        let mut expected = b.mem.clone();
+        let frame = Cpu::phys(c.s[SS], 0x8ffa);
+        expected[frame..frame + 6].copy_from_slice(&[0, 0x10, 0, 0, 2, 0]);
+        c.step(&mut b).unwrap();
+        assert_eq!((c.ip, c.r[SP], c.reg32(BP)), (0x20c0, 0x8ffa, 0x17000));
+        assert!(
+            b.mem == expected,
+            "rejected ENTER changed memory outside #SS frame"
+        );
     }
 }
 
@@ -973,7 +987,7 @@ fn gdtr_bus_mapping_a20_rom_and_independent_reset_state() {
 
 #[test]
 fn gdtr_other_group_operations_and_vm_remain_explicitly_unsupported() {
-    for kind in [5, 6, 7] {
+    for kind in [5, 7] {
         let (mut c, mut b) = cpu(&[0x0f, 0x01, (kind << 3) | 6, 0, 0x40]);
         assert!(c
             .step(&mut b)
@@ -1813,7 +1827,7 @@ fn smsw_memory_sizes_sib_segments_unaligned_and_exact_width() {
     ];
     for &(address32, prefixes, encoding, segment, offset) in cases {
         for operand32 in [false, true] {
-            for status in [0x10, 0xa53f] {
+            for status in [0x10, 0xa53e] {
                 let mut code = prefixes.to_vec();
                 if operand32 {
                     code.extend_from_slice(&[0x66, 0x66]);
@@ -1824,7 +1838,7 @@ fn smsw_memory_sizes_sib_segments_unaligned_and_exact_width() {
                 code.extend_from_slice(&[0x0f, 0x01]);
                 code.extend_from_slice(encoding);
                 let (mut c, mut b) = cpu(&code);
-                c.cr0 = status; // Host-only state variation proves CPU-local readback.
+                c.cr0 = status; // Host-only PE-clear variation; protected SMSW is tested separately.
                 c.s[DS] = 0x3000;
                 c.s[ES] = 0x4000;
                 c.s[SS] = 0x5000;
@@ -2005,13 +2019,13 @@ fn smsw_bus_a20_rom_cpu_isolation_and_machine_reset_readback() {
     c.step(&mut b).unwrap();
     assert_eq!(&b.mem[0xf001f..0xf0025], &[0xa5; 6]);
     let (mut other, mut other_bus) = cpu(&[0x0f, 0x01, 0xe0]);
-    c.cr0 = 0xa53f;
+    c.cr0 = 0xa53e;
     other.step(&mut other_bus).unwrap();
     assert_eq!(other.r[AX], 0x10);
     c.ip = 0x1000;
     b.mem[0x1000..0x1003].copy_from_slice(&[0x0f, 0x01, 0xe0]);
     c.step(&mut b).unwrap();
-    assert_eq!(c.r[AX], 0xa53f);
+    assert_eq!(c.r[AX], 0xa53e);
     let mut m = Machine::new(Profile::Pc9821ApDos);
     m.cpu = c;
     m.reset();

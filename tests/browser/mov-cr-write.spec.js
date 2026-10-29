@@ -38,7 +38,7 @@ test('Ap: MOV CR WRITE from all GPRs, CR0/CR3 readback and guest fault repair be
   }
 });
 
-for (const name of ['pe', 'pe_pg']) {
+for (const name of ['pe_pg']) {
   test(`Ap: ${name} transition stops explicitly before commit, cold and after reset`, async ({ page }) => {
     const time = new Date('2026-01-01T00:00:00Z');
     await page.clock.install({ time });
@@ -49,7 +49,7 @@ for (const name of ['pe', 'pe_pg']) {
     expect(await page.evaluate(() => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
     const image = await fs.readFile(new URL(`../../fixtures/mov_cr_write/${name}.hdm`, import.meta.url));
     const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/mov-cr-write-manifest.json', import.meta.url)));
-    const variant = manifest.unsupported_transition_variants[name];
+    const variant = manifest.transition_variants[name];
     expect(createHash('sha256').update(image).digest('hex')).toBe(variant.image_sha256);
     await page.locator('#file').setInputFiles({ name: `${name}.hdm`, mimeType: 'application/octet-stream', buffer: image });
     await expect(page.locator('#media-name')).toContainText(`${name}.hdm`);
@@ -57,7 +57,7 @@ for (const name of ['pe', 'pe_pg']) {
       if (run) await page.locator('#reset').click();
       await page.evaluate(() => { pc98.core.step(10000); pc98.core.audio_clear(); });
       const error = await page.evaluate(() => pc98.stats().error);
-      expect(error).toContain('unsupported protected execution/paging transition');
+      expect(error).toContain('unsupported paging transition');
       expect(error).toContain(`CS:IP=${variant.cs_ip} opcode=0f 22 modrm=c0 CR0 GPR=eax old=60000010 written=${variant.written}`);
       expect(error).toContain(`PE=1 PG=${name === 'pe_pg' ? 1 : 0} next-ip=${variant.next_ip}; write not committed`);
       expect(await page.evaluate(() => pc98.core.step(10000))).toBe(0);
