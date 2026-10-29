@@ -13,7 +13,7 @@ import tarfile
 import tempfile
 
 from build_media import ROOT, assemble
-from prepare_freedos import extract_fat_file
+from prepare_freedos import ASSETS, extract_fat_file
 
 DEST = ROOT / 'fixtures/dos-apps'
 
@@ -22,11 +22,11 @@ def sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def build():
-    base = (ROOT / 'fixtures/freedos/minimal.hdm').read_bytes()
-    adv = (DEST / 'adv98.hdm').read_bytes()
+def load_boot():
     # Pinned GPL source is assembled unchanged; retain it and all DOS sources.
     archive = ROOT / 'fixtures/freedos/kernel-source.tar.gz'
+    if sha(archive.read_bytes()) != ASSETS['kernel-source.tar.gz'][1]:
+        raise ValueError('kernel source checksum mismatch')
     with tarfile.open(archive) as tar:
         member = next(m for m in tar if m.name.endswith('/nec98/boot/boot.asm'))
         source = tar.extractfile(member).read()
@@ -37,14 +37,10 @@ def build():
         subprocess.run(['nasm', '-f', 'bin', '-DNEC98HDD', '-DISFAT12', str(asm), '-o', str(binary)], check=True)
         boot = binary.read_bytes()
     assert len(boot) == 512
-    files = {name: extract_fat_file(base, name) for name in [
-        b'KERNEL  SYS', b'COMMAND COM', b'COPYING    ']}
-    files.update({name: extract_fat_file(adv, name) for name in [
-        b'ADV98   EXE', b'SCRIPT  TXT', b'ADV     PAL', b'CLASS   G98', b'C01_N   SPR', b'APP     LIC']})
-    files[b'FDCONFIGSYS'] = b'DOS=LOW\r\nSHELL=A:\\COMMAND.COM A:\\ /P /E:256\r\n'
-    files[b'MOUSE98 COM'] = assemble('guest/mouse98.asm')
-    files[b'RUST    LIC'] = (ROOT / 'LICENSE').read_bytes()
-    files[b'AUTOEXECBAT'] = b'@echo off\r\necho HDD DOS BOOT\r\necho DURABLE DOS WRITE>HDDSAVE.TXT\r\nMOUSE98\r\nADV98\r\n'
+    return boot, source
+
+
+def image_with_files(boot, files):
     # 64 cylinders x 8 heads x 16 sectors. One DOS FAT12 partition at C=1.
     cylinders, heads, sectors = 64, 8, 16
     hidden, total, reserved, fatsecs, roots, spc = 128, 8064, 2, 6, 192, 4
@@ -94,6 +90,23 @@ def build():
     part[16:] = b'FreeDOS IDE     '
     image[4096+512:4096+544] = part
     image[4096+hidden*512:] = volume
+    return bytes(image), ipl
+
+
+def build():
+    base = (ROOT / 'fixtures/freedos/minimal.hdm').read_bytes()
+    adv = (DEST / 'adv98.hdm').read_bytes()
+    boot, source = load_boot()
+    files = {name: extract_fat_file(base, name) for name in [
+        b'KERNEL  SYS', b'COMMAND COM', b'COPYING    ']}
+    files.update({name: extract_fat_file(adv, name) for name in [
+        b'ADV98   EXE', b'SCRIPT  TXT', b'ADV     PAL', b'CLASS   G98', b'C01_N   SPR', b'APP     LIC']})
+    files[b'FDCONFIGSYS'] = b'DOS=LOW\r\nSHELL=A:\\COMMAND.COM A:\\ /P /E:256\r\n'
+    files[b'MOUSE98 COM'] = assemble('guest/mouse98.asm')
+    files[b'RUST    LIC'] = (ROOT / 'LICENSE').read_bytes()
+    files[b'AUTOEXECBAT'] = b'@echo off\r\necho HDD DOS BOOT\r\necho DURABLE DOS WRITE>HDDSAVE.TXT\r\nMOUSE98\r\nADV98\r\n'
+    image, ipl = image_with_files(boot, files)
+    cylinders, heads, sectors = 64, 8, 16
     (DEST / 'adv98.hdi').write_bytes(image)
     (DEST / 'hdd-boot.asm').write_bytes(source)
     manifest = {

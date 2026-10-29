@@ -60,6 +60,7 @@ jobs:
       - run: python3 tools/prepare_opn_ch3_fixture.py
       - run: python3 tools/prepare_opna_irq_fixture.py
       - run: python3 tools/prepare_freedos.py
+      - run: python3 tools/prepare_freedos_hdd_fixture.py
       - run: python3 tools/prepare_font_fixture.py
       - run: python3 tools/prepare_dos_apps.py
       - run: python3 tools/prepare_cpu_fixture.py

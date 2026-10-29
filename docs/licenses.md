@@ -299,3 +299,17 @@ The original MIT `guest/fpu_init.asm` probe and offline
 `tools/prepare_fpu_init_fixture.py` use no third-party guest software or ROM.
 `fixtures/fpu_init-manifest.json` records source/image hashes, assembly command,
 license and literal expected bytes. Generated test media stays outside `web/`.
+
+### Independent HDD shell control (Issue #111)
+
+`tools/prepare_freedos_hdd_fixture.py` selects only the existing pinned GPL
+kernel/FreeCOM/notices plus original MIT IPL/PROBE/configuration/helpers. It
+assembles the unchanged HDD boot source from the matching checked kernel archive.
+[The manifest](../fixtures/freedos-hdd-manifest.json) pins the image, boot source,
+IPL and all selected files. Keep the entire generated `fixtures/freedos` folder,
+complete corresponding kernel/FreeCOM source archives and licenses with the disk.
+It is a test fixture, excluded from Pages.
+
+The [lawful-access record](hdd-boot-investigation.md#baseline-and-lawful-access-decision)
+does not clear `aliceY3.hdi`: no exact-image provenance/component inventory was
+verified, no game media was acquired, and no private-image retest occurred.

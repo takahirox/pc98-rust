@@ -79,6 +79,10 @@ pub struct Cpu {
     /// None is the emulator's uninitialized reset state, not a fabricated TSS.
     pub tr_cache: Option<SegmentCache>,
     pub last_fault: Option<(u8, u32)>,
+    /// Architectural instruction faults attempted, including repeated same-vector faults.
+    pub fault_count: u64,
+    /// Maskable interrupt requests acknowledged from the PIC, including failed delivery.
+    pub irq_acks: u64,
     /// Last successful VM86 gate: vector, gate type, target CS:EIP, SS0:ESP0.
     /// Bounded CPU metadata for opt-in tracing; no guest instruction bypass.
     pub last_vm86_gate: Option<(u8, u8, u16, u32, u16, u32)>,
@@ -139,6 +143,8 @@ impl Default for Cpu {
             tr: 0,
             tr_cache: None,
             last_fault: None,
+            fault_count: 0,
+            irq_acks: 0,
             last_vm86_gate: None,
             cr2: 0,
             cr3: 0,
@@ -732,6 +738,7 @@ impl Cpu {
         }
         if self.flags & IF != 0 && self.inhibit == 0 {
             if let Some(n) = b.irq() {
+                self.irq_acks += 1;
                 self.deliver_event(b, n)
                     .map_err(|e| format!("interrupt delivery failed: {e:?}"))?;
             }
@@ -776,12 +783,14 @@ impl Cpu {
                     ExecError::Fault(n) => n,
                     ExecError::PageFault { linear, code } => {
                         *self = saved;
+                        self.fault_count += 1;
                         self.cr2 = linear;
                         return self.protected_event(b, 14, Some(code), GateSource::Fault)
                             .map_err(|e| format!("protected page fault delivery failed CR2={:08x} error={code:08x}: {e:?}", self.cr2));
                     }
                     ExecError::ProtectedFault(n, code) => {
                         *self = saved;
+                        self.fault_count += 1;
                         return self.protected_event(b, n, Some(code), GateSource::Fault)
                             .map_err(|e| format!("protected fault delivery failed vector={n} error={code:08x}: {e:?}"));
                     }
@@ -798,6 +807,7 @@ impl Cpu {
                     }
                 };
                 *self = saved;
+                self.fault_count += 1;
                 if self.protected_mode() {
                     let error = matches!(vector, 8 | 10..=14 | 17).then_some(0);
                     self.last_fault = Some((vector, error.unwrap_or(0)));

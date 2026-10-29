@@ -246,6 +246,10 @@ mod wasm {
                 14 => m.bus.pcm.writes as f64,
                 15 => m.bus.pcm.samples as f64,
                 16 => u8::from(m.cpu.shutdown) as f64,
+                17 => m.cpu.s[1] as f64,
+                18 => m.cpu.ip as f64,
+                19 => m.cpu.fault_count as f64,
+                20 => m.cpu.irq_acks as f64,
                 _ => m.bus.cycles as f64,
             }
         })

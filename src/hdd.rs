@@ -110,6 +110,15 @@ impl Default for Ide {
     }
 }
 impl Ide {
+    /// Read-only task-file metadata; never reads data or acknowledges INTRQ.
+    pub fn diagnostic(&self) -> String {
+        format!(
+            "reads={} writes={} status={:02x} error={:02x} count={} sector={:02x} cylinder={:04x} head={:02x} remaining={} lba={} cursor={} irq={} control={:02x} bank={}",
+            self.reads, self.writes, self.status, self.error, self.count,
+            self.sector, self.cylinder, self.head, self.remaining, self.lba,
+            self.cursor, self.irq, self.control, self.bank
+        )
+    }
     pub fn mount(&mut self, disk: Option<HardDisk>) {
         *self = Self {
             disk,
