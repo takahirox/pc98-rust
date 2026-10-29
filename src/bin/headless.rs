@@ -38,6 +38,10 @@ fn instruction_diagnostic(c: &Cpu, b: &Bus) -> (String, bool) {
     if opcode == Some(0x0f) {
         if let Some(ext) = next() {
             operation.push_str(&format!(" {ext:02x}"));
+            if ap && ext == 0x06 {
+                control = true;
+                operation.push_str(&format!(" CLTS old={:08x} ts={}", c.cr0, (c.cr0 >> 3) & 1));
+            }
             if ap && ext == 0x00 {
                 if let Some(m) = next() {
                     let name = match (m >> 3) & 7 {
@@ -150,6 +154,8 @@ fn main() {
         }
     }
     for i in 0..steps {
+        let previous_retired = m.cpu.retired;
+        let mut observed_control = false;
         if trace {
             m.step_with_observer(1, |cpu, bus| {
                 if history.len() == 100 {
@@ -162,6 +168,7 @@ fn main() {
                     }
                 }
                 pending_control = control;
+                observed_control = control;
                 if control {
                     if control_history.len() == 16 {
                         control_history.pop_front();
@@ -172,6 +179,25 @@ fn main() {
             });
         } else {
             m.step(1);
+        }
+        if trace && observed_control {
+            if let Some(last) = control_history.back_mut() {
+                last.push_str(&format!(
+                    " result={} new-cr0={:08x} ts={} fault={:?} next={:04x}:{:08x}",
+                    if m.error.is_some() {
+                        "stopped"
+                    } else if m.cpu.retired == previous_retired {
+                        "fault-delivered"
+                    } else {
+                        "executed"
+                    },
+                    m.cpu.cr0,
+                    (m.cpu.cr0 >> 3) & 1,
+                    m.cpu.last_fault,
+                    m.cpu.s[1],
+                    m.cpu.ip
+                ));
+            }
         }
         if m.error.is_some() {
             break;

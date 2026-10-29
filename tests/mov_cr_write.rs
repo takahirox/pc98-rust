@@ -131,6 +131,7 @@ fn all_invalid_modrm_and_lock_ud_with_atomic_restart_and_retry() {
             expected.ip = 0x100;
             expected.r[SP] -= 6;
             expected.flags &= !(IF | TF);
+            expected.last_fault = Some((6, 0));
             preserved(&c, expected);
             assert_eq!((c.retired, c.extended_retired), (0, 0));
             b.mem[0x1002] = 0x65;
@@ -139,6 +140,7 @@ fn all_invalid_modrm_and_lock_ud_with_atomic_restart_and_retry() {
             c.step(&mut b).unwrap();
             let mut expected = saved;
             expected.ip = 6;
+            expected.last_fault = Some((6, 0));
             preserved(&c, expected);
         }
     }
@@ -159,6 +161,7 @@ fn invalid_cr0_combinations_gp_before_mutation_and_iret_retry() {
         expected.ip = 0x100;
         expected.r[SP] -= 6;
         expected.flags &= !(IF | TF);
+        expected.last_fault = Some((13, 0));
         preserved(&c, expected);
         assert_eq!((c.retired, c.extended_retired), (0, 0));
         c.step(&mut b).unwrap();

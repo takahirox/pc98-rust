@@ -760,6 +760,7 @@ impl Cpu {
                     return self.protected_event(b, vector, error, GateSource::Fault)
                         .map_err(|e| format!("protected fault delivery failed vector={vector} error={error:?}: {e:?}"));
                 }
+                self.last_fault = Some((vector, 0));
                 self.deliver_event(b, vector)
                     .map_err(|_| "fault while delivering real-mode exception".to_string())
             }
@@ -767,12 +768,27 @@ impl Cpu {
     }
     fn extended(&mut self, b: &mut Bus, ov: Option<usize>) -> ExecResult<()> {
         let op = self.fetch(b)?;
+        if self.protected_mode() && self.cpl != 0 && op != 0x06 {
+            return Err(ExecError::Unsupported(format!(
+                "unsupported protected execution CPL={}; only ring 0 is implemented",
+                self.cpl
+            )));
+        }
         if self.lock_prefix && !matches!(op, 0xab | 0xb3 | 0xbb | 0xba | 0xb0 | 0xb1 | 0xc0 | 0xc1)
         {
             return Err(ExecError::Fault(6));
         }
         match op {
             0x00 => self.system_group0(b, ov)?,
+            0x06 => {
+                // Intel486 PRM CLTS, p.26-55: no ModR/M, real mode or CPL0;
+                // clear only TS. In particular, EM and the hidden caches survive.
+                // The shared extended-opcode LOCK check above supplies #UD.
+                if self.protected_mode() && self.cpl != 0 {
+                    return Err(ExecError::Fault(13));
+                }
+                self.cr0 &= !8;
+            }
             0x20 | 0x22 => {
                 let m = self.fetch(b)?;
                 if m >> 6 != 3 {
@@ -1107,12 +1123,6 @@ impl Cpu {
         if self.halted {
             return Ok(());
         }
-        if self.protected_mode() && self.cpl != 0 {
-            return Err(ExecError::Unsupported(format!(
-                "unsupported protected execution CPL={}; only ring 0 is implemented",
-                self.cpl
-            )));
-        }
         let start = self.ip;
         self.flags_upper &= !1; // RF suppresses one instruction, then clears (IRET can reload it).
         self.instruction_bytes = 0;
@@ -1162,6 +1172,17 @@ impl Cpu {
                 "unsupported V30 carry-repeat with non-compare opcode (emulator limitation)".into(),
             );
         }
+        // Decode CLTS at any CPL so privilege violations become guest #GP(0),
+        // without enabling general execution outside the bounded ring-0 core.
+        if self.protected_mode()
+            && self.cpl != 0
+            && (op != 0x0f || b.profile != crate::Profile::Pc9821ApDos)
+        {
+            return Err(ExecError::Unsupported(format!(
+                "unsupported protected execution CPL={}; only ring 0 is implemented",
+                self.cpl
+            )));
+        }
         self.retired += 1;
         if self.operand32 || self.address32 {
             self.extended_retired += 1;
@@ -1197,18 +1218,19 @@ impl Cpu {
             return Err(ExecError::Fault(6));
         }
         match op {
-            0xd9 | 0xdb | 0xdd | 0xdf if b.profile == crate::Profile::Pc9821ApDos => {
+            0xd8..=0xdf if b.profile == crate::Profile::Pc9821ApDos => {
                 let m = self.fetch(b)?;
+                // All ESC instructions check EM/TS, including operations whose
+                // numerical execution remains unsupported. Non-waiting forms do
+                // not check pending numerical exceptions or update FPU pointers.
+                if self.cr0 & 0x000c != 0 {
+                    return Err(ExecError::Fault(7));
+                }
                 let memory_store = matches!(op, 0xd9 | 0xdd) && m < 0xc0 && (m >> 3) & 7 == 7;
                 if !memory_store && !matches!((op, m), (0xdb, 0xe3) | (0xdf, 0xe0)) {
                     return Err(ExecError::Unsupported(format!(
                         "unimplemented x87 opcode {op:02x} {m:02x}"
                     )));
-                }
-                // Non-waiting forms still check EM/TS, but never pending
-                // numerical exceptions. No instruction/data pointer updates.
-                if self.cr0 & 0x000c != 0 {
-                    return Err(ExecError::Fault(7));
                 }
                 if memory_store {
                     let Operand::Mem(s, off) = self.decode(b, m, ov)? else {
@@ -1568,7 +1590,19 @@ impl Cpu {
                 let seg = self.word(b)?;
                 self.far_transfer(b, seg, off, true, false)?;
             }
-            0x9b => {}
+            0x9b => {
+                if b.profile == crate::Profile::Pc9821ApDos {
+                    // Intel486 PRM WAIT, p.26-280: EM alone does not trap WAIT.
+                    if self.cr0 & 0x000a == 0x000a {
+                        return Err(ExecError::Fault(7));
+                    }
+                    if self.fpu.status & 0x80 != 0 {
+                        return Err(ExecError::Unsupported(
+                            "unsupported x87 WAIT pending numeric exception".into(),
+                        ));
+                    }
+                }
+            }
             0x9c => {
                 let v = if b.profile == crate::Profile::Pc9801Vm {
                     (self.flags | 0xf002) as u32
