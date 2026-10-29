@@ -1238,6 +1238,118 @@ fn rejected_memory_push_and_near_call_preflight_stack_before_device_read() {
 }
 
 #[test]
+fn truncated_imul_immediates_fault_before_operand_device_reads() {
+    for big in [false, true] {
+        for bytes in [2usize, 4] {
+            for op in [0x69, 0x6b] {
+                let immediate_bytes = if op == 0x69 { bytes } else { 1 };
+                for available in 0..immediate_bytes {
+                    let mut code = vec![];
+                    if big != (bytes == 4) {
+                        code.push(0x66);
+                    }
+                    if !big {
+                        code.push(0x67);
+                    }
+                    code.extend([op, 0x05, 0, 0, 0, 0]); // IMUL E/AX, DS:[0], imm
+                    let immediate_start = code.len();
+                    code.extend_from_slice(&1u32.to_le_bytes()[..immediate_bytes]);
+                    let (mut c, mut b) = protected(&code, big, true);
+                    c.segment_caches[CS].as_mut().unwrap().limit =
+                        0x1000 + (immediate_start + available) as u32 - 1;
+                    c.segment_caches[DS].as_mut().unwrap().base = 0xa8000;
+                    c.set_reg32(AX, 0x12345678);
+                    c.flags |= CF | OF;
+                    seed_stack_operand_egc(&mut b);
+                    let saved = c.clone();
+                    let memory = b.mem.clone();
+                    let graphics = b.graphics.clone();
+                    c.step(&mut b).unwrap();
+                    fault_frame(&c, &b, 13, 0);
+                    assert_eq!(c.flags, saved.flags);
+                    assert_eq!(c.cr0, saved.cr0);
+                    assert_eq!(c.s, saved.s);
+                    // Fault delivery reloads CS from the GDT; other caches stay put.
+                    for seg in [ES, SS, DS, 4, 5] {
+                        assert_eq!(c.segment_caches[seg], saved.segment_caches[seg]);
+                    }
+                    for r in 0..8 {
+                        assert_eq!(
+                            c.reg32(r),
+                            if r == SP {
+                                saved.reg32(r) - 16
+                            } else {
+                                saved.reg32(r)
+                            }
+                        );
+                    }
+                    let sp = c.reg32(SP) as usize;
+                    assert_eq!(&b.mem[..sp], &memory[..sp]);
+                    assert_eq!(&b.mem[sp + 16..], &memory[sp + 16..]);
+                    assert_eq!(b.graphics, graphics);
+                    assert_stack_operand_egc_latches_unchanged(&mut b);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn rejected_indirect_far_call_preflights_both_slots_before_device_pointer_reads() {
+    for big in [false, true] {
+        for bytes in [2u32, 4] {
+            for stack_big in [false, true] {
+                for failure in ["first slot", "second slot", "read-only"] {
+                    let mut code = vec![];
+                    if big != (bytes == 4) {
+                        code.push(0x66);
+                    }
+                    if !big {
+                        code.push(0x67);
+                    }
+                    code.extend([0xff, 0x1d, 0, 0, 0, 0]); // CALL FAR DS:[0]
+                    let (mut c, mut b) = protected(&code, big, stack_big);
+                    c.segment_caches[DS].as_mut().unwrap().base = 0xa8000;
+                    let sp = if stack_big { 0x18000 } else { 0x8000 };
+                    let ss = c.segment_caches[SS].as_mut().unwrap();
+                    match failure {
+                        "first slot" => ss.limit = sp - bytes - 1,
+                        "second slot" => {
+                            ss.access = 0x97; // expand down: only the first push fits
+                            ss.limit = sp - bytes * 2;
+                        }
+                        _ => ss.access = 0x91,
+                    }
+                    seed_stack_operand_egc(&mut b);
+                    // A valid same-ring pointer, so only the stack rejects CALL.
+                    b.graphics[..bytes as usize]
+                        .copy_from_slice(&0x2000u32.to_le_bytes()[..bytes as usize]);
+                    b.graphics[bytes as usize..bytes as usize + 2]
+                        .copy_from_slice(&8u16.to_le_bytes());
+                    let saved = c.clone();
+                    let memory = b.mem.clone();
+                    let graphics = b.graphics.clone();
+                    let error = c.step(&mut b).unwrap_err();
+                    assert!(error.contains("shutdown"), "{error}");
+                    assert!(c.shutdown); // Neither #SS nor #DF frames fit.
+                    assert_eq!(c.ip, saved.ip);
+                    assert_eq!(c.flags, saved.flags);
+                    assert_eq!(c.cr0, saved.cr0);
+                    assert_eq!(c.s, saved.s);
+                    assert_eq!(c.segment_caches, saved.segment_caches);
+                    for r in 0..8 {
+                        assert_eq!(c.reg32(r), saved.reg32(r));
+                    }
+                    assert_eq!(b.mem, memory);
+                    assert_eq!(b.graphics, graphics);
+                    assert_stack_operand_egc_latches_unchanged(&mut b);
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn memory_push_and_near_call_read_operand_before_changing_esp() {
     for bytes in [2u32, 4] {
         for stack_big in [false, true] {
