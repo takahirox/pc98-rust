@@ -1522,6 +1522,10 @@ impl Cpu {
                 self.set_stack_pointer(next_sp);
                 let o = self.decode(b, m, ov)?;
                 self.set_stack_pointer(old_sp);
+                // Validate the complete destination before a stack device read.
+                if let Operand::Mem(s, a) = o {
+                    self.check_access(b, s, a, self.bytes(true), true, false)?;
+                }
                 let v = self.pop(b)?;
                 self.put(b, o, v, true)?;
             }
@@ -1982,6 +1986,11 @@ impl Cpu {
                     if let Operand::Mem(s, a) = o {
                         self.check_mem(b, s, a, self.bytes(true) + 2)?;
                     }
+                }
+                if matches!((m >> 3) & 7, 2 | 6) {
+                    // Near CALL/PUSH must validate the stack write before
+                    // reading an operand that may change device latches.
+                    self.check_stack_sequence(b, 1, true)?;
                 }
                 let v = if m & 0x38 <= 8 {
                     self.get_modify(b, o, w)?
