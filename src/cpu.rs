@@ -500,6 +500,14 @@ impl Cpu {
             Operand::Mem(s, a) => self.read_mem(b, s, a, self.bytes(w)),
         }
     }
+    fn get_modify(&self, b: &Bus, o: Operand, w: bool) -> ExecResult<u32> {
+        // Preflight the full write span before any operand bus read: reads of
+        // memory-mapped devices (for example EGC VRAM) can change device latches.
+        if let Operand::Mem(s, a) = o {
+            self.check_access(b, s, a, self.bytes(w), true, false)?;
+        }
+        self.get(b, o, w)
+    }
     fn put(&mut self, b: &mut Bus, o: Operand, v: u32, w: bool) -> ExecResult<()> {
         match o {
             Operand::Reg(r) => {
@@ -999,7 +1007,11 @@ impl Cpu {
                     }
                 }
                 let bit = 1u32 << (index & (bits - 1));
-                let v = self.get(b, o, true)?;
+                let v = if kind == 0 {
+                    self.get(b, o, true)?
+                } else {
+                    self.get_modify(b, o, true)?
+                };
                 self.flag(CF, v & bit != 0);
                 let out = match kind {
                     1 => v | bit,
@@ -1019,7 +1031,7 @@ impl Cpu {
                 } else {
                     self.byte(1)
                 }) & 31;
-                let dst = self.get(b, o, true)?;
+                let dst = self.get_modify(b, o, true)?;
                 let src = self.get(b, Operand::Reg(((m >> 3) & 7) as usize), true)?;
                 if n != 0 {
                     let bits = self.bytes(true) * 8;
@@ -1050,7 +1062,7 @@ impl Cpu {
                 let m = self.fetch(b)?;
                 let o = self.decode(b, m, ov)?;
                 let reg = Operand::Reg(((m >> 3) & 7) as usize);
-                let dst = self.get(b, o, w)?;
+                let dst = self.get_modify(b, o, w)?;
                 let src = self.get(b, reg, w)?;
                 if op & 0x40 != 0 {
                     let result = self.alu(0, dst, src, w);
@@ -1061,6 +1073,8 @@ impl Cpu {
                     if self.flags & ZF != 0 {
                         self.put(b, o, src, w)?;
                     } else {
+                        // CMPXCHG performs a destination write cycle on mismatch too.
+                        self.put(b, o, dst, w)?;
                         self.put(b, Operand::Reg(AX), dst, w)?;
                     }
                 }
@@ -1219,7 +1233,12 @@ impl Cpu {
                     let rm = self.decode(b, m, ov)?;
                     let reg = Operand::Reg(((m >> 3) & 7) as usize);
                     let (dst, src) = if op & 2 == 0 { (rm, reg) } else { (reg, rm) };
-                    let v = self.alu(kind, self.get(b, dst, w)?, self.get(b, src, w)?, w);
+                    let a = if kind == 7 {
+                        self.get(b, dst, w)?
+                    } else {
+                        self.get_modify(b, dst, w)?
+                    };
+                    let v = self.alu(kind, a, self.get(b, src, w)?, w);
                     if kind != 7 {
                         self.put(b, dst, v, w)?;
                     }
@@ -1405,7 +1424,12 @@ impl Cpu {
                 if self.lock_prefix && kind == 7 {
                     return Err(ExecError::Fault(6));
                 }
-                let out = self.alu(kind, self.get(b, o, w)?, v, w);
+                let a = if kind == 7 {
+                    self.get(b, o, w)?
+                } else {
+                    self.get_modify(b, o, w)?
+                };
+                let out = self.alu(kind, a, v, w);
                 if kind != 7 {
                     self.put(b, o, out, w)?;
                 }
@@ -1426,7 +1450,7 @@ impl Cpu {
                 let m = self.fetch(b)?;
                 let o = self.decode(b, m, ov)?;
                 let reg = Operand::Reg(((m >> 3) & 7) as usize);
-                let a = self.get(b, o, w)?;
+                let a = self.get_modify(b, o, w)?;
                 let c = self.get(b, reg, w)?;
                 self.put(b, o, c, w)?;
                 self.put(b, reg, a, w)?;
@@ -1649,7 +1673,7 @@ impl Cpu {
                 } else {
                     n
                 };
-                let v = self.shift((m >> 3) & 7, self.get(b, o, w)?, n, w);
+                let v = self.shift((m >> 3) & 7, self.get_modify(b, o, w)?, n, w);
                 self.put(b, o, v, w)?;
             }
             0xc2 | 0xc3 | 0xca | 0xcb => {
@@ -1842,7 +1866,11 @@ impl Cpu {
                 if m & 0x38 == 8 && b.profile == crate::Profile::Pc9821ApDos {
                     return Err(ExecError::Fault(6));
                 }
-                let v = self.get(b, o, w)?;
+                let v = if matches!((m >> 3) & 7, 2 | 3) {
+                    self.get_modify(b, o, w)?
+                } else {
+                    self.get(b, o, w)?
+                };
                 match (m >> 3) & 7 {
                     0 | 1 => {
                         let c = self.immediate(b, w)?;
@@ -1942,7 +1970,11 @@ impl Cpu {
                         self.check_mem(b, s, a, self.bytes(true) + 2)?;
                     }
                 }
-                let v = self.get(b, o, w)?;
+                let v = if m & 0x38 <= 8 {
+                    self.get_modify(b, o, w)?
+                } else {
+                    self.get(b, o, w)?
+                };
                 match (m >> 3) & 7 {
                     0 | 1 => {
                         let cf = self.flags & CF;

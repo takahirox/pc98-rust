@@ -774,3 +774,183 @@ fn full_width_fetch_wrap_and_indirect_far_pointer_overflow_are_bounded() {
     c.step(&mut b).unwrap();
     fault_frame(&c, &b, 13, 0);
 }
+
+#[test]
+fn cmpxchg_requires_writable_destination_for_both_comparison_outcomes() {
+    for bytes in [1usize, 2, 4] {
+        for locked in [false, true] {
+            for equal in [false, true] {
+                for writable in [false, true] {
+                    let mut code = vec![];
+                    if bytes == 2 {
+                        code.push(0x66);
+                    }
+                    if locked {
+                        code.push(0xf0);
+                    }
+                    code.extend([0x0f, if bytes == 1 { 0xb0 } else { 0xb1 }, 0x0d, 0, 0, 0, 0]);
+                    let (mut c, mut b) = protected(&code, true, true);
+                    c.segment_caches[DS].as_mut().unwrap().access =
+                        if writable { 0x93 } else { 0x91 };
+                    let initial = 0x87654321u32;
+                    let accumulator = if equal { initial } else { 0x12345678 };
+                    c.set_reg32(AX, accumulator);
+                    c.set_reg32(CX, 0xaabbccdd);
+                    c.flags = 2 | CF;
+                    b.mem[0x1ffff..0x20005].fill(0xa5);
+                    b.mem[0x20000..0x20000 + bytes]
+                        .copy_from_slice(&initial.to_le_bytes()[..bytes]);
+                    c.step(&mut b).unwrap();
+                    let mask = u32::MAX >> ((4 - bytes) * 8);
+                    let mut expected = initial.to_le_bytes();
+                    if writable {
+                        assert_eq!(c.last_fault, None);
+                        assert_eq!(c.ip, 0x1000 + code.len() as u32);
+                        assert_eq!(c.flags & ZF != 0, equal);
+                        assert_eq!(
+                            c.reg32(AX),
+                            if equal {
+                                accumulator
+                            } else {
+                                (accumulator & !mask) | (initial & mask)
+                            }
+                        );
+                        if equal {
+                            expected = 0xaabbccddu32.to_le_bytes();
+                        }
+                    } else {
+                        fault_frame(&c, &b, 13, 0);
+                        assert_eq!(c.reg32(AX), accumulator);
+                        assert_eq!(b.mem[0x17ffc], (2 | CF) as u8);
+                    }
+                    assert_eq!(c.reg32(CX), 0xaabbccdd);
+                    assert_eq!(&b.mem[0x20000..0x20000 + bytes], &expected[..bytes]);
+                    assert_eq!((b.mem[0x1ffff], b.mem[0x20000 + bytes]), (0xa5, 0xa5));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn cmpxchg_mismatch_performs_unchanged_value_bus_writeback() {
+    for equal in [false, true] {
+        // The EGC's inverted CPU-source ROP exposes the byte actually written.
+        let (mut c, mut b) = protected(&[0x0f, 0xb0, 0x0d, 0, 0, 0, 0], true, true);
+        c.segment_caches[DS].as_mut().unwrap().base = 0xa8000;
+        c.set_reg32(AX, if equal { 0x12 } else { 0xff });
+        c.set_reg32(CX, 0x34);
+        b.egc.enabled = true;
+        b.grcg_mode = 0x80;
+        b.egc.registers[2] = 0x2c0f;
+        b.graphics[0] = 0x12;
+        c.step(&mut b).unwrap();
+        assert_eq!(c.last_fault, None);
+        assert_eq!(c.flags & ZF != 0, equal);
+        assert_eq!(c.byte(AX), 0x12);
+        for plane in 0..4 {
+            assert_eq!(b.graphics[plane * 0x8000], if equal { 0xcb } else { 0xed });
+            assert_eq!(b.graphics[plane * 0x8000 + 1], 0);
+        }
+    }
+}
+
+#[test]
+fn rejected_memory_read_modify_write_preserves_egc_source_and_pattern_latches() {
+    // Each encoding addresses DS:0 in 32-bit address size. Cover every shared
+    // modifying path, both bit addressing forms, and byte/word/dword spans.
+    let cases: &[(&[u8], u8, &[u8], bool)] = &[
+        (&[0x00], 0x0d, &[], false), // ADD byte [0],CL
+        (&[0x01], 0x0d, &[], true),  // ADD [0],ECX
+        (&[0x80], 0x05, &[1], false),
+        (&[0x81], 0x05, &[1, 0, 0, 0], true),
+        (&[0x83], 0x05, &[1], true),
+        (&[0x86], 0x0d, &[], false), // XCHG
+        (&[0x87], 0x0d, &[], true),
+        (&[0xc0], 0x25, &[1], false), // SHL
+        (&[0xc1], 0x25, &[1], true),
+        (&[0xd0], 0x25, &[], false),
+        (&[0xd1], 0x25, &[], true),
+        (&[0xd2], 0x25, &[], false),
+        (&[0xd3], 0x25, &[], true),
+        (&[0xf6], 0x15, &[], false), // NOT
+        (&[0xf7], 0x15, &[], true),
+        (&[0xf6], 0x1d, &[], false), // NEG
+        (&[0xf7], 0x1d, &[], true),
+        (&[0xfe], 0x05, &[], false), // INC
+        (&[0xff], 0x05, &[], true),
+        (&[0xfe], 0x0d, &[], false), // DEC
+        (&[0xff], 0x0d, &[], true),
+        (&[0x0f, 0xab], 0x0d, &[], true), // BTS/BTR/BTC
+        (&[0x0f, 0xb3], 0x0d, &[], true),
+        (&[0x0f, 0xbb], 0x0d, &[], true),
+        (&[0x0f, 0xba], 0x2d, &[1], true),
+        (&[0x0f, 0xba], 0x35, &[1], true),
+        (&[0x0f, 0xba], 0x3d, &[1], true),
+        (&[0x0f, 0xa4], 0x0d, &[1], true), // SHLD/SHRD
+        (&[0x0f, 0xa5], 0x0d, &[], true),
+        (&[0x0f, 0xac], 0x0d, &[1], true),
+        (&[0x0f, 0xad], 0x0d, &[], true),
+        (&[0x0f, 0xb0], 0x0d, &[], false), // CMPXCHG mismatch
+        (&[0x0f, 0xb1], 0x0d, &[], true),
+        (&[0x0f, 0xc0], 0x0d, &[], false), // XADD
+        (&[0x0f, 0xc1], 0x0d, &[], true),
+    ];
+    for &(opcode, modrm, immediate, wide) in cases {
+        for word in [false, true] {
+            if word && !wide {
+                continue;
+            }
+            let mut code = vec![];
+            if word {
+                code.push(0x66);
+            }
+            code.extend(opcode);
+            code.extend([modrm, 0, 0, 0, 0]);
+            code.extend(if word && opcode == [0x81] {
+                &immediate[..2]
+            } else {
+                immediate
+            });
+            let (mut c, mut b) = protected(&code, true, true);
+            let ds = c.segment_caches[DS].as_mut().unwrap();
+            ds.base = 0xa8000;
+            ds.access = 0x91; // Readable, present, read-only data.
+            c.set_reg32(AX, 0x12345678);
+            c.set_reg32(CX, 1);
+            let registers = c.r;
+            b.egc.enabled = true;
+            b.grcg_mode = 0x80;
+            b.egc.registers[2] = 0x29f0; // source-copy ROP; reads also load pattern
+            for plane in 0..4 {
+                b.graphics[plane * 0x8000..plane * 0x8000 + 4].copy_from_slice(&[
+                    0x12 + plane as u8,
+                    0x34,
+                    0x56,
+                    0x78,
+                ]);
+            }
+            let graphics = b.graphics.clone();
+            c.step(&mut b).unwrap();
+            fault_frame(&c, &b, 13, 0);
+            for r in [AX, CX, DX, BX, BP, SI, DI] {
+                assert_eq!(c.r[r], registers[r], "opcode={code:02x?}");
+            }
+            assert_eq!(b.graphics, graphics, "opcode={code:02x?}");
+            // Expose both latch lanes through real bus writes, without reading
+            // VRAM first. Rejected operand reads would copy nonzero data here.
+            for (rop, offset) in [(0x28f0, 0x10), (0x3000, 0x12)] {
+                b.egc.registers[2] = rop;
+                b.write(0xa8000 + offset, 0xff);
+                b.write(0xa8001 + offset, 0xff);
+                for plane in 0..4 {
+                    assert_eq!(
+                        &b.graphics[plane * 0x8000 + offset..plane * 0x8000 + offset + 2],
+                        &[0, 0],
+                        "opcode={code:02x?} ROP={rop:04x} plane={plane}"
+                    );
+                }
+            }
+        }
+    }
+}
