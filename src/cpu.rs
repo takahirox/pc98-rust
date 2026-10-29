@@ -939,7 +939,7 @@ impl Cpu {
                         // preserved as a deterministic emulator policy.
                         Operand::Reg(r) => self.r[r] = self.cr0 as u16,
                         Operand::Mem(s, off) => {
-                            if !self.protected_mode() && off > 0xfffe {
+                            if (!self.protected_mode() || self.vm86()) && off > 0xfffe {
                                 return Err(ExecError::Fault(13));
                             }
                             self.write_mem(b, s, off, self.cr0, 2)?;
@@ -964,9 +964,9 @@ impl Cpu {
                 let Operand::Mem(s, off) = self.decode(b, m, ov)? else {
                     return Err(ExecError::Fault(6));
                 };
-                // Real-address 486 table operands fault #GP, including SS;
+                // Real-address and VM86 486 table operands fault #GP, including SS;
                 // protected operands use ordinary descriptor access checks.
-                if !self.protected_mode() && off > 0xfffa {
+                if (!self.protected_mode() || self.vm86()) && off > 0xfffa {
                     return Err(ExecError::Fault(13));
                 }
                 self.check_access(b, s, off, 6, kind < 2, false)?;
@@ -1317,9 +1317,9 @@ impl Cpu {
                     let Operand::Mem(s, off) = self.decode(b, m, ov)? else {
                         unreachable!();
                     };
-                    // Intel486 real-address contract: #GP even for SS, unlike
-                    // the modern SDM. Preflight the entire fixed-width store.
-                    if !self.protected_mode() && off > 0xfffe {
+                    // Intel486 real-address/VM86 contract: #GP even for SS,
+                    // unlike the modern SDM. Preflight the entire fixed-width store.
+                    if (!self.protected_mode() || self.vm86()) && off > 0xfffe {
                         return Err(ExecError::Fault(13));
                     }
                     let value = if op == 0xd9 {

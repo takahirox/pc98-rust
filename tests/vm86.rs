@@ -201,6 +201,102 @@ fn cs_override_writes_retain_vm86_segment_bounds() {
 }
 
 #[test]
+fn system_store_limit_faults_use_gp_in_vm86_and_ss_in_protected_mode() {
+    // Intel486 PRM instruction exception tables: these stores use #GP for
+    // VM86 bounds violations even through SS; protected mode retains #SS.
+    for (opcode, extension, width) in [
+        (&[0x0f, 0x01][..], 0, 6), // SGDT
+        (&[0x0f, 0x01][..], 1, 6), // SIDT
+        (&[0x0f, 0x01][..], 4, 2), // SMSW
+        (&[0xd9][..], 7, 2),       // FNSTCW
+        (&[0xdd][..], 7, 2),       // FNSTSW
+    ] {
+        for pg in [false, true] {
+            for virtual_mode in [false, true] {
+                for operand32 in [false, true] {
+                    for address32 in [false, true] {
+                        let mut code = vec![0x36]; // explicit SS override
+                        if operand32 {
+                            code.push(0x66);
+                        }
+                        if address32 {
+                            code.push(0x67);
+                        }
+                        code.extend_from_slice(opcode);
+                        // [BP+0] / [EBP+0], so the monitor can repair and retry.
+                        code.extend_from_slice(&[
+                            (if address32 { 0x45 } else { 0x46 }) | extension << 3,
+                            0,
+                        ]);
+                        let (mut c, mut b) = setup(&code, pg, 0x23002);
+                        if virtual_mode {
+                            enter(&mut c, &mut b);
+                        } else {
+                            c.ip = 0x12000;
+                            b.mem[0x12000..0x12000 + code.len()].copy_from_slice(&code);
+                            c.segment_caches[CS].as_mut().unwrap().attributes = 0;
+                            c.segment_caches[SS].as_mut().unwrap().limit = 0xffff;
+                            c.set_reg32(SP, 0xf000);
+                        }
+                        c.set_reg32(BP, 0x10001 - width); // FFFBh / FFFFh
+                        let target = if virtual_mode { 0x3fff0 } else { 0xfff0 };
+                        b.mem[target..target + 32].fill(0xa5);
+                        b.egc.enabled = true;
+                        b.grcg_mode = 0x80;
+                        let saved = c.clone();
+                        let egc = b.egc.clone();
+                        let graphics = b.graphics.clone();
+                        c.step(&mut b).unwrap();
+                        let vector = if virtual_mode { 13 } else { 12 };
+                        assert_eq!(c.last_fault, Some((vector, 0)), "{code:02x?} PG={pg}");
+                        if virtual_mode {
+                            frame(&c, &b, 13, Some(0), 0, 0x33002);
+                        } else {
+                            assert_eq!(c.reg32(SP), 0xeff0);
+                            for (i, value) in [0, 0x12000, 8, 0x10002].into_iter().enumerate() {
+                                assert_eq!(get(&b, 0xeff0 + 4 * i), value);
+                            }
+                        }
+                        assert_eq!(&b.mem[target..target + 32], &[0xa5; 32]);
+                        assert_eq!(b.egc, egc);
+                        assert_eq!(b.graphics, graphics);
+                        assert_eq!(b.grcg_mode, 0x80);
+                        assert_eq!(c.fpu, saved.fpu);
+                        assert_eq!(c.cr2, saved.cr2);
+                        for r in 0..8 {
+                            if r != SP {
+                                assert_eq!(c.reg32(r), saved.reg32(r));
+                            }
+                        }
+                        if virtual_mode {
+                            // Guest monitor drops the error and IRETD restores
+                            // the faulting EIP; a repaired operand then succeeds.
+                            b.mem[0x11000..0x11004].copy_from_slice(&[0x83, 0xc4, 4, 0xcf]);
+                            c.set_reg32(BP, 0x4000);
+                            c.step(&mut b).unwrap();
+                            c.step(&mut b).unwrap();
+                            assert!(c.vm86());
+                            assert_eq!(c.ip, 0);
+                            c.step(&mut b).unwrap();
+                            assert!(c.vm86());
+                            assert_eq!(c.ip, code.len() as u32);
+                            let expected = match (opcode, extension) {
+                                ([0x0f, 0x01], 0) => vec![31, 0, 0, 0x50, 0, 0],
+                                ([0x0f, 0x01], 1) => vec![0xff, 7, 0, 0x60, 0, 0],
+                                ([0x0f, 0x01], 4) => (saved.cr0 as u16).to_le_bytes().to_vec(),
+                                ([0xd9], _) => saved.fpu.control.to_le_bytes().to_vec(),
+                                _ => saved.fpu.status.to_le_bytes().to_vec(),
+                            };
+                            assert_eq!(&b.mem[0x34000..0x34000 + width as usize], expected);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn interrupt_trap_and_error_frames_run_guest_monitor_then_iretd_back() {
     for (code, source, access, err, ip) in [
         (vec![0xcd, 0x30], false, 0xef, None, 2),
