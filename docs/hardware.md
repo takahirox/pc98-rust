@@ -357,13 +357,12 @@ One `u32` **CR0** replaces the previous `u16 machine_status`. Construction and
 Machine reset expose **60000010h**, with CD/NW/ET set and PE/PG/MP/EM/TS/NE clear,
 following the **1992** manual's §10.1/Figure 10-2, printed **10-2** (PDF 252).
 The 1990 edition's figure differs; the later figure supplies the selected reset
-contract. Reserved bits are zero by emulator policy. SMSW still reads only 0010h
-and x87 checks EM/TS from that same CR0. ET does not imply numerical FPU support;
+contract. Reserved bits are zero by emulator policy. SMSW reads bits 15:0 (0010h at
+reset), and x87 checks EM/TS from that same CR0. ET does not imply numerical FPU support;
 CD/NW readback adds no cache simulation. **CR2/CR3 reset to zero by explicit
 emulator policy**; their reset values are not specified in that PRM's reset table.
-They are independent 32-bit CPU metadata, not generated values: there are no guest
-writers, page-fault updates, translation tables or TLB effects. Native-only state
-variation tests prove full-width readback and isolation; guests see reset state.
+They are independent CPU metadata with guest MOV writers as described below;
+there are no page-fault updates, translation tables or TLB effects.
 
 Instructions are limited to 15 bytes and the existing real-mode CS limit.
 Invalid forms deliver the existing six-byte real-mode exception frame without
@@ -380,10 +379,70 @@ at both `/` and `/pc98-rust/`, requiring `MOV CR PASS`, no FAIL/errors, exact
 results and unchanged media. Hosts only mount, step, inspect and reset.
 Generated disks and source/license copies stay outside `web/`.
 
-`0F 22` writes, LMSW, CLTS, protected execution, paging, DPMI and numerical x87
-remain unimplemented. There is no filename-specific behavior or complete HDD,
-game boot or playability claim. See the
+LMSW, CLTS, protected execution, paging, DPMI and numerical x87 remain
+unimplemented. Real-mode-safe `0F 22` writes are described below. There is no
+filename-specific behavior or complete HDD, game boot or playability claim. See the
 [private HDD diagnostic procedure](dos-compatibility.md#diagnose-a-local-hdd-control-register-failure).
+
+## Ap real-mode control-register writes
+
+Issue #99 adds `0F 22 /r` for CR0/CR2/CR3. The read contract above also applies
+here: mod=3, any full 32-bit GPR (including ESP), size/segment/REP prefixes ignored,
+LOCK/memory/reserved CR selector #UD, preserved flags and unrelated state.
+VM keeps its existing `unsupported V30 opcode 0F 22` diagnostic and does not
+consume a ModR/M byte. No external CPU implementation is used.
+
+The independent specification is the same **1992 Intel486 PRM**, MOV printed
+26-212–213, §4.1.3/Figure 4-3 (CR layout), §10.2 (PG requires PE), §12.2.1/Table
+12-1 (CD/NW combinations) and §19.2 (ET hardwired to 1). The
+[1986 Intel 80386 PRM](https://pdos.csail.mit.edu/6.828/2018/readings/i386.pdf),
+MOV special registers and §4.1, independently establishes the original selectors
+and full-width transfer. The 486 additions and ET behavior follow the 486 manual,
+not later CR4/Pentium rules.
+
+- **CR0:** writable defined bits are PG/CD/NW/AM/WP/NE/TS/EM/MP/PE
+  (mask E005002Fh). ET always reads 1, including after a source value with ET=0;
+  this models a fixed hardware bit rather than a new exception. Other reserved
+  bits must remain zero. Real-mode-safe values commit atomically and SMSW and
+  existing x87 EM/TS checks immediately see the same CR0. AM/WP have no effect in
+  real mode; cache controls remain metadata in this core without a cache model.
+- **CR2:** stores all 32 source bits and reads them back unchanged. It does not
+  enable paging or generate a page fault.
+- **CR3:** accepts the page-directory base (bits 31:12), PCD (4) and PWT (3),
+  mask FFFFF018h. It is metadata while paging is disabled, with no RAM lookup,
+  address masking to installed memory, translation or TLB to flush. Reserved low
+  bits must remain zero. CR2/CR3 reset remains deterministic zero by policy.
+
+PG=1 with PE=0, or NW=1 with CD=0, raises restartable **#GP (13)** before mutation.
+As with existing Ap real-mode exceptions, the frame has FLAGS/CS/first-prefix IP,
+no error code, and guest IRET can retry the instruction. Encoding/LOCK failures
+have #UD priority over value validation. Instruction length/CS bounds are checked
+before a control register changes. TF traps after a successful write at the next IP.
+
+The PRM requires software to preserve reserved bits and does not specify a useful
+result for violations. This core explicitly **stops with an undefined reserved-bit
+write diagnostic**, rather than inventing #GP or silently masking them. A valid
+CR0 request with **PE=1** (with or without PG) similarly stops with an **unsupported
+protected execution/paging transition** error. Neither case commits a write,
+advances IP, retires the instruction, delivers a spurious guest fault, or changes
+GPRs/flags/segments/FPU/RAM. The error contains first-prefix CS:IP, opcode/ModR/M,
+CR/GPR, old/written value, requested PE/PG and sequential next IP. Machine execution
+stays stopped until reset. No segment-cache or interrupt-mode transition is faked.
+This is a diagnostic boundary, not protected-mode or paging support.
+
+The original MIT [write probe](../guest/mov_cr_write.asm) and
+[manifest](../fixtures/mov-cr-write-manifest.json) pin source, boot/image hashes,
+license, commands, exact 128 result/guard bytes and a two-million-slot bound.
+Prepare with `python3 tools/prepare_mov_cr_write_fixture.py`, then run
+`cargo test --locked --test mov_cr_write --test headless_trace` and `npm test`.
+The default guest verifies all eight CR2 source GPRs, CR3 from ESP, CR0/SMSW,
+flags and #UD/#GP repair/IRET/retry itself. Two `-DMODE` builds request PE and PE+PG
+and must stop without PASS. Native and actual release-Wasm Chromium checks run
+the same images cold and after reset, at both serving roots, without host guest
+logic. Generated media/source/license copies stay outside `web/`.
+
+See [Issue #99 validation evidence](control-register-writes-validation.md) and the
+[bounded local trace procedure](dos-compatibility.md#diagnose-a-local-hdd-control-register-failure).
 
 ## Ap real-mode SMSW
 

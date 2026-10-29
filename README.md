@@ -91,6 +91,7 @@ python3 tools/prepare_gdtr_fixture.py
 python3 tools/prepare_idtr_fixture.py
 python3 tools/prepare_smsw_fixture.py
 python3 tools/prepare_mov_cr_fixture.py
+python3 tools/prepare_mov_cr_write_fixture.py
 python3 tools/prepare_fpu_init_fixture.py
 python3 tools/prepare_pic_fixture.py
 python3 tools/prepare_pic_smm_fixture.py
@@ -163,7 +164,16 @@ assembly, hashes and exact results. Native and production Rust/Wasm tests boot
 the identical image cold and after reset at both serving roots. See the
 [CR0/CR2/CR3 contract](docs/hardware.md#ap-real-mode-control-register-reads) and
 [local HDD diagnostic procedure](docs/dos-compatibility.md#diagnose-a-local-hdd-control-register-failure).
-Protected execution, paging and control-register writes remain unimplemented.
+The original MIT [write probe](guest/mov_cr_write.asm) covers `0F 22`, all eight
+source GPRs, CR0/CR2/CR3 round trips, FLAGS/guards and guest #UD/#GP repair/retry.
+Prepare with `python3 tools/prepare_mov_cr_write_fixture.py`; run
+`cargo test --locked --test mov_cr_write --test headless_trace` and `npm test`.
+Its [manifest](fixtures/mov-cr-write-manifest.json) also pins two transition images
+that must stop with precise errors, cold and after reset. See the
+[write contract](docs/hardware.md#ap-real-mode-control-register-writes) and
+[validation evidence](docs/control-register-writes-validation.md).
+Protected execution and paging remain unimplemented; CR0 requests to enable them
+stop before any partial mode change.
 
 The original MIT [channel-3 probe](guest/opn_ch3.asm) programs each logical FM
 operator through guest I/O, with keyed normal → 40h → 80h → normal stages and

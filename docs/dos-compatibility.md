@@ -4,9 +4,11 @@ Issue #11 adds DOS device workflows to the CPU work merged by PR #10.
 See the [current Ap device contracts, fixtures and acceptance evidence](ap-devices.md).
 Ap also supports bounded [real-mode SMSW readback](hardware.md#ap-real-mode-smsw),
 including reset MSW 0010h and restartable faults, and
-[32-bit CR0/CR2/CR3 reads](hardware.md#ap-real-mode-control-register-reads).
+[32-bit CR0/CR2/CR3 reads](hardware.md#ap-real-mode-control-register-reads) and
+[real-mode-safe MOV writes](hardware.md#ap-real-mode-control-register-writes).
 CR0 resets to 60000010h; PE/PG remain clear. ET readback does not imply numerical
-x87 support; protected execution, paging and status writers remain unimplemented.
+x87 support; protected execution and paging remain unimplemented. PE/PG requests
+stop explicitly before committing CR0; they are never forced clear to continue.
 Both profiles support bounded [8259A normal-EOI software polling](hardware.md#8259a-ocw3-normal-eoi-polling),
 including two separate reads and EOIs for the fixed cascade while IF is clear.
 The original PIT/FDC boot probe is hardware acceptance evidence, not an expanded
@@ -291,12 +293,12 @@ made that the new tests validate those missing devices. That historical checkpoi
 
 ## Diagnose a local HDD control-register failure
 
-The reported `aliceY3.hdi` error `unimplemented i486 opcode 0F 20` establishes a
-CPU decoder failure after image acceptance. It establishes neither the ModR/M,
+The reported `aliceY3.hdi` errors for `0F 20` and then `0F 22` establish a
+CPU decoder failure after image acceptance. They establish neither the ModR/M,
 CRn selector, instruction validity nor the program's intended control flow.
 The original lawful local image was **not available and was not retested** for
-Issue #97. The independent MIT probe reproduces the old missing opcode and
-verifies the implementation; it cannot establish that this HDD boots or plays.
+Issues #97/#99. The independent MIT probes reproduce the old missing opcodes and
+verify the implementation; they cannot establish that this HDD boots or plays.
 
 For a lawfully held local copy, select Ap and IDE/HDI boot, then capture a bounded
 local headless run. Keep the image, saves, detailed output and hashes in a private
@@ -316,8 +318,10 @@ budget end, including the pre-execution **CS:IP**,
 primary/extended opcode, bounded prefix list, effective operand/address-size
 attributes, all GPRs, segments/FS/GS, flags and CR0/CR2/CR3. For Ap `0F 20` and
 `0F 22`, it also records the following ModR/M, mod field, CRn selector and GPR
-name, without decoding a memory operand. The operand attribute may be 16 even
-though MOV CR always transfers 32 bits. Peeking respects the 15-byte and CS limits.
+name, without decoding a memory operand. Writes additionally record the old and
+intended value and CR0 PE/PG bits. Each retained control event includes the next
+attempted instruction metadata, or `<stopped>`/`<budget-end>` when none was
+attempted. The operand attribute may be 16 even though MOV CR transfers 32 bits. Peeking respects the 15-byte and CS limits.
 No surrounding code stream, disassembly or memory dump is emitted. The retained
 history includes a failing instruction even when it occurs well before the final
 100 budget slots. The separate control-event history retains reads even when
@@ -325,11 +329,12 @@ execution progresses beyond the final 100 slots. Tracing is opt-in and does not
 change guest CPU execution.
 
 Check `mod=3`, CR0/2/3 selection and the prefix context before identifying a valid
-control-register read. Invalid media or an incorrect control-flow path could also
-reach these bytes. A later stop may be unrelated; compare the next exact location
+control-register operation. Invalid media or an incorrect control-flow path could
+also reach these bytes. A later stop may be unrelated; compare the next exact location
 and opcode. Summarize only brief opcode/ModR/M metadata and bounded findings when
 reporting evidence; never upload restricted media, game code or detailed raw
 traces to Git, CI, Issues, PRs or Pages. If an actual local run next requires
-`0F 22`, protected mode, paging, extended DOS or another device, record the evidence
-and open a separate `task` Issue. Do not fake these facilities or treat the new
-read instruction as a claim of complete game compatibility.
+protected mode, paging, extended DOS or another device, record the evidence and
+plan a separate `task` Issue. A synthetic transition probe proves only the explicit
+unsupported-mode boundary, not a requirement of the private game. Do not fake these
+facilities or treat opcode support as a claim of complete game compatibility.

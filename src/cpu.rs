@@ -58,10 +58,10 @@ pub struct Cpu {
     pub upper: [u16; 8],
     pub extra_segments: [u16; 2], // FS, GS
     /// i486 CR0: reset CD/NW/ET set; PE/PG clear. Shared by MOV, SMSW and x87.
-    /// Guest control-register writers and protected execution are not implemented.
+    /// MOV writers accept real-mode-safe state; protected execution is unsupported.
     pub cr0: u32,
     /// CR2/CR3 use deterministic zero on reset (emulator policy).
-    /// No paging, page-fault updates, CR3 translation or guest writers exist.
+    /// Guest-writable metadata; no paging, page-fault updates or translation exists.
     pub cr2: u32,
     pub cr3: u32,
     pub fpu: Fpu,
@@ -133,6 +133,8 @@ impl Default for Cpu {
 }
 #[derive(Debug)]
 enum ExecError {
+    /// Control writes reject undefined/unsupported state before any mutation.
+    ControlWriteRejected(String),
     Fault(u8),
     Unsupported(String),
 }
@@ -698,6 +700,10 @@ impl Cpu {
                         return Err("invalid V30 instruction".into())
                     }
                     ExecError::Fault(n) => n,
+                    ExecError::ControlWriteRejected(message) => {
+                        *self = saved;
+                        return Err(message);
+                    }
                     ExecError::Unsupported(message) => return Err(message),
                 };
                 *self = saved;
@@ -713,7 +719,7 @@ impl Cpu {
             return Err(ExecError::Fault(6));
         }
         match op {
-            0x20 => {
+            0x20 | 0x22 => {
                 let m = self.fetch(b)?;
                 if m >> 6 != 3 {
                     return Err(ExecError::Fault(6));
@@ -727,7 +733,52 @@ impl Cpu {
                 // Intel486 PRM (1992) pp. 26-212–213: always a full 32-bit GPR,
                 // independent of size overrides. Arithmetic flags are undefined
                 // there; preserve all flags as our deterministic policy.
-                self.set_reg32((m & 7) as usize, value);
+                if op == 0x20 {
+                    self.set_reg32((m & 7) as usize, value);
+                } else {
+                    let written = self.reg32((m & 7) as usize);
+                    let selector = (m >> 3) & 7;
+                    // Intel486 PRM §§4.1.3, 10.2, 12.2.1, 19.2 and MOV
+                    // pp. 26-212–213. Validate before committing any CR state.
+                    if selector == 0
+                        && ((written & 0x80000001 == 0x80000000)
+                            || (written & 0x60000000 == 0x20000000))
+                    {
+                        return Err(ExecError::Fault(13));
+                    }
+                    let reserved = match selector {
+                        0 => written & !0xe005003f,
+                        3 => written & !0xfffff018,
+                        _ => 0,
+                    };
+                    let reason = if reserved != 0 {
+                        Some("undefined reserved-bit write")
+                    } else if selector == 0 && written & 0x80000001 != 0 {
+                        Some("unsupported protected execution/paging transition")
+                    } else {
+                        None
+                    };
+                    if let Some(reason) = reason {
+                        let mode = if selector == 0 {
+                            format!(" PE={} PG={}", written & 1, written >> 31)
+                        } else {
+                            String::new()
+                        };
+                        return Err(ExecError::ControlWriteRejected(format!(
+                            "{reason}: CS:IP={:04x}:{:08x} opcode=0f 22 modrm={m:02x} CR{selector} GPR={} old={value:08x} written={written:08x}{mode} next-ip={:08x}; write not committed",
+                            self.s[CS], self.ip - self.instruction_bytes as u32,
+                            ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"][(m & 7) as usize],
+                            self.ip
+                        )));
+                    }
+                    match selector {
+                        // ET is hardwired to 1 on the selected Intel486.
+                        0 => self.cr0 = written | 0x10,
+                        2 => self.cr2 = written,
+                        3 => self.cr3 = written,
+                        _ => unreachable!(),
+                    }
+                }
             }
             0x01 => {
                 let m = self.fetch(b)?;
