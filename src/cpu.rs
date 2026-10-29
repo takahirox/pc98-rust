@@ -1388,13 +1388,15 @@ impl Cpu {
             0x69 | 0x6b => {
                 let m = self.fetch(b)?;
                 let o = self.decode(b, m, ov)?;
-                let a = self.signed(self.get(b, o, true)?, true);
                 let c = if op == 0x69 {
                     let v = self.immediate(b, true)?;
                     self.signed(v, true)
                 } else {
                     self.fetch(b)? as i8 as i64
                 };
+                // Decode the whole instruction before a device-backed operand
+                // read, so a truncated immediate cannot change device latches.
+                let a = self.signed(self.get(b, o, true)?, true);
                 let v = a * c;
                 self.put(b, Operand::Reg(((m >> 3) & 7) as usize), v as u32, true)?;
                 self.flag(CF, v != self.signed(v as u32, true));
@@ -1997,10 +1999,12 @@ impl Cpu {
                         self.check_mem(b, s, a, self.bytes(true) + 2)?;
                     }
                 }
-                if matches!((m >> 3) & 7, 2 | 6) {
-                    // Near CALL/PUSH must validate the stack write before
-                    // reading an operand that may change device latches.
-                    self.check_stack_sequence(b, 1, true)?;
+                match (m >> 3) & 7 {
+                    // CALL/PUSH must validate every stack slot before reading
+                    // an operand or far pointer that may change device latches.
+                    2 | 6 => self.check_stack_sequence(b, 1, true)?,
+                    3 if matches!(o, Operand::Mem(..)) => self.check_stack_sequence(b, 2, true)?,
+                    _ => {}
                 }
                 let v = if m & 0x38 <= 8 {
                     self.get_modify(b, o, w)?
