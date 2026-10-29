@@ -1,6 +1,6 @@
 // Original synthetic failing guest; no third-party code/media. MIT, Issue #97.
 #[test]
-fn bounded_local_trace_retains_early_unsupported_control_write() {
+fn bounded_local_trace_retains_early_rejected_control_write() {
     let path = std::env::temp_dir().join(format!("pc98-cr-trace-{}.hdm", std::process::id()));
     let mut image = vec![0; 1_261_568];
     image[..3].copy_from_slice(&[0x0f, 0x20, 0xc0]);
@@ -16,7 +16,7 @@ fn bounded_local_trace_retains_early_unsupported_control_write() {
     assert!(!output.status.success());
     let diagnostic = String::from_utf8(output.stderr).unwrap();
     assert!(diagnostic.contains("profile=Pc9821ApDos"), "{diagnostic}");
-    assert!(diagnostic.contains("1fc0:000000cb opcode=0f 22 modrm=dc mod=3 cr=3 gpr=esp prefixes=[66, 67, 65] operand=32 address=32"), "{diagnostic}");
+    assert!(diagnostic.contains("1fc0:000000cb opcode=0f 22 modrm=dc mod=3 cr=3 gpr=esp old=00000000 written=00007c00 prefixes=[66, 67, 65] operand=32 address=32"), "{diagnostic}");
     assert!(diagnostic.contains("cr0=60000010"));
     assert!(
         diagnostic
@@ -35,7 +35,7 @@ fn bounded_local_trace_retains_early_unsupported_control_write() {
             .count()
             <= 16
     );
-    assert!(diagnostic.contains("unimplemented i486 opcode 0F 22"));
+    assert!(diagnostic.contains("undefined reserved-bit write"));
     assert!(
         diagnostic
             .lines()
@@ -86,14 +86,14 @@ fn trace_irq_handler(handler: &[u8], name: &str) -> String {
     std::fs::remove_file(path).unwrap();
     assert!(!output.status.success());
     let diagnostic = String::from_utf8(output.stderr).unwrap();
-    assert!(diagnostic.contains("unimplemented i486 opcode 0F 22"));
+    assert!(diagnostic.contains("undefined reserved-bit write"));
     diagnostic
 }
 
 #[test]
-fn trace_captures_unsupported_control_write_at_irq_handler_entry() {
+fn trace_captures_rejected_control_write_at_irq_handler_entry() {
     let diagnostic = trace_irq_handler(&[0x66, 0x67, 0x65, 0x0f, 0x22, 0xdc], "write");
-    let expected = "1fc0:00000080 opcode=0f 22 modrm=dc mod=3 cr=3 gpr=esp prefixes=[66, 67, 65] operand=32 address=32";
+    let expected = "1fc0:00000080 opcode=0f 22 modrm=dc mod=3 cr=3 gpr=esp old=00000000 written=00007bfa prefixes=[66, 67, 65] operand=32 address=32";
     let last = diagnostic
         .lines()
         .rfind(|line| line.starts_with("slot="))
@@ -116,7 +116,7 @@ fn trace_captures_supported_control_read_at_irq_handler_entry() {
     let diagnostic = trace_irq_handler(
         &[
             0x66, 0x67, 0x65, 0x0f, 0x20, 0xc3, // mov ebx, cr0
-            0x0f, 0x22, 0xdc, // unsupported write stops execution
+            0x0f, 0x22, 0xdc, // reserved CR3 bits stop execution
         ],
         "read",
     );
@@ -135,4 +135,44 @@ fn trace_captures_supported_control_read_at_irq_handler_entry() {
         controls[1].contains(", 60000010, 00007bfa,"),
         "{diagnostic}"
     );
+}
+
+#[test]
+fn trace_distinguishes_real_mode_setup_from_a_requested_transition() {
+    // Guest writes CR2, runs NOP, then requests PE in CR0. Only original bytes.
+    let mut image = vec![0; 1_261_568];
+    let code = [
+        0x66, 0xb8, 0xef, 0xbe, 0xad, 0xde, 0x0f, 0x22, 0xd0, 0x90, 0x66, 0xb8, 0x11, 0, 0, 0x60,
+        0x66, 0x67, 0x65, 0x0f, 0x22, 0xc0, 0xf4,
+    ];
+    image[..code.len()].copy_from_slice(&code);
+    let path = std::env::temp_dir().join(format!("pc98-cr-mode-{}.hdm", std::process::id()));
+    std::fs::write(&path, image).unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_headless"))
+        .arg(&path)
+        .args(["10000", "trace", "--ap"])
+        .output()
+        .unwrap();
+    std::fs::remove_file(path).unwrap();
+    assert!(!output.status.success());
+    let diagnostic = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        diagnostic.contains("cr=2 gpr=eax old=00000000 written=deadbeef"),
+        "{diagnostic}"
+    );
+    assert!(
+        diagnostic.contains("next-attempt=1fc0:00000009 opcode=90"),
+        "{diagnostic}"
+    );
+    assert!(
+        diagnostic.contains(
+            "cr=0 gpr=eax old=60000010 written=60000011 PE=0->1 PG=0->0 prefixes=[66, 67, 65]"
+        ),
+        "{diagnostic}"
+    );
+    assert!(
+        diagnostic.contains("next-attempt=<stopped>"),
+        "{diagnostic}"
+    );
+    assert!(diagnostic.contains("CS:IP=1fc0:00000010 opcode=0f 22 modrm=c0 CR0 GPR=eax old=60000010 written=60000011 PE=1 PG=0 next-ip=00000016; write not committed"),"{diagnostic}");
 }

@@ -48,6 +48,28 @@ fn instruction_diagnostic(c: &Cpu, b: &Bus) -> (String, bool) {
                         (m >> 3) & 7,
                         names[(m & 7) as usize]
                     ));
+                    if ext == 0x22 {
+                        let old = match (m >> 3) & 7 {
+                            0 => Some(c.cr0),
+                            2 => Some(c.cr2),
+                            3 => Some(c.cr3),
+                            _ => None,
+                        };
+                        let written = c.reg32((m & 7) as usize);
+                        operation.push_str(&format!(
+                            " old={} written={written:08x}",
+                            old.map_or_else(|| "<undefined>".into(), |v| format!("{v:08x}"))
+                        ));
+                        if (m >> 3) & 7 == 0 {
+                            operation.push_str(&format!(
+                                " PE={}->{} PG={}->{}",
+                                c.cr0 & 1,
+                                written & 1,
+                                c.cr0 >> 31,
+                                written >> 31
+                            ));
+                        }
+                    }
                 } else {
                     operation.push_str(" modrm=<fetch-limit>");
                 }
@@ -90,7 +112,8 @@ fn main() {
         .unwrap_or(1_000_000u64);
     let trace = args.iter().any(|a| a == "trace");
     let mut history = VecDeque::with_capacity(100);
-    let mut control_history = VecDeque::with_capacity(16);
+    let mut control_history: VecDeque<String> = VecDeque::with_capacity(16);
+    let mut pending_control = false;
     if trace {
         eprintln!(
             "profile={:?} instruction-history=100 control-history=16 (opcode/ModR/M only)",
@@ -113,6 +136,12 @@ fn main() {
                     history.pop_front();
                 }
                 let (diagnostic, control) = instruction_diagnostic(cpu, bus);
+                if pending_control {
+                    if let Some(last) = control_history.back_mut() {
+                        last.push_str(&format!(" next-attempt={diagnostic}"));
+                    }
+                }
+                pending_control = control;
                 if control {
                     if control_history.len() == 16 {
                         control_history.pop_front();
@@ -129,6 +158,15 @@ fn main() {
         }
     }
     if trace {
+        if pending_control {
+            if let Some(last) = control_history.back_mut() {
+                last.push_str(if m.error.is_some() {
+                    " next-attempt=<stopped>"
+                } else {
+                    " next-attempt=<budget-end>"
+                });
+            }
+        }
         for record in control_history {
             eprintln!("{record}");
         }
