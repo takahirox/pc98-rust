@@ -1695,6 +1695,11 @@ impl Cpu {
             }
             0xc2 | 0xc3 | 0xca | 0xcb => {
                 let n = if op & 1 == 0 { self.word(b)? } else { 0 };
+                if op & 8 != 0 {
+                    // A missing selector slot must fault before reading an offset
+                    // from a device-backed stack, which can change device latches.
+                    self.check_stack_sequence(b, 2, false)?;
+                }
                 let off = self.pop(b)?;
                 if op & 8 != 0 {
                     let seg = self.pop(b)? as u16;
@@ -1883,6 +1888,12 @@ impl Cpu {
                 if m & 0x38 == 8 && b.profile == crate::Profile::Pc9821ApDos {
                     return Err(ExecError::Fault(6));
                 }
+                // Decode TEST completely before a device-backed operand read.
+                let immediate = if matches!((m >> 3) & 7, 0 | 1) {
+                    self.immediate(b, w)?
+                } else {
+                    0
+                };
                 let v = if matches!((m >> 3) & 7, 2 | 3) {
                     self.get_modify(b, o, w)?
                 } else {
@@ -1890,8 +1901,7 @@ impl Cpu {
                 };
                 match (m >> 3) & 7 {
                     0 | 1 => {
-                        let c = self.immediate(b, w)?;
-                        self.alu(4, v, c, w);
+                        self.alu(4, v, immediate, w);
                     }
                     2 => self.put(b, o, !v, w)?,
                     3 => {

@@ -1065,6 +1065,90 @@ fn assert_stack_operand_egc_latches_unchanged(b: &mut Bus) {
 }
 
 #[test]
+fn rejected_retf_preflights_both_slots_before_stack_device_reads() {
+    for big in [false, true] {
+        for bytes in [2u32, 4] {
+            for stack_big in [false, true] {
+                for op in [0xca, 0xcb] {
+                    let mut code = vec![];
+                    if big != (bytes == 4) {
+                        code.push(0x66);
+                    }
+                    code.push(op);
+                    if op == 0xca {
+                        code.extend([0x10, 0]);
+                    }
+                    let (mut c, mut b) = protected(&code, big, stack_big);
+                    let sp = if stack_big { 0xa8000 } else { 0x8000 };
+                    c.set_reg32(SP, sp);
+                    let ss = c.segment_caches[SS].as_mut().unwrap();
+                    ss.base = if stack_big { 0 } else { 0xa0000 };
+                    // The offset slot fits in EGC VRAM; the selector slot does not.
+                    ss.limit = sp + bytes - 1;
+                    seed_stack_operand_egc(&mut b);
+                    let registers = std::array::from_fn::<_, 8, _>(|r| c.reg32(r));
+                    let memory = b.mem.clone();
+                    let graphics = b.graphics.clone();
+                    let flags = c.flags;
+                    c.step(&mut b).unwrap();
+                    assert_eq!(c.last_fault, Some((12, 0)));
+                    assert_eq!((c.s[CS], c.ip), (8, 0x2000));
+                    assert_eq!(c.flags, flags);
+                    for (r, value) in registers.into_iter().enumerate() {
+                        assert_eq!(c.reg32(r), if r == SP { value - 16 } else { value });
+                    }
+                    // Only the #SS frame is pushed, below VRAM in unmapped A7FF0.
+                    assert_eq!(b.mem, memory);
+                    assert_eq!(b.graphics, graphics);
+                    assert_stack_operand_egc_latches_unchanged(&mut b);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn truncated_test_immediate_faults_before_operand_device_reads() {
+    for big in [false, true] {
+        for bytes in [1usize, 2, 4] {
+            for available in 0..bytes {
+                let mut code = vec![];
+                if bytes != 1 && big != (bytes == 4) {
+                    code.push(0x66);
+                }
+                if !big {
+                    code.push(0x67);
+                }
+                code.extend([if bytes == 1 { 0xf6 } else { 0xf7 }, 0x05, 0, 0, 0, 0]);
+                let immediate_start = code.len();
+                code.extend_from_slice(&1u32.to_le_bytes()[..bytes]);
+                let (mut c, mut b) = protected(&code, big, true);
+                c.segment_caches[CS].as_mut().unwrap().limit =
+                    0x1000 + (immediate_start + available) as u32 - 1;
+                c.segment_caches[DS].as_mut().unwrap().base = 0xa8000;
+                seed_stack_operand_egc(&mut b);
+                let registers = std::array::from_fn::<_, 8, _>(|r| c.reg32(r));
+                let memory = b.mem.clone();
+                let graphics = b.graphics.clone();
+                let flags = c.flags;
+                c.step(&mut b).unwrap();
+                fault_frame(&c, &b, 13, 0);
+                assert_eq!(c.flags, flags);
+                for (r, value) in registers.into_iter().enumerate() {
+                    assert_eq!(c.reg32(r), if r == SP { value - 16 } else { value });
+                }
+                let sp = c.reg32(SP) as usize;
+                // Only the expected exception frame may change RAM.
+                assert_eq!(&b.mem[..sp], &memory[..sp]);
+                assert_eq!(&b.mem[sp + 16..], &memory[sp + 16..]);
+                assert_eq!(b.graphics, graphics);
+                assert_stack_operand_egc_latches_unchanged(&mut b);
+            }
+        }
+    }
+}
+
+#[test]
 fn rejected_pop_memory_preflights_destination_before_stack_device_read() {
     for bytes in [2u32, 4] {
         for failure in ["read-only", "limit", "post-increment ESP limit"] {
