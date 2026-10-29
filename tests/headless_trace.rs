@@ -212,3 +212,46 @@ fn protected_round_trip_trace_retains_modes_caches_tables_and_fault() {
     );
     assert!(trace.lines().filter(|s| s.starts_with("slot=")).count() <= 100);
 }
+
+#[test]
+fn bounded_trace_names_ltr_str_and_retains_loaded_tss_metadata() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_headless"))
+        .args([
+            "fixtures/task_register/task_register.hdm",
+            "190",
+            "trace",
+            "--ap",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let diagnostic = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        diagnostic
+            .contains("0008:00000036 opcode=0f 00 modrm=d8 LTR selector=0028 descriptor=Some"),
+        "{diagnostic}"
+    );
+    assert!(diagnostic.contains("opcode=0f 00 modrm=cb STR"));
+    assert!(diagnostic.contains("opcode=0f 00 modrm=1f LTR"));
+    assert!(
+        diagnostic.contains("tr=0028 tss=Some(SegmentCache { base: 33024, limit: 43, access: 131")
+    );
+    assert!(
+        diagnostic.contains("tr=0030 tss=Some(SegmentCache { base: 33280, limit: 103, access: 235")
+    );
+    assert!(diagnostic.contains("next-attempt="));
+    assert!(
+        diagnostic
+            .lines()
+            .filter(|s| s.starts_with("control-slot="))
+            .count()
+            <= 16
+    );
+    assert!(
+        diagnostic
+            .lines()
+            .filter(|s| s.starts_with("slot="))
+            .count()
+            <= 100
+    );
+}

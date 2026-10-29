@@ -588,8 +588,9 @@ PASS without FAIL, exact bytes, unchanged disk data and terminal shutdown.
 Fixtures remain outside `web/`.
 
 Protected mode and CPU386 remain partial. The [protected subset](protected-mode.md)
-implements CR0/PE transitions, same-ring gates and GDT/LDT descriptor caches.
-Privilege transitions, TR/task switching, paging, numerical x87, NMI, DPMI, and
+implements CR0/PE transitions, same-ring gates, GDT/LDT descriptor caches and
+STR/LTR with cached 16/32-bit TSS initialization. Privilege transitions, hardware
+task switching, paging, numerical x87, NMI, DPMI, and
 Windows compatibility remain outstanding. These probes do
 not establish full protected-mode accuracy or commercial software compatibility.
 

@@ -123,7 +123,7 @@ complete reproduction of those specifications.
 
 | Area | Implemented and tested | Remaining limits |
 | --- | --- | --- |
-| CPU | Original shared 8/16/32-bit real-mode interpreter; 66/67 overrides, EAX–EDI, FS/GS, ModR/M/SIB, dword ALU/stack/strings/control flow/I/O, selected 386/486 integer 0F instructions, EFLAGS AC, restartable #DE/#BR/#UD/#NM/#SS/#GP and #DB traps. The [ring-0 protected-mode subset](protected-mode.md) adds cached GDT/LDT descriptors, 16/32-bit code/stacks, IDT gates, checked addresses and real-mode return. LGDT/SGDT and LIDT/SIDT provide the [GDTR](hardware.md#ap-real-mode-gdtr) and [IDTR prerequisites](hardware.md#ap-real-mode-idtr); Ap supports relocated real-mode vectors, table-limit exception 8 and bounded shutdown when that entry is unavailable. Ap provides bounded [x87 FNINIT and non-waiting control/status readback](hardware.md#ap-x87-environment-initialization), without arithmetic or WAIT completion. Ap retains masked shift counts and encoded AAM/AAD radix; V30 behavior remains selected by VM | No privilege transitions, TSS/task switching, paging, DPMI, numerical FPU execution, CPUID, general system/debug-register instructions or complete 486 ISA/timing. Cached segment state is retained on PE exit; full unreal-mode guest/BIOS compatibility is unverified. Explicit invalid encodings fault; valid unimplemented instructions stop with a diagnostic. See CPU coverage below |
+| CPU | Original shared 8/16/32-bit real-mode interpreter; 66/67 overrides, EAX–EDI, FS/GS, ModR/M/SIB, dword ALU/stack/strings/control flow/I/O, selected 386/486 integer 0F instructions, EFLAGS AC, restartable #DE/#BR/#UD/#NM/#SS/#GP and #DB traps. The [ring-0 protected-mode subset](protected-mode.md) adds cached GDT/LDT descriptors, 16/32-bit code/stacks, IDT gates, STR/LTR with cached 16/32-bit TSS initialization, checked addresses and real-mode return. LGDT/SGDT and LIDT/SIDT provide the [GDTR](hardware.md#ap-real-mode-gdtr) and [IDTR prerequisites](hardware.md#ap-real-mode-idtr); Ap supports relocated real-mode vectors, table-limit exception 8 and bounded shutdown when that entry is unavailable. Ap provides bounded [x87 FNINIT and non-waiting control/status readback](hardware.md#ap-x87-environment-initialization), without arithmetic or WAIT completion. Ap retains masked shift counts and encoded AAM/AAD radix; V30 behavior remains selected by VM | No privilege transitions, hardware task switching, TSS stack/I/O-bitmap use, paging, DPMI, numerical FPU execution, CPUID, general system/debug-register instructions or complete 486 ISA/timing. Cached segment state is retained on PE exit; full unreal-mode guest/BIOS compatibility is unverified. Explicit invalid encodings fault; valid unimplemented instructions stop with a diagnostic. See CPU coverage below |
 | RAM | 640 KiB conventional plus 3 MiB at physical 100000–3FFFFF; BWA 401h reports 24 × 128 KiB; holes and firmware retain PC-98 mapping | HMA is reachable with A20 enabled, including dword accesses. Address override does not enlarge the real-mode 64 KiB segment limit, and INT 1F/90 now provides validated byte copies to extended RAM. XMS/EMS managers remain absent; selected guests need conventional RAM and/or this BIOS service |
 | A20 | PC-98 F2 write enables A20; F6=02/03 enables/disables; F2/F6 read bit 0 reports masked state; reset masks it | No IBM port 92 or AT keyboard-controller gate. F0 remains the private synthetic-firmware trap, not an emulated CPU reset port |
 | Bitmap | Two four-plane 128 KiB pages; B/R/G at A8000/B0000/B8000, intensity at E0000; independent CPU/display pages; analog palette 16 × 12-bit RGB; four-plane GRCG TDW/RMW/TCR | Aligned EGC raster operations and 512 KiB PEGC packed 256-color storage/windows/palette are now tested by independent DEBUG; see the device audit. No arbitrary EGC shifts, PEGC planar mode, 480-line mode or GDC vector engine |
@@ -199,6 +199,11 @@ Local review against Issue #7: this checkpoint establishes the documented DOS
 slice with rights-cleared fixtures and regressions, but the missing capabilities
 listed above remain blocking findings for any claim to finish the whole Issue.
 No external approval or human-only test blocks continued implementation.
+
+The [TR/TSS initialization contract and clustered roadmap](protected-mode.md#task-register-initialization-issue-103)
+separate STR/LTR from hardware tasks, privilege/TSS stacks, I/O bitmaps and paging.
+The original `task_register.asm` guest is hash-pinned and tested cold/reset through
+the native and production Wasm interpreters; it requires no private HDD.
 
 ## Issue #9 CPU coverage and independent guest evidence
 
@@ -317,12 +322,15 @@ cargo run --locked --release --bin headless -- /private/local/aliceY3.hdi 200000
 
 The trace header records profile and parsed HDI byte count, C/H/S geometry and
 512-byte sector size. The last **100 scheduler slots**, plus the last **16
-control-register events**, are kept in memory and printed on early error or
+control-register and STR/LTR events**, are kept in memory and printed on early error or
 budget end, including the pre-execution **CS:IP**,
 primary/extended opcode, bounded prefix list, effective operand/address-size
 attributes, all GPRs, segments/FS/GS, flags and CR0/CR2/CR3. Protected-mode
-metadata includes mode, CPL, hidden segment caches, LDTR, GDT/IDT base/limit
-and the most recent fault vector/error code. For Ap `0F 20` and
+metadata includes mode, CPL, hidden segment caches, LDTR, TR/cached TSS,
+GDT/IDT base/limit and the most recent fault vector/error code. Ap `0F 00 /1`
+and `/3` records name STR/LTR and show ModR/M; register-source LTR also shows
+its candidate selector and ordinary-RAM descriptor metadata. Memory-source
+operands are not dereferenced by tracing. For Ap `0F 20` and
 `0F 22`, it also records the following ModR/M, mod field, CRn selector and GPR
 name, without decoding a memory operand. Writes additionally record the old and
 intended value and CR0 PE/PG bits. Each retained control event includes the next

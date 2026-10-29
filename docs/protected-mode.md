@@ -1,4 +1,4 @@
-# Ap paging-disabled protected mode (Issue #101)
+# Ap paging-disabled protected mode (Issues #101, #103)
 
 PC-9821Ap DOS now executes an original-Rust ring-0 protected subset with
 CR0.PE=1 and CR0.PG=0. The default VM/V30 decoder and devices retain their
@@ -32,7 +32,7 @@ font dump or guest host-execution mechanism was used. Cargo dependencies are unc
   writable 64 KiB stack/data and 16-bit 64 KiB code, disables interrupts, clears
   PE, far-jumps to real code, reloads IDTR and then reloads real data segments.
   No guest PE bit is silently cleared by the emulator. Reset clears caches,
-  LDTR and fault metadata and restores real-mode control/table reset state.
+  LDTR, TR and fault metadata and restores real-mode control/table reset state.
 - **Segments:** visible selectors and hidden base, inclusive limit, type/access,
   presence and default-size attributes for CS/SS/DS/ES/FS/GS. GDT and LLDT-loaded
   LDT fetches use complete eight-byte bounds checks, including LDT entry zero.
@@ -70,13 +70,99 @@ font dump or guest host-execution mechanism was used. Cargo dependencies are unc
   and 16 retained control-register events, including their next attempted
   instruction. It now fetches opcodes through cached CS, uses CS.D for displayed
   sizes, and reports mode, CPL, caches/selectors, CR0, GDTR/IDTR, LDTR and the most
-  recent fault vector/error code. Only opcode/ModR/M and CPU metadata are read;
+  recent fault vector/error code. Issue #103 adds named STR/LTR records, visible
+  TR and cached TSS metadata, plus ordinary-RAM descriptor metadata for a register
+  LTR source. STR/LTR share the bounded control history and next-attempt capture.
+  Only opcode/ModR/M and CPU metadata are read;
   no surrounding guest code or operand memory is dumped.
+
+## Task-register initialization (Issue #103)
+
+Ap implements `0F 00 /1 STR r/m16` and `/3 LTR r/m16` in protected mode.
+Both use **two-byte operands regardless of CS.D or 66**; register STR preserves
+bits 31:16, and LTR ignores source bits 31:16. The 67 prefix selects effective
+address size independently, including SIB and full offsets; segment overrides
+use the existing caches and complete word-span/access checks. LOCK raises #UD
+before any operand read/write; group-0 /6 and /7 are invalid and raise #UD.
+Real-mode STR/LTR raise #UD. VM keeps its separate V30 `0F 00` interpretation.
+Flags and unrelated registers/memory are preserved.
+
+The independent specifications are the
+[1992 Intel486 PRM](https://bitsavers.trailing-edge.com/components/intel/80486/1992_Intel_486_Programmers_Reference_Manual.pdf),
+printed pp. **26-209 (LTR), 26-274 (STR), 7-1–7-6 (TSS/TR), 10-1–10-3
+(reset)**, and the [Intel 80386 PRM LTR entry](https://pdos.csail.mit.edu/6.828/2018/readings/i386/LTR.htm),
+[§7.2](https://pdos.csail.mit.edu/6.828/2018/readings/i386/s07_02.htm),
+[§7.3](https://pdos.csail.mit.edu/6.828/2018/readings/i386/s07_03.htm),
+[§9.8.10](https://pdos.csail.mit.edu/6.828/2018/readings/i386/s09_08.htm).
+The 486 §7.3 sentence calling STR privileged conflicts with its §4.2 table and
+instruction exception table; STR has no CPL check. LTR requires CPL 0 before
+reading its source. The interpreter retains its general **ring-0-only execution**
+boundary; this change does not enable user-mode execution. A handler-level test
+checks the architectural CPL distinction independently of that boundary.
+
+LTR requires a non-null **GDT** selector and an available system TSS descriptor:
+type 1 for a 16-bit TSS, type 9 for a 32-bit TSS. Null raises #GP(0); TI=1,
+out-of-table, busy (3/B), code/data or other system type raises #GP(selector).
+A valid type with P=0 raises #NP(selector). Selector error codes clear RPL and
+retain TI; source RPL and descriptor DPL otherwise do not restrict LTR. The
+whole descriptor must fit the inclusive GDTR limit. All checks finish before
+setting bit 1 of the access byte through the PC-98 bus and committing TR and its
+hidden base, inclusive limit, access/type/presence and attributes. Cached type
+3/B distinguishes 16/32-bit state. No IRQ or device scheduler runs inside this
+instruction's busy update/commit; this is a single-CPU emulator.
+
+**LTR is not a task switch:** it does not read or write the TSS, load its saved
+registers, set CR0.TS, use a backlink/stack/I/O bitmap, or clear the previous
+TSS's busy bit. The 44-byte (16-bit, inclusive limit 43) and 104-byte (32-bit,
+inclusive limit 103) minimum sizes apply when **switching tasks**, not when
+loading TR. LTR caches even a shorter descriptor; imposing #TS/#GP on that load
+would invent an exception absent from the target-era LTR contract. Tests cover
+both proper minimum-sized descriptors and shorter cached limits, as well as
+page granularity. Actual task use remains explicitly unsupported.
+
+STR reads the visible selector without consulting the GDT or TSS. Changing the
+GDT, clearing its busy bit, reloading GDTR or leaving/reentering PE does not
+change TR/cache. A later successful LTR replaces the cache; reloading a busy
+descriptor faults until guest software clears busy. Construction and machine
+reset deterministically choose TR=0 and an uninitialized cache (`None`). This is
+an emulator reset policy: the target-era Intel reset tables do not guarantee
+initialized TR contents. Reset does not fabricate a descriptor or touch guest
+TSS storage. The original fixture rebuilds its table on each boot.
+
+The physical bus has no page/write faults: ROM writes are ignored, and graphics
+reads may modify EGC latches. LTR therefore preflights its source word for
+side-effecting reads, and every GDT descriptor byte as **ordinary writable RAM
+after PC-98 A20 decoding**. A source in latched EGC graphics stops as `LTR source
+bus access`; ordinary ROM, RAM and other side-effect-free source reads retain
+their bus behavior. A descriptor in ROM, unmapped memory or a device window stops
+as `LTR descriptor bus access` before any descriptor read or write. These limits
+do not synthesize an architectural protection/page fault or claim a busy update
+succeeded. STR memory writes retain ordinary bus/device semantics after segment
+preflight. Tests verify rejected spans, descriptor-boundary crossings and EGC
+source/pattern latches, including A20 aliases. Paging is still unavailable.
+
+The wholly original MIT [guest](../guest/task_register.asm) executes real →
+16-bit protected → 32-bit protected → real → protected → real code. It loads both
+TSS types, checks busy bits, register and memory STR, 66/67 word semantics, RPL/DPL
+behavior, guest busy clearing/reload, flags and TR retention across PE transitions.
+It compares a 64-byte result/guard block and prints `TASK REGISTER PASS` only
+on success. Native and production-Wasm browser tests run the exact same disk
+cold and after reset, verify the result bytes, untouched TSS storage and disk.
+The [manifest](../fixtures/task-register-manifest.json) pins source, boot and disk
+SHA-256, MIT license, NASM command, results and a two-million-slot budget. Generated
+source/license/media copies remain outside `web/`.
+
+```sh
+python3 tools/prepare_task_register_fixture.py
+cargo test --locked --lib --test protected_mode --test headless_trace
+cargo run --locked --bin headless -- fixtures/task_register/task_register.hdm 10000 trace --ap
+npm test
+```
 
 ## Explicit unsupported paths
 
 Only CPL 0 execution and same-ring transfers are accepted. Privilege returns,
-call gates, TSS/task registers, task gates/switches and IRET task/virtual-8086
+call gates, task gates/switches and IRET task/virtual-8086
 returns stop with named protected-mode diagnostics and the restart CPU state.
 Invalid direct code/stack privilege combinations raise architectural faults.
 No selected fixture needs a privilege change or TSS-based stack switch.
@@ -92,6 +178,36 @@ These restrictions do not promote the project's protected-mode/CPU386 inventory
 to full architectural fidelity. Unsupported execution terminates diagnostically;
 there is no application-name or disk-filename shortcut. More advanced features
 need independently demonstrated guests and separate tasks.
+
+## Focused compatibility inventory and cohesive future milestones
+
+This inventory describes code boundaries, not predictions about any unexamined
+HDD. None of the original initialization fixtures requires the advanced paths.
+New task Issues should be based on an independently reproducible requirement,
+with CPU metadata and lawful fixtures; this change establishes no additional
+real-guest requirement and creates no speculative Issues.
+
+| Cluster / possible milestone | Current code and test evidence | Cohesive independent fixture group / architecture basis |
+| --- | --- | --- |
+| **TR/TSS initialization (implemented)** | `system_group0`, `load_task_register`; `tests/protected_mode.rs` LTR/STR matrix and original boot; `task-register.spec.js` cold/reset | Available 16/32-bit descriptors, visible/cache retention, busy updates, selector faults, 66/67, A20; Intel PRM ch.7 and LTR/STR entries. |
+| **Descriptor queries and privilege prerequisites** | Group-0 VERR/VERW stop as descriptor queries; 0F 02 LAR / 03 LSL remain unimplemented in `extended`; ARPL has a named boundary. LLDT/SLDT already work in ring 0. | One original query guest with readable/writable/conforming/system descriptors, DPL/RPL/ZF, invalid/null selectors, LDT and size overrides; Intel PRM ch.6/17. Useful as a cluster, not successive guessed opcodes. |
+| **Privilege gates and TSS stacks** | `code_target` rejects call gates and privilege returns; `protected_interrupt` rejects a privilege/TSS stack switch. General execution outside CPL0 stops. Initialization does not authorize a ring change. | Coordinated CPL3↔0 interrupt/trap/call-gate and RETF/IRET guests, 16/32-bit SS:SP/ESP TSS fields, complete frame preflight, #TS/#SS/#NP/#GP, IOPL/CLI/STI/POPF, segment invalidation; PRM ch.6/8/9. Implement access rules and all return paths together. |
+| **Hardware tasks, task gates and nested return** | `code_target` names direct hardware task switch vs task gate; IDT task gates stop in `protected_interrupt`; IRET.NT stops **before reading a normal frame**. Loaded-TR rejection tests assert intact CPU/RAM. | Original 16/32-bit TSS CALL/JMP/IDT gate/IRET.NT chain with busy/backlink/NT/TS semantics, minimum limits, saved/loaded state, exception ordering and atomicity; PRM ch.7, §9.8.10, ch.21 and instruction operations. No fake host-side task switch. |
+| **I/O protection and virtual-8086** | Ring-0 I/O uses existing PC-98 ports; no TSS bitmap is consulted. IRET virtual-8086 return has its own boundary. No nonzero-CPL execution is enabled. | After the privilege milestone, an original IOPL/bitmap guest covering scalar and string I/O, bitmap limits/terminator and denied-access side effects, followed by independent VM86 entry/interrupt/return fixtures; PRM ch.8/15. |
+| **Remaining system/debug/FPU coordination** | 0F 06 CLTS, 0F 21/23 debug-register moves and other unimplemented extended forms stop explicitly; x87 EM/TS tests already work. | Independently specified CLTS/TS/#NM and later debug-register/#DB/NMI fixtures, grouped by actual dependency; PRM ch.11/12, Intel486 system/exception chapters. Numerical x87 remains a separate substantial feature. |
+| **Paging** | MOV CR0 PG requests stop before mutation; CR2/CR3 remain metadata. Existing MOV-CR-write tests retain PE+PG rejection. | Independent page translation/protection/fault/CR2/TLB and restart fixtures, including descriptor/TSS accesses, after a dedicated design; PRM ch.5/9 and Intel486 paging chapters. TR loading proves no paging support. |
+
+For a private local retest, use the offline headless command in
+[the local HDD diagnostic procedure](dos-compatibility.md#diagnose-a-local-hdd-control-register-failure).
+STR/LTR records now include names, opcode/ModR/M and CS:EIP, TR/cache, and, for
+register-source LTR, candidate selector/descriptor metadata. Memory sources are
+not dereferenced by tracing. Unsupported protected stops include TR/cache and
+name task switches, gates, privilege/TSS stacks, IRET.NT and paging separately.
+The 100-instruction / 16-control-event bounds still apply; older events can be
+evicted. Share only the first blocker and a brief CPU metadata excerpt, never
+the image, a memory dump or surrounding disassembly. The private `aliceY3.hdi`
+was unavailable and **not tested**. Initialization success promises no game or
+DOS-extender compatibility.
 
 ## Reproduce the original guest
 
@@ -243,3 +359,58 @@ hashes or traces were acquired, committed, uploaded or published. The original
 probe proves this CPU subset, not playability or the next blocker of that game.
 No post-merge verification, deployment, physical machine or manual approval is
 required for these tests.
+
+### Task-register implementation validation (Issue #103)
+
+The original `task_register.hdm` guest reproduced the prior boundary against the
+selected pre-implementation core (`ff0ed0e`): `unsupported protected TSS/task
+register; PE=1 PG=0 CS:EIP=0008:00000036`, GDTR `0001fda8/0037`. The original
+assembly at that location is `LTR AX`, `0F 00 D8`, selector 0028h. This locates the
+new legal fixture's blocker; it does **not** identify the private HDD's opcode.
+The implemented core executes the same boot/image bytes through to
+`TASK REGISTER PASS` (655 retired instructions in the native headless run).
+
+The new native matrix covers both TSS types, RPL/DPL, minimum-sized and shorter
+limits, page granularity, null/TI/busy/type/presence/GDT bounds and selector error
+codes; every GPR and both default sizes; repeated 66/67; memory/segment overrides;
+upper register preservation; flags; cached metadata after descriptor edits;
+ROM source reads; PC-98 A20 aliases; reset; and a guest #NP handler that repairs
+the descriptor and IRETD retries the first prefix. Rejected descriptor/source
+spans and EGC accesses preserve memory and source/pattern latches. Truncated
+instruction decoding cannot reach a device operand. Loaded TR does not enable
+hardware tasks, task/call gates or IRET.NT; NT stops before a normal frame read.
+A separate privilege/TSS interrupt-stack boundary test preserves CPU/RAM, and the
+existing paging, privilege-return, V30, real-mode and protected IRQ tests remain.
+
+Final validation in the assigned worktree on 2026-10-29:
+
+- All fixture preparations and asset checks from `emulator.yml` passed (43
+  preparation/asset commands), including the legal FreeDOS/source preparations.
+  `python3 -m unittest discover -s tools -p test_fixture_fetch.py`: 7 passed.
+  The new fixture was regenerated and then verified without `--update-manifest`;
+  image SHA-256 is `31befb0a3250873829b77d9e2f6199888b830824a079eca372d4089569bf1946`.
+  Explicit STR/LTR bytes avoid assembler operand-prefix choices; NASM 3.02 was
+  used for this run.
+- `cargo test --locked`: **452 passed, 0 failed, 0 ignored**, including the
+  instruction-handler privilege test, 43 protected-mode tests and six trace
+  tests. `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check` and
+  `git diff --check` passed.
+- `npm ci` and `npx playwright install chromium` passed. `npm test -- --config=.issue103-playwright.config.js` passed the production release Wasm
+  build, publication audit (**10 approved assets, valid 500913-byte Wasm**) and
+  **all 146 Chromium tests in 4.6 minutes**. The new task-register guest passed
+  cold/reset at both `/` and `/pc98-rust/`, with exact manifest result/guard bytes,
+  untouched TSS storage, unchanged exported disk and no browser/emulator error.
+- Port 8000 was already occupied. The temporary config imported the checked
+  Playwright config, used two workers, and changed only serving ports to
+  18290/18291. Its project server used the checked `serve_project.py` with the
+  alternate port and retained the `web/` symlink under `/pc98-rust/`. Test code
+  and both serving paths were preserved; temporary config/server files were
+  removed afterward. No existing server was stopped or modified.
+- Updated relative documentation links were checked. No Cargo/npm dependency,
+  emulator library, binary core, host-side guest result substitution, private
+  image or proprietary ROM/font was introduced. The generated probe stays
+  outside the publication tree. No push, PR, merge, comment or deployment was
+  performed; none is required to validate this node.
+
+The private `aliceY3.hdi` was unavailable and was not tested. No claim is made
+about its next blocker or playability. No post-merge verification is required.

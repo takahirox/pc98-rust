@@ -325,14 +325,6 @@ fn rejected_far_call_and_interrupt_preflight_entire_stack_without_partial_mutati
 
 #[test]
 fn unsupported_task_privilege_vm86_and_ldt_diagnostics_are_bounded() {
-    let (mut c, mut b) = protected(&[0x0f, 0x00, 0xd8], true, true); // LTR AX
-    let before = b.mem.clone();
-    let saved = format!("{c:?}");
-    let error = c.step(&mut b).unwrap_err();
-    assert!(error.contains("TSS/task"));
-    assert!(error.contains("PE=1 PG=0"));
-    assert_eq!(b.mem, before);
-    assert_eq!(format!("{c:?}"), saved);
     let (mut arpl, mut arpl_bus) = protected(&[0x63, 0xc0], true, true);
     assert!(arpl
         .step(&mut arpl_bus)
@@ -1378,4 +1370,429 @@ fn memory_push_and_near_call_read_operand_before_changing_esp() {
             }
         }
     }
+}
+
+#[test]
+fn ltr_accepts_both_tss_types_and_caches_metadata_without_touching_tss_or_flags() {
+    for (access, limit) in [(0x81, 43), (0xe9, 103), (0x81, 0), (0x89, 102)] {
+        let (mut c, mut b) = protected(&[0x0f, 0x00, 0xd8], true, true);
+        // Size is checked only when a task switch actually consumes the TSS.
+        // Neither DPL nor source RPL limits this privileged descriptor load.
+        descriptor(&mut b, 32, 0x12345678, limit, access, 0);
+        c.set_reg32(AX, 0xabcd0023);
+        c.flags = 2 | CF | OF | DF;
+        let regs = c.r;
+        let upper = c.upper;
+        let flags = c.flags;
+        let mut memory = b.mem.clone();
+        memory[0x5025] |= 2;
+        c.step(&mut b).unwrap();
+        assert_eq!(c.last_fault, None);
+        assert_eq!((c.tr, c.r, c.upper, c.flags), (0x23, regs, upper, flags));
+        let d = c.tr_cache.unwrap();
+        assert_eq!((d.base, d.limit, d.access), (0x12345678, limit, access | 2));
+        assert_eq!(b.mem, memory); // No TSS read/write, not even an installed base required.
+    }
+    // Page-granular limits use the same descriptor parser as other tables.
+    let (mut c, mut b) = protected(&[0x0f, 0x00, 0xd8], true, true);
+    descriptor(&mut b, 32, 0x210001, 1, 0x89, 0x80);
+    c.r[AX] = 32;
+    c.step(&mut b).unwrap();
+    assert_eq!(c.tr_cache.unwrap().limit, 0x1fff);
+}
+
+#[test]
+fn str_and_ltr_register_width_is_always_word_across_defaults_and_prefixes() {
+    for big in [false, true] {
+        for prefix in [&[][..], &[0x66][..], &[0x66, 0x66, 0x67, 0x67][..]] {
+            for reg in 0..8 {
+                let mut code = prefix.to_vec();
+                code.extend([0x0f, 0x00, 0xd8 | reg]); // LTR r16
+                code.extend(prefix);
+                code.extend([0x0f, 0x00, 0xc8 | reg]); // STR r16
+                let (mut c, mut b) = protected(&code, big, true);
+                descriptor(&mut b, 32, 0x30000, 103, 0x89, 0);
+                c.set_reg32(reg as usize, 0x98760023);
+                let flags = c.flags;
+                c.step(&mut b).unwrap();
+                assert_eq!(c.tr, 0x23);
+                // Cache and visible TR survive guest edits, including busy clear.
+                let cache = c.tr_cache;
+                b.mem[0x5020..0x5028].fill(0);
+                c.set_reg32(reg as usize, 0xbeefffff);
+                let mut expected = c.r;
+                expected[reg as usize] = 0x23;
+                c.step(&mut b).unwrap();
+                assert_eq!(c.r, expected);
+                assert_eq!(c.reg32(reg as usize), 0xbeef0023);
+                assert_eq!(c.flags, flags);
+                assert_eq!(c.tr_cache, cache);
+            }
+        }
+    }
+}
+
+#[test]
+fn task_register_memory_forms_address_override_segment_override_and_word_guards() {
+    for big in [false, true] {
+        for address32 in [false, true] {
+            for seg in [DS, SS, 4, 5] {
+                let prefix = [0x3e, 0x36, 0x64, 0x65]
+                    [[DS, SS, 4, 5].iter().position(|s| *s == seg).unwrap()];
+                let mut code = vec![prefix, 0x66];
+                if big != address32 {
+                    code.push(0x67);
+                }
+                code.extend([0x0f, 0x00, if address32 { 0x1d } else { 0x1e }]);
+                if address32 {
+                    code.extend(0x10101u32.to_le_bytes())
+                } else {
+                    code.extend(0x101u16.to_le_bytes())
+                }
+                let mut store = code.clone();
+                let m = store.iter().position(|v| *v == 0x0f).unwrap() + 2;
+                store[m] -= 0x10; // /3 -> /1; identical effective address.
+                code.extend(store);
+                let (mut c, mut b) = protected(&code, big, true);
+                descriptor(&mut b, 32, 0x31000, 43, 0x81, 0);
+                let off = if address32 { 0x10101 } else { 0x101 };
+                let addr = (c.segment_cache(seg).base + off) as usize;
+                b.mem[addr - 1..addr + 3].copy_from_slice(&[0xa5, 0x20, 0, 0xa5]);
+                c.step(&mut b).unwrap();
+                assert_eq!(c.tr, 0x20);
+                b.mem[addr..addr + 2].fill(0xff);
+                c.step(&mut b).unwrap();
+                assert_eq!(&b.mem[addr - 1..addr + 3], &[0xa5, 0x20, 0, 0xa5]);
+                assert_eq!(c.last_fault, None);
+            }
+        }
+    }
+}
+
+#[test]
+fn ltr_selector_type_presence_bounds_fault_codes_and_retry_are_atomic() {
+    for (selector, access, table_limit, vector, error) in [
+        (0, 0x89, 0x7f, 13, 0),
+        (3, 0x89, 0x7f, 13, 0),
+        (4, 0x89, 0x7f, 13, 4),
+        (0x27, 0x89, 0x7f, 13, 0x24),
+        (0x23, 0x89, 0x26, 13, 0x20),
+        (0x80, 0x89, 0x7f, 13, 0x80),
+        (0x23, 0x83, 0x7f, 13, 0x20),
+        (0x23, 0x8b, 0x7f, 13, 0x20),
+        (0x23, 0x99, 0x7f, 13, 0x20),
+        (0x23, 0x82, 0x7f, 13, 0x20),
+        (0x23, 0x85, 0x7f, 13, 0x20),
+        (0x23, 0x80, 0x7f, 13, 0x20),
+        (0x23, 0x01, 0x7f, 11, 0x20),
+        (0x23, 0x69, 0x7f, 11, 0x20),
+        (0x23, 0x0b, 0x7f, 13, 0x20), // type/busy check precedes P
+    ] {
+        let (mut c, mut b) = protected(&[0x66, 0x0f, 0x00, 0xd8], true, true);
+        descriptor(&mut b, 32, 0x30000, 103, access, 0);
+        c.gdtr_limit = table_limit;
+        c.set_reg32(AX, 0xbeef0000 | selector);
+        c.tr = 0x38;
+        c.tr_cache = Some(SegmentCache::parse(raw(0x32000, 43, 0x83, 0)));
+        let old = c.tr_cache;
+        let mut memory = b.mem.clone();
+        c.step(&mut b).unwrap();
+        fault_frame(&c, &b, vector, error);
+        assert_eq!((c.tr, c.tr_cache), (0x38, old));
+        assert_eq!(c.reg32(AX), 0xbeef0000 | selector);
+        memory[0x17ff0..0x18000].copy_from_slice(&b.mem[0x17ff0..0x18000]);
+        assert_eq!(b.mem, memory);
+    }
+    // A guest #NP handler repairs the descriptor, drops its error word and
+    // IRETD retries at the first prefix, rather than the emulator skipping LTR.
+    let (mut c, mut b) = protected(&[0x66, 0x0f, 0x00, 0xd8], true, true);
+    descriptor(&mut b, 32, 0x31000, 103, 0x09, 0);
+    c.r[AX] = 0x23;
+    // DS has base 20000h: patch the descriptor at linear 5025h through FS=flat SS.
+    c.segment_caches[4] = c.segment_caches[SS];
+    b.mem[0x12000..0x1200c].copy_from_slice(&[
+        0x64, 0x80, 0x0d, 0x25, 0x50, 0, 0, 0x80, // OR byte [FS:5025],80h
+        0x83, 0xc4, 4, 0xcf, // ADD ESP,4; IRETD
+    ]);
+    c.step(&mut b).unwrap();
+    fault_frame(&c, &b, 11, 0x20);
+    for _ in 0..4 {
+        c.step(&mut b).unwrap();
+    }
+    assert_eq!((c.tr, c.ip, c.reg32(SP)), (0x23, 0x1004, 0x18000));
+    assert_eq!(b.mem[0x5025], 0x8b);
+}
+
+#[test]
+fn task_register_segment_preflight_prevents_partial_words_and_descriptor_updates() {
+    for store in [false, true] {
+        for seg in [DS, SS] {
+            for access in [0x93, 0x91, 0] {
+                if seg == SS && access != 0x93 {
+                    continue; // A read-only/null SS cannot deliver the fault frame either.
+                }
+                let code = [
+                    if seg == SS { 0x36 } else { 0x3e },
+                    0x0f,
+                    0x00,
+                    if store { 0x0d } else { 0x1d },
+                    0xff,
+                    0xff,
+                    0,
+                    0,
+                ];
+                let (mut c, mut b) = protected(&code, true, true);
+                c.tr = 32;
+                c.set_reg32(SP, 0x8000);
+                c.segment_caches[seg] = Some(SegmentCache::parse(raw(0x30000, 0xffff, access, 0)));
+                descriptor(&mut b, 32, 0x31000, 103, 0x89, 0);
+                b.mem[0x3ffff] = 0x20;
+                let before = b.mem.clone();
+                c.step(&mut b).unwrap();
+                assert_eq!(c.last_fault, Some((if seg == SS { 12 } else { 13 }, 0)));
+                assert_eq!(&b.mem[0x3ffff..0x40003], &before[0x3ffff..0x40003]);
+                assert_eq!(b.mem[0x5025], 0x89);
+                assert_eq!((c.tr, c.tr_cache), (32, None));
+            }
+        }
+    }
+    // Write permission is checked even when the whole STR word fits.
+    let (mut c, mut b) = protected(&[0x0f, 0x00, 0x0d, 0, 1, 0, 0], true, true);
+    c.segment_caches[DS].as_mut().unwrap().access = 0x91;
+    let old = b.read16(0x20100);
+    c.step(&mut b).unwrap();
+    fault_frame(&c, &b, 13, 0);
+    assert_eq!(b.read16(0x20100), old);
+}
+
+#[test]
+fn ltr_non_ram_tables_and_sources_stop_before_device_reads_or_busy_writes() {
+    for base in [0xa2fda, 0xa7fda, 0xeffda, 0x3fffda, 0xffff_ffda] {
+        let (mut c, mut b) = protected(&[0x0f, 0x00, 0xd8], true, true);
+        c.r[AX] = 0x23;
+        c.gdtr_base = base;
+        let saved = format!("{c:?}");
+        let mem = b.mem.clone();
+        seed_stack_operand_egc(&mut b);
+        let graphics = b.graphics.clone();
+        let error = c.step(&mut b).unwrap_err();
+        assert!(error.contains("LTR descriptor bus access"), "{error}");
+        assert!(error.contains("opcode=0f 00 modrm=d8"));
+        assert!(error.contains("TR=0000 TSS=None"));
+        assert_eq!(format!("{c:?}"), saved);
+        assert_eq!(b.mem, mem);
+        // Seeded graphics are unchanged and no EGC read latch was consumed.
+        assert_eq!(b.graphics, graphics);
+        assert_stack_operand_egc_latches_unchanged(&mut b);
+    }
+    let (mut c, mut b) = protected(&[0x0f, 0x00, 0x1d, 0, 0, 0, 0], true, true);
+    c.segment_caches[DS].as_mut().unwrap().base = 0xa8000;
+    seed_stack_operand_egc(&mut b);
+    let memory = b.mem.clone();
+    let saved = format!("{c:?}");
+    assert!(c
+        .step(&mut b)
+        .unwrap_err()
+        .contains("LTR source bus access"));
+    assert_eq!(format!("{c:?}"), saved);
+    assert_eq!(b.mem, memory);
+    assert_stack_operand_egc_latches_unchanged(&mut b);
+}
+
+#[test]
+fn task_register_reset_mode_and_lock_invalid_encoding_boundaries() {
+    for code in [
+        vec![0xf0, 0x0f, 0x00, 0xd8],
+        vec![0xf0, 0x0f, 0x00, 0xc8],
+        vec![0x0f, 0x00, 0xf0],
+        vec![0x0f, 0x00, 0xf8],
+    ] {
+        let (mut c, mut b) = protected(&code, true, true);
+        c.tr = 0x20;
+        c.step(&mut b).unwrap();
+        assert_eq!(c.last_fault, Some((6, 0)));
+        assert_eq!(b.read16(0x17ff4), 0x1000); // #UD has no error code
+        assert_eq!(c.tr, 0x20);
+    }
+    // Nonzero CPL execution remains outside the core's supported subset.
+    let (mut c, mut b) = protected(&[0x0f, 0x00, 0xd8], true, true);
+    c.cpl = 3;
+    assert!(c.step(&mut b).unwrap_err().contains("only ring 0"));
+    for m in [0xc8, 0xd8] {
+        let mut c = Cpu {
+            s: [0, 0x1000, 0, 0],
+            flags: 2,
+            ..Cpu::default()
+        };
+        let mut b = Bus::new(Profile::Pc9821ApDos);
+        b.mem[0x10000..0x10003].copy_from_slice(&[0x0f, 0x00, m]);
+        c.step(&mut b).unwrap();
+        assert_eq!((c.s[CS], c.ip), (0, 0)); // real-mode #UD vector
+        assert_eq!((c.tr, c.tr_cache), (0, None));
+    }
+    let mut m = Machine::new(Profile::Pc9821ApDos);
+    m.cpu.tr = 0x20;
+    m.cpu.tr_cache = Some(SegmentCache::parse(raw(0x9000, 103, 0x8b, 0)));
+    m.reset();
+    assert_eq!((m.cpu.tr, m.cpu.tr_cache), (0, None));
+}
+
+#[test]
+fn loaded_tr_does_not_enable_hardware_tasks_privilege_switches_or_nt_return() {
+    for (code, access, name) in [
+        (
+            vec![0x9a, 0, 0, 0, 0, 0x20, 0],
+            0x89,
+            "hardware task switch",
+        ),
+        (
+            vec![0xea, 0, 0, 0, 0, 0x20, 0],
+            0x81,
+            "hardware task switch",
+        ),
+        (vec![0x9a, 0, 0, 0, 0, 0x20, 0], 0x85, "task gate transfer"),
+        (
+            vec![0x9a, 0, 0, 0, 0, 0x20, 0],
+            0x8c,
+            "call gate/privilege-stack transfer",
+        ),
+        (vec![0xcf], 0x89, "IRET.NT hardware task return"),
+        (vec![0xcd, 0x30], 0x89, "IDT task gate"),
+    ] {
+        let mut setup = vec![0x0f, 0x00, 0xd8];
+        setup.extend(code);
+        let (mut c, mut b) = protected(&setup, true, true);
+        descriptor(&mut b, 0x28, 0x32000, 103, 0x89, 0);
+        c.r[AX] = 0x28;
+        c.step(&mut b).unwrap();
+        descriptor(&mut b, 0x20, 0x31000, 103, access, 0);
+        gate(&mut b, 0x30, 0x20, 0, 0x85);
+        if name.contains("IRET.NT") {
+            c.flags |= 0x4000;
+            c.set_reg32(SP, 0xffff_ffff); // NT must stop before reading any normal return frame.
+        }
+        let saved = format!("{c:?}");
+        let memory = b.mem.clone();
+        let error = c.step(&mut b).unwrap_err();
+        assert!(error.contains(name), "{error}");
+        assert!(error.contains("TR=0028 TSS=Some"), "{error}");
+        assert_eq!(format!("{c:?}"), saved);
+        assert_eq!(b.mem, memory);
+    }
+}
+
+#[test]
+fn original_task_register_boot_guest_cold_reset_results_guards_and_cache() {
+    let image = std::fs::read("fixtures/task_register/task_register.hdm")
+        .expect("run python3 tools/prepare_task_register_fixture.py");
+    let expected = [
+        0xa5, 0x28, 0, 0x16, 0xa5, 0x28, 0, 0xa5, 0xa5, 0x33, 0, 0x33, 0, 0xa5, 0xa5, 0x33, 0,
+        0x32, 0xa5, 0x30, 0, 0x30, 0, 0xa5, 0xa5, 0x30, 0, 0x46,
+    ];
+    let mut m = Machine::new(Profile::Pc9821ApDos);
+    m.insert(0, image.clone(), "task_register.hdm").unwrap();
+    for run in 0..2 {
+        if run != 0 {
+            m.reset();
+        }
+        assert_eq!((m.cpu.tr, m.cpu.tr_cache), (0, None));
+        m.step(100_000);
+        assert!(m.error.is_none(), "{:?}", m.error);
+        assert!(
+            m.bus.text().contains("TASK REGISTER PASS"),
+            "{}",
+            m.bus.text()
+        );
+        assert!(!m.bus.text().contains("FAIL"));
+        assert_eq!(&m.bus.mem[0x8000..0x801c], &expected);
+        assert_eq!(&m.bus.mem[0x801c..0x8040], &[0xa5; 36]);
+        assert_eq!(&m.bus.mem[0x8100..0x8268], &[0; 0x168]);
+        assert_eq!(m.cpu.tr, 0x30);
+        let d = m.cpu.tr_cache.unwrap();
+        assert_eq!((d.base, d.limit, d.access), (0x8200, 103, 0xeb));
+        assert!(!m.cpu.protected_mode());
+        assert!(m.bus.unknown_ports.is_empty());
+        assert_eq!(m.bus.disks[0].as_ref().unwrap().bytes, image);
+        assert_eq!(m.bus.disks[0].as_ref().unwrap().writes, 0);
+    }
+}
+
+#[test]
+fn task_register_gdt_and_memory_operands_use_pc98_a20_bus_decode() {
+    for a20 in [false, true] {
+        let (mut c, mut b) = protected(
+            &[0x0f, 0x00, 0x1d, 0, 1, 0, 0, 0x0f, 0x00, 0xc8],
+            true,
+            true,
+        );
+        descriptor(&mut b, 32, 0xfedcba98, 103, 0x89, 0);
+        let table = b.mem[0x5000..0x5080].to_vec();
+        b.mem[0x105000..0x105080].copy_from_slice(&table);
+        // Distinguish high RAM from its A20 alias.
+        b.mem[0x105025] = 0x81;
+        c.gdtr_base = 0x105000;
+        c.gdtr_limit = 0x27; // exact final descriptor byte fits
+        c.segment_caches[DS].as_mut().unwrap().base = 0x120000;
+        b.mem[0x20100..0x20102].copy_from_slice(&0x23u16.to_le_bytes());
+        b.mem[0x120100..0x120102].copy_from_slice(&0x20u16.to_le_bytes());
+        b.a20 = a20;
+        c.step(&mut b).unwrap();
+        assert_eq!(c.tr, if a20 { 0x20 } else { 0x23 });
+        assert_eq!(c.tr_cache.unwrap().base, 0xfedcba98); // cache is not A20-masked
+        assert_eq!(c.tr_cache.unwrap().access, if a20 { 0x83 } else { 0x8b });
+        assert_eq!(b.mem[0x5025], if a20 { 0x89 } else { 0x8b });
+        assert_eq!(b.mem[0x105025], if a20 { 0x83 } else { 0x81 });
+        c.step(&mut b).unwrap();
+        assert_eq!(c.r[AX], c.tr);
+    }
+}
+
+#[test]
+fn str_before_initialization_and_after_gdt_edits_never_reloads_descriptor() {
+    let (mut c, mut b) = protected(&[0x0f, 0x00, 0xc8], true, true);
+    c.gdtr_base = 0xa8000; // querying reset TR must not read EGC or even the GDT
+    c.gdtr_limit = 0;
+    c.set_reg32(AX, 0xbeefffff);
+    seed_stack_operand_egc(&mut b);
+    c.step(&mut b).unwrap();
+    assert_eq!(c.reg32(AX), 0xbeef0000);
+    assert_eq!(c.tr_cache, None);
+    assert_stack_operand_egc_latches_unchanged(&mut b);
+}
+
+#[test]
+fn ltr_accepts_readonly_rom_source_and_preflights_truncated_decoding() {
+    let (mut c, mut b) = protected(&[0x0f, 0x00, 0x1d, 0, 1, 0, 0], true, true);
+    c.segment_caches[DS].as_mut().unwrap().base = 0xf0000;
+    descriptor(&mut b, 32, 0x31000, 103, 0x89, 0);
+    b.mem[0xf0100..0xf0102].copy_from_slice(&0x20u16.to_le_bytes());
+    c.step(&mut b).unwrap();
+    assert_eq!(c.tr, 0x20);
+    for last_byte in [0x1001, 0x1004] {
+        let (mut c, mut b) = protected(&[0x0f, 0x00, 0x1d, 0, 0, 0, 0], true, true);
+        c.segment_caches[DS].as_mut().unwrap().base = 0xa8000;
+        c.segment_caches[CS].as_mut().unwrap().limit = last_byte;
+        seed_stack_operand_egc(&mut b);
+        c.step(&mut b).unwrap();
+        fault_frame(&c, &b, 13, 0);
+        assert_eq!((c.tr, c.tr_cache), (0, None));
+        assert_stack_operand_egc_latches_unchanged(&mut b);
+    }
+}
+
+#[test]
+fn tss_stack_switch_interrupt_boundary_precedes_memory() {
+    let (mut c, mut b) = protected(&[0x90], true, true);
+    descriptor(&mut b, 32, 0x10000, 0x3ffff, 0x9b, 0x40);
+    // A pending hardware event can be delivered before the general CPL0 guard.
+    // The external-interrupt API checks that same protected gate routine.
+    gate(&mut b, 0x30, 32, 0x2000, 0xee);
+    c.cpl = 3;
+    c.tr = 0x28;
+    let saved = format!("{c:?}");
+    let memory = b.mem.clone();
+    let error = c.interrupt(&mut b, 0x30).unwrap_err();
+    assert!(error.contains("privilege/TSS stack switch"), "{error}");
+    assert_eq!(format!("{c:?}"), saved);
+    assert_eq!(b.mem, memory);
 }

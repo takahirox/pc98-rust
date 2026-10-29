@@ -1,0 +1,20 @@
+{
+  "source": "guest/task_register.asm",
+  "license": "MIT; LICENSE and original assembly copied alongside image",
+  "assembly": "nasm -f bin guest/task_register.asm -o task_register.bin",
+  "source_sha256": "ad92b9a7fda874d8670d03a03dc9267d323d6fdf58f1cb410e11c07bb0fb05df",
+  "boot_sha256": "387c7efeedd27ca537ed126c4586ab5a3dd5d43056acdf6182d469812cd60b53",
+  "image": "fixtures/task_register/task_register.hdm",
+  "image_sha256": "31befb0a3250873829b77d9e2f6199888b830824a079eca372d4089569bf1946",
+  "geometry": "77 cylinders, 2 heads, 8 sectors, 1024 bytes per sector",
+  "contract": "CPL0 PE=1 PG=0 LTR16/STR register and memory, 16/32-bit TSS, 66/67, flags, GDT busy bits, guest reload, TR survives PE exit/reentry, 64 result/guard bytes, cold/reset",
+  "result_address": "0x8000",
+  "result_length": 64,
+  "result_hex": "a5280016a52800a5a533003300a5a5330032a530003000a5a5300046a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+  "markers": [
+    "TASK REGISTER PASS",
+    "TASK REGISTER FAIL"
+  ],
+  "slot_budget": 2000000,
+  "distribution": "Test only; excluded from web/"
+}
