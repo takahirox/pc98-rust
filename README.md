@@ -1,6 +1,6 @@
 # pc98-rust
 
-An original Rust real-mode PC-98 emulator, with a local browser demo. **Star
+An original Rust PC-98 emulator, with a local browser demo. **Star
 Trail** is a bootable guest game: its machine code draws text and bitmap VRAM,
 reads PC-98 keyboard input, beeps, and saves through the emulated floppy controller.
 The browser displays the Rust framebuffer and plays the core's clocked PCM.
@@ -26,7 +26,10 @@ Issue #11 adds guest INT 1F extended-memory access, IDE HDD boot and persistence
 aligned EGC raster operations, PEGC packed 256-color video, bus mouse input,
 sequenced ADV98 music through a guest PMD driver, and OPNA/86 PCM subsets.
 See [device contracts, fixtures and unsupported features](docs/ap-devices.md).
-Protected mode, DPMI, numerical FPU execution and full 486 fidelity are not implemented.
+Ap also supports a [paging-disabled ring-0 protected-mode subset](docs/protected-mode.md),
+including 16/32-bit segments, GDT/LDT, IDT gates and return to real mode.
+Paging, privilege transitions, task switching, DPMI, numerical FPU execution and
+full 486 fidelity remain unsupported.
 Ap provides only bounded x87 environment initialization and control/status readback.
 See [guest provenance, commands and exact profile limits](docs/dos-compatibility.md).
 
@@ -92,6 +95,7 @@ python3 tools/prepare_idtr_fixture.py
 python3 tools/prepare_smsw_fixture.py
 python3 tools/prepare_mov_cr_fixture.py
 python3 tools/prepare_mov_cr_write_fixture.py
+python3 tools/prepare_protected_mode_fixture.py
 python3 tools/prepare_fpu_init_fixture.py
 python3 tools/prepare_pic_fixture.py
 python3 tools/prepare_pic_smm_fixture.py
@@ -168,12 +172,18 @@ The original MIT [write probe](guest/mov_cr_write.asm) covers `0F 22`, all eight
 source GPRs, CR0/CR2/CR3 round trips, FLAGS/guards and guest #UD/#GP repair/retry.
 Prepare with `python3 tools/prepare_mov_cr_write_fixture.py`; run
 `cargo test --locked --test mov_cr_write --test headless_trace` and `npm test`.
-Its [manifest](fixtures/mov-cr-write-manifest.json) also pins two transition images
-that must stop with precise errors, cold and after reset. See the
+Its [manifest](fixtures/mov-cr-write-manifest.json) also pins PE and PE+PG images;
+PE now commits, while paging stops atomically, cold and after reset. See the
 [write contract](docs/hardware.md#ap-real-mode-control-register-writes) and
 [validation evidence](docs/control-register-writes-validation.md).
-Protected execution and paging remain unimplemented; CR0 requests to enable them
-stop before any partial mode change.
+The original MIT [protected-mode guest](guest/protected_mode.asm) enters 16-bit
+then 32-bit protected code, handles a software interrupt, recoverable #GP and
+hardware PIC/PIT IRQ0, accesses extended RAM and PC-98 ports, and returns to real
+mode. Prepare with `python3 tools/prepare_protected_mode_fixture.py`; run
+`cargo test --locked --test protected_mode --test headless_trace` and `npm test`.
+Its [manifest](fixtures/protected-mode-manifest.json) pins the same self-checking
+disk used natively and by production release Wasm, at both roots cold/after reset.
+See the [exact boundaries and validation](docs/protected-mode.md).
 
 The original MIT [channel-3 probe](guest/opn_ch3.asm) programs each logical FM
 operator through guest I/O, with keyed normal → 40h → 80h → normal stages and
@@ -465,9 +475,9 @@ LGDT/SGDT, exact load/store bytes and guards, reset readback and restartable
 faults. Native `cargo test --locked --test cpu386 gdtr_` and production-Wasm
 browser tests run the same image before and after reset, at both serving paths,
 within two million slots per run. Its [manifest](fixtures/gdtr-manifest.json)
-records source/license, assembly and hashes. This adds only a
-[GDTR prerequisite](docs/hardware.md#ap-real-mode-gdtr); protected mode remains
-unimplemented. Generated test fixtures stay outside `web/`.
+records source/license, assembly and hashes. This probe checks the
+[GDTR prerequisite](docs/hardware.md#ap-real-mode-gdtr); the later
+[protected-mode probe](docs/protected-mode.md) exercises descriptor execution. Generated test fixtures stay outside `web/`.
 
 The original MIT [DMA auto-init boot probe](guest/dma_autoinit.asm) builds into
 `fixtures/dma/autoinit.hdm`, separate from all existing disks and publication assets.
@@ -618,7 +628,7 @@ and browser Wasm tests.
 checks, Wasm build and browser tests on pull requests before merge. Local test
 coverage and execution evidence are in [validation](docs/validation.md). No
 published site, post-merge deployment, human playtest or original hardware is
-required for pre-merge acceptance. No protected mode, SCSI, NEC BASIC, proprietary
+required for pre-merge acceptance. No full protected-mode, SCSI, NEC BASIC, proprietary
 font, complete EGC/PEGC or complete OPNA fidelity is claimed.
 Unsupported CPU/BIOS operations report errors;
 unmapped ports return an open bus and are recorded for headless diagnostics.

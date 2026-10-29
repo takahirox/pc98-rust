@@ -1,5 +1,9 @@
 # Issue #99 control-register write validation
 
+This is historical evidence for Issue #99. Issue #101 supersedes the PE-only
+rejection with [paging-disabled protected mode](protected-mode.md); PE+PG still
+stops atomically. The default write probe and its image hash remain unchanged.
+
 The candidate starts from `8b70e54c87b740469877cc387385712b9b0576fa`.
 The final checkpoint commit containing this document identifies the tested source.
 The profile for the new guest is **PC-9821Ap DOS**, using an original MIT floppy

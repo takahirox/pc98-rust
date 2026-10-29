@@ -156,6 +156,9 @@ pub fn disk_transfer(
     st0 & 0xc0 == 0 && st1 == 0
 }
 pub fn service(c: &mut Cpu, b: &mut Bus) -> Result<(), String> {
+    if c.protected_mode() {
+        return Err("synthetic real-mode firmware requested from protected mode".into());
+    }
     if c.s[CS] == 0xf990 {
         return crate::lio::service(c, b);
     }
@@ -174,7 +177,7 @@ pub fn service(c: &mut Cpu, b: &mut Bus) -> Result<(), String> {
                 // IRQ0 already pushed FLAGS, CS, IP and cleared IF/TF. Hand
                 // that frame to the guest; its IRET resumes interrupted code.
                 // Disarm before entry so the handler may rearm the service.
-                c.s[CS] = timer.segment;
+                c.reload_real_code(timer.segment);
                 c.ip = timer.offset as u32;
             }
         }

@@ -17,12 +17,13 @@
     "MOV CR WRITE FAIL"
   ],
   "slot_budget": 2000000,
-  "unsupported_transition_variants": {
+  "transition_variants": {
     "pe": {
       "assembly_define": "MODE=0x60000011",
       "boot_sha256": "240f5afde49ef540b81f01972ee3a17c032ad88ff290f4c9e559a7a818dd5249",
       "image_sha256": "3537188e18c1c938352562dc5d550f4b71ff55633c7cf7393a710e415e892c9a",
       "written": "60000011",
+      "expected": "commit PE and halt with cached real-mode segments",
       "cs_ip": "1fc0:00000007",
       "next_ip": "0000000d",
       "opcode_modrm": "66 67 65 0f 22 c0"
@@ -32,6 +33,7 @@
       "boot_sha256": "d405dca39cbf0a8b30b75291052196d3d4acf6a5686020052c52efe48fd47650",
       "image_sha256": "69aa3ee146449c95ef5e4d2a0f444bc651c7e64aed7001d8f9408417fa8b5915",
       "written": "e0000011",
+      "expected": "atomic unsupported paging error",
       "cs_ip": "1fc0:00000007",
       "next_ip": "0000000d",
       "opcode_modrm": "66 67 65 0f 22 c0"
