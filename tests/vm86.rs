@@ -182,6 +182,66 @@ fn interrupt_trap_and_error_frames_run_guest_monitor_then_iretd_back() {
     }
 }
 #[test]
+fn invalid_gate_system_targets_deliver_gp_and_run_guest_handler() {
+    for pg in [false, true] {
+        for external in [false, true] {
+            for gate_access in [0xee, 0xef] {
+                // Available/busy 16/32-bit TSS, call gates and task gates.
+                for kind in [9, 1, 3, 4, 5, 11, 12] {
+                    for present in [0, 0x80] {
+                        let (mut c, mut b) = setup(&[0xcd, 0x30, 0x90], pg, 0x23202);
+                        c.gdtr_limit = 39;
+                        desc(&mut b, 32, present | kind);
+                        gate(&mut b, 0x30, gate_access);
+                        // RPL must be removed from the selector error code.
+                        b.mem[0x6182] = 35;
+                        enter(&mut c, &mut b);
+                        let target = b.mem[0x5020..0x5028].to_vec();
+                        let egc = b.egc.clone();
+                        let graphics = b.graphics.clone();
+                        let a20 = b.a20;
+                        let result = if external {
+                            c.interrupt(&mut b, 0x30)
+                        } else {
+                            c.step(&mut b)
+                        };
+                        assert!(
+                            result.is_ok(),
+                            "pg={pg} external={external} gate={gate_access:02x} target={:02x}: {result:?}",
+                            present | kind
+                        );
+                        frame(&c, &b, 13, Some(32 | u32::from(external)), 0, 0x33202);
+                        assert!(!c.shutdown);
+                        assert_eq!(&b.mem[0x5020..0x5028], target);
+                        // Only the #GP frame may occupy the monitor stack.
+                        assert!(b.mem[0x17fd0..0x17fd8].iter().all(|&v| v == 0));
+                        assert_eq!(b.egc, egc);
+                        assert_eq!(b.graphics, graphics);
+                        assert_eq!(b.a20, a20);
+                        // Original guest handler writes a guard, advances the
+                        // faulting IP past INT, drops the error, then IRETD.
+                        let handler = [
+                            0x36, 0xc7, 0x05, 0, 0x90, 1, 0, 0x78, 0x56, 0x34, 0x12, 0x36, 0x83,
+                            0x44, 0x24, 4, 2, 0x83, 0xc4, 4, 0xcf,
+                        ];
+                        b.mem[0x11000..0x11000 + handler.len()].copy_from_slice(&handler);
+                        for _ in 0..4 {
+                            c.step(&mut b).unwrap();
+                        }
+                        assert_eq!(get(&b, 0x19000), 0x12345678);
+                        assert!(c.vm86());
+                        assert_eq!(c.cpl, 3);
+                        assert_eq!((c.s[CS], c.ip), (0x2000, 2));
+                        assert_eq!(c.reg32(SP), 0xabcd7000);
+                        c.step(&mut b).unwrap();
+                        assert_eq!(c.ip, 3);
+                    }
+                }
+            }
+        }
+    }
+}
+#[test]
 fn vm86_privileged_instructions_fault_before_operands_or_devices() {
     for code in [
         vec![0xfa],

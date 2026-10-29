@@ -194,20 +194,31 @@ impl Cpu {
         if !matches!(kind, 14 | 15) {
             return Err(ExecError::ProtectedFault(13, (n as u32 * 8) | 2 | ext));
         }
-        // Validate at the destination CPL; neither the old CS RPL nor the
-        // VM86 segment caches are protected descriptor selectors.
+        // Gate targets must be code descriptors (Intel486 PRM 26-167).
+        // TSS/call/task-gate targets are invalid here, rather than requests
+        // for the unsupported operations accepted by a far-transfer helper.
+        let (code, code_address) = self.descriptor(b, selector & !3).map_err(|e| match e {
+            ExecError::ProtectedFault(n, code) => ExecError::ProtectedFault(n, code | ext),
+            other => other,
+        })?;
+        if code.access & 0x18 != 0x18 || code.attributes & 0x20 != 0 || (code.access >> 5) & 3 != 0
+        {
+            return Err(ExecError::ProtectedFault(13, target_error));
+        }
+        if code.access & 0x80 == 0 {
+            return Err(ExecError::ProtectedFault(11, target_error));
+        }
+        if off > code.limit {
+            return Err(ExecError::Fault(13));
+        }
+        if code.access & 4 != 0 {
+            return Err(ExecError::ProtectedFault(13, target_error));
+        }
+        // Neither the old CS RPL nor the VM86 segment caches are protected
+        // descriptor selectors. Validate the new stack at the destination CPL.
         let mut next = self.clone();
         next.cpl = 0;
         next.flags_upper &= !2;
-        let (code, code_address) = next
-            .code_target(b, selector & !3, off, false)
-            .map_err(|e| match e {
-                ExecError::ProtectedFault(n, code) => ExecError::ProtectedFault(n, code | ext),
-                other => other,
-            })?;
-        if code.access & 4 != 0 || (code.access >> 5) & 3 != 0 {
-            return Err(ExecError::ProtectedFault(13, target_error));
-        }
         let tr_error = (self.tr & !3) as u32 | ext;
         let invalid_tss = || ExecError::ProtectedFault(10, tr_error);
         let tss = self.tr_cache.ok_or_else(invalid_tss)?;
@@ -538,7 +549,7 @@ mod gate_tests {
     #[test]
     fn invalid_gate_tss_and_ss0_errors_include_correct_selector_and_external_bit() {
         for external in [false, true] {
-            for case in 0..14 {
+            for case in 0..48 {
                 let mut b = Bus::new(crate::Profile::Pc9821ApDos);
                 let mut c = Cpu {
                     cr0: 0x11,
@@ -623,9 +634,26 @@ mod gate_tests {
                         b.mem[0x500d] = 0x1b;
                         (11, 8)
                     }
-                    _ => {
+                    13 => {
                         c.tr |= 4;
                         (10, 28)
+                    }
+                    14 => {
+                        b.mem[0x500d] = 0x1f;
+                        (11, 8)
+                    }
+                    15 => {
+                        b.mem[0x500d] = 0x9f;
+                        b.mem[0x500e] = 0;
+                        (13, 0)
+                    }
+                    _ => {
+                        // Every system descriptor type, present or absent,
+                        // is invalid as an interrupt/trap gate's CS target.
+                        let descriptor = case - 16;
+                        b.mem[0x500d] =
+                            (descriptor & 15) | if descriptor & 16 != 0 { 0x80 } else { 0 };
+                        (13, 8)
                     }
                 };
                 let cpu = format!("{c:?}");
@@ -641,8 +669,11 @@ mod gate_tests {
                     },
                     None,
                 );
-                if case == 9 {
-                    assert!(matches!(result, Err(ExecError::Fault(12))), "{result:?}");
+                if matches!(case, 9 | 15) {
+                    assert!(
+                        matches!(result, Err(ExecError::Fault(n)) if n == vector),
+                        "case={case}: {result:?}"
+                    );
                 } else {
                     assert!(
                         matches!(result,Err(ExecError::ProtectedFault(n,e)) if n==vector && e==code|u32::from(external)),
