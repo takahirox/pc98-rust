@@ -137,6 +137,70 @@ fn entry_restores_every_segment_and_executes_overrides_with_and_without_nonident
     }
 }
 #[test]
+fn cs_override_store_and_rmw_work_with_and_without_nonidentity_paging() {
+    for pg in [false, true] {
+        // MOV byte [CS:0100h],90h; INC byte [CS:0100h].
+        let code = [0x2e, 0xc6, 0x06, 0, 1, 0x90, 0x2e, 0xfe, 0x06, 0, 1];
+        let (mut c, mut b) = setup(&code, pg, 0x23002);
+        let target = if pg { 0x300100 } else { 0x20100 };
+        b.mem[target - 1..target + 2].copy_from_slice(&[0x5a, 0x12, 0xa5]);
+        enter(&mut c, &mut b);
+        for (ip, value) in [(6, 0x90), (11, 0x91)] {
+            c.step(&mut b).unwrap();
+            assert!(c.vm86());
+            assert_eq!(c.cpl, 3);
+            assert_eq!(c.ip, ip);
+            assert_eq!(c.last_fault, None);
+            assert_eq!(&b.mem[target - 1..target + 2], &[0x5a, value, 0xa5]);
+        }
+        if pg {
+            assert_eq!(get(&b, 0x2080) & 0x60, 0x60); // CS page accessed/dirty
+            assert_eq!(b.mem[0x20100], 0); // no write to the identity address
+        }
+    }
+}
+
+#[test]
+fn cs_override_writes_retain_user_paging_permissions_and_fault_atomically() {
+    for code in [
+        vec![0x2e, 0xc6, 0x06, 0, 0x11, 0x90], // MOV byte [CS:1100h],90h
+        vec![0x2e, 0xfe, 0x06, 0, 0x11],       // INC byte [CS:1100h]
+    ] {
+        for (permissions, error) in [(5, 7), (3, 7)] {
+            let (mut c, mut b) = setup(&code, true, 0x23002);
+            // A separate target page keeps instruction fetch user-accessible.
+            put(&mut b, 0x2084, 0x330000 | permissions);
+            b.mem[0x3300ff..0x330102].copy_from_slice(&[0x5a, 0x12, 0xa5]);
+            enter(&mut c, &mut b);
+            c.step(&mut b).unwrap();
+            frame(&c, &b, 14, Some(error), 0, 0x33002);
+            assert_eq!(c.cr2, 0x21100);
+            assert_eq!(&b.mem[0x3300ff..0x330102], &[0x5a, 0x12, 0xa5]);
+            assert_eq!(get(&b, 0x2084) & 0x40, 0); // denied write never sets D
+        }
+    }
+}
+
+#[test]
+fn cs_override_writes_retain_vm86_segment_bounds() {
+    for pg in [false, true] {
+        for code in [
+            // MOV dword [CS:fffeh],12345678h spans the 64 KiB limit.
+            vec![0x2e, 0x66, 0xc7, 0x06, 0xfe, 0xff, 0x78, 0x56, 0x34, 0x12],
+            // a32 INC byte [CS:00010000h] starts beyond the limit.
+            vec![0x2e, 0x67, 0xfe, 0x05, 0, 0, 1, 0],
+        ] {
+            let (mut c, mut b) = setup(&code, pg, 0x23002);
+            b.mem[0x2fffc..0x30004].fill(0xa5);
+            enter(&mut c, &mut b);
+            c.step(&mut b).unwrap();
+            frame(&c, &b, 13, Some(0), 0, 0x33002);
+            assert_eq!(&b.mem[0x2fffc..0x30004], &[0xa5; 8]);
+        }
+    }
+}
+
+#[test]
 fn interrupt_trap_and_error_frames_run_guest_monitor_then_iretd_back() {
     for (code, source, access, err, ip) in [
         (vec![0xcd, 0x30], false, 0xef, None, 2),

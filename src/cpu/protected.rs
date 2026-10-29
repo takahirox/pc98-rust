@@ -103,7 +103,10 @@ impl Cpu {
         if !d.contains(off, bytes) {
             return Err(ExecError::Fault(fault));
         }
+        // VM86 has 8086 segment semantics, including writes through CS.
+        // Keep segment bounds above and CPL3 paging permissions below.
         if self.protected_mode()
+            && !self.vm86()
             && (d.access & 0x80 == 0
                 || (execute && !d.code())
                 || (!execute && d.code() && (write || d.access & 2 == 0))
