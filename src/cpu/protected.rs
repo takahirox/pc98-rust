@@ -411,7 +411,11 @@ impl Cpu {
         let mut vector = n;
         let mut code = error;
         let mut source = source;
-        for _ in 0..3 {
+        // Intel486 PRM 9.9.8: a benign fault may become contributory, then
+        // #PF, then #DF. Attempt all four deliveries, including #DF itself.
+        // Delivery only raises contributory faults or #PF in this subset;
+        // a fault during #DF still shuts down immediately below.
+        for _ in 0..4 {
             let saved = self.clone();
             if self.paging_enabled() {
                 b.begin_cpu_memory();

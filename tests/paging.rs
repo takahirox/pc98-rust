@@ -357,6 +357,37 @@ fn idt_stack_and_nested_faults_follow_486_double_fault_matrix_and_are_bounded() 
 }
 
 #[test]
+fn benign_contributory_page_fault_chain_reaches_double_fault_delivery() {
+    for df_selector in [8, 0] {
+        // Invalid INVLPG register encoding raises #UD. Its null-selector gate
+        // raises #GP; reading the #GP and #PF gates then faults on page 12000h.
+        // Intel486 PRM 9.9.8 permits #UD -> #GP -> #PF -> #DF, so the fourth
+        // delivery must run, whether its gate succeeds or causes shutdown.
+        let (mut c, mut b) = setup(&[0x0f, 0x01, 0xf8]);
+        c.idtr_base = 0x11f98;
+        gate(&mut b, 0x11f98, 6, 0);
+        gate(&mut b, 0x11f98, 8, df_selector);
+        put32(&mut b, 0x2000 + 0x12 * 4, 0);
+        let stack = b.mem[0x70000..0x71000].to_vec();
+        let result = c.step(&mut b);
+        assert_eq!(c.cr2, 0x12008);
+        if df_selector == 8 {
+            result.unwrap();
+            frame(&c, &b, 8, 0, 0x400000);
+            assert_eq!(c.reg32(SP), 0xc00fe0);
+            assert!(!c.shutdown);
+            assert_eq!(&b.mem[0x70000..0x70fe0], &stack[..0xfe0]);
+            assert_eq!(&b.mem[0x70ff0..0x71000], &stack[0xff0..]);
+        } else {
+            assert!(result.unwrap_err().contains("triple fault/shutdown"));
+            assert!(c.shutdown);
+            assert_eq!(c.reg32(SP), 0xc00ff0);
+            assert_eq!(&b.mem[0x70000..0x71000], stack);
+        }
+    }
+}
+
+#[test]
 fn invlpg_encoding_privilege_nonpresent_address_and_no_operand_access() {
     for (code, vector) in [
         (vec![0x0f, 0x01, 0xf8], 6),

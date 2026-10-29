@@ -11,10 +11,20 @@ DOS-extender compatibility or playability is claimed.
 The original MIT [guest](../guest/paging.asm) and
 [manifest](../fixtures/paging-manifest.json) are reproducible with NASM.
 The 1,261,568-byte disk SHA-256 is
-`6541b4c1072a1f92401f76f0efb0a71f6ad08a51f16da46084345c14c5fae4c2`.
+`99f88ffea40a996b8bf8bbc7bfa2c468288213b8daed8ed833dbd868c6f628c3`.
 Preparation copies the original source, repository MIT license and manifest next
 to the generated disk, outside `web/`. No proprietary disk/ROM/font or emulator
 core/dependency is added.
+
+The review revision explicitly encodes the SMSW operand-size prefix and the
+order of the 16-bit code probe's operand/address-size prefixes. NASM 2.16.01
+(the Ubuntu CI version) and 3.02 now produce byte-identical 1,024-byte boot
+sectors, SHA-256
+`b96cff502af87c5e9eaa594b654945ca293e205c3da622e19e6fb7bec5dc4640`.
+Both versions passed `python3 tools/prepare_paging_fixture.py` against the
+updated checked manifest, without `--update-manifest`. This retains the
+nonidentity execution and both 66/67 overrides without depending on NASM's
+choice of equivalent encodings. Select either version through `PATH` to repeat.
 
 The identical disk was run on an isolated source archive of baseline
 `d10f28a4dcc39e62639c2029c1bab5416aeda9de` and reproduced:
@@ -78,15 +88,15 @@ focused paging, protected-mode, control-register, trace and DMA tests. Final res
 
 | Check | Result |
 | --- | --- |
-| `cargo test --locked` | 482 passed, zero failed/ignored; 30 test-suite summaries including empty binary/doc suites |
+| `cargo test --locked` | 483 passed, zero failed/ignored; 30 test-suite summaries including empty binary/doc suites |
 | `cargo clippy --all-targets -- -D warnings` | Passed |
 | `cargo fmt --check`, `git diff --check` | Passed |
-| Complete real-Wasm Chromium suite | 150 passed (both roots, including paging cold/reset); 1.5 minutes |
+| Complete real-Wasm Chromium suite | 150 passed (both roots, including paging cold/reset); 1.6 minutes |
 | `npm run build` and publication audit | Passed; ten approved assets, valid 512,045-byte release Wasm |
 | Fixture-fetch helper tests and all 43 fixture preparations | Passed |
 
 Final Wasm SHA-256:
-`669051d330e729e569ddd39cd4c41a8ad4d4590e8cc2945ed8c9162d4dad5512`.
+`a50949250fdcf6e5e662bba90534ec6ae25d22e177752b9be34f32a9154c2186`.
 `Cargo.lock` is unchanged and `cargo tree --locked` lists only this crate.
 
 Port 8000 was already occupied by an unrelated local server. Browser verification
@@ -107,6 +117,9 @@ The build verifies firmware/media/font checksums, builds release Rust/Wasm and
 audits exactly the ten permitted publication assets and Wasm exports. Generated
 paging and third-party test fixtures stay outside the publication tree.
 
+These review-revision results are local checks. Hosted Ubuntu CI must rerun
+after publication; this revision was validated without pushing or merging.
+
 ## Coverage and remaining boundaries
 
 The native paging permission matrix tests both levels' Present/RW/US bits,
@@ -117,6 +130,15 @@ clean PTE becoming MMIO), PC-98 RAM/text/graphics/ROM/open bus, cross-page spans
 updates, first-prefix fetch/operand fault frames, EGC rollback, and nested
 GP→PF/PF→GP/PF→PF/double/triple-fault delivery. Actual FDC DMA transfers remain
 physical while CPU reads use a different frame.
+
+The review regression also checks #UD→#GP→#PF→#PF: a null-selector #UD gate
+and unmapped #GP/#PF gates with IDTR=00011f98h must reach the mapped #DF gate.
+The four-attempt delivery bound permits that final #DF attempt according to
+[Intel486 PRM §9.9.8](https://manuals.plus/m/d86207aaebd9b10464f2058efc61559e6141d3b072db100e89bfe17c8187e143).
+It checks #DF(0), CR2=00012008h, the original instruction's frame and untouched
+stack guards. A failing #DF gate in the same layout instead reports bounded
+triple-fault shutdown and leaves the stack untouched. The regression reproduced
+the premature delivery-limit shutdown before the fix.
 
 Explicit limits remain ordinary writable-RAM paging tables, diagnostic stops
 for reserved present flags, deterministic TLB replacement and no cache-cycle

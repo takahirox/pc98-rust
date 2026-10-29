@@ -72,7 +72,8 @@ mov eax, cr3
 mov [RESULT+8], eax
 cmp eax, 0x10018
 jne fail
-smsw ax
+; NASM 3 omits SMSW's redundant size prefix unless explicitly requested.
+o16 smsw ax
 cmp ax, 0x11
 jne fail
 mov dword [0x401000], 0x11223344
@@ -109,7 +110,10 @@ jne fail
 jmp word 24:paged16
 bits 16
 paged16:
-mov eax, [dword 0x401000] ; independent 66/67 with 16-bit protected CS
+; Emit 66 explicitly: NASM 2/3 order combined 66/67 prefixes differently.
+; Together these encode MOV EAX,[a32 00401000h] in 16-bit protected CS.
+db 0x66
+mov ax, [dword 0x401000]
 cmp eax, 0x11223344
 jne fail16
 push word 0x4321
