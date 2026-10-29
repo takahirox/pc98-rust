@@ -564,6 +564,43 @@ mod tests {
     use super::*;
 
     #[test]
+    fn clts_privilege_and_lock_faults_preserve_all_state() {
+        // Exercise the handler at each CPL independently of event delivery.
+        // General CPL>0 execution remains bounded; CLTS only delivers a fault.
+        for pm in [false, true] {
+            for cpl in 0..=3 {
+                for locked in [false, true] {
+                    let mut b = Bus::new(crate::Profile::Pc9821ApDos);
+                    let mut c = Cpu {
+                        cr0: 0x6005003e | u32::from(pm),
+                        cpl,
+                        s: [0; 4],
+                        ip: 0x1000,
+                        lock_prefix: locked,
+                        ..Cpu::default()
+                    };
+                    b.mem[0x1000] = 0x06; // second opcode byte, no following byte needed
+                    let mut expected = c.clone();
+                    expected.ip += 1;
+                    expected.instruction_bytes += 1;
+                    let memory = b.mem.clone();
+                    let result = c.extended(&mut b, None);
+                    if locked {
+                        assert!(matches!(result, Err(ExecError::Fault(6))));
+                    } else if pm && cpl != 0 {
+                        assert!(matches!(result, Err(ExecError::Fault(13))));
+                    } else {
+                        result.unwrap();
+                        expected.cr0 &= !8;
+                    }
+                    assert_eq!(format!("{c:?}"), format!("{expected:?}"));
+                    assert_eq!(b.mem, memory);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn group0_privilege_check_precedes_source_read_and_str_is_unprivileged() {
         let mut b = Bus::new(crate::Profile::Pc9821ApDos);
         let mut c = Cpu {

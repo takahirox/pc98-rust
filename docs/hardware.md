@@ -294,8 +294,8 @@ accuracy nor commercial compatibility.
 ## Ap x87 environment initialization
 
 Ap implements only `DB E3` FNINIT, `D9 /7` memory FNSTCW, `DD /7`
-memory FNSTSW and `DF E0` FNSTSW AX in real mode. The environment belongs to
-one CPU. FNINIT sets control `037Fh`, status `0000h`, tags `FFFFh` (all empty),
+memory FNSTSW and `DF E0` FNSTSW AX in real and bounded protected mode.
+The environment belongs to one CPU. FNINIT sets control `037Fh`, status `0000h`, tags `FFFFh` (all empty),
 and clears instruction/data pointers, selectors and last opcode. Stack data is
 not modeled or zeroed. Stores read current words, always write two bytes, and
 preserve EAX's upper half for AX. Integer flags and other registers are preserved.
@@ -304,7 +304,8 @@ pointers or opcode with their own addresses. The stores' undefined x87 condition
 bits are preserved as a deterministic emulator policy, not a hardware guarantee.
 See Intel's [SDM Volume 2A, printed pp. 3-395–396 and 3-438–443](https://cdrdv2-public.intel.com/782150/253666-sdm-vol-2a.pdf).
 
-Either CR0.EM or CR0.TS causes restartable exception 7. LOCK causes exception 6.
+Either CR0.EM or CR0.TS causes restartable exception 7 for every ESC opcode,
+including numerical operations that otherwise stop unsupported. LOCK causes exception 6.
 Memory offsets outside `0000h..FFFFh`, including a word starting at `FFFFh`, cause
 exception 13 **even for SS**. This deliberately follows the target-era
 [Intel486 PRM, printed pp. 26-97–98, 26-132 and 26-135–136](https://manuals.plus/m/d86207aaebd9b10464f2058efc61559e6141d3b072db100e89bfe17c8187e143),
@@ -327,12 +328,30 @@ seed every field and independently exercise EM/TS and relocated delivery.
 
 FPU inventory status is **partial**, with no scope verified. Stack/load/store
 operations, arithmetic/comparisons/conversions, rounding/precision, other control
-and environment operations, numerical exceptions, WAIT/FWAIT completion and
-NE/IRQ routing remain required. Other valid x87 forms stop explicitly unsupported.
+and environment operations, numerical exceptions, pending WAIT/FWAIT completion and
+NE/IRQ routing remain required. WAIT checks MP AND TS for #NM and otherwise
+completes only with no pending numeric exception; EM alone does not fault WAIT.
+Other valid x87 forms stop explicitly unsupported.
 VM coprocessor behavior, Ap CPUID rejection and optional FPU-detection fixture
 adaptations remain unchanged. Protected execution, paging and other inventory
 gaps remain required; these limited probes establish neither complete hardware
 accuracy nor commercial compatibility.
+
+## Ap CLTS and task-switched state
+
+`0F 06` CLTS clears only CR0.TS (bit 3) in real mode and at protected CPL0.
+There is no ModR/M, immediate, memory access, flag update or cache reload.
+Size and segment overrides do not affect the operation; LOCK raises #UD.
+Other CPLs receive #GP(0) through the existing event machinery; general user
+execution and TSS-based privilege-stack transitions remain unsupported.
+MOV CR0, SMSW, LMSW and x87 all observe this same CR0. LMSW can set TS;
+CLTS leaves EM/MP/ET and every other bit intact. Reset clears TS/EM.
+LTR initializes the task register without performing a task switch or setting TS.
+
+The [original guest and validation](clts-validation.md) exercise real/protected
+#NM frames, CLTS/IRET retry and EM independent of TS, natively and in production
+Wasm. The [adjacent system-instruction audit](protected-mode.md#adjacent-system-instruction-source-audit-issue-105)
+records implemented coverage, remaining edge cases and grouped feature boundaries.
 
 ## Ap real-mode control-register reads
 

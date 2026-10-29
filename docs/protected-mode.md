@@ -167,11 +167,12 @@ returns stop with named protected-mode diagnostics and the restart CPU state.
 Invalid direct code/stack privilege combinations raise architectural faults.
 No selected fixture needs a privilege change or TSS-based stack switch.
 Native tests explicitly check these diagnostic paths without mutating guest memory.
-Descriptor-query instructions outside LLDT/SLDT, ARPL, CLTS, debug-register handling,
+Descriptor-query instructions outside LLDT/SLDT, ARPL, debug-register handling,
 NMI/debug-breakpoint machinery, paging, virtual-8086 execution, DPMI, DOS extenders,
 Windows and Windows drivers are not implemented here. Existing x87 initialization
-and metadata stores work through protected segments; arithmetic and WAIT completion
-remain unsupported. Synthetic real-mode BIOS services are explicitly rejected
+and metadata stores work through protected segments; CLTS and WAIT MP/TS checks
+are implemented. Arithmetic and pending numeric exception completion remain
+unsupported. Synthetic real-mode BIOS services are explicitly rejected
 while PE=1; protected handlers execute guest code through IDT gates.
 
 These restrictions do not promote the project's protected-mode/CPU386 inventory
@@ -194,7 +195,8 @@ real-guest requirement and creates no speculative Issues.
 | **Privilege gates and TSS stacks** | `code_target` rejects call gates and privilege returns; `protected_interrupt` rejects a privilege/TSS stack switch. General execution outside CPL0 stops. Initialization does not authorize a ring change. | Coordinated CPL3↔0 interrupt/trap/call-gate and RETF/IRET guests, 16/32-bit SS:SP/ESP TSS fields, complete frame preflight, #TS/#SS/#NP/#GP, IOPL/CLI/STI/POPF, segment invalidation; PRM ch.6/8/9. Implement access rules and all return paths together. |
 | **Hardware tasks, task gates and nested return** | `code_target` names direct hardware task switch vs task gate; IDT task gates stop in `protected_interrupt`; IRET.NT stops **before reading a normal frame**. Loaded-TR rejection tests assert intact CPU/RAM. | Original 16/32-bit TSS CALL/JMP/IDT gate/IRET.NT chain with busy/backlink/NT/TS semantics, minimum limits, saved/loaded state, exception ordering and atomicity; PRM ch.7, §9.8.10, ch.21 and instruction operations. No fake host-side task switch. |
 | **I/O protection and virtual-8086** | Ring-0 I/O uses existing PC-98 ports; no TSS bitmap is consulted. IRET virtual-8086 return has its own boundary. No nonzero-CPL execution is enabled. | After the privilege milestone, an original IOPL/bitmap guest covering scalar and string I/O, bitmap limits/terminator and denied-access side effects, followed by independent VM86 entry/interrupt/return fixtures; PRM ch.8/15. |
-| **Remaining system/debug/FPU coordination** | 0F 06 CLTS, 0F 21/23 debug-register moves and other unimplemented extended forms stop explicitly; x87 EM/TS tests already work. | Independently specified CLTS/TS/#NM and later debug-register/#DB/NMI fixtures, grouped by actual dependency; PRM ch.11/12, Intel486 system/exception chapters. Numerical x87 remains a separate substantial feature. |
+| **CR0.TS / #NM coordination (implemented)** | `extended` CLTS, all ESC EM/TS checks, WAIT MP/TS checks; original `clts.asm`, native CLTS/FPU/trace matrices and `clts.spec.js` cold/reset. | TS-only clear, fault/IRET retry and independent EM rejection; see the [source audit and validation](clts-validation.md). No task switch or numerical FPU is implied. |
+| **Debug and remaining cache/system operations** | 0F 21/23 debug-register moves, 0F 24/26 test-register moves, INVD/WBINVD and INVLPG remain unsupported extended/group forms. | Coordinated DR/#DB/RF/GD and NMI fixtures only on evidence; cache/TLB instructions belong with memory management. Numerical x87 remains separate. |
 | **Paging** | MOV CR0 PG requests stop before mutation; CR2/CR3 remain metadata. Existing MOV-CR-write tests retain PE+PG rejection. | Independent page translation/protection/fault/CR2/TLB and restart fixtures, including descriptor/TSS accesses, after a dedicated design; PRM ch.5/9 and Intel486 paging chapters. TR loading proves no paging support. |
 
 For a private local retest, use the offline headless command in
@@ -208,6 +210,48 @@ evicted. Share only the first blocker and a brief CPU metadata excerpt, never
 the image, a memory dump or surrounding disassembly. The private `aliceY3.hdi`
 was unavailable and **not tested**. Initialization success promises no game or
 DOS-extender compatibility.
+
+## Adjacent system-instruction source audit (Issue #105)
+
+The table separates architectural validity from implemented coverage. Architecture
+sources are Intel's [80386 PRM system instruction inventory](https://www.scs.stanford.edu/05au-cs240c/lab/i386/s04_02.htm)
+and [instruction reference](https://www.scs.stanford.edu/05au-cs240c/lab/i386/c17.htm),
+and the [Intel486 PRM](https://manuals.plus/m/d86207aaebd9b10464f2058efc61559e6141d3b072db100e89bfe17c8187e143)
+chapters 4, 9, 19, 21 and 26. This is a source audit with linked regression
+coverage, not a claim that every edge was independently executed on hardware.
+
+| Instructions / architectural validity | Current handler and coverage | Remaining limits / untested edges |
+| --- | --- | --- |
+| CLTS `0F 06`: real mode; protected CPL0; LOCK #UD | `extended`; [CLTS matrix](../tests/clts.rs), handler privilege matrix in `cpu/protected.rs`, original boot and [browser](../tests/browser/clts.spec.js) | Nonzero-CPL decoding is allowed only to deliver its privilege/encoding fault. General user execution, VM86 and privilege-stack delivery remain unavailable. Reserved REP is ignored by decoder policy. |
+| SMSW `0F 01 /4`: real/protected, unprivileged; LMSW `/6`: real/protected CPL0 | `extended`; [CPU386 SMSW tests](../tests/cpu386.rs), CLTS readback/lifecycle guest | LMSW changes only low four bits and cannot clear PE. SMSW stores a word; undefined register upper bits preserved by policy. General nonzero-CPL execution stops before SMSW/LMSW; mixed fault priorities are not exhaustively covered. |
+| MOV CR0/2/3 `0F 20/22`: real/protected CPL0, register operand, always 32 bits | `extended`, `commit_cr0`; [reads](../tests/mov_cr.rs), [writes](../tests/mov_cr_write.rs), CPU386 and CLTS matrices | Unsupported CR selectors/memory encodings #UD. Reserved writes stop atomically; PG stops before mutation. Invalid PG/PE and NW/CD combinations #GP. Other privilege checks rely on the ring-0 execution boundary; CR2/3 are metadata, not paging. |
+| SGDT/SIDT `0F 01 /0,/1`: real/protected, unprivileged; LGDT/LIDT `/2,/3`: real/protected CPL0; memory only | `extended`; CPU386 GDTR/IDTR matrices, protected boot/IRQ tests | Six-byte preflight, target-era 24/32-bit base and size/segment cases covered. Nonzero-CPL user execution remains unavailable. Unaligned CPL3 #AC and exhaustive competing exceptions are untested. |
+| SLDT/STR `0F 00 /0,/1`: protected only, unprivileged; LLDT/LTR `/2,/3`: protected CPL0 | `system_group0`, `load_task_register`; [protected tests](../tests/protected_mode.rs), task-register boot/browser | LTR marks available TSS busy and caches metadata; it does not switch tasks or set TS. STR always writes a word. LLDT/LDT are bounded and SLDT uses the generic register writer: its operand32 upper-word policy lacks a dedicated target-era regression. General CPL>0 execution is unavailable. |
+| VERR/VERW `/4,/5`, LAR/LSL `0F 02/03`, ARPL `63`: protected-only queries/selector adjustment, not CPL0-only | Group-0 queries stop by name; LAR/LSL stop as unimplemented extended opcodes; ARPL names its boundary and #UD in real mode | No ZF/access-rights/limit semantics. Group-0 real-mode #UD is covered; LAR/LSL real-mode #UD is still an unsupported diagnostic, not an implemented instruction contract. No dedicated successful query fixture. |
+| MOV DR `0F 21/23`, MOV test registers `0F 24/26`: privileged; INVD/WBINVD `0F 08/09` and INVLPG `0F 01 /7`: privileged i486 memory-system operations | No execution handler; named unimplemented extended/group stops | DR/GD/#DB, test registers, external cache signals and TLB effects absent. No success coverage. Do not emulate these by returning arbitrary registers or silently accepting flushes. |
+| CLI/STI, HLT, PUSHF/POPF, IN/OUT and strings: real/protected with IOPL/privilege rules | `execute`; existing CPU, PIC/PIT, DOS and device suites at real mode/CPL0 | IOPL checks and TSS I/O bitmap are not implemented. Nonzero-CPL execution stops; this cannot be represented as full protected I/O protection. |
+| Far CALL/JMP/RET, INT/IRET, task gates and IRET.NT | `far_transfer`, `code_target`, `protected_event`; protected/TSS/IRQ matrices | Same-ring code and IDT gates implemented. Hardware tasks, privilege gates/stacks, nested task return and VM86 stop explicitly. No automatic task-switch TS setting exists because no hardware task switch executes. |
+| FNINIT, FNSTCW, FNSTSW memory/AX; WAIT | `execute`; [FPU](../tests/fpu.rs), CLTS and original real/protected boot | EM/TS #NM for all ESC; MP+TS #NM for WAIT. No pending numerical completion, #MF/NE/IRQ routing, numerical stack data or arithmetic. Unsupported numerical operations still stop after TS/EM are removed. Reset clears TS/EM and retains existing environment metadata by the documented reset policy. |
+
+All rows inherit common fetch/prefix limits. Invalid encodings do not authorize
+valid but absent subsystems. The CLTS and #NM changes do not extend the privilege,
+paging or numerical boundaries. The existing grouped roadmap above remains the
+planning boundary, with these priorities when an original guest establishes need:
+
+1. Descriptor query/selector validation as one cluster (LAR/LSL/VERR/VERW/ARPL,
+   LDT and store-width edge coverage), followed by coordinated privilege/gate/
+   return and I/O protection fixtures if a guest needs them.
+2. Debug state/#DB/NMI, or numeric FPU state/exceptions, as separate families
+   selected by the next reproducible blocker. WAIT numeric completion belongs
+   with FPU error routing, not a fabricated successful WAIT.
+3. Hardware tasks/backlinks/busy/NT/TS and privilege stacks as complete transition
+   chains; paging/CR2/TLB/cache operations as a separate memory-management design.
+
+These priorities describe dependencies, not a prediction of the private HDD's
+next instruction. The new original guest requires only CLTS/TS/#NM. No larger
+independent feature family was demonstrated as a compatibility requirement, so
+no speculative follow-up Issues were created. The [CLTS evidence](clts-validation.md)
+records the two directly reproduced lifecycle defects fixed within this scope.
 
 ## Reproduce the original guest
 

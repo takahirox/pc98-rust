@@ -255,3 +255,72 @@ fn bounded_trace_names_ltr_str_and_retains_loaded_tss_metadata() {
             <= 100
     );
 }
+
+#[test]
+fn bounded_clts_trace_records_actual_ts_transition_and_fault_result() {
+    // Two original raw boot guests: CLTS succeeds, or LOCK CLTS delivers #UD.
+    for locked in [false, true] {
+        let path = std::env::temp_dir().join(format!(
+            "pc98-clts-trace-{}-{locked}.hdm",
+            std::process::id()
+        ));
+        let mut image = vec![0; 1_261_568];
+        let mut code = vec![
+            0x66, 0xb8, 0x18, 0, 0, 0x60, // MOV EAX,60000018h
+            0x0f, 0x22, 0xc0, // MOV CR0,EAX
+        ];
+        if locked {
+            code.push(0xf0);
+        }
+        code.extend([0x0f, 0x06]);
+        code.extend([0x90; 110]);
+        code.extend([0x0f, 0x05]); // named unsupported stop
+        image[..code.len()].copy_from_slice(&code);
+        std::fs::write(&path, image).unwrap();
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_headless"))
+            .arg(&path)
+            .args(["300", "trace", "--ap"])
+            .output()
+            .unwrap();
+        std::fs::remove_file(path).unwrap();
+        let diagnostic = String::from_utf8(output.stderr).unwrap();
+        let record = diagnostic
+            .lines()
+            .find(|line| {
+                line.starts_with("control-slot=")
+                    && line
+                        .split(" next-attempt=")
+                        .next()
+                        .unwrap()
+                        .contains("opcode=0f 06 CLTS")
+            })
+            .unwrap_or_else(|| panic!("{diagnostic}"));
+        assert!(record.contains("old=60000018 ts=1"), "{record}");
+        if locked {
+            assert!(
+                record.contains("result=fault-delivered new-cr0=60000018 ts=1 fault=Some((6, 0))"),
+                "{record}"
+            );
+        } else {
+            assert!(
+                record.contains("result=executed new-cr0=60000010 ts=0"),
+                "{record}"
+            );
+            assert!(!output.status.success());
+        }
+        assert!(
+            diagnostic
+                .lines()
+                .filter(|l| l.starts_with("control-slot="))
+                .count()
+                <= 16
+        );
+        assert!(
+            diagnostic
+                .lines()
+                .filter(|l| l.starts_with("slot="))
+                .count()
+                <= 100
+        );
+    }
+}

@@ -97,6 +97,7 @@ python3 tools/prepare_mov_cr_fixture.py
 python3 tools/prepare_mov_cr_write_fixture.py
 python3 tools/prepare_protected_mode_fixture.py
 python3 tools/prepare_task_register_fixture.py
+python3 tools/prepare_clts_fixture.py
 python3 tools/prepare_fpu_init_fixture.py
 python3 tools/prepare_pic_fixture.py
 python3 tools/prepare_pic_smm_fixture.py
@@ -159,6 +160,13 @@ the primary download fails. Every source uses the original SHA-256 and size
 checks before caching; existing cached archives are verified for offline reuse.
 The canonical provenance URLs, source archives and audited image manifests remain
 the same.
+
+The original MIT [CLTS probe](guest/clts.asm) checks CR0.TS/#NM recovery in real
+and protected mode, all four supported x87 metadata forms, WAIT MP/TS and EM
+independent of CLTS. Prepare with `python3 tools/prepare_clts_fixture.py`; native
+and production-Wasm tests boot the [same pinned disk](fixtures/clts-manifest.json)
+cold/reset at both roots. See the [validation evidence](docs/clts-validation.md)
+and [system-instruction audit](docs/protected-mode.md#adjacent-system-instruction-source-audit-issue-105).
 
 The original MIT [task-register probe](guest/task_register.asm) initializes 16/32-bit
 TSS descriptors with LTR, queries TR with STR, checks busy bits and guest reload,
