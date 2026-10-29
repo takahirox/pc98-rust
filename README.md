@@ -164,11 +164,14 @@ checks before caching; existing cached archives are verified for offline reuse.
 The canonical provenance URLs, source archives and audited image manifests remain
 the same.
 
-The [Issue #111 HDD investigation](docs/hdd-boot-investigation.md) provides an
+The [HDD investigation](docs/hdd-boot-investigation.md) provides an
 independent GPL FreeDOS HDD shell control, exact kernel-handoff acceptance and
 `headless --progress --ap` summaries for silent loops and raw text-VRAM glyph
 selection. It does not establish a fix for private `aliceY3.hdi`; that image was
 not obtained or retested and game playability remains unconfirmed.
+The [Issue #113 continuation](docs/hdd-boot-investigation.md#issue-113-continuation-verified-listing-private-image-not-tested)
+verifies the exact PC-98 archive listing separately from the CD-image download
+and records the local access decision; the private-image hang remains unresolved.
 
 The original MIT [CLTS probe](guest/clts.asm) checks CR0.TS/#NM recovery in real
 and protected mode, all four supported x87 metadata forms, WAIT MP/TS and EM
