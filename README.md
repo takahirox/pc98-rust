@@ -96,6 +96,7 @@ python3 tools/prepare_smsw_fixture.py
 python3 tools/prepare_mov_cr_fixture.py
 python3 tools/prepare_mov_cr_write_fixture.py
 python3 tools/prepare_protected_mode_fixture.py
+python3 tools/prepare_task_register_fixture.py
 python3 tools/prepare_fpu_init_fixture.py
 python3 tools/prepare_pic_fixture.py
 python3 tools/prepare_pic_smm_fixture.py
@@ -158,6 +159,14 @@ the primary download fails. Every source uses the original SHA-256 and size
 checks before caching; existing cached archives are verified for offline reuse.
 The canonical provenance URLs, source archives and audited image manifests remain
 the same.
+
+The original MIT [task-register probe](guest/task_register.asm) initializes 16/32-bit
+TSS descriptors with LTR, queries TR with STR, checks busy bits and guest reload,
+and retains TR across PE exit/reentry. Prepare it offline with
+`python3 tools/prepare_task_register_fixture.py`. Native and production-Wasm
+browser checks run the identical [hash-pinned disk](fixtures/task-register-manifest.json)
+cold/reset at both roots. See the [initialization contract and focused roadmap](docs/protected-mode.md#task-register-initialization-issue-103);
+hardware tasks, privilege/TSS stack switches and paging remain unsupported.
 
 The original MIT [control-register probe](guest/mov_cr.asm) exercises Ap
 `0F 20` reads, all eight 32-bit destinations including ESP, CR0/SMSW agreement,

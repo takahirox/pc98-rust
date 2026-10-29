@@ -69,6 +69,12 @@ pub struct Cpu {
     pub cpl: u8,
     pub ldtr: u16,
     pub ldtr_cache: Option<SegmentCache>,
+    /// Visible TR selector. Reset deterministically chooses zero; the target-era
+    /// reset tables do not promise an initialized task register.
+    pub tr: u16,
+    /// Cached TSS descriptor; type 3 is 16-bit, type 11 is 32-bit (busy).
+    /// None is the emulator's uninitialized reset state, not a fabricated TSS.
+    pub tr_cache: Option<SegmentCache>,
     pub last_fault: Option<(u8, u32)>,
     /// CR2/CR3 use deterministic zero on reset (emulator policy).
     /// Guest-writable metadata; no paging, page-fault updates or translation exists.
@@ -122,6 +128,8 @@ impl Default for Cpu {
             cpl: 0,
             ldtr: 0,
             ldtr_cache: None,
+            tr: 0,
+            tr_cache: None,
             last_fault: None,
             cr2: 0,
             cr3: 0,
@@ -740,7 +748,7 @@ impl Cpu {
                     ExecError::Unsupported(message) => {
                         if saved.protected_mode() {
                             *self = saved;
-                            return Err(format!("{message}; PE=1 PG=0 CS:EIP={:04x}:{:08x} CPL={} CR0={:08x} GDT={:08x}/{:04x} IDT={:08x}/{:04x}", self.s[CS], self.ip, self.cpl, self.cr0, self.gdtr_base, self.gdtr_limit, self.idtr_base, self.idtr_limit));
+                            return Err(format!("{message}; PE=1 PG=0 CS:EIP={:04x}:{:08x} CPL={} CR0={:08x} GDT={:08x}/{:04x} IDT={:08x}/{:04x} TR={:04x} TSS={:?}", self.s[CS], self.ip, self.cpl, self.cr0, self.gdtr_base, self.gdtr_limit, self.idtr_base, self.idtr_limit, self.tr, self.tr_cache));
                         }
                         return Err(message);
                     }
@@ -1783,15 +1791,18 @@ impl Cpu {
                 }
             }
             0xcf => {
+                if self.protected_mode() && self.flags & 0x4000 != 0 {
+                    return Err(ExecError::Unsupported(
+                        "unsupported protected IRET.NT hardware task return".into(),
+                    ));
+                }
                 self.check_stack_sequence(b, 3, false)?;
                 let off = self.pop(b)?;
                 let seg = self.pop(b)? as u16;
                 let v = self.pop(b)?;
-                if self.protected_mode()
-                    && (self.flags & 0x4000 != 0 || (self.operand32 && v & 0x20000 != 0))
-                {
+                if self.protected_mode() && self.operand32 && v & 0x20000 != 0 {
                     return Err(ExecError::Unsupported(
-                        "unsupported protected IRET task/virtual-8086 return".into(),
+                        "unsupported protected IRET virtual-8086 return".into(),
                     ));
                 }
                 self.far_transfer(b, seg, off, false, true)?;

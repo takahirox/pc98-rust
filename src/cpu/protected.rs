@@ -110,8 +110,8 @@ impl Cpu {
         }
         Ok(())
     }
-    /// Fetch descriptor bytes through the same PC-98 physical/A20 bus as operands.
-    pub(super) fn descriptor(&self, b: &Bus, selector: u16) -> ExecResult<(SegmentCache, u32)> {
+    /// Resolve a complete descriptor span before fetching any bus bytes.
+    fn descriptor_address(&self, selector: u16) -> ExecResult<u32> {
         let error = (selector & !3) as u32;
         let (base, limit) = if selector & 4 == 0 {
             (self.gdtr_base, self.gdtr_limit as u32)
@@ -125,7 +125,11 @@ impl Cpu {
         if selector & !3 == 0 || index + 7 > limit {
             return Err(ExecError::ProtectedFault(13, error));
         }
-        let address = base.wrapping_add(index);
+        Ok(base.wrapping_add(index))
+    }
+    /// Fetch descriptor bytes through the same PC-98 physical/A20 bus as operands.
+    pub(super) fn descriptor(&self, b: &Bus, selector: u16) -> ExecResult<(SegmentCache, u32)> {
+        let address = self.descriptor_address(selector)?;
         let raw = std::array::from_fn(|i| b.read(address.wrapping_add(i as u32) as usize));
         Ok((SegmentCache::parse(raw), address))
     }
@@ -193,9 +197,15 @@ impl Cpu {
         let error = (selector & !3) as u32;
         let (d, address) = self.descriptor(b, selector)?;
         if d.access & 0x10 == 0 {
-            if matches!(d.access & 15, 1 | 3 | 4 | 5 | 9 | 11 | 12) {
+            let operation = match d.access & 15 {
+                1 | 3 | 9 | 11 => Some("hardware task switch"),
+                5 => Some("task gate transfer"),
+                4 | 12 => Some("call gate/privilege-stack transfer"),
+                _ => None,
+            };
+            if let Some(operation) = operation {
                 return Err(ExecError::Unsupported(format!(
-                    "unsupported protected task/call-gate transfer selector={selector:04x}"
+                    "unsupported protected {operation} selector={selector:04x} descriptor={d:?}"
                 )));
             }
             return Err(ExecError::ProtectedFault(13, error));
@@ -327,6 +337,17 @@ impl Cpu {
             } else {
                 0
             };
+        if self.cpl != 0 {
+            let (target, _) = self.descriptor(b, selector & !3).map_err(|e| match e {
+                ExecError::ProtectedFault(n, code) => ExecError::ProtectedFault(n, code | external),
+                other => other,
+            })?;
+            if target.access & 0x18 == 0x18 && !target.conforming() && target.dpl() < self.cpl {
+                return Err(ExecError::Unsupported(format!(
+                    "unsupported protected interrupt privilege/TSS stack switch vector={n:02x} selector={selector:04x}"
+                )));
+            }
+        }
         let (d, address) = self
             .code_target(b, selector & !3, off, false)
             .map_err(|e| match e {
@@ -420,13 +441,67 @@ impl Cpu {
             "protected nested-fault delivery limit/shutdown".into(),
         ))
     }
+    /// Bounded, read-only CPU descriptor metadata for the offline trace. Never
+    /// reads device windows or a decoded guest memory operand.
+    pub fn task_descriptor_metadata(&self, b: &Bus, selector: u16) -> Option<SegmentCache> {
+        if selector & 4 != 0 {
+            return None;
+        }
+        let address = self.descriptor_address(selector).ok()?;
+        if !(0..8).all(|i| b.is_plain_ram(address.wrapping_add(i))) {
+            return None;
+        }
+        self.descriptor(b, selector).ok().map(|(d, _)| d)
+    }
+    fn load_task_register(&mut self, b: &mut Bus, selector: u16, m: u8) -> ExecResult<()> {
+        let error = (selector & !3) as u32;
+        // Null selectors and LDT selectors cannot name a TSS. RPL/DPL do not
+        // participate in LTR's privilege check; CPL must already be zero.
+        if selector & !3 == 0 || selector & 4 != 0 {
+            return Err(ExecError::ProtectedFault(13, error));
+        }
+        let address = self.descriptor_address(selector)?;
+        // The physical bus has no write faults: ROM ignores writes and device
+        // reads may change latches. Stop before *any* such access rather than
+        // pretend a descriptor became busy or perform a partial device RMW.
+        if !(0..8).all(|i| b.is_plain_ram(address.wrapping_add(i))) {
+            return Err(ExecError::Unsupported(format!(
+                "unsupported protected LTR descriptor bus access opcode=0f 00 modrm={m:02x} selector={selector:04x} descriptor={address:08x}; requires writable ordinary RAM"
+            )));
+        }
+        let (d, _) = self.descriptor(b, selector)?;
+        if !matches!(d.access & 31, 1 | 9) {
+            return Err(ExecError::ProtectedFault(13, error));
+        }
+        if d.access & 0x80 == 0 {
+            return Err(ExecError::ProtectedFault(11, error));
+        }
+        // LTR never reads the TSS or checks its minimum size. The 44/104-byte
+        // size checks belong to a task switch (Intel PRM 7.2/9.8.10), not LTR.
+        // All fallible checks precede the busy write and the cache/selector
+        // commit. One interpreter instruction is indivisible to our bus/IRQs.
+        b.write(address.wrapping_add(5) as usize, d.access | 2);
+        self.tr = selector;
+        self.tr_cache = Some(SegmentCache {
+            access: d.access | 2,
+            ..d
+        });
+        Ok(())
+    }
     pub(super) fn system_group0(&mut self, b: &mut Bus, ov: Option<usize>) -> ExecResult<()> {
         if !self.protected_mode() {
             return Err(ExecError::Fault(6));
         }
         let m = self.fetch(b)?;
+        let kind = (m >> 3) & 7;
+        if kind >= 6 {
+            return Err(ExecError::Fault(6));
+        }
+        if matches!(kind, 2 | 3) && self.cpl != 0 {
+            return Err(ExecError::Fault(13));
+        }
         let o = self.decode(b, m, ov)?;
-        match (m >> 3) & 7 {
+        match kind {
             0 => match o {
                 Operand::Reg(r) => self.put_register(r, self.ldtr as u32),
                 Operand::Mem(s, a) => self.write_mem(b, s, a, self.ldtr as u32, 2)?,
@@ -454,10 +529,25 @@ impl Cpu {
                 self.ldtr = selector;
                 self.ldtr_cache = Some(d);
             }
-            1 | 3 => {
-                return Err(ExecError::Unsupported(
-                    "unsupported protected TSS/task register".into(),
-                ))
+            1 => match o {
+                // Target-era STR is always a word, including with 66 or CS.D.
+                Operand::Reg(r) => self.r[r] = self.tr,
+                Operand::Mem(s, a) => self.write_mem(b, s, a, self.tr as u32, 2)?,
+            },
+            3 => {
+                let selector = match o {
+                    Operand::Reg(r) => self.r[r],
+                    Operand::Mem(s, a) => {
+                        self.check_mem(b, s, a, 2)?;
+                        if (0..2).any(|i| b.read_has_side_effects(self.linear(s, a + i) as u32)) {
+                            return Err(ExecError::Unsupported(format!(
+                                "unsupported protected LTR source bus access opcode=0f 00 modrm={m:02x}; side-effecting device read"
+                            )));
+                        }
+                        self.read_mem(b, s, a, 2)? as u16
+                    }
+                };
+                self.load_task_register(b, selector, m)?;
             }
             _ => {
                 return Err(ExecError::Unsupported(
@@ -466,5 +556,35 @@ impl Cpu {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn group0_privilege_check_precedes_source_read_and_str_is_unprivileged() {
+        let mut b = Bus::new(crate::Profile::Pc9821ApDos);
+        let mut c = Cpu {
+            cr0: 0x11,
+            cpl: 3,
+            tr: 0x23,
+            ..Cpu::default()
+        };
+        c.s[CS] = 0x1000;
+        // Test the instruction handler directly: general nonzero-CPL execution
+        // remains deliberately unavailable in execute(), independent of LTR.
+        b.mem[0x10000] = 0x1d; // LTR with an incomplete disp32 source
+        c.address32 = true;
+        assert!(matches!(
+            c.system_group0(&mut b, None),
+            Err(ExecError::Fault(13))
+        ));
+        c.ip = 0;
+        b.mem[0x10000] = 0xc8; // STR AX, no privilege requirement of its own
+        c.set_reg32(AX, 0xabcdffff);
+        c.system_group0(&mut b, None).unwrap();
+        assert_eq!(c.reg32(AX), 0xabcd0023);
     }
 }

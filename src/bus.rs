@@ -163,6 +163,21 @@ impl Bus {
             a & !0x100000
         }
     }
+    /// Ordinary writable memory, with the same A20 decode as read/write.
+    /// System-table preflight must not touch graphics read latches or MMIO.
+    pub(crate) fn is_plain_ram(&self, a: u32) -> bool {
+        match self.address(a as usize) {
+            0..=0xa2fff => true,
+            0x100000..=0x3fffff => self.profile == Profile::Pc9821ApDos,
+            _ => false,
+        }
+    }
+    /// Only EGC graphics reads currently mutate physical-memory read latches.
+    pub(crate) fn read_has_side_effects(&self, a: u32) -> bool {
+        self.egc.enabled
+            && self.grcg_mode & 0x80 != 0
+            && self.graphics_offset(self.address(a as usize)).is_some()
+    }
     fn page_bytes(&self) -> usize {
         self.profile.planes() * 0x8000
     }

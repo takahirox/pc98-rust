@@ -38,6 +38,26 @@ fn instruction_diagnostic(c: &Cpu, b: &Bus) -> (String, bool) {
     if opcode == Some(0x0f) {
         if let Some(ext) = next() {
             operation.push_str(&format!(" {ext:02x}"));
+            if ap && ext == 0x00 {
+                if let Some(m) = next() {
+                    let name = match (m >> 3) & 7 {
+                        1 => "STR",
+                        3 => "LTR",
+                        _ => "group0",
+                    };
+                    operation.push_str(&format!(" modrm={m:02x} {name}"));
+                    control = matches!((m >> 3) & 7, 1 | 3);
+                    if name == "LTR" && m >= 0xc0 {
+                        let selector = c.r[(m & 7) as usize];
+                        operation.push_str(&format!(
+                            " selector={selector:04x} descriptor={:?}",
+                            c.task_descriptor_metadata(b, selector)
+                        ));
+                    }
+                } else {
+                    operation.push_str(" modrm=<fetch-limit>");
+                }
+            }
             if ap && matches!(ext, 0x20 | 0x22) {
                 control = true;
                 if let Some(m) = next() {
@@ -78,11 +98,11 @@ fn instruction_diagnostic(c: &Cpu, b: &Bus) -> (String, bool) {
     }
     let registers: Vec<_> = (0..8).map(|r| c.reg32(r)).collect();
     (format!(
-        "{:04x}:{:08x} opcode={} prefixes={:02x?} operand={} address={} gpr={:08x?} seg={:04x?} fs_gs={:04x?} flags={:04x}{:04x} cr0={:08x} cr2={:08x} cr3={:08x} mode={} cpl={} gdt={:08x}/{:04x} idt={:08x}/{:04x} caches={:?} ldtr={:04x} fault={:?}",
+        "{:04x}:{:08x} opcode={} prefixes={:02x?} operand={} address={} gpr={:08x?} seg={:04x?} fs_gs={:04x?} flags={:04x}{:04x} cr0={:08x} cr2={:08x} cr3={:08x} mode={} cpl={} gdt={:08x}/{:04x} idt={:08x}/{:04x} caches={:?} ldtr={:04x} tr={:04x} tss={:?} fault={:?}",
         c.s[1], c.ip, operation, prefixes,
         if ap && (c.segment_cache(1).big() ^ prefixes.contains(&0x66)) {32} else {16},
         if ap && (c.segment_cache(1).big() ^ prefixes.contains(&0x67)) {32} else {16},
-        registers, c.s, c.extra_segments, c.flags_upper, c.flags, c.cr0, c.cr2, c.cr3, if c.protected_mode() {"protected"} else {"real"}, c.cpl, c.gdtr_base, c.gdtr_limit, c.idtr_base, c.idtr_limit, c.segment_caches, c.ldtr, c.last_fault
+        registers, c.s, c.extra_segments, c.flags_upper, c.flags, c.cr0, c.cr2, c.cr3, if c.protected_mode() {"protected"} else {"real"}, c.cpl, c.gdtr_base, c.gdtr_limit, c.idtr_base, c.idtr_limit, c.segment_caches, c.ldtr, c.tr, c.tr_cache, c.last_fault
     ), control)
 }
 fn main() {

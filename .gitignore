@@ -40,3 +40,4 @@ __pycache__/
 /fixtures/mov_cr/
 /fixtures/mov_cr_write/
 /fixtures/protected_mode/
+/fixtures/task_register/
