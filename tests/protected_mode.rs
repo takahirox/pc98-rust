@@ -1032,3 +1032,154 @@ fn rejected_movs_and_cmps_preserve_egc_source_and_pattern_latches() {
         }
     }
 }
+
+fn seed_stack_operand_egc(b: &mut Bus) {
+    b.egc.enabled = true;
+    b.grcg_mode = 0x80;
+    b.egc.registers[2] = 0x29f0; // reads load both source and pattern latches
+    for plane in 0..4 {
+        b.graphics[plane * 0x8000..plane * 0x8000 + 4].copy_from_slice(&[
+            0x12 + plane as u8,
+            0x34,
+            0x56,
+            0x78,
+        ]);
+    }
+}
+
+fn assert_stack_operand_egc_latches_unchanged(b: &mut Bus) {
+    // Observe source and pattern through bus writes without reading VRAM first.
+    // Both lanes of every plane must still contain their original zero values.
+    for (rop, offset) in [(0x28f0, 0x10), (0x3000, 0x12)] {
+        b.egc.registers[2] = rop;
+        b.write(0xa8000 + offset, 0xff);
+        b.write(0xa8001 + offset, 0xff);
+        for plane in 0..4 {
+            assert_eq!(
+                &b.graphics[plane * 0x8000 + offset..plane * 0x8000 + offset + 2],
+                &[0, 0],
+                "ROP={rop:04x} plane={plane}"
+            );
+        }
+    }
+}
+
+#[test]
+fn rejected_pop_memory_preflights_destination_before_stack_device_read() {
+    for bytes in [2u32, 4] {
+        for failure in ["read-only", "limit", "post-increment ESP limit"] {
+            let mut code = vec![];
+            if bytes == 2 {
+                code.push(0x66);
+            }
+            if failure == "post-increment ESP limit" {
+                code.extend([0x3e, 0x8f, 0x04, 0x24]); // POP DS:[ESP]
+            } else {
+                code.extend([0x8f, 0x05, 0, 0, 0, 0]); // POP DS:[0]
+            }
+            let (mut c, mut b) = protected(&code, true, true);
+            c.set_reg32(SP, 0xa8000);
+            c.segment_caches[SS].as_mut().unwrap().limit = 0xaffff;
+            let ds = c.segment_caches[DS].as_mut().unwrap();
+            match failure {
+                "read-only" => ds.access = 0x91,
+                "limit" => ds.limit = bytes - 2,
+                _ => {
+                    ds.base = 0;
+                    // The old ESP fits; the incremented destination does not.
+                    ds.limit = 0xa8000 + bytes - 1;
+                }
+            }
+            seed_stack_operand_egc(&mut b);
+            let registers = std::array::from_fn::<_, 8, _>(|r| c.reg32(r));
+            let memory = b.mem.clone();
+            let graphics = b.graphics.clone();
+            c.step(&mut b).unwrap();
+            assert_eq!(c.last_fault, Some((13, 0)));
+            assert_eq!((c.s[CS], c.ip), (8, 0x2000));
+            for (r, value) in registers.into_iter().enumerate() {
+                assert_eq!(c.reg32(r), if r == SP { value - 16 } else { value });
+            }
+            // The exception frame is below VRAM in the unmapped A7FF0 range;
+            // bus writes there leave RAM and graphics unchanged.
+            assert_eq!(b.mem, memory);
+            assert_eq!(b.graphics, graphics);
+            assert_stack_operand_egc_latches_unchanged(&mut b);
+        }
+    }
+}
+
+#[test]
+fn rejected_memory_push_and_near_call_preflight_stack_before_device_read() {
+    for bytes in [2u32, 4] {
+        for stack_big in [false, true] {
+            for modrm in [0x15, 0x35] {
+                // CALL DS:[0], PUSH DS:[0]
+                for failure in ["limit", "read-only"] {
+                    let mut code = vec![];
+                    if bytes == 2 {
+                        code.push(0x66);
+                    }
+                    code.extend([0xff, modrm, 0, 0, 0, 0]);
+                    let (mut c, mut b) = protected(&code, true, stack_big);
+                    c.segment_caches[DS].as_mut().unwrap().base = 0xa8000;
+                    let sp = if stack_big { 0x18000 } else { 0x8000 };
+                    let ss = c.segment_caches[SS].as_mut().unwrap();
+                    if failure == "limit" {
+                        // First byte is valid, final byte exceeds the limit.
+                        ss.limit = sp - 2;
+                    } else {
+                        ss.access = 0x91;
+                    }
+                    seed_stack_operand_egc(&mut b);
+                    let registers = std::array::from_fn::<_, 8, _>(|r| c.reg32(r));
+                    let memory = b.mem.clone();
+                    let graphics = b.graphics.clone();
+                    let flags = c.flags;
+                    let error = c.step(&mut b).unwrap_err();
+                    assert!(error.contains("shutdown"), "{error}");
+                    assert!(c.shutdown); // #SS and #DF frames also cannot fit.
+                    assert_eq!(c.ip, 0x1000);
+                    assert_eq!(c.flags, flags);
+                    for (r, value) in registers.into_iter().enumerate() {
+                        assert_eq!(c.reg32(r), value);
+                    }
+                    assert_eq!(b.mem, memory);
+                    assert_eq!(b.graphics, graphics);
+                    assert_stack_operand_egc_latches_unchanged(&mut b);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn memory_push_and_near_call_read_operand_before_changing_esp() {
+    for bytes in [2u32, 4] {
+        for stack_big in [false, true] {
+            for modrm in [0x14, 0x34] {
+                // CALL [ESP], PUSH [ESP]
+                let mut code = vec![];
+                if bytes == 2 {
+                    code.push(0x66);
+                }
+                code.extend([0xff, modrm, 0x24]);
+                let (mut c, mut b) = protected(&code, true, stack_big);
+                b.mem[0x18000..0x18004].copy_from_slice(&0x2000u32.to_le_bytes());
+                let sp = if stack_big { 0x18000 } else { 0x8000 } - bytes as usize;
+                b.mem[sp - 1..sp + bytes as usize].fill(0xa5);
+                c.step(&mut b).unwrap();
+                assert_eq!(c.last_fault, None);
+                assert_eq!(c.reg32(SP), 0x18000 - bytes);
+                let ret = 0x1000 + code.len() as u32;
+                let value = if modrm == 0x14 { ret } else { 0x2000 };
+                assert_eq!(
+                    &b.mem[sp..sp + bytes as usize],
+                    &value.to_le_bytes()[..bytes as usize]
+                );
+                assert_eq!(b.mem[sp - 1], 0xa5);
+                assert_eq!(c.ip, if modrm == 0x14 { 0x2000 } else { ret });
+            }
+        }
+    }
+}
