@@ -201,6 +201,24 @@ fn cross_page_read_write_and_rmw_faults_preflight_all_bytes_and_latches() {
 }
 
 #[test]
+fn rejected_stores_set_both_accessed_bits_without_dirty_or_operand_changes() {
+    for (directory, table) in [(0x5001, 0x50003), (0x5003, 0x50001)] {
+        let (mut c, mut b) = setup(&[0xa3, 0, 0, 0x80, 0]); // MOV [00800000], EAX
+        put32(&mut b, 0x1008, directory);
+        put32(&mut b, 0x5000, table);
+        put32(&mut b, 0x50000, 0x12345678);
+        c.set_reg32(AX, 0xdeadbeef);
+        c.step(&mut b).unwrap();
+        frame(&c, &b, 14, 3, 0x400000);
+        assert_eq!(c.cr2, 0x800000);
+        assert_eq!(c.reg32(AX), 0xdeadbeef);
+        assert_eq!(get32(&b, 0x1008), directory | 0x20);
+        assert_eq!(get32(&b, 0x5000), table | 0x20); // A survives fault rollback; D stays clear
+        assert_eq!(get32(&b, 0x50000), 0x12345678);
+    }
+}
+
+#[test]
 fn wp_permission_fault_retry_invlpg_and_no_read_side_effects() {
     for wp in [false, true] {
         let (mut c, mut b) = setup(&[0x83, 0x05, 0, 0, 0x80, 0, 1]);

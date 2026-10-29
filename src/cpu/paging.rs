@@ -113,6 +113,9 @@ impl Cpu {
                 return Err(Self::page_fault(linear, write, user, false));
             }
             Self::page_flags(pte, pte_address, false)?;
+            // Intel486 PRM 9.9.14: both A bits are set even when page-level
+            // permissions reject this access. Dirty still requires a write.
+            b.page_accessed(pte_address);
             let entry = Entry {
                 page,
                 frame: pte & 0xfffff000,
@@ -124,7 +127,6 @@ impl Cpu {
             if !self.page_permission(entry, write, user) {
                 return Err(Self::page_fault(linear, write, user, true));
             }
-            b.page_accessed(pte_address);
             self.paging.entries.borrow_mut()[index] = Some(entry);
             entry
         };
@@ -239,7 +241,7 @@ mod tests {
                 for user in [false, true] {
                     for write in [false, true] {
                         for wp in [false, true] {
-                            let (mut c, mut b, _) = setup(0x12345678, directory, table);
+                            let (mut c, mut b, pte) = setup(0x12345678, directory, table);
                             if !wp {
                                 c.cr0 &= !0x10000;
                             }
@@ -263,6 +265,19 @@ mod tests {
                                         | (u32::from(user) << 2)
                                 );
                             }
+                            // Both levels become accessed on protection faults;
+                            // nonpresent entries remain entirely software-owned.
+                            assert_eq!(
+                                get32(&b, 0x1000 + (0x12345678 >> 22) * 4),
+                                0x2000 | directory | if directory & 1 != 0 { 0x20 } else { 0 }
+                            );
+                            assert_eq!(
+                                get32(&b, pte),
+                                0x30000
+                                    | table
+                                    | if present { 0x20 } else { 0 }
+                                    | if allowed && write { 0x40 } else { 0 }
+                            );
                         }
                     }
                 }
