@@ -1,6 +1,6 @@
 //! Original Graph LIO subset, from the NEC BIOS databook's interface description.
 //! No NEC implementation bytes or private work-area layout are reproduced.
-use crate::{bus::Bus, cpu::*};
+use crate::{bus::Bus, cpu::*, firmware::memory};
 
 const ROM: usize = 0xf9900;
 const THUNKS: usize = 0x100;
@@ -27,36 +27,54 @@ pub(crate) fn initialize(b: &mut Bus) {
     }
 }
 
-pub(crate) fn service(c: &mut Cpu, b: &mut Bus) -> Result<(), String> {
+pub(crate) fn service(c: &mut Cpu, b: &mut Bus) -> ExecResult<()> {
     let ip = c.ip as usize;
     if !(THUNKS + 2..THUNKS + 18 * 4 + 2).contains(&ip) || (ip - THUNKS - 2) & 3 != 0 {
         return Err("firmware trap outside synthetic LIO ROM".into());
     }
     let entry = (ip - THUNKS - 2) / 4;
     if entry != 0 {
-        return Err(format!(
-            "unsupported Graph LIO ROM entry {entry} (GINIT only)"
-        ));
+        return Err(format!("unsupported Graph LIO ROM entry {entry} (GINIT only)").into());
     }
     let work = usize::from(c.s[DS]) * 16;
     // Do not wrap into the IVT, video memory or ROM. Validate before mutations.
-    let overlaps_frame = (0..6).any(|i| {
-        // Match stack accesses, including segment-offset and profile/A20 wrap.
-        let a = b.address(Cpu::phys(c.s[SS], c.r[SP].wrapping_add(i)));
-        (work..work + 0x1200).contains(&a)
-    });
-    if work < 0x600 || work + 0x1200 > 0xa0000 || overlaps_frame {
+    if work < 0x600 || work + 0x1200 > 0xa0000 {
         return Err("unsupported GINIT work area (requires disjoint conventional RAM)".into());
     }
-
-    // Printed p.138 explicitly permits callers to use the gaps. Only the common
-    // 128 bytes and command scratch 512 bytes belong to this non-GCOPY subset.
-    b.mem[work + 0x620..work + 0x6a0].fill(0);
-    b.mem[work + 0x1000..work + 0x1200].fill(0);
-    // Our own opaque common-state encoding: mode, switch, active, display,
-    // palette mode, foreground, background, border, then inclusive view bounds.
-    b.mem[work + 0x620..work + 0x630]
-        .copy_from_slice(&[0, 0, 0, 1, 0, 7, 0, 0, 0, 0, 0, 0, 0x7f, 2, 199, 0]);
+    // Check all written pages and physical aliases of the return frame before
+    // changing device state. The gaps remain available to the caller.
+    let mut frame = Vec::new();
+    for i in 0..6 {
+        let physical = memory::physical(c, b, Cpu::phys(c.s[SS], c.r[SP].wrapping_add(i)), false)?;
+        frame.push(b.address(physical));
+    }
+    if !c.vm86() && frame.iter().any(|a| (work..work + 0x1200).contains(a)) {
+        return Err("unsupported GINIT work area (requires disjoint conventional RAM)".into());
+    }
+    for range in [0x620..0x6a0, 0x1000..0x1200] {
+        memory::check(c, b, work + range.start, range.len(), true)?;
+        for i in range {
+            let physical = memory::physical(c, b, work + i, false)?;
+            if !b.is_plain_ram(physical as u32) || frame.contains(&b.address(physical)) {
+                return Err(
+                    "unsupported GINIT work area (requires disjoint conventional RAM)".into(),
+                );
+            }
+        }
+    }
+    memory::check(c, b, 0x54c, 2, false)?;
+    memory::check(c, b, 0x54c, 2, true)?;
+    for range in [0x620..0x6a0, 0x1000..0x1200] {
+        for i in range {
+            memory::write(c, b, work + i, 0)?;
+        }
+    }
+    for (i, byte) in [0, 0, 0, 1, 0, 7, 0, 0, 0, 0, 0, 0, 0x7f, 2, 199, 0]
+        .into_iter()
+        .enumerate()
+    {
+        memory::write(c, b, work + 0x620 + i, byte)?;
+    }
 
     b.output(0x7c, 0); // ordinary drawing, no charger
     b.egc.enabled = false;
@@ -70,9 +88,11 @@ pub(crate) fn service(c: &mut Cpu, b: &mut Bus) -> Result<(), String> {
     b.gdcs[1].start = 0;
     b.gdcs[1].pitch = 40;
     b.gdcs[1].enabled = true;
-    b.mem[0x54c] |= 0x80;
+    let mode = memory::read(c, b, 0x54c)?;
+    memory::write(c, b, 0x54c, mode | 0x80)?;
     // Color, LOWER region; preserve the independently selected drawing timing.
-    b.mem[0x54d] = (b.mem[0x54d] & 8) | 0x40;
+    let mode = memory::read(c, b, 0x54d)?;
+    memory::write(c, b, 0x54d, (mode & 8) | 0x40)?;
     for (i, color) in b.palette.iter_mut().enumerate() {
         let level = match i {
             0..=7 => 255,

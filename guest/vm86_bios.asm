@@ -78,7 +78,7 @@ mov word [IDT+8*%1+6], (BOOT+%2-$$)>>16
 %endmacro
 gate 8, timer, 0x8e
 gate 9, keyboard, 0x8e
-gate 13, fail, 0x8e
+gate 13, gp, 0x8e
 gate 14, pf, 0x8e
 gate 0x18, keys, 0xee
 gate 0x1b, disk, 0xee
@@ -175,6 +175,26 @@ add eax, 0x1000
 mov [ebp], eax
 mov dword [ebp+4], 0xf000
 and dword [ebp+8], ~0x10300 ; clear RF/TF/IF, retain VM/IOPL
+popad
+add esp, 4
+iretd
+
+; Blocking BIOS input executes real STI/HLT/retry ROM instructions. HLT
+; always traps in VM86, even with IOPL3. This original monitor resumes at
+; the retry instruction; ordinary IRQ reflection delivers pending keys.
+gp:
+pushad
+lea ebp, [esp+36]
+mov ax, 16
+mov ds, ax
+cmp dword [ebp-4], 0
+jne fail
+cmp dword [ebp+4], 0xf000
+jne fail
+cmp dword [ebp], 0x1801
+jne fail
+inc dword [ebp]
+inc dword [RESULT+8]
 popad
 add esp, 4
 iretd

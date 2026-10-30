@@ -147,7 +147,7 @@ impl Cpu {
         }
         Ok(entry.frame | (linear & 4095))
     }
-    pub(super) fn check_pages(
+    pub(crate) fn check_pages(
         &self,
         b: &mut Bus,
         linear: u32,

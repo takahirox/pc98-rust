@@ -41,7 +41,7 @@ fn original_vm86_bios_guest_cold_reset() {
         assert_eq!(seen, [true; 3]);
         assert_eq!(injected, [true; 3]);
         assert_eq!(&m.bus.mem[0x8000..0x8004], &[3, 0, 4, 0]);
-        assert_eq!(m.cpu.fault_count, 4);
+        assert_eq!(m.cpu.fault_count, 4 + get(&m.bus, 0x8008) as u64);
         assert_eq!(m.bus.fdc.writes, 0);
         assert_eq!(m.bus.disks[0].as_ref().unwrap().bytes, image);
     }
@@ -349,12 +349,12 @@ fn firmware_trap_io_permission_and_unsupported_modes_remain_explicit() {
     c.step(&mut b).unwrap();
     assert_eq!(c.last_fault, Some((13, 0)));
     assert_eq!(b.read16(0x58a), ticks);
-    for (segment, int, expected) in [(0xf000, 0x1f, "INT 1F"), (0xf990, 0, "Graph LIO")] {
-        let (mut c, mut b) = request(int, 0, true);
+    for (segment, int, expected) in [(0xf000, 0x1c, "INT 1C"), (0xf990, 0, "Graph LIO")] {
+        let (mut c, mut b) = request(int, 0xff, true);
         c.s[CS] = segment;
         c.segment_caches[CS].as_mut().unwrap().base = (segment as u32) << 4;
         if segment == 0xf990 {
-            c.ip = 0x100;
+            c.ip = 0x104;
         }
         let error = c.step(&mut b).unwrap_err();
         assert!(error.contains(expected), "{error}");

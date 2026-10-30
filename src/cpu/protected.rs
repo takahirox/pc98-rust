@@ -46,7 +46,7 @@ impl SegmentCache {
     fn conforming(self) -> bool {
         self.code() && self.access & 4 != 0
     }
-    fn contains(self, offset: u32, bytes: u32) -> bool {
+    pub(super) fn contains(self, offset: u32, bytes: u32) -> bool {
         let Some(end) = offset.checked_add(bytes - 1) else {
             return false;
         };
@@ -282,7 +282,7 @@ impl Cpu {
         self.ip = off;
         Ok(())
     }
-    /// Synthetic firmware tail transfers obey the same real CS reload contract.
+    /// Synthetic firmware tail transfers obey the real/VM86 CS reload contract.
     pub(crate) fn reload_real_code(&mut self, selector: u16) {
         if self.vm86() {
             self.load_vm86_segment(CS, selector);

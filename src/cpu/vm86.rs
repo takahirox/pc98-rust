@@ -58,9 +58,15 @@ impl Cpu {
         {
             bytes = 36;
         }
-        let in_bounds = sp
-            .checked_add(bytes - 1)
-            .is_some_and(|end| end <= self.segment_cache(SS).limit);
+        let width = if operand32 { 4 } else { 2 };
+        let in_bounds = if self.protected_mode() {
+            self.segment_cache(SS).contains(sp, bytes)
+        } else {
+            (0..3).all(|i| {
+                self.segment_cache(SS)
+                    .contains(self.stack_offset(sp.wrapping_add(i * width)), width)
+            })
+        };
         (self.s[SS], sp, bytes, in_bounds)
     }
     pub(super) fn load_vm86_segment(&mut self, s: usize, selector: u16) {
@@ -115,21 +121,34 @@ impl Cpu {
                 "unsupported protected IRET.NT hardware task return".into(),
             ));
         }
-        // A frame is contiguous within the current stack segment. Do not wrap
-        // individual pops across a segment limit while validating IRET.
-        self.check_access(
-            b,
-            SS,
-            self.stack_pointer(),
-            self.bytes(true) * 3,
-            false,
-            false,
-        )?;
+        // Intel486 PRM, IRET real-address operation: three successive pops.
+        // SP may wrap BETWEEN operands, just as on interrupt entry. Each
+        // operand must still fit its segment. Protected/VM86 frames retain
+        // their contiguous-frame validation.
+        if self.protected_mode() {
+            self.check_access(
+                b,
+                SS,
+                self.stack_pointer(),
+                self.bytes(true) * 3,
+                false,
+                false,
+            )?;
+        } else {
+            self.check_stack_sequence(b, 3, false)?;
+        }
         let sp = self.stack_pointer();
         let bytes = self.bytes(true);
         let off = self.read_mem(b, SS, sp, bytes)?;
-        let seg = self.read_mem(b, SS, sp + bytes, bytes)? as u16;
-        let flags = self.read_mem(b, SS, sp + 2 * bytes, bytes)?;
+        let frame_offset = |delta| {
+            if self.protected_mode() {
+                sp + delta
+            } else {
+                self.stack_offset(sp.wrapping_add(delta))
+            }
+        };
+        let seg = self.read_mem(b, SS, frame_offset(bytes), bytes)? as u16;
+        let flags = self.read_mem(b, SS, frame_offset(2 * bytes), bytes)?;
         if self.protected_mode()
             && !virtual_return
             && self.operand32

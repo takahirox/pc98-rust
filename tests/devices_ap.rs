@@ -69,6 +69,17 @@ fn independent_debug_writes_egc_and_256_color_pegc_through_dos() {
 }
 
 fn copy_call(m: &mut Machine, src: u32, dst: u32, len: u16) -> bool {
+    copy_call_attributes(m, src, dst, len, 0, 0xffff, 0x92)
+}
+fn copy_call_attributes(
+    m: &mut Machine,
+    src: u32,
+    dst: u32,
+    len: u16,
+    flags: u8,
+    limit: u16,
+    access: u8,
+) -> bool {
     m.cpu.s[CS] = 0;
     m.cpu.ip = 0x600;
     m.cpu.s[SS] = 0;
@@ -82,13 +93,13 @@ fn copy_call(m: &mut Machine, src: u32, dst: u32, len: u16) -> bool {
     m.cpu.r[DI] = 0;
     for (p, base) in [(0x9010, src), (0x9018, dst)] {
         m.bus.mem[p..p + 8].copy_from_slice(&[
-            0xff,
-            0xff,
+            limit as u8,
+            (limit >> 8) as u8,
             base as u8,
             (base >> 8) as u8,
             (base >> 16) as u8,
-            0x92,
-            0,
+            access,
+            flags,
             (base >> 24) as u8,
         ]);
     }
@@ -125,6 +136,40 @@ fn int1f_copy_uses_extended_ram_preserves_a20_and_rejects_holes_atomically() {
     m.reset();
     assert!(!m.bus.a20);
     assert_eq!(m.bus.mem[0x401], 24);
+}
+
+#[test]
+fn int1f_copy_accepts_386_limit_bits_and_granularity_but_rejects_invalid_descriptors() {
+    for (flags, limit, access, success) in [
+        (0x0f, 0xffff, 0x93, true),  // 20-bit byte limit, used by public FDXMS
+        (0xcf, 0xffff, 0x93, true),  // 4 KiB granularity, 32-bit data
+        (0x80, 0, 0x92, true),       // inclusive effective limit FFFh
+        (0x10, 0xffff, 0x92, true),  // software AVL bit
+        (0x20, 0xffff, 0x92, false), // reserved 486 descriptor bit
+        (0, 0, 0x92, false),         // inclusive byte limit too short
+        (0, 0xffff, 0x9a, false),    // executable
+        (0, 0xffff, 0x12, false),    // not present
+        (0, 0xffff, 0x90, false),    // read-only destination
+        (0, 0xffff, 0x96, false),    // expand-down outside supported contract
+    ] {
+        let mut m = Machine::new(Profile::Pc9821ApDos);
+        m.bus.mem[0x100000..0x100010].copy_from_slice(b"386 COPY LIMITS!");
+        m.bus.mem[0x200000..0x200010].fill(0xa5);
+        assert_eq!(
+            copy_call_attributes(&mut m, 0x100000, 0x200000, 16, flags, limit, access),
+            success,
+            "flags={flags:02x} access={access:02x}"
+        );
+        assert_eq!(
+            &m.bus.mem[0x200000..0x200010],
+            if success {
+                &b"386 COPY LIMITS!"[..]
+            } else {
+                &[0xa5; 16]
+            }
+        );
+        assert!(!m.bus.a20);
+    }
 }
 
 #[test]

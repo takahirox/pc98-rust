@@ -891,3 +891,351 @@ fn protected_only_and_invalid_system_encodings_in_vm86_raise_ud() {
         assert!(!c.vm86());
     }
 }
+
+// Original firmware probes: ROM thunks execute through the same CPU transaction
+// as their OUT instruction. No commercial-media bytes or guest-derived code.
+fn firmware_setup(int: u8, low_permissions: u32) -> (Cpu, Bus) {
+    let (mut c, mut b) = setup(&[], true, 0x23002);
+    pc98_rust::firmware::initialize(&mut b);
+    put(&mut b, 0x2000, 0x340000 | low_permissions);
+    // VM86 entry at the real synthetic ROM, stack nonidentity as in setup().
+    put(&mut b, 0x18000, 0x1000 + int as u32 * 4);
+    put(&mut b, 0x18004, 0xf000);
+    b.mem[0x320000..0x320006].copy_from_slice(&[0, 0, 0, 0x20, 2, 0x30]);
+    enter(&mut c, &mut b);
+    (c, b)
+}
+
+#[test]
+fn vm86_firmware_timer_uses_user_mapping_and_returns_through_mapped_stack() {
+    let (mut c, mut b) = firmware_setup(8, 7);
+    b.mem[0x34058a..0x34058c].copy_from_slice(&41u16.to_le_bytes());
+    b.mem[0x58a..0x58c].copy_from_slice(&0xbeefu16.to_le_bytes());
+    c.step(&mut b).unwrap();
+    assert_eq!(get(&b, 0x340588) >> 16, 42);
+    assert_eq!(b.read16(0x58a), 0xbeef);
+    assert!(c.vm86());
+    assert_eq!(c.cpl, 3);
+    assert_eq!(get(&b, 0x2000) & 0x60, 0x60);
+    c.step(&mut b).unwrap(); // ordinary guest IRET, not a host return shortcut
+    assert_eq!((c.s[CS], c.ip, c.r[SP]), (0x2000, 0, 0x7006));
+    assert!(c.vm86());
+    assert_eq!(c.cpl, 3);
+}
+
+#[test]
+fn vm86_firmware_fault_restarts_out_without_eoi_or_data_mutation_then_retries() {
+    for (permissions, code) in [(0, 6), (3, 7), (5, 7)] {
+        let (mut c, mut b) = firmware_setup(8, permissions);
+        b.mem[0x34058a..0x34058c].copy_from_slice(&41u16.to_le_bytes());
+        b.pics[0].isr = 1;
+        c.step(&mut b).unwrap();
+        assert_eq!(c.last_fault, Some((14, code)));
+        assert_eq!(c.cr2, 0x58a);
+        assert_eq!(get(&b, 0x17fdc), 0x1020); // restart OUT, not following IRET
+        assert_eq!(get(&b, 0x17fe0), 0xf000);
+        assert_eq!(b.read16(0x34058a), 41);
+        assert_eq!(b.pics[0].isr, 1); // timer did not acknowledge IRQ
+        assert_eq!(get(&b, 0x2000) & 0x40, 0);
+        assert!(!b.firmware_request);
+        // Original monitor repairs its PTE, invalidates it, discards error and
+        // IRETDs; firmware must execute exactly once on the restarted OUT.
+        b.mem[0x11000..0x1100c].copy_from_slice(&[
+            0x0f, 0x01, 0x3d, 0x8a, 5, 0, 0, // INVLPG [58a]
+            0x83, 0xc4, 4, 0xcf, 0x90,
+        ]);
+        put(&mut b, 0x2000, 0x340007);
+        for _ in 0..4 {
+            c.step(&mut b).unwrap();
+        }
+        assert!(c.vm86());
+        assert_eq!(b.read16(0x34058a), 42);
+        assert_eq!(b.pics[0].isr, 0);
+    }
+}
+
+#[test]
+fn vm86_firmware_carry_rtc_and_keyboard_preflight_mapped_operands() {
+    let (mut c, mut b) = firmware_setup(0x1b, 7);
+    c.r[AX] = 0x0480; // no HDD: return carry via mapped saved FLAGS
+    c.step(&mut b).unwrap();
+    assert_eq!(b.read16(0x320004) & CF, CF);
+    assert_eq!(b.read16(0x37004), 0);
+    c.step(&mut b).unwrap();
+    assert_eq!(c.flags & CF, CF);
+    assert_eq!(c.cpl, 3);
+
+    let (mut c, mut b) = firmware_setup(0x1c, 7);
+    c.r[AX] = 0;
+    c.r[BX] = 0xffd; // six bytes cross two noncontiguous mapped pages
+    put(&mut b, 0x2100, 0x350007); // ES:4000 page0
+    put(&mut b, 0x2104, 0x360007); // page1
+    let expected = b.rtc.snapshot();
+    c.step(&mut b).unwrap();
+    assert_eq!(&b.mem[0x350ffd..0x351000], &expected[..3]);
+    assert_eq!(&b.mem[0x360000..0x360003], &expected[3..]);
+    assert_eq!(&b.mem[0x40ffd..0x41003], &[0; 6]);
+
+    for permissions in [0, 5] {
+        let (mut c, mut b) = firmware_setup(9, permissions);
+        b.key(0x1c, true);
+        let count = b.keyboard.fifo.len();
+        c.step(&mut b).unwrap();
+        assert_eq!(
+            c.last_fault,
+            Some((14, if permissions == 0 { 6 } else { 7 }))
+        );
+        assert_eq!(b.keyboard.fifo.len(), count);
+        assert!(b.keyboard.bios.is_empty());
+    }
+}
+
+#[test]
+fn vm86_firmware_interval_callback_keeps_vm_cpl_and_cached_cs() {
+    let (mut c, mut b) = firmware_setup(0x1c, 7);
+    c.r[AX] = 0x0200;
+    c.r[CX] = 1;
+    c.r[BX] = 0x40;
+    c.step(&mut b).unwrap(); // arm ES:BX
+    c.step(&mut b).unwrap(); // return
+    b.tick(80_001);
+    // Jump to timer thunk through ordinary VM86 far JMP.
+    b.mem[0x300000..0x300005].copy_from_slice(&[0xea, 0x20, 0x10, 0, 0xf0]);
+    c.step(&mut b).unwrap();
+    c.step(&mut b).unwrap();
+    assert_eq!((c.s[CS], c.ip, c.cpl), (0x4000, 0x40, 3));
+    assert!(c.vm86());
+    assert_eq!(c.segment_cache(CS).base, 0x40000);
+    assert_eq!(c.segment_cache(CS).limit, 0xffff);
+    assert!(!c.segment_cache(CS).big());
+}
+
+fn firmware_hdd() -> Vec<u8> {
+    let mut image = vec![0; 4096 + 1024];
+    for (at, value) in [
+        (8, 4096u32),
+        (12, 1024),
+        (16, 512),
+        (20, 2),
+        (24, 1),
+        (28, 1),
+    ] {
+        image[at..at + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    for (i, b) in image[4096..].iter_mut().enumerate() {
+        *b = (i ^ (i >> 4)) as u8;
+    }
+    image
+}
+
+#[test]
+fn vm86_firmware_ide_buffer_uses_noncontiguous_user_pages_and_preflights_faults() {
+    for (op, permissions) in [(6, 7), (5, 7), (6, 0), (6, 5), (5, 3)] {
+        let (mut c, mut b) = firmware_setup(0x1b, 7);
+        let image = firmware_hdd();
+        b.ide.mount(Some(
+            pc98_rust::hdd::HardDisk::parse(image.clone()).unwrap(),
+        ));
+        c.r[AX] = (op << 8) | 0x80;
+        c.r[BX] = 512;
+        c.r[CX] = 0;
+        c.r[DX] = 0;
+        c.r[BP] = 0xfff;
+        put(&mut b, 0x2100, 0x350007);
+        put(&mut b, 0x2104, 0x360000 | permissions);
+        b.mem[0x350fff] = 0x5a;
+        b.mem[0x360000..0x3601ff].fill(0xa5);
+        c.step(&mut b).unwrap();
+        if permissions != 7 {
+            assert_eq!(
+                c.last_fault,
+                Some((
+                    14,
+                    if permissions == 0 {
+                        6
+                    } else if op == 6 {
+                        7
+                    } else {
+                        5
+                    }
+                ))
+            );
+            assert_eq!(c.cr2, 0x41000);
+            assert_eq!((b.ide.reads, b.ide.writes), (0, 0));
+            assert_eq!(b.ide.disk.as_ref().unwrap().bytes, image);
+            assert_eq!(b.mem[0x350fff], 0x5a);
+            assert!(b.mem[0x360000..0x3601ff].iter().all(|v| *v == 0xa5));
+            assert_eq!(get(&b, 0x2100) & 0x40, 0);
+        } else if op == 6 {
+            assert_eq!(b.mem[0x350fff], image[4096]);
+            assert_eq!(&b.mem[0x360000..0x3601ff], &image[4097..4608]);
+            assert_eq!(b.mem[0x40fff], 0);
+            assert_eq!(b.ide.reads, 1);
+        } else {
+            assert_eq!(b.ide.disk.as_ref().unwrap().bytes[4096], 0x5a);
+            assert!(b.ide.disk.as_ref().unwrap().bytes[4097..4608]
+                .iter()
+                .all(|v| *v == 0xa5));
+            assert_eq!(b.ide.writes, 1);
+        }
+    }
+}
+
+#[test]
+fn vm86_firmware_extended_copy_uses_mapped_descriptor_data_and_preflights_destination() {
+    for permissions in [7, 5, 0] {
+        let (mut c, mut b) = firmware_setup(0x1f, 7);
+        c.r[AX] = 0x9000;
+        c.r[BX] = 0x200;
+        c.r[CX] = 16;
+        c.r[SI] = 0;
+        c.r[DI] = 0;
+        put(&mut b, 0x2100, 0x350007); // ES page contains GDT
+        for (p, mid) in [(0x350210, 0x20), (0x350218, 0x21)] {
+            b.mem[p..p + 8].copy_from_slice(&[0xff, 0xff, 0, 0, mid, 0x93, 0x0f, 0]);
+        }
+        put(&mut b, 0x2800, 0x360007); // 200000h source
+        put(&mut b, 0x2840, 0x370000 | permissions); // 210000h destination
+        b.mem[0x360000..0x360010].copy_from_slice(b"MAPPED BIOS COPY");
+        b.mem[0x370000..0x370010].fill(0xa5);
+        c.step(&mut b).unwrap();
+        if permissions == 7 {
+            assert!(c.vm86());
+            assert_eq!(c.last_fault, None);
+            assert_eq!(&b.mem[0x370000..0x370010], b"MAPPED BIOS COPY");
+            assert_eq!(b.read16(0x320004) & CF, 0);
+        } else {
+            assert_eq!(
+                c.last_fault,
+                Some((14, if permissions == 0 { 6 } else { 7 }))
+            );
+            assert_eq!(c.cr2, 0x210000);
+            assert_eq!(&b.mem[0x370000..0x370010], &[0xa5; 16]);
+            assert_eq!(b.read16(0x320004), 0x3002);
+        }
+        assert_eq!(&b.mem[0x210000..0x210010], &[0; 16]);
+        assert_eq!(get(&b, 0x2100) & 0x40, 0); // descriptors read, never rewritten
+    }
+}
+
+#[test]
+fn vm86_blocking_bios_keyboard_wait_executes_sti_hlt_with_monitor_protection() {
+    for iopl3 in [false, true] {
+        let (mut c, mut b) = firmware_setup(0x18, 7);
+        c.r[AX] = 0;
+        if !iopl3 {
+            c.flags &= !0x3000;
+        }
+        c.step(&mut b).unwrap();
+        assert_eq!((c.ip, c.cpl), (0x1800, 3));
+        assert!(c.vm86());
+        assert!(!c.halted);
+        assert_eq!(c.flags & IF, 0); // host service did not force virtual IF
+        c.step(&mut b).unwrap(); // ordinary STI, IOPL checked by CPU
+        if iopl3 {
+            assert_eq!(c.flags & IF, IF);
+            assert!(c.vm86());
+            c.step(&mut b).unwrap(); // VM86 HLT always #GP, even at IOPL3
+        }
+        assert_eq!(c.last_fault, Some((13, 0)));
+        assert_eq!(get(&b, 0x17fdc), if iopl3 { 0x1801 } else { 0x1800 });
+        assert_eq!(get(&b, 0x17fe0), 0xf000);
+        assert!(!c.halted); // monitor receives the exception, no hidden host halt
+    }
+}
+
+#[test]
+fn vm86_firmware_floppy_dma_preserves_scatter_mapping_and_fault_atomicity() {
+    for case in 0..6 {
+        let (mut c, mut b) = firmware_setup(0x1b, 7);
+        let mut image = vec![0; 1_261_568];
+        for (i, byte) in image[..1024].iter_mut().enumerate() {
+            *byte = (i ^ (i >> 3)) as u8;
+        }
+        b.mount_floppy(
+            0,
+            Some(pc98_rust::disk::Disk::parse(image.clone(), "probe.hdm").unwrap()),
+        );
+        c.r[AX] = 0x5690;
+        c.r[BX] = 1024;
+        c.r[CX] = 0x0300;
+        c.r[DX] = 1;
+        c.r[BP] = match case {
+            0 => 0,
+            1 => 0xf00,
+            2 => 0xff00,
+            3 => 0xffd,
+            4 => 0xf00,
+            _ => 0,
+        };
+        put(&mut b, 0x2100, 0x85007);
+        put(
+            &mut b,
+            0x2104,
+            if case == 3 {
+                0
+            } else if case == 4 {
+                0x86007
+            } else {
+                0x96007
+            },
+        );
+        if case == 5 {
+            put(&mut b, 0x2100, 0x350007);
+        }
+        put(&mut b, 0x213c, 0x8f007);
+        put(&mut b, 0x2140, 0x96007);
+        b.mem[0x85000..0x90000].fill(0xa5);
+        let result = c.step(&mut b);
+        match case {
+            0 => {
+                result.unwrap();
+                assert!(c.vm86());
+                assert_eq!(
+                    b.fdc.reads,
+                    1,
+                    "AH={:02x} CF={} DMA-address={:x}",
+                    c.byte(4),
+                    b.read16(0x320004) & CF,
+                    b.dma.address(2)
+                );
+                assert_eq!(&b.mem[0x85000..0x85400], &image[..1024]);
+                assert_eq!(&b.mem[0x40000..0x40400], &[0; 1024]);
+                assert_eq!(b.fdc.reads, 1);
+            }
+            1 | 2 => {
+                result.unwrap();
+                let (first, second, prefix) = if case == 1 {
+                    (0x85f00, 0x96000, 0x100)
+                } else {
+                    (0x8ff00, 0x96000, 0x100)
+                };
+                assert_eq!(&b.mem[first..first + prefix], &image[..prefix]);
+                assert_eq!(&b.mem[second..second + 1024 - prefix], &image[prefix..1024]);
+                assert_eq!(b.fdc.reads, 1);
+            }
+            3 => {
+                result.unwrap();
+                assert_eq!(c.last_fault, Some((14, 6)));
+                assert_eq!(c.cr2, 0x41000);
+                assert_eq!(b.fdc.reads, 0);
+                assert!(b.mem[0x85000..0x90000].iter().all(|v| *v == 0xa5));
+            }
+            4 => {
+                result.unwrap();
+                assert_eq!(&b.mem[0x85f00..0x86300], &image[..1024]);
+                assert_eq!(b.fdc.reads, 1);
+                // DMA writes physical RAM, not CPU operands: no PTE D update.
+                assert_eq!(get(&b, 0x2100) & 0x60, 0x20);
+                assert_eq!(get(&b, 0x2104) & 0x60, 0x20);
+            }
+            _ => {
+                result.unwrap();
+                assert_eq!(b.fdc.reads, 1);
+                assert_eq!(&b.mem[0x350000..0x350400], &image[..1024]);
+            }
+        }
+        assert_eq!(b.disks[0].as_ref().unwrap().bytes, image);
+        assert_eq!(b.fdc.writes, 0);
+    }
+}

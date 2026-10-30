@@ -1,8 +1,9 @@
 //! Newly written synthetic firmware services behind executable ROM thunks.
 //! INT 21h is deliberately not implemented: DOS must execute its own kernel.
 use crate::{bus::Bus, cpu::*};
-mod memory;
-use memory::Memory;
+pub(crate) mod memory;
+use memory::{read, read_seg, write, write_seg};
+const KEY_WAIT: u32 = 0x1800;
 /// INT 1C/02 has one interval and one ES:BX target, not an event queue.
 pub(crate) struct IntervalTimer {
     pub deadline: u64,
@@ -19,6 +20,10 @@ pub fn initialize(b: &mut Bus) {
         b.write_seg(0, (n * 4) as u16, off as u16, true);
         b.write_seg(0, (n * 4 + 2) as u16, 0xf000, true);
     }
+    // The blocking keyboard path executes real STI/HLT instructions. A VM86
+    // monitor must see their normal IOPL/#GP behavior, rather than host code
+    // forcing IF or halting a virtual task behind its back.
+    b.mem[0xf1800..0xf1805].copy_from_slice(&[0xfb, 0xf4, 0xe9, 0x5b, 0xf8]);
     crate::lio::initialize(b);
     b.mem[0x501] = 4; // 640 KiB, normal resolution, 8 MHz PIT.
     b.mem[0x500] = 0x20;
@@ -57,25 +62,25 @@ pub fn initialize(b: &mut Bus) {
     b.gdcs[1].pitch = 40;
     b.gdcs[0].cursor_bottom = 15;
 }
-fn carry(c: &Cpu, b: &mut Bus, m: &Memory, on: bool) {
+fn carry(c: &Cpu, b: &mut Bus, on: bool) -> ExecResult<()> {
     let p = c.r[SP].wrapping_add(4);
-    let mut f = m.read_seg(b, c.s[SS], p, true);
+    let mut f = read_seg(c, b, c.s[SS], p, true)?;
     if on {
         f |= CF
     } else {
         f &= !CF
     }
-    m.write_seg(b, c.s[SS], p, f, true);
+    write_seg(c, b, c.s[SS], p, f, true)
 }
-fn sync_keys(b: &mut Bus, m: &Memory) {
+fn sync_keys(c: &Cpu, b: &mut Bus) -> ExecResult<()> {
     let count = b.keyboard.bios.len().min(16);
     for i in 0..count {
-        m.write_seg(b, 0, 0x502 + i as u16 * 2, b.keyboard.bios[i], true);
+        write_seg(c, b, 0, 0x502 + i as u16 * 2, b.keyboard.bios[i], true)?;
     }
-    m.write_seg(b, 0, 0x524, 0x502, true);
-    m.write_seg(b, 0, 0x526, 0x502 + (count as u16 * 2) % 32, true);
-    m.write(b, 0x528, count as u8);
-    m.write(b, 0x53a, b.keyboard.modifiers);
+    write_seg(c, b, 0, 0x524, 0x502, true)?;
+    write_seg(c, b, 0, 0x526, 0x502 + (count as u16 * 2) % 32, true)?;
+    write(c, b, 0x528, count as u8)?;
+    write(c, b, 0x53a, b.keyboard.modifiers)
 }
 /// One BIOS request goes through the same command/result FIFO, channel 2 DMA,
 /// scheduler and IRQ as guest-issued I/O. No sector data bypasses the controller.
@@ -87,7 +92,6 @@ pub fn disk_transfer(
     address: usize,
     write: bool,
 ) -> bool {
-    let firmware_dma = b.firmware_dma.take();
     let [c, h, r, n] = chrn;
     if bytes == 0 || drive > 1 || h > 1 || n > 3 || r == 0 {
         return false;
@@ -150,9 +154,7 @@ pub fn disk_transfer(
     ] {
         b.output(0x92, v)
     }
-    b.firmware_dma = firmware_dma;
     b.tick(160);
-    b.firmware_dma = None;
     let st0 = b.input(0x92);
     let st1 = b.input(0x92);
     for _ in 0..5 {
@@ -160,37 +162,28 @@ pub fn disk_transfer(
     } // drain result phase
     st0 & 0xc0 == 0 && st1 == 0
 }
-/// Direct entry retained for native real-mode callers. Machine execution uses
-/// `execute` inside the CPU fault boundary so VM86 #PF can reach the monitor.
+/// Direct native-call compatibility API. Machine execution uses the CPU's
+/// restartable instruction transaction and exception delivery instead.
 pub fn service(c: &mut Cpu, b: &mut Bus) -> Result<(), String> {
-    execute(c, b).map_err(|e| match e {
-        ExecError::Unsupported(message) => message,
-        other => format!("{other:?}"),
-    })
+    execute_service(c, b).map_err(|e| format!("{e:?}"))
 }
-pub(crate) fn execute(c: &mut Cpu, b: &mut Bus) -> ExecResult<()> {
+pub(crate) fn execute_service(c: &mut Cpu, b: &mut Bus) -> ExecResult<()> {
     if c.protected_mode() && !c.vm86() {
         return Err("synthetic real-mode firmware requested from protected mode".into());
     }
     if c.s[CS] == 0xf990 {
-        if c.vm86() {
-            return Err("unsupported VM86 Graph LIO firmware".into());
-        }
-        return crate::lio::service(c, b).map_err(Into::into);
+        return crate::lio::service(c, b);
     }
     if c.s[CS] != 0xf000 || !(0x1002..0x1402).contains(&c.ip) || (c.ip - 0x1002) & 3 != 0 {
         return Err("firmware trap outside synthetic ROM".into());
     }
     let int = ((c.ip - 0x1002) / 4) as u8;
-    let m = memory::prepare(c, b, int)?;
-    service_inner(c, b, &m, int).map_err(Into::into)
-}
-fn service_inner(c: &mut Cpu, b: &mut Bus, m: &Memory, int: u8) -> Result<(), String> {
     let ah = c.byte(4);
+    preflight(c, b, int, ah)?;
     match int {
         8 => {
-            let ticks = m.read_seg(b, 0, 0x58a, true).wrapping_add(1);
-            m.write_seg(b, 0, 0x58a, ticks, true);
+            let ticks = read_seg(c, b, 0, 0x58a, true)?.wrapping_add(1);
+            write_seg(c, b, 0, 0x58a, ticks, true)?;
             b.output(0, 0x20);
             if b.interval.as_ref().is_some_and(|t| b.cycles >= t.deadline) {
                 let timer = b.interval.take().unwrap();
@@ -210,9 +203,10 @@ fn service_inner(c: &mut Cpu, b: &mut Bus, m: &Memory, int: u8) -> Result<(), St
                     let scan = code & 0x7f;
                     // Follow serviced FIFO order, not the host's newer held state.
                     let address = 0x52a + scan as usize / 8;
-                    let state = m.read(b, address);
+                    let state = read(c, b, address)?;
                     let mask = 1 << (scan % 8);
-                    m.write(
+                    write(
+                        c,
                         b,
                         address,
                         if code & 0x80 == 0 {
@@ -220,9 +214,9 @@ fn service_inner(c: &mut Cpu, b: &mut Bus, m: &Memory, int: u8) -> Result<(), St
                         } else {
                             state & !mask
                         },
-                    );
+                    )?;
                     b.keyboard.service_scan(code);
-                    sync_keys(b, m);
+                    sync_keys(c, b)?;
                 }
             }
             b.output(0, 0x20);
@@ -237,11 +231,9 @@ fn service_inner(c: &mut Cpu, b: &mut Bus, m: &Memory, int: u8) -> Result<(), St
             0 => {
                 if let Some(key) = b.keyboard.bios.pop_front() {
                     c.r[AX] = key;
-                    sync_keys(b, m);
+                    sync_keys(c, b)?;
                 } else {
-                    c.ip = c.ip.wrapping_sub(2);
-                    c.halted = true;
-                    c.flags |= IF;
+                    c.ip = KEY_WAIT;
                 }
             }
             1 | 5 => {
@@ -250,7 +242,7 @@ fn service_inner(c: &mut Cpu, b: &mut Bus, m: &Memory, int: u8) -> Result<(), St
                     c.set_byte(7, 1);
                     if ah == 5 {
                         b.keyboard.bios.pop_front();
-                        sync_keys(b, m);
+                        sync_keys(c, b)?;
                     }
                 } else {
                     c.set_byte(7, 0)
@@ -259,21 +251,21 @@ fn service_inner(c: &mut Cpu, b: &mut Bus, m: &Memory, int: u8) -> Result<(), St
             2 => c.set_byte(0, b.keyboard.modifiers),
             3 => {
                 b.keyboard.bios.clear();
-                sync_keys(b, m);
+                sync_keys(c, b)?;
             }
             4 => {
                 let group = c.byte(0) as usize;
                 c.set_byte(
                     4,
                     if group < 16 {
-                        m.read(b, 0x52a + group)
+                        read(c, b, 0x52a + group)?
                     } else {
                         0
                     },
                 )
             }
-            0x0a => m.write(b, 0x53c, c.byte(0)),
-            0x0b => c.set_byte(0, m.read(b, 0x53c)),
+            0x0a => write(c, b, 0x53c, c.byte(0))?,
+            0x0b => c.set_byte(0, read(c, b, 0x53c)?),
             0x0c => b.gdcs[0].enabled = true,
             0x0d => b.gdcs[0].enabled = false,
             0x0e => {
@@ -293,24 +285,32 @@ fn service_inner(c: &mut Cpu, b: &mut Bus, m: &Memory, int: u8) -> Result<(), St
                 // Full-width JIS read: scratch word, then 16 left/right rows.
                 for i in 0..32u16 {
                     let byte = b.user_characters.byte(c.byte(6), c.byte(2), i as usize);
-                    m.write_seg(b, c.r[BX], c.r[CX].wrapping_add(2 + i), byte as u16, false);
+                    write_seg(
+                        c,
+                        b,
+                        c.r[BX],
+                        c.r[CX].wrapping_add(2 + i),
+                        byte as u16,
+                        false,
+                    )?;
                 }
             }
             0x14 => {
                 for y in 0..16 {
-                    m.write_seg(
+                    write_seg(
+                        c,
                         b,
                         c.s[ES],
                         c.r[BX].wrapping_add(y),
                         crate::font::row(c.byte(6), y as u8) as u16,
                         false,
-                    )
+                    )?
                 }
             }
             0x16 => {
                 for i in 0..2000 {
-                    m.write_seg(b, 0xa000, i * 2, c.r[DX] & 255, true);
-                    m.write_seg(b, 0xa200, i * 2, (c.r[DX] >> 8) & 255, true);
+                    write_seg(c, b, 0xa000, i * 2, c.r[DX] & 255, true)?;
+                    write_seg(c, b, 0xa200, i * 2, (c.r[DX] >> 8) & 255, true)?;
                 }
             }
             0x17 => b.set_beep(true),
@@ -322,24 +322,28 @@ fn service_inner(c: &mut Cpu, b: &mut Bus, m: &Memory, int: u8) -> Result<(), St
                     return Err(format!(
                         "unsupported user-character registration code {:04x}",
                         c.r[DX]
-                    ));
+                    )
+                    .into());
                 }
                 let mut pattern = [0; 32];
                 for (i, byte) in pattern.iter_mut().enumerate() {
-                    *byte = m.read_seg(b, c.r[BX], c.r[CX].wrapping_add(2 + i as u16), false) as u8;
+                    *byte =
+                        read_seg(c, b, c.r[BX], c.r[CX].wrapping_add(2 + i as u16), false)? as u8;
                 }
                 b.user_characters.define(c.r[DX], pattern);
             }
             0x40 => {
                 b.gdcs[1].enabled = true;
                 if b.profile == crate::Profile::Pc9821ApDos {
-                    m.write(b, 0x54c, m.read(b, 0x54c) | 128);
+                    let mode = read(c, b, 0x54c)?;
+                    write(c, b, 0x54c, mode | 128)?;
                 }
             }
             0x41 => {
                 b.gdcs[1].enabled = false;
                 if b.profile == crate::Profile::Pc9821ApDos {
-                    m.write(b, 0x54c, m.read(b, 0x54c) & !128);
+                    let mode = read(c, b, 0x54c)?;
+                    write(c, b, 0x54c, mode & !128)?;
                 }
             }
             0x42 => {
@@ -348,31 +352,32 @@ fn service_inner(c: &mut Cpu, b: &mut Bus, m: &Memory, int: u8) -> Result<(), St
                 }
                 // Mode setup must not discard the independently selected
                 // drawing timing (PRXDUPD bit 3).
-                let timing = m.read(b, 0x54d) & 8;
-                m.write(b, 0x54d, c.byte(5));
+                let timing = read(c, b, 0x54d)? & 8;
+                write(c, b, 0x54d, c.byte(5))?;
                 b.graphics_200 = false;
                 if b.profile == crate::Profile::Pc9821ApDos {
-                    m.write(b, 0x54d, (m.read(b, 0x54d) & !8) | timing);
+                    write(c, b, 0x54d, (c.byte(5) & !8) | timing)?;
                 }
             }
             0x4a if b.profile == crate::Profile::Pc9821ApDos => {
                 let flash = match c.byte(5) {
                     0x06 => true,
                     0x16 => false,
-                    ch => return Err(format!("unsupported graphics drawing timing CH={ch:02x}")),
+                    ch => {
+                        return Err(
+                            format!("unsupported graphics drawing timing CH={ch:02x}").into()
+                        )
+                    }
                 };
                 b.gdcs[1].draw_during_display = flash;
-                m.write(
-                    b,
-                    0x54d,
-                    (m.read(b, 0x54d) & !8) | if flash { 8 } else { 0 },
-                );
+                let mode = read(c, b, 0x54d)?;
+                write(c, b, 0x54d, (mode & !8) | if flash { 8 } else { 0 })?;
             }
-            _ => return Err(format!("unsupported BIOS INT 18 AH={ah:02x}")),
+            _ => return Err(format!("unsupported BIOS INT 18 AH={ah:02x}").into()),
         },
         0x1b => {
             if c.byte(0) & 0x7f == 0 && b.profile == crate::Profile::Pc9821ApDos {
-                hdd_service(c, b, m);
+                hdd_service(c, b)?;
                 return Ok(());
             }
             let drive = c.byte(0) & 3;
@@ -382,7 +387,7 @@ fn service_inner(c: &mut Cpu, b: &mut Bus, m: &Memory, int: u8) -> Result<(), St
                 || b.disks[drive as usize].is_none()
             {
                 c.set_byte(4, 0x80);
-                carry(c, b, m, true);
+                carry(c, b, true)?;
                 return Ok(());
             }
             let op = ah & 15;
@@ -405,9 +410,14 @@ fn service_inner(c: &mut Cpu, b: &mut Bus, m: &Memory, int: u8) -> Result<(), St
                         return Err("invalid BIOS disk transfer size".into());
                     }
                     while left > 0 {
+                        // Preserve #118's BIOS-only scatter transfer. Raw guest
+                        // DMA still uses physical channel addresses.
                         if c.vm86() {
-                            b.firmware_dma =
-                                Some((0..sector_size).map(|i| m.physical(addr + i)).collect());
+                            b.firmware_dma = Some(
+                                (0..sector_size)
+                                    .map(|i| memory::resolve(c, b, addr + i, op != 5))
+                                    .collect::<ExecResult<_>>()?,
+                            );
                         }
                         let transferred = disk_transfer(
                             b,
@@ -466,12 +476,12 @@ fn service_inner(c: &mut Cpu, b: &mut Bus, m: &Memory, int: u8) -> Result<(), St
                 }
                 _ => {
                     c.set_byte(4, 0x40);
-                    carry(c, b, m, true);
+                    carry(c, b, true)?;
                     return Ok(());
                 }
             };
             c.set_byte(4, if success { 0 } else { 0x40 });
-            carry(c, b, m, !success);
+            carry(c, b, !success)?;
         }
         0x1c => {
             match ah {
@@ -482,11 +492,18 @@ fn service_inner(c: &mut Cpu, b: &mut Bus, m: &Memory, int: u8) -> Result<(), St
                         [0x26, 0x14, 0x01, 0, 0, 0]
                     };
                     for (i, v) in snapshot.into_iter().enumerate() {
-                        m.write_seg(b, c.s[ES], c.r[BX].wrapping_add(i as u16), v.into(), false)
+                        write_seg(
+                            c,
+                            b,
+                            c.s[ES],
+                            c.r[BX].wrapping_add(i as u16),
+                            v.into(),
+                            false,
+                        )?
                     }
                 }
                 2 => {
-                    m.write_seg(b, 0, 0x58a, 0, true);
+                    write_seg(c, b, 0, 0x58a, 0, true)?;
                     let count = if c.r[CX] == 0 { 65_536 } else { c.r[CX] as u64 };
                     b.interval = Some(IntervalTimer {
                         deadline: b.cycles + count * 80_000, // 10 ms at 8 MHz
@@ -494,72 +511,192 @@ fn service_inner(c: &mut Cpu, b: &mut Bus, m: &Memory, int: u8) -> Result<(), St
                         offset: c.r[BX],
                     });
                 }
-                _ => return Err(format!("unsupported BIOS INT 1C AH={ah:02x}")),
+                _ => return Err(format!("unsupported BIOS INT 1C AH={ah:02x}").into()),
             }
         }
         0x1e => return Err("Boot failed: no readable PC-98 floppy or IDE IPL".into()),
         0x1f => {
-            let ok = ah == 0x90 && b.profile == crate::Profile::Pc9821ApDos && extended_copy(c, b);
-            carry(c, b, m, !ok);
+            let ok = ah == 0x90 && b.profile == crate::Profile::Pc9821ApDos && extended_copy(c, b)?;
+            carry(c, b, !ok)?;
         }
         _ => {
             return Err(format!(
                 "unhandled BIOS INT {int:02x} AH={ah:02x} at guest return {:04x}:{:04x}",
-                m.read_seg(b, c.s[SS], c.r[SP].wrapping_add(2), true),
-                m.read_seg(b, c.s[SS], c.r[SP], true)
-            ))
+                read_seg(c, b, c.s[SS], c.r[SP].wrapping_add(2), true)?,
+                read_seg(c, b, c.s[SS], c.r[SP], true)?
+            )
+            .into())
         }
+    }
+    Ok(())
+}
+
+/// Resolve every fallible output span before consuming ports, queued keys,
+/// controller data or timer state. Page A bits may change during preflight;
+/// D bits and data change only during the actual service transaction.
+fn preflight(c: &Cpu, b: &mut Bus, int: u8, ah: u8) -> ExecResult<()> {
+    use memory::{check, check_seg};
+    match int {
+        8 => {
+            check(c, b, 0x58a, 2, true)?;
+            check(c, b, 0x58a, 2, false)?;
+        }
+        9 if b.keyboard.scan_pending() => {
+            check(c, b, 0x502, 0x39, true)?;
+            check(c, b, 0x52a, 16, false)?;
+        }
+        0x18 => match ah {
+            0 | 5 if !b.keyboard.bios.is_empty() => check(c, b, 0x502, 0x39, true)?,
+            3 => check(c, b, 0x502, 0x39, true)?,
+            0x0a => check(c, b, 0x53c, 1, true)?,
+            0x14 | 0x1a => {
+                let wide =
+                    b.profile == crate::Profile::Pc9821ApDos && (0x21..=0x7e).contains(&c.byte(6));
+                let (seg, off, len) = if ah == 0x1a || wide {
+                    (c.r[BX], c.r[CX].wrapping_add(2), 32)
+                } else {
+                    (c.s[ES], c.r[BX], 16)
+                };
+                for i in 0..len {
+                    check_seg(c, b, seg, off.wrapping_add(i), false, ah == 0x14)?;
+                }
+            }
+            0x16 => {
+                check(c, b, 0xa0000, 4000, true)?;
+                check(c, b, 0xa2000, 4000, true)?;
+            }
+            0x40 | 0x41 if b.profile == crate::Profile::Pc9821ApDos => {
+                check(c, b, 0x54c, 1, false)?;
+                check(c, b, 0x54c, 1, true)?;
+            }
+            0x42 | 0x4a => {
+                check(c, b, 0x54d, 1, false)?;
+                check(c, b, 0x54d, 1, true)?;
+            }
+            _ => {}
+        },
+        0x1b | 0x1f => {
+            let off = c.r[SP].wrapping_add(4);
+            check_seg(c, b, c.s[SS], off, true, false)?;
+            check_seg(c, b, c.s[SS], off, true, true)?;
+            if int == 0x1b {
+                let op = ah & 15;
+                let addr = Cpu::phys(c.s[ES], c.r[BP]);
+                if c.byte(0) & 0x7f == 0 && b.profile == crate::Profile::Pc9821ApDos {
+                    if let Some(disk) = b.ide.disk.as_ref() {
+                        let lba = if c.byte(0) & 128 != 0 {
+                            disk.chs(c.r[CX], c.byte(6), c.byte(2))
+                        } else {
+                            Some(c.r[CX] as usize | ((c.r[DX] as usize) << 16))
+                        };
+                        let len = c.r[BX] as usize;
+                        if matches!(op, 5 | 6)
+                            && len != 0
+                            && len.is_multiple_of(512)
+                            && lba.is_some_and(|l| l + len / 512 <= disk.sector_count())
+                        {
+                            check(c, b, addr, len, op == 6)?;
+                        }
+                    }
+                } else {
+                    let drive = (c.byte(0) & 3) as usize;
+                    if matches!(op, 1 | 5 | 6) && drive < 2 && b.disks[drive].is_some() {
+                        let len = c.r[BX] as usize;
+                        check(c, b, addr, len, op != 5)?;
+                    }
+                }
+            }
+        }
+        0x1c => match ah {
+            0 => {
+                for i in 0..6 {
+                    check_seg(c, b, c.s[ES], c.r[BX].wrapping_add(i), false, true)?;
+                }
+            }
+            2 => check(c, b, 0x58a, 2, true)?,
+            _ => {}
+        },
+        _ => {}
     }
     Ok(())
 }
 
 /// NEC INT 1F/90: CX bytes, ES:BX GDT, SI=DI=0 (RBIL release 61).
 /// Only RAM data descriptors are accepted; invalid requests have no side effects.
-fn extended_copy(c: &Cpu, b: &mut Bus) -> bool {
+fn extended_copy(c: &Cpu, b: &mut Bus) -> ExecResult<bool> {
     if c.r[SI] != 0 || c.r[DI] != 0 {
-        return false;
+        return Ok(false);
+    }
+    if c.vm86() && c.r[BX] as u32 + 32 > 0x10000 {
+        return Err(ExecError::Fault(13));
     }
     let table = Cpu::phys(c.s[ES], c.r[BX]);
-    let descriptor = |offset: usize, write: bool| -> Option<usize> {
-        let p = table.checked_add(offset)?;
-        if p + 8 > 0xa0000 {
-            return None;
+    if table + 32 > 0xa0000 {
+        return Ok(false);
+    }
+    let mut descriptor = |offset: usize, writable: bool| -> ExecResult<Option<usize>> {
+        let p = table + offset;
+        memory::check(c, b, p, 8, false)?;
+        let mut raw = [0; 8];
+        for (i, byte) in raw.iter_mut().enumerate() {
+            *byte = read(c, b, p + i)?;
         }
-        let access = b.read(p + 5);
-        // Present, ordinary data, expand-up. Destination must be writable.
-        if access & 0xfc != 0x90 || (write && access & 2 == 0) || b.read(p + 6) != 0 {
-            return None;
+        let access = raw[5];
+        if access & 0x9c != 0x90 || (writable && access & 2 == 0) || raw[6] & 0x20 != 0 {
+            return Ok(None);
         }
-        let base = b.read16(p + 2) as usize
-            | ((b.read(p + 4) as usize) << 16)
-            | ((b.read(p + 7) as usize) << 24);
+        let base = u16::from_le_bytes([raw[2], raw[3]]) as usize
+            | ((raw[4] as usize) << 16)
+            | ((raw[7] as usize) << 24);
         let len = c.r[CX] as usize;
-        if len > b.read16(p) as usize + 1 {
-            return None;
+        let descriptor = SegmentCache::parse(raw);
+        if len != 0 && len as u64 > descriptor.limit as u64 + 1 {
+            return Ok(None);
         }
-        let end = base.checked_add(len)?;
-        if (base < 0xa0000 && end <= 0xa0000) || (base >= 0x100000 && end <= 0x400000) {
-            Some(base)
-        } else {
-            None
+        let Some(end) = base.checked_add(len) else {
+            return Ok(None);
+        };
+        Ok(
+            ((base < 0xa0000 && end <= 0xa0000) || (base >= 0x100000 && end <= 0x400000))
+                .then_some(base),
+        )
+    };
+    let (Some(source), Some(dest)) = (descriptor(0x10, false)?, descriptor(0x18, true)?) else {
+        return Ok(false);
+    };
+    let len = c.r[CX] as usize;
+    if !c.vm86() {
+        // This service intentionally addresses extended RAM without changing
+        // A20, matching its existing real-mode contract.
+        b.mem.copy_within(source..source + len, dest);
+    } else {
+        memory::check(c, b, source, len, false)?;
+        memory::check(c, b, dest, len, true)?;
+        for (address, writable) in [(source, false), (dest, true)] {
+            for i in 0..len {
+                let physical = memory::resolve(c, b, address + i, writable)?;
+                if !b.is_plain_ram(physical as u32) {
+                    return Ok(false);
+                }
+            }
         }
-    };
-    let (Some(source), Some(dest)) = (descriptor(0x10, false), descriptor(0x18, true)) else {
-        return false;
-    };
-    // Service accesses physical extended RAM without changing the caller's A20
-    // latch. The CPU still cannot address beyond its real-mode segment limits.
-    b.mem.copy_within(source..source + c.r[CX] as usize, dest);
-    true
+        let bytes: Vec<u8> = (0..len)
+            .map(|i| read(c, b, source + i))
+            .collect::<ExecResult<_>>()?;
+        for (i, byte) in bytes.into_iter().enumerate() {
+            write(c, b, dest + i, byte)?;
+        }
+    }
+    Ok(true)
 }
 
 /// PC-98 IDE uses the SASI BIOS DA/UA 00h (LBA) or 80h (zero-based CHS).
 /// Transfers use the same PIO task file and data buffer as guest port accesses.
-fn hdd_service(c: &mut Cpu, b: &mut Bus, m: &Memory) {
+fn hdd_service(c: &mut Cpu, b: &mut Bus) -> ExecResult<()> {
     let Some(disk) = b.ide.disk.as_ref() else {
         c.set_byte(4, 0x80);
-        carry(c, b, m, true);
-        return;
+        carry(c, b, true)?;
+        return Ok(());
     };
     let ah = c.byte(4);
     let op = ah & 15;
@@ -568,15 +705,15 @@ fn hdd_service(c: &mut Cpu, b: &mut Bus, m: &Memory) {
         c.r[CX] = disk.cylinders;
         c.r[DX] = ((disk.heads as u16) << 8) | disk.sectors as u16;
         c.set_byte(4, 0);
-        carry(c, b, m, false);
-        return;
+        carry(c, b, false)?;
+        return Ok(());
     }
     if matches!(op, 0 | 3 | 7 | 0xe) {
         b.output(0x74c, 4);
         b.output(0x74c, 0);
         c.set_byte(4, 0);
-        carry(c, b, m, false);
-        return;
+        carry(c, b, false)?;
+        return Ok(());
     }
     let lba = if c.byte(0) & 128 != 0 {
         disk.chs(c.r[CX], c.byte(6), c.byte(2))
@@ -591,8 +728,8 @@ fn hdd_service(c: &mut Cpu, b: &mut Bus, m: &Memory) {
             && matches!(op, 1 | 5 | 6)
     }) else {
         c.set_byte(4, 0x40);
-        carry(c, b, m, true);
-        return;
+        carry(c, b, true)?;
+        return Ok(());
     };
     let mut addr = Cpu::phys(c.s[ES], c.r[BP]);
     b.output(0x432, 0);
@@ -622,11 +759,11 @@ fn hdd_service(c: &mut Cpu, b: &mut Bus, m: &Memory) {
         if op != 1 {
             for i in 0..512 {
                 if op == 5 {
-                    let v = m.read(b, addr + i);
+                    let v = read(c, b, addr + i)?;
                     b.output(0x640 + (i & 1) as u16, v);
                 } else {
                     let v = b.input(0x640 + (i & 1) as u16);
-                    m.write(b, addr + i, v);
+                    write(c, b, addr + i, v)?;
                 }
             }
             if b.input(0x64e) & 1 != 0 {
@@ -639,5 +776,6 @@ fn hdd_service(c: &mut Cpu, b: &mut Bus, m: &Memory) {
     }
     b.output(0x74c, 0);
     c.set_byte(4, if ok { 0 } else { 0x40 });
-    carry(c, b, m, !ok);
+    carry(c, b, !ok)?;
+    Ok(())
 }

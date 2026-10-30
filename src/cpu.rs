@@ -759,10 +759,12 @@ impl Cpu {
         }
         let execution = self.execute(b).and_then(|()| {
             if std::mem::take(&mut b.firmware_request) {
-                crate::firmware::execute(self, b)?;
+                crate::firmware::execute_service(self, b)?;
             }
             Ok(())
         });
+        // A rejected OUT must not leave a pending host request for the next slot.
+        b.firmware_request = false;
         b.finish_cpu_memory(execution.is_ok());
         match execution {
             Ok(()) => {

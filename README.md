@@ -117,6 +117,8 @@ python3 tools/prepare_clts_fixture.py
 python3 tools/prepare_paging_fixture.py
 python3 tools/prepare_vm86_fixture.py
 python3 tools/prepare_vm86_bios_fixture.py
+python3 tools/prepare_vm86_firmware_fixture.py
+python3 tools/prepare_iret_wrap_fixture.py
 python3 tools/prepare_fpu_init_fixture.py
 python3 tools/prepare_pic_fixture.py
 python3 tools/prepare_pic_smm_fixture.py
@@ -781,3 +783,12 @@ source archives beside the generated image. See [file-level audit](docs/licenses
 - [Review and merge guidelines](docs/review-guidelines.md)
 - [Issue template](.github/ISSUE_TEMPLATE/issue.md) and [PR template](.github/pull_request_template.md)
 - [AI agent instructions](AGENTS.md)
+
+### Additional original CPU/firmware regression fixtures
+
+The original MIT IRET and VM86 firmware fixtures are included in the preparation
+commands above. They exercise architectural stack returns, paged firmware copies
+and protected keyboard waits independently of external application media. See
+the [Issue #113 independent regression evidence](docs/issue-113-independent-regressions.md)
+for the tested behavior, reproduction commands and limits of the inherited
+private retest observation.
