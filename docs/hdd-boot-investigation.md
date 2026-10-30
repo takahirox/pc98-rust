@@ -7,9 +7,11 @@
 which was administratively closed after PR #112. The investigation path for
 unavailable private media is complete and ready for review, with each mandatory
 criterion accounted for [below](#mandatory-acceptance-disposition). This continuation establishes
-neither a compatibility fix nor game boot, input or playability. Leave #113 open
-because its reported symptom remains unresolved; optional private access or
-discovery of an otherwise unevidenced defect is not a condition for reviewing
+neither a compatibility fix nor game boot, input or playability.
+[PR #114](https://github.com/takahirox/pc98-rust/pull/114) references #113 without
+a closing keyword, so merging it leaves #113 open for the unresolved reported
+symptom. Optional private access or discovery of an otherwise unevidenced defect
+is not a condition for reviewing
 these completed experiments. The sections below this continuation preserve the
 #111 checkpoint's evidence and validation; their access decisions describe that
 earlier run.
@@ -258,8 +260,8 @@ can compare its first differing bounded checkpoint with these controls; it is
 not required for CI or review. These unknowns limit the compatibility conclusions;
 they are not unfinished mandatory work when private media is unavailable. No
 independent large missing feature was found that would justify a speculative
-task. **Leave #113 open** and make no closing or game-playability claim. No human
-confirmation or post-merge check is required.
+task. **Leave #113 open** through a non-closing reference in PR #114 and make no
+game-playability claim. No human confirmation or post-merge check is required.
 
 ### Mandatory acceptance disposition
 
@@ -277,7 +279,7 @@ HDI now boots.
 | 4. Minimal fail-before/pass-after regression for every corrected emulator defect | Conditional; no correction warranted by the observations. All controls pass on the unchanged interpreter; no emulator defect was diagnosed or corrected. The intentional guest IRQ mask has a measured recovery path and is not a defect. Inventing a failure or speculative execution workaround would not satisfy this criterion. A demonstrated future defect will require its own independent regression. |
 | 5. Unreproduced behavior and optional private retest | Complete reporting. ZIP/HDI identity, components and first divergence remain unknown; the actual hang, shell and game were not tested. The independent controls establish only the results above. No commercial media, manual playthrough or age confirmation is required to accept them. |
 | 6. Fixture/license preparation and native, production-Wasm, asset and browser checks | Complete. [Revision validation](#revision-validation-and-remaining-limits) records all 46 preparations, 523 native tests, Clippy, formatting, production build/approved-assets audit and 162 real-Wasm Chromium tests across `/` and `/pc98-rust/`. The subsequent review independently passed fixture preparation, 523 native tests, Clippy, formatting, production build/asset audit and the ten focused HDD Chromium cases across both paths. No private media is tracked or required. |
-| 7. Honest completion and Issue lifecycle | Complete for this bounded investigation: ready for review, with no closing reference for #113. The reported hang remains unresolved, so #113 stays open. There is no evidenced independent large missing feature requiring another task and no administrative closure requiring a continuation at this checkpoint. |
+| 7. Honest completion and Issue lifecycle | Complete for this bounded investigation: ready for review. PR #114 uses a non-closing reference to #113, so merging it leaves the Issue open for the untested, unresolved private-image hang. Completion of the bounded experiments is not resolution of that compatibility report. There is no evidenced independent large missing feature requiring another task and no administrative closure requiring a continuation at this checkpoint. |
 
 There is no outstanding lawful agent-executable investigation justified by these
 observations in this bounded scope. Private retrieval, gameplay and finding a
