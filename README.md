@@ -130,6 +130,7 @@ python3 tools/prepare_opna_irq_fixture.py
 # This makes a minimal GPL guest disk; it downloads no emulator code.
 python3 tools/prepare_freedos.py
 python3 tools/prepare_freedos_hdd_fixture.py
+python3 tools/prepare_hdd_investigation.py
 python3 tools/prepare_font_fixture.py
 python3 tools/prepare_dos_apps.py
 python3 tools/prepare_cpu_fixture.py
@@ -169,9 +170,11 @@ independent GPL FreeDOS HDD shell control, exact kernel-handoff acceptance and
 `headless --progress --ap` summaries for silent loops and raw text-VRAM glyph
 selection. It does not establish a fix for private `aliceY3.hdi`; that image was
 not obtained or retested and game playability remains unconfirmed.
-The [Issue #113 continuation](docs/hdd-boot-investigation.md#issue-113-continuation-verified-listing-private-image-not-tested)
+The [Issue #113 continuation](docs/hdd-boot-investigation.md#issue-113-continuation-independent-alternatives-private-image-not-tested)
 verifies the exact PC-98 archive listing separately from the CD-image download
-and records the local access decision; the private-image hang remains unresolved.
+and records the local access decision. It also adds native/production-Wasm
+fragmented FAT12/FAT16, high-cylinder and original persistent-NUL keyboard/IRQ
+controls; the private-image hang remains unresolved.
 
 The original MIT [CLTS probe](guest/clts.asm) checks CR0.TS/#NM recovery in real
 and protected mode, all four supported x87 metadata forms, WAIT MP/TS and EM
