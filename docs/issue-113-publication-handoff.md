@@ -163,3 +163,24 @@ blocker is resolved, preserving both remote PR history and integrated main.
 ### Required post-merge verification
 
 None.
+
+## Publication recheck from checkpoint 48b9238 — 2026-10-30
+
+Read-only GitHub metadata confirms that PR #117 remains open, draft and unmerged
+at `8d8e7c896a4c0569d7305c517d90628ce8f15f66`, with `mergeable=false`.
+Its live base is `04cb05978486f7413bc79591487d9305f80fa140`; a local
+merge-base check confirms that this base is already an ancestor of the assigned
+checkpoint. No new integration is needed for that observed base. The outgoing
+checkpoint diff still has 28 text files, zero binary changes and passes
+`git diff --check`. Runtime suites were not repeated; the earlier 546 native and
+168 browser results remain inherited validation evidence.
+
+The previous automatic approval rejection remains unresolved. It rejected the
+tree upload as private diagnostic/provenance data. This node neither retries the
+upload nor substitutes another publication mechanism. There was no push, GitHub
+tree/commit/ref mutation, PR metadata update, merge or Issue closure. This node
+did not retrieve or test private media. The integrated fixes remain local, and
+publication of this worktree is **blocked/incomplete**. Resolving the existing
+publication approval is distinct from the already granted authorization for
+eligible private local-only retrieval and testing; no renewed media-access
+permission is requested.
