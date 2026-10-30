@@ -101,6 +101,23 @@ The fix node reran the complete native and browser checks listed above after
 integration; publication approval remains pending. GitHub CI for a future updated
 head remains unverified.
 
+### Publication node recheck — 2026-10-30
+
+The live PR metadata still reports an open draft at
+`8d8e7c896a4c0569d7305c517d90628ce8f15f66`. The assigned checkpoint is
+`81f3c65d90376b11234835a7e2c7757a743d250e`; its history includes both the
+integrated main commit and implementation commit `e98fc5b` above. The outgoing
+checkpoint diff contains 28 text files, zero binary changes, and passes
+`git diff --check`. Runtime checks were not repeated by this publication node;
+the integrated fix node's results above remain the validation evidence.
+
+The existing automatic-review rejection and pending publication question remain
+unresolved. This node made no upload attempt, branch update, PR metadata change,
+merge or Issue closure. Implementation files and this handoff remain in the
+official worktree for the next checkpoint. Publication is incomplete; the remote
+PR does not yet contain the integrated fixes. Resume only after the publication
+blocker is resolved, preserving both remote PR history and integrated main.
+
 ### Required post-merge verification
 
 None.
