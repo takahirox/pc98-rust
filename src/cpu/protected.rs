@@ -86,7 +86,7 @@ impl Cpu {
     pub(super) fn linear(&self, s: usize, off: u32) -> usize {
         self.segment_cache(s).base.wrapping_add(off) as usize
     }
-    pub(super) fn check_access(
+    pub(crate) fn check_access(
         &self,
         b: &mut Bus,
         s: usize,
@@ -284,6 +284,10 @@ impl Cpu {
     }
     /// Synthetic firmware tail transfers obey the same real CS reload contract.
     pub(crate) fn reload_real_code(&mut self, selector: u16) {
+        if self.vm86() {
+            self.load_vm86_segment(CS, selector);
+            return;
+        }
         self.s[CS] = selector;
         if let Some(old) = self.segment_caches[CS] {
             self.segment_caches[CS] = Some(SegmentCache {

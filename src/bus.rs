@@ -49,6 +49,8 @@ pub struct Bus {
     pub text_enabled: bool,
     pub unknown_ports: std::collections::BTreeSet<u16>,
     pub firmware_request: bool,
+    // One synthetic BIOS sector only; every scatter address is preflighted.
+    pub(crate) firmware_dma: Option<Vec<usize>>,
     pub(crate) interval: Option<crate::firmware::IntervalTimer>,
     // Protected CPU execution uses this journal. DMA and devices continue to
     // call the physical bus outside an instruction, with no virtual addresses.
@@ -207,6 +209,7 @@ impl Bus {
             text_enabled: true,
             unknown_ports: Default::default(),
             firmware_request: false,
+            firmware_dma: None,
             interval: None,
         }
     }
@@ -1114,7 +1117,16 @@ impl Bus {
                             }
                             let mut terminal_count = false;
                             for i in 0..count {
-                                let addr = self.dma.address(2);
+                                let addr = if let Some(map) = &self.firmware_dma {
+                                    let Some(&address) = map.get(i) else {
+                                        st0 |= 64;
+                                        st1 = 16;
+                                        break;
+                                    };
+                                    address
+                                } else {
+                                    self.dma.address(2)
+                                };
                                 if write {
                                     let v = self.read(addr);
                                     self.disks[d].as_mut().unwrap().bytes[s.offset + i] = v;

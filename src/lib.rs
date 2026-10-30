@@ -97,15 +97,9 @@ impl Machine {
             if self.error.is_some() {
                 break;
             }
-            let mut result = self
+            let result = self
                 .cpu
                 .step_with_observer(&mut self.bus, &mut before_instruction);
-            if self.bus.firmware_request {
-                self.bus.firmware_request = false;
-                if result.is_ok() {
-                    result = firmware::service(&mut self.cpu, &mut self.bus)
-                }
-            }
             self.bus.tick(8);
             done += 1;
             if let Err(e) = result {
