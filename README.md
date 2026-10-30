@@ -187,11 +187,9 @@ the same.
 The [HDD investigation](docs/hdd-boot-investigation.md) provides an
 independent GPL FreeDOS HDD shell control, exact kernel-handoff acceptance and
 `headless --progress --ap` summaries for silent loops and raw text-VRAM glyph
-selection. Private `aliceY3.hdi` testing diagnosed real-mode IRET wrapping,
-paged VM86 firmware access and extended-copy descriptor defects. Their corrections
-now have cold/reset DOS command and bounded game-input evidence; full game
-playability is not claimed. The report separates current results from historical
-access blockers and independent controls. Private media never enters CI or web/.
+selection. Its historical independent controls do not resolve the reported
+private HDI boot/input failure. The [current publication scope](docs/hdd-boot-investigation.md#publication-scope--2026-10-30)
+keeps Issue #113 open. Private media is excluded from CI and web assets.
 
 The original MIT [VM86 BIOS probe](guest/vm86_bios.asm) reproduces the paged
 VM86 timer firmware stop, then checks translated BIOS work areas, buffer faults,
@@ -200,7 +198,7 @@ and PG=0, cold/reset. Prepare it with
 `python3 tools/prepare_vm86_bios_fixture.py`; native and production-Wasm Chromium
 checks use the same pinned disk at both roots. See the
 [supported contract and validation evidence](docs/vm86-bios-validation.md).
-The separate HDD investigation records the private Issue #113 boot/input retest.
+These independent controls do not establish recovery of the Issue #113 boot/input path.
 
 The original MIT [CLTS probe](guest/clts.asm) checks CR0.TS/#NM recovery in real
 and protected mode, all four supported x87 metadata forms, WAIT MP/TS and EM
@@ -243,9 +241,7 @@ Prepare offline with `python3 tools/prepare_vm86_fixture.py`; run
 `npm test`. The [manifest](fixtures/vm86-manifest.json) pins source/license/media
 and exact context/guards; see [capabilities and limits](docs/protected-mode.md#i486-virtual-8086-mode-issue-109)
 and [validation](docs/vm86-validation.md). This does not establish DOS-extender,
-Windows or general commercial-game compatibility. See the
-[current private investigation](docs/hdd-boot-investigation.md) for its separate,
-bounded boot/input outcome.
+Windows or general commercial-game compatibility. Issue #113 remains open.
 
 The original MIT [VM86 BIOS guest](guest/vm86_firmware.asm) covers paged BIOS work
 areas and stack, recoverable service page faults, noncontiguous RTC buffers,

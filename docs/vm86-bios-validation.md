@@ -5,9 +5,8 @@ including PG=1. Ordinary protected-mode requests still report
 `synthetic real-mode firmware requested from protected mode`.
 PR #119 established this independent service baseline without accessing private
 media. Its integration with the Issue #113 correction preserves both original
-fixtures and the BIOS-only scatter path. The separate
-[HDD investigation](hdd-boot-investigation.md#current-restart--2026-10-30-bootinput-correction-verified)
-records actual private boot/input retests; keep #113 open for publication/review.
+fixtures and the BIOS-only scatter path. These independent controls do not
+establish recovery of the reported private boot/input failure; keep #113 open.
 
 ## Supported contract
 

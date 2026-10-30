@@ -1684,8 +1684,8 @@ uses its FIFO, scheduler and channel-2 progression. Raw guest DMA retains physic
 addressing and its existing boundary behavior. Physical DMA does not set CPU page
 dirty bits. IDE PIO buffers can also span noncontiguous pages. The independent
 [firmware guest](../guest/vm86_firmware.asm) and native matrices verify this
-contract without private media. See the [investigation](hdd-boot-investigation.md)
-for the separately verified private boot/input outcome.
+contract without private media. These independent checks do not establish
+recovery of the reported Issue #113 boot/input failure.
 
 ### BIOS held-key bitmap
 

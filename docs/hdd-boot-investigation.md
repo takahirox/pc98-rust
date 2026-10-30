@@ -1,98 +1,44 @@
 # FreeDOS(98) HDD investigation — Issues #111 and #113
 
-## Current restart — 2026-10-30: boot/input correction verified
+## Publication scope — 2026-10-30
 
-Related to #113 and #118. PR #114 is historical independent-control work.
-The implementation now corrects real-mode IRET operand wrapping, paged VM86
-synthetic firmware access and extended-copy descriptor validation. Keep #113
-open for review; no complete game compatibility or playthrough is claimed.
+**Issue #113 remains open and this publication is incomplete.** PR #114 is
+historical baseline work. The independent controls below do not resolve the
+reported private HDI boot/input failure.
 
-### Source verification and prior access decision
+The earlier access decision was unsupported: retrieval had not been attempted,
+and no specific environment prohibition or reproducible download failure had
+been established. The existing owner authorization is unchanged. This
+publication node retrieved no private media and performed no private retest.
+No private-media observations or component inventories are added here.
 
-The [live distributor listing](https://alicefree.fastlast.org/) was checked on
-2026-10-30. Its `アリスの館3(PC-98版)` link targets the exact user-provided
-[PC-98 ZIP](https://d1.alicefree.fastlast.org/d/alice_yakata3.zip).
-The separate CD-image listing targets `alice_yakata3_CD.zip`/`.rar`; it is not
-the selected archive. This publication node checked listing links only and did
-not retrieve media.
+This revision publishes original emulator corrections and independently runnable
+regressions. Upstream verification reports 546 native and 168 Chromium cases
+passing, with formatting, Clippy, production Rust/Wasm builds and the approved
+asset audit also passing. Runtime source is unchanged by this publication
+revision; those checks were not repeated for its documentation edits. These
+results establish the independent regressions only, without a new private-image
+reproduction, retest or compatibility claim from this node.
 
-The current [official conditional declaration](https://www.alicesoft.com/about/#cont08)
-retains copyright, excludes distribution to under-18 recipients, requires the
-notice and current conditions, prohibits profitable distribution and restricts
-extracted-asset distribution. Game distribution terms do not establish rights
-for bundled OS, drivers or utilities. No bundled media is redistributed here.
+The following sections preserve the historical public baseline. Their access
+assessment and completion wording are superseded by the restart objective in
+[Issue #113](https://github.com/takahirox/pc98-rust/issues/113).
 
-The earlier Run initially stopped without attempting retrieval because age and
-environment eligibility had not been established. Its later component-provenance
-uncertainty was also treated as an execution prohibition without identifying an
-applicable term. These were assumptions, not a demonstrated download failure or
-verified environment ban. Existing [owner authorization](https://github.com/takahirox/pc98-rust/issues/113#issuecomment-6513464041)
-and the [adult operator's confirmation](https://github.com/takahirox/pc98-rust/issues/113#issuecomment-6516387665)
-were subsequently reused for eligible private local work. They do not certify an
-AI's independent age or waive third-party terms. Exact component attribution
-and redistribution rights remain qualified; no new permission is inferred.
+## Issue #113 continuation: independent alternatives, private image not tested
 
-### Bounded outcome
-
-The upstream implementation and fix nodes report actual private retrieval,
-inspection and reproduction, followed by cold/reset DOS command execution and
-bounded game-input response after correction. This publication node has not
-repeated private testing. Full playability remains unverified.
-
-Only this short technical outcome is published. Private component inventories,
-binary comparisons, guest addresses, code, traces, screenshots, hashes and raw
-logs are excluded from the publication payload and retained outside the checkout.
-The historical independent controls below are distinct from the private retest.
-
-### Corrections and independent evidence
-
-- Real-mode IRET checks each operand against its segment limit and wraps the
-  stack offset between operands. An operand that straddles the limit still
-  faults. Protected-mode and VM86 frame checks remain enforced.
-- Supported VM86 BIOS requests execute through user paging checks with
-  restartable faults. Guest mappings apply to work areas, buffers, callbacks,
-  keyboard waits, Graph LIO initialization and extended copies. Unsupported
-  protected-mode requests retain explicit errors.
-- Extended copies decode valid 386 descriptor limits and page granularity,
-  retaining reserved-bit, effective-limit and RAM-range validation. Integration
-  preserves main's BIOS-only scatter transfers and the original monitor's
-  architectural HLT fault handling.
-
-The original MIT [IRET guest](../guest/iret_wrap.asm),
-[VM86 firmware guest](../guest/vm86_firmware.asm),
-[VM86 BIOS guest](../guest/vm86_bios.asm) and native CPU/device regressions use
-no private guest bytes or third-party emulator implementation. Their fixture
-manifests pin only independently authored sources and artifacts. See the
-[VM86 service contract and independent validation](vm86-bios-validation.md).
-The same descriptor regression fails on integrated main and passes with the
-correction; upstream records also establish fail-before/pass-after evidence for
-IRET wrapping and paged firmware access.
-
-### Validation evidence and publication scope
-
-Current main `a33bca6f503c35d9e1aa213497460f260f015abc` is integrated.
-The upstream fix nodes report all 49 documented fixture preparations, seven
-fixture-fetch tests, media/font checks, 546 native tests, Clippy with warnings
-denied, formatting, native release and production Rust/Wasm builds passing.
-The approved-assets audit passed with ten assets. A complete production-Wasm
-Chromium run passed 168 tests across `/` and `/pc98-rust/`; the latest fix node
-reran the six IRET/VM86 cases at both roots successfully after installing the
-pinned browser. The full 168-test result is inherited evidence.
-
-The publication revision changes documentation only. Runtime checks are not
-repeated for that edit. Whitespace, links, outgoing text-file scope and absence
-of private media must be checked before updating the draft PR. Publication
-approval and remote-head verification are recorded in the [handoff](issue-113-publication-handoff.md).
-No closing keywords, merge, or new claim of complete game playability is intended.
-Required post-merge verification: None.
-
-## PR #114 baseline: independent alternatives, private image not tested
-
-The remaining sections preserve historical #113/#111 evidence and validation.
-Their statements about completed bounded investigation and review readiness
-describe PR #114's earlier scope, superseded by the current restart objective;
-they do not establish the current correction; the new private evidence is
-recorded above.
+**Bounded mandatory investigation complete; the reported hang remains unresolved.**
+[Issue #113](https://github.com/takahirox/pc98-rust/issues/113) continues #111,
+which was administratively closed after PR #112. The investigation path for
+unavailable private media is complete and ready for review, with each mandatory
+criterion accounted for [below](#mandatory-acceptance-disposition). This continuation establishes
+neither a compatibility fix nor game boot, input or playability.
+[PR #114](https://github.com/takahirox/pc98-rust/pull/114) references #113 without
+a closing keyword, so merging it leaves #113 open for the unresolved reported
+symptom. Optional private access or discovery of an otherwise unevidenced defect
+is not a condition for reviewing
+these completed experiments. The sections below this continuation preserve the
+#111 checkpoint's evidence and validation; their access decisions describe that
+earlier run.
 
 ### Source verification and access decision (2026-10-30)
 
