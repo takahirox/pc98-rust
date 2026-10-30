@@ -2,451 +2,89 @@
 
 ## Current restart — 2026-10-30: boot/input correction verified
 
-The current [Issue #113 objective](https://github.com/takahirox/pc98-rust/issues/113)
-requires addressing the actual HDI boot/input failure. Merged
-[PR #114](https://github.com/takahirox/pc98-rust/pull/114) supplies existing
-independent controls only. The IRET, paged VM86 firmware and extended-copy
-corrections below now have actual private cold/reset shell-command and game-input
-evidence. **Full game playability is not claimed; #113 stays open for review.**
+Related to #113 and #118. PR #114 is historical independent-control work.
+The implementation now corrects real-mode IRET operand wrapping, paged VM86
+synthetic firmware access and extended-copy descriptor validation. Keep #113
+open for review; no complete game compatibility or playthrough is claimed.
 
-The initial restart's assigned checkpoint was
-`3636778cb3f18a7e29233a3b2b3ff3116c5a6969`.
-Read-only `git ls-remote https://github.com/takahirox/pc98-rust.git refs/heads/main`
-confirmed current main at `04cb05978486f7413bc79591487d9305f80fa140`;
-`git diff 04cb059 HEAD --stat` was empty before this restart. PR #114's merge
-`83f120d38681d22fe8f87fb64ba31b39bea75e19` is already in this history.
-No upstream technical diagnosis was supplied.
+### Source verification and prior access decision
 
-### Integration with current main — review revision
+The [live distributor listing](https://alicefree.fastlast.org/) was checked on
+2026-10-30. Its `アリスの館3(PC-98版)` link targets the exact user-provided
+[PC-98 ZIP](https://d1.alicefree.fastlast.org/d/alice_yakata3.zip).
+The separate CD-image listing targets `alice_yakata3_CD.zip`/`.rar`; it is not
+the selected archive. This publication node checked listing links only and did
+not retrieve media.
 
-The fix node fetched `main` at
-`a33bca6f503c35d9e1aa213497460f260f015abc` (merged PR #119) and integrated it
-locally. Both independent VM86 guests and the IRET-wrap fixture remain in README
-and CI preparation. The overlapping implementations now retain #119's BIOS-only
-floppy scatter map, request-wide fault preflight and write-access timer fault
-codes, together with #113's descriptor-limit correction, mapped extended copies,
-GINIT accesses and architectural STI/HLT keyboard wait. Raw DMA remains physical.
-The original #119 monitor was extended to validate and resume the ROM HLT #GP;
-its four deliberate page faults retain separate exact checks and trap accounting.
-Unsupported-service controls now select services outside the expanded contract.
+The current [official conditional declaration](https://www.alicesoft.com/about/#cont08)
+retains copyright, excludes distribution to under-18 recipients, requires the
+notice and current conditions, prohibits profitable distribution and restricts
+extracted-asset distribution. Game distribution terms do not establish rights
+for bundled OS, drivers or utilities. No bundled media is redistributed here.
 
-The current public listing returned HTTP 200 and retained the exact PC-98 ZIP
-link and distinct CD-image link. The official declaration was reread. Existing
-adult-operator confirmation, owner authorization and the recorded access reassessment
-remain applicable; no new media download or permission assertion was needed.
-The prior Run's initial no-download decision was an unestablished eligibility/
-environment assumption, not an observed server failure or a verified prohibition.
-The subsequent VM86 and descriptor failures were actual technical constraints.
+The earlier Run initially stopped without attempting retrieval because age and
+environment eligibility had not been established. Its later component-provenance
+uncertainty was also treated as an execution prohibition without identifying an
+applicable term. These were assumptions, not a demonstrated download failure or
+verified environment ban. Existing [owner authorization](https://github.com/takahirox/pc98-rust/issues/113#issuecomment-6513464041)
+and the [adult operator's confirmation](https://github.com/takahirox/pc98-rust/issues/113#issuecomment-6516387665)
+were subsequently reused for eligible private local work. They do not certify an
+AI's independent age or waive third-party terms. Exact component attribution
+and redistribution rights remain qualified; no new permission is inferred.
 
-The integrated native release was privately retested using the existing separate
-unmodified working HDI. Cold and reset both reached a DOS prompt and produced a
-standalone `ok` line from `ECHO OK`. Each reported 900 expected ROM STI/HLT #GP
-traps, zero other CPU faults and no host error. Paired game runs were advanced
-100,000,000 slots before input: their frames initially matched and still matched
-after Escape; injecting Enter into only one run then changed its rendered frame.
-Cold and reset repeated that outcome with zero CPU faults and no host error.
-Working media remained unchanged and matched the preserved original. This is
-bounded boot/input evidence, not a full playthrough or a claim about every profile.
-All harnesses, frames, comparisons and detailed diagnostics stayed outside Git.
+### Bounded outcome
 
-Validation of the integrated tree:
+The upstream implementation and fix nodes report actual private retrieval,
+inspection and reproduction, followed by cold/reset DOS command execution and
+bounded game-input response after correction. This publication node has not
+repeated private testing. Full playability remains unverified.
 
-- All 52 documented Python preparation/check commands passed, including seven
-  fixture-fetch unit tests and matching complete FreeDOS sources/license copies.
-  Both original VM86 fixtures and IRET media were rebuilt and manifest-checked
-  after integration; all 49 fixture preparations are present in both README and CI.
-- `cargo test --locked`: **546 passed**, zero failed or ignored.
-  An isolated archive of current main with the same original descriptor regression
-  fails on a valid 20-bit-limit descriptor; the integrated revision passes it.
-- `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`, whitespace,
-  documentation file-link checks and tracked-media/archive/dump audits passed.
-- Production native and Rust/Wasm builds passed. `npm test -- --workers=2`
-  includes the reproducible media/font checks and asset audit: **10 approved
-  publication assets**, with no private media or regression disks in `web/`.
+Only this short technical outcome is published. Private component inventories,
+binary comparisons, guest addresses, code, traces, screenshots, hashes and raw
+logs are excluded from the publication payload and retained outside the checkout.
+The historical independent controls below are distinct from the private retest.
 
-- `npm test -- --workers=2`: **168 Chromium tests passed** at `/` and
-  `/pc98-rust/`, including both original VM86 guests, IRET wrapping, legal DOS
-  shell/keyboard and HDD controls, cold/reset. No skipped cases or final-run
-  retries. The pinned Chromium shell installer stalled during extraction;
-  integrity/path-checked official build 1194 was extracted with system `unzip`,
-  then Chromium 141.0.7390.37 executed the full suite on the standard local ports.
+### Corrections and independent evidence
 
-Publication remains separate: PR #117's published head is still
-`8d8e7c896a4c0569d7305c517d90628ce8f15f66`. This node performs no push, GitHub PR merge,
-Issue closure or publication-approval retry. The existing human publication
-question remains pending; see the [handoff](issue-113-publication-handoff.md).
+- Real-mode IRET checks each operand against its segment limit and wraps the
+  stack offset between operands. An operand that straddles the limit still
+  faults. Protected-mode and VM86 frame checks remain enforced.
+- Supported VM86 BIOS requests execute through user paging checks with
+  restartable faults. Guest mappings apply to work areas, buffers, callbacks,
+  keyboard waits, Graph LIO initialization and extended copies. Unsupported
+  protected-mode requests retain explicit errors.
+- Extended copies decode valid 386 descriptor limits and page granularity,
+  retaining reserved-bit, effective-limit and RAM-range validation. Integration
+  preserves main's BIOS-only scatter transfers and the original monitor's
+  architectural HLT fault handling.
 
-### Access audit after the operator's age answer
-
-The live Issue and its comments were read, including the
-[existing owner authorization](https://github.com/takahirox/pc98-rust/issues/113#issuecomment-6513464041).
-Owner permission for eligible private local testing is established and was not
-requested again. The earlier Run's actual recorded reason for stopping was
-unestablished age eligibility and environment permission, as recorded in its
-[access decision](#source-verification-and-access-decision-2026-10-30).
-It did not attempt an archive request. That record demonstrates neither a
-download failure nor an applicable environment prohibition.
-
-The initial restart reread the live [listing](https://alicefree.fastlast.org/) and
-inspected its HTML links without requesting archive media. The PC-98 entry still
-targets <https://d1.alicefree.fastlast.org/d/alice_yakata3.zip>; the separate CD
-entry targets <https://d1.alicefree.fastlast.org/d/zip/alice_yakata3_CD.zip>.
-The listing asks under-18s not to use its files. The current
-[official declaration](https://www.alicesoft.com/about/#cont08) still lists the
-game, retains copyright, and prohibits supplying AliceSoft-brand software to
-under-18s. It identifies its latest revision as 2019-01-21. The other conditional
-distribution requirements remain applicable; the declaration does not establish
-licenses for unidentified bundled OS, driver, utility or font components.
-
-The [operator's answer](https://github.com/takahirox/pc98-rust/issues/113#issuecomment-6516387665)
-confirms that the requesting human operator is at least 18. **That question is
-answered; no renewed age or owner-permission request is pending.** It does not
-certify the independent eligibility of an AI service or waive component terms.
-Review revision `e1a2820b68b08603705fa8b5ae8756459d911a6a` reassessed the actual
-environment: the supplied rules permit local shell/filesystem and network
-operations, authorize this private inspection for the adult operator, and contain
-no explicit prohibition on this compatibility investigation. No age/access gate
-was bypassed and no independent human age was asserted for the agent. The
-earlier generic environment concern was not a verified restriction.
-
-### Prior private retrieval and component inspection — 2026-10-30
-
-Before retrieval, this revision rechecked the live listing over HTTP (200), its
-exact PC-98/CD links, and the current official declaration linked above. The
-previously missing operator age fact is resolved. Private retrieval and metadata/
-license inspection proceeded on that operator's behalf under the existing
-authorization. Those earlier revisions stopped before guest execution; the
-reassessment and actual execution below supersede that stopping decision.
-
-The exact PC-98 ZIP request returned **HTTP 200**. ZIP integrity passed for all
-four members. There is exactly one HDI member, with basename **`aliceY3.hdi`**.
-The ZIP, extracted original, separate identical working copy, filesystem
-inventory and downloaded public component packages are outside the checkout in
-a private directory. No private hashes, payloads, game text, screenshots,
-disassembly or execution traces are published. This verifies the current
-archive's target member, not byte identity with the user's original local file.
-
-Short format observations from a read-only parser:
-
-- HDI: 4,096-byte header, 11,141,120-byte payload, 320 cylinders, 4 heads,
-  17 physical sectors/track, 512 bytes/physical sector; header and file extent
-  agree. Partition 0 starts at physical LBA 68.
-- FAT12 BPB: 1,024-byte logical sectors, 4 sectors/cluster, 1 reserved sector,
-  2 FAT copies of 4 logical sectors each, 1,024 root entries, 10,846 volume
-  logical sectors. The logical/physical sector-size difference is an observation,
-  **not a diagnosed emulator defect**.
-- The private FAT reader extracted an inventory of 52 files. Boot/support files
-  include `KERNEL.SYS`, FreeCOM `COMMAND.COM`, `FDXMS.SYS`, `EMM386.EXE` and
-  `XMZ.SYS`. CONFIG references FDXMS and EMM386; XMZ is present but not referenced
-  there. No separate font file was identified in this inventory; that does not
-  certify all game assets or establish every component's rights.
-
-Component rights were inspected separately from AliceSoft's game declaration:
-
-| Component | Evidence and remaining limit |
-| --- | --- |
-| AliceSoft game | Listed in the current conditional declaration; copyright is retained. No game or extracted asset redistribution is authorized by this work. |
-| FDXMS | The private binary exactly matches `FDXMS.SYS` in the author's [2004-09-10 port package](http://retropc.net/tori/freedos/fdxms_20040910.zip), which includes source and GPL notices. Its identifier is 0.9.Sand, dated 2002-12-30. This component has a concrete upstream license match. |
-| Kernel/partition loader | The archive attributes FreeDOS(98), and the partition loader contains the FreeDOS identifier. All three kernel packages on the author's page were inspected privately: [2028 dated 2004-09-10](http://retropc.net/tori/freedos/kernel_20040910.zip), [2028 dated 2005-07-24](http://retropc.net/tori/freedos/kernel_2028_20050724.zip), and [2035a dated 2005-07-25](http://retropc.net/tori/freedos/kernel_2035a_20050725.zip). All include GPL sources/notices, but none of their supplied kernel binaries equals the private one. These comparisons leave the exact build unidentified; they do not establish a non-GPL origin or a use prohibition. The separate partition loader also remains unmatched. |
-| EMM386 | The private version identifier is EMM386(98) 1.14, dated 2005-02-23. The author's [2005-02-23 package](http://retropc.net/tori/freedos/emm386_20050223.zip) contains an Artistic License and sources, but neither supplied executable exactly matches the private binary. Its exact variant/provenance remains unverified; it must not simply be labelled GPL because FreeDOS is bundled. |
-| Disk IPL | The disk IPL has an `IPL1` identifier, which does not identify its author or license. A privately assembled public-domain BTNPART MBR candidate also has this identifier but does not match the supplied IPL. No applicable terms for the supplied IPL were established. |
-| XMZ | Private identifier inspection is consistent with ZOBplus Hayami's XMZ v1.02 XMS driver. No accompanying XMZ license notice was found. The historical distribution host identified by its API documentation no longer resolves; identification alone does not establish use terms. XMZ is not referenced by CONFIG, so this is not evidence that it causes or participates in the boot hang. |
-
-The archive's ancillary files comprise the game declaration and a short FreeDOS/
-Anex86 note. Neither establishes the missing IPL/XMZ terms. The filesystem has
-two text-notice candidates; neither supplies a component license notice. These
-are inspection results, **not proof of infringement or a prohibition on every
-FreeDOS build**. Matching source packages were sought at the
-[port author's page](http://retropc.net/tori/freedos/) and the
-[FDXMS author's page](https://www.ludd.ltu.se/~ams/freedos/fdxms/), rather than
-assuming all support code shared the game's permission. The two historical
-Nifty source URLs in the ancillary note failed DNS resolution. The port site's
-HTTPS handshake failed, but its HTTP source page and packages were accessible;
-that TLS error did not prevent the component audit or the archive download.
-
-### Review follow-up: remaining upstream candidates
-
-The review correctly identified an untested lead: the live port-author page also
-lists `kernel_2035a_20050725.zip`. This revision retrieved it privately over HTTP
-(200), validated ZIP integrity, and inspected its kernel, build instructions,
-boot/SYS sources and GPLv2-or-later notices. Integrity was also rechecked for both
-2028 packages. The 2035a binary is not the private kernel, and its boot sources
-do not identify the supplied disk-level IPL. All three listed kernel candidates
-have now been checked; the earlier two-package search was insufficient.
-
-The private kernel contains a UPX marker. The public `kernel/makefile` and
-`utils/exeflat.c` describe compression followed by EXE flattening. A private
-unpacking attempt with checksum-verified Homebrew UPX 5.3.0 returned
-`NotPackedException: not packed by UPX`; no unpacked output was produced and no
-guest code was executed. Thus a compressed/flattened build remains a provenance
-lead, not a verified kernel identity. Direct byte inequality alone cannot decide
-its license. Both executables in the EMM386 package, including the Anex86
-variant, were compared again; neither matches the supplied executable.
-
-Component-specific investigation also followed the current
-[FreeDOS(98) maintainer's page](https://bauxite.sakura.ne.jp/software/dos/freedos.htm).
-The public-domain [BTNPART IPL source](https://github.com/lpproj/btnpart/blob/ff3baa4a114d02d5f5e895bce6df7b7f4b20640b/btnp_mbr.nas)
-was assembled with NASM outside the checkout and compared with the supplied
-512-byte disk IPL: no match. The GPL
-[NEC98 partition-loader source](https://github.com/lpproj/fdkernel/blob/fa81d6e7c524f95f4ed6a903c28bf98817d80a9e/nec98/boot/boot.asm)
-was assembled separately; its 512 bytes do not match the supplied partition
-loader's first 512 bytes even excluding BPB bytes 3–61. These are negative
-candidate comparisons, not proof about every historical variant. Neither source
-is an emulator implementation, and no source or compiled component was imported
-into this repository or substituted into the private image.
-
-[XMZ's API documentation](https://fd.lod.bz/rbil/interrup/memory/2f4310.html)
-identifies its author/version and historical distribution directory
-`ftp://ftp.tohoku.ac.jp/pub/msdos/Memory/xmz/`. A local DNS lookup of
-`ftp.tohoku.ac.jp` failed with “nodename nor servname provided, or not known”.
-The API documentation supplies no XMZ use license. This is a specific unavailable
-component source, not a failure to retrieve the game ZIP.
-
-### Owner clarification: reassessment of the asserted use restriction
-
-The [latest owner clarification](https://github.com/takahirox/pc98-rust/issues/113#issuecomment-6516921898)
-requests public component research and distinguishes missing provenance from an
-actual restriction on private use. The previous section's negative binary
-comparisons remain valid, but the previous conclusion that they prevented any
-execution was unsupported. No applicable private-execution prohibition was found
-in the checked sources or environment rules. Existing adult-operator confirmation
-and local-testing authorization remain sufficient for this bounded investigation;
-no new age, owner-permission or component-author confirmation was requested.
-This is not certification of every component's origin or redistribution rights.
-
-The live distributor listing was rechecked (HTTP 200, unchanged exact PC-98 and
-separate CD links), along with the official declaration. Further public-source
-checks covered the port author's live HTTP page, its already downloaded GPL
-kernel/FDXMS sources and Artistic EMM386 notice, the current maintainer's page,
-and historical-source leads. GPLv2 section 0 explicitly excludes running from its
-restrictions; source-provision requirements for distribution do not automatically
-restrict private execution. The Artistic notice separately describes customary
-use and distribution; exact build identity is still unverified. Neither permits
-relabelling an unknown IPL as GPL. The public-domain BTNPART candidate remains a
-negative comparison, not an identification of that IPL.
-
-Historical index requests for the two Nifty paths in the archive's note and the
-Tohoku XMZ directory did not recover notices (HTTP failure/timeouts). Public
-searches also located [Namikaze's ZOBplus-associated author page](https://www.namikaze.org/software/98dos/),
-which describes another driver's release, not XMZ's terms. Neither a dead host
-nor another driver's notice establishes an XMZ restriction or license. **IPL/XMZ
-provenance remains unresolved; no specific term prohibiting this private boot
-was identified.** XMZ is absent from CONFIG and is not evidence for this failure.
-These unresolved redistribution/attribution questions are retained without
-turning them into an unsupported execution ban.
-
-### Actual Ap/IDE reproduction and correction — 2026-10-30
-
-The existing separate, unmodified working HDI was booted privately with the
-original Rust interpreter and a 20,000,000-slot budget:
-
-```sh
-cargo run --locked --release --bin headless -- /private/local/working.hdi 20000000 --progress --ap
-```
-
-The path is illustrative. All detailed logs, inventories, private diagnostic
-harnesses and media remain outside the checkout. Only short architectural
-observations are reported here; no guest code, media payloads, disassembly or detailed traces were
-supplied to a model or external service.
-
-Before correction, the reported persistent display and lack of Enter response
-were reproduced. There were **zero literal `3F` cells and 1,973 NUL fallback
-cells**, with no host error. The first CPU fault occurred at slot 1,211,605:
-a real-mode synthetic BIOS IRET attempted to return through a frame at SP=FFFC.
-The guest's software interrupt had entered at SP=0002, wrapping between word
-pushes. The return incorrectly validated all six bytes as one contiguous
-operand. It raised #SS, then repeatedly faulted returning from the default
-exception handler. At 20,000,000 slots there were 6,262,799 faults; Enter remained
-queued with no further IRQ acknowledgements. This distinguishes an actual
-execution failure from a renderer-only interpretation of the question marks.
-No IDE read error or protected-mode transition preceded that first fault.
-
-The [Intel486 PRM (1992), IRET pp.26-173–177](https://manuals.plus/m/d86207aaebd9b10464f2058efc61559e6141d3b072db100e89bfe17c8187e143)
-specifies successive pops in real-address mode. The correction preflights each
-real-mode return operand independently and applies the stack address size
-between operands. Each individual word/dword must still fit its segment;
-protected-mode and VM86 contiguous-frame checks remain intact. The read-only
-IRET bounds metadata uses the same distinction. No guest-specific branch,
-filename check, code substitution or forced guest state was added.
-
-The new original MIT [IRET guest](../guest/iret_wrap.asm) exercises a BIOS
-interrupt at SP=0002, two word frames and two dword frames that wrap between
-operands, saved carry, final SP and result guards. Its
-[pinned manifest](../fixtures/iret-wrap-manifest.json) and offline
-[preparation](../tools/prepare_iret_wrap_fixture.py) contain only original test
-material. Native and production-Wasm tests boot it cold and after reset. A
-separate CPU matrix covers valid wraps, rejected dwords that straddle the limit,
-restart IP, intact guard memory and diagnostic bounds. Both the guest and CPU
-matrix failed against the unchanged assigned checkpoint and pass after the fix.
-
-### Previous technical blocker: VM86 synthetic BIOS service
-
-The affected private HDI was rerun after correction, cold and after reset, with
-the same 20,000,000-slot ceiling. Both runs passed the prior fault and kernel
-handoff, retired **5,025,484 instructions with zero CPU faults**, initialized
-EMM386 and entered paged VM86 execution. Both then stopped at the existing
-`synthetic real-mode firmware requested from protected mode` guard in
-[firmware service](../src/firmware.rs). The pending service is timer IRQ0's
-INT 08h thunk invoked in VM86, rather than the original IRET loop. There were
-500 IRQ acknowledgements; the mounted disk remained byte-for-byte unchanged.
-An Enter submitted after this host stop cannot be serviced. **A responsive DOS
-shell, command execution and game launch/input have not been established.**
-
-Removing the firmware guard alone is not a safe correction: firmware currently
-uses direct Bus/physical accesses, whereas VM86 requires guest paging and
-protection semantics, including BIOS work areas, buffers, saved flags, interrupt
-returns and callbacks. That revision tracked the remaining work in [task #118](https://github.com/takahirox/pc98-rust/issues/118):
-a cohesive VM86-compatible synthetic BIOS path, verified with independent guests
-using nonidentity mappings and faults, then affected-image boot/input retesting. This is a reproducible
-technical limitation, not an age, environment, archive-download or unproven
-component-use restriction. **That revision remained incomplete.** Fixing
-the first demonstrated defect does not establish full boot/input recovery or
-commercial-game compatibility.
-
-### Review correction: VM86 firmware and extended-copy descriptors — 2026-10-30
-
-This revision resolves the two subsequent, independently demonstrated firmware
-failures rather than treating the IRET correction or independent controls as
-completion. It reused the original extraction and separate working copy outside
-the checkout. The live distributor listing again returned HTTP 200 with the same
-exact PC-98 ZIP link and separate CD link; the official declaration was reread.
-Existing adult-operator confirmation and owner authorization remain applicable.
-No new download, eligibility assertion or permission request was needed. The
-historical access audit above explains the earlier unsupported stopping decisions;
-these technical failures are not access or licensing restrictions.
-
-**VM86 service boundary.** Firmware requests now execute within the CPU's
-restartable OUT instruction transaction. Supported BIOS and GINIT operands use
-the VM86 caller's user paging translations, including work areas, saved carry,
-font/RTC/IDE buffers and extended-copy tables/data. Complete output spans are
-preflighted before consuming queued keys, controller bytes or timer state. A
-missing, supervisor-only or read-only page produces the ordinary guest #PF with
-CR2/error code and restarts the original OUT after monitor repair; it does not
-become a host error or silently touch the physical identity alias. CPU operand writes
-set page dirty bits. After integration with PR #119, the VM86 floppy service
-preserves its BIOS-only scatter map across noncontiguous pages and extended RAM,
-with request-wide permission checks before controller execution. Raw guest DMA
-retains physical addressing; physical DMA does not set PTE D. General
-protected-mode BIOS calls remain unsupported.
-
-Timer callbacks retain CPL3, VM and a 16-bit VM86 CS cache. The ordinary guest
-IRET consumes the mapped return frame. Blocking keyboard input enters an
-original ROM STI/HLT/retry sequence: those instructions retain normal IOPL/#GP
-and monitor behavior instead of host code forcing IF or secretly halting VM86.
-
-**Extended-copy descriptor failure.** Once the timer stop was removed, private
-startup reached FreeCOM's XMS swapping. All 46 observed INT 1Fh/90 requests in a
-bounded run were rejected; the later bad return and #SS were consequences, not
-evidence that PUSH should ignore VM86 stack limits. The checked public
-[FDXMS source package](http://retropc.net/tori/freedos/fdxms_20040910.zip)
-constructs ordinary writable data descriptors with a 20-bit byte limit: the upper
-limit nibble is `0Fh`. Firmware incorrectly required the entire descriptor byte
-containing that nibble to be zero. It now decodes the complete 386 limit and
-4 KiB granularity using the existing descriptor parser. Present/type/write,
-reserved-bit, effective-limit and RAM-range checks remain enforced. No private
-code was copied, disassembled into model input, substituted or special-cased.
-
-**Actual private cold/reset outcomes.** With both corrections, the unmodified
-working HDI passes the earlier stops, completes startup by launching `ADV.COM`,
-reaches its display and runs past 100,000,000 slots with zero CPU faults and no host error. The prior
-persistent fallback screen is absent: both NUL and literal `3F` visible text-cell
-counts are zero. An uncontrolled animated frame change was deliberately not
-counted as input evidence. Paired runs began with identical rendered frames;
-they still matched after an Escape trial, then diverged when Enter was injected
-into only the input run. This comparison was repeated cold and after reset.
-It establishes bounded game launch/input progress, not complete playability.
-
-A separate test on the same unmodified HDI interrupted its startup batch with
-Ctrl+C followed by Y/Enter, then typed `ECHO OK`.
-Cold and reset both produced a standalone `ok` output line and a DOS prompt.
-Each run recorded 900 expected #GP deliveries from the synthetic ROM's actual
-STI/HLT instructions to EMM386's monitor and **zero other CPU faults**. These
-virtualization traps are distinct from the former #SS loop and firmware host
-stop. The original and working media stayed byte-for-byte unchanged throughout
-these tests. All frame comparisons, logs, byte comparisons and harnesses stayed
-private outside the checkout; no screenshots, media, private hashes, code bytes,
-raw memory or detailed traces are publication artifacts.
-
-**Independent regressions.** The original MIT
+The original MIT [IRET guest](../guest/iret_wrap.asm),
 [VM86 firmware guest](../guest/vm86_firmware.asm),
-[pinned manifest](../fixtures/vm86-firmware-manifest.json) and
-[offline builder](../tools/prepare_vm86_firmware_fixture.py) require no DOS or
-private media. Cold/reset native and production-Wasm acceptance exercise mapped
-BIOS/stack/RTC buffers, monitor repair/retry of user #PF(7/6), saved carry,
-20-bit-limit extended copies, timer callbacks and real host Enter injection.
-Native matrices additionally cover absent/supervisor/read-only pages, atomic
-IDE buffers across noncontiguous pages, descriptor validation, mapped copy
-source/destination and protected STI/HLT waits. The guest failed at the VM86
-firmware guard on this fix node's assigned review checkpoint
-`d83993654ce9399c91da9d3d583ccd4befbb796b`. With VM86 support present but the old
-upper-limit rejection restored, both the guest and the descriptor regression
-failed; both pass with the complete correction. No commercial guest is used by
-public tests, CI or the build.
+[VM86 BIOS guest](../guest/vm86_bios.asm) and native CPU/device regressions use
+no private guest bytes or third-party emulator implementation. Their fixture
+manifests pin only independently authored sources and artifacts. See the
+[VM86 service contract and independent validation](vm86-bios-validation.md).
+The same descriptor regression fails on integrated main and passes with the
+correction; upstream records also establish fail-before/pass-after evidence for
+IRET wrapping and paged firmware access.
 
-These results address the reported boot/input failure in the bounded tested
-configuration. They do not certify every bundled component's provenance, full
-commercial-game compatibility, a manual playthrough, or other hardware profiles.
-Issue #113 remains open pending publication/review; this node performs no push,
-merge or Issue closure. The earlier blocked milestone and its validation below
-are historical records, not the current outcome.
+### Validation evidence and publication scope
 
-### Final checks for the VM86 firmware correction
+Current main `a33bca6f503c35d9e1aa213497460f260f015abc` is integrated.
+The upstream fix nodes report all 49 documented fixture preparations, seven
+fixture-fetch tests, media/font checks, 546 native tests, Clippy with warnings
+denied, formatting, native release and production Rust/Wasm builds passing.
+The approved-assets audit passed with ten assets. A complete production-Wasm
+Chromium run passed 168 tests across `/` and `/pc98-rust/`; the latest fix node
+reran the six IRET/VM86 cases at both roots successfully after installing the
+pinned browser. The full 168-test result is inherited evidence.
 
-- All README/CI fixture preparation commands passed, including complete pinned
-  legal FreeDOS source/license preparation. The new original guest was rebuilt
-  offline and verified against its committed manifest. Fixture-fetch unit tests:
-  **7 passed**.
-- `cargo test --locked`: **535 passed**, no failures. This includes the new
-  floppy DMA mapping/bounds matrix as well as unchanged legal HDD shell,
-  fragmented FAT12/FAT16, high-cylinder, persistent-NUL and IRET controls.
-- `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`,
-  `git diff --check` and modified documentation local-link checks passed.
-- `npm run build`: production Rust/Wasm compilation, reproducible original media
-  and font checks, and approved-assets audit passed; exactly **10 approved
-  publication assets**. No private image or new regression disk is a web asset.
-- `npx playwright test --workers=2`: **166 passed** across `/` and
-  `/pc98-rust/`, with the production Wasm and original VM86 BIOS guest cold/reset.
-  No skipped tests, timeout changes or failing-test rerun was needed in this
-  final full pass. A preceding full pass also passed all 166 tests.
-- This worktree initially lacked the expected Chromium executable. The standard
-  installer stalled during extraction; the official Playwright build 1194
-  headless-shell ZIP passed integrity/path checks and was extracted with system
-  `unzip`, after which Chromium 141.0.7390.37 ran the tests above. This setup
-  problem did not prevent private media access or guest testing.
-
-The new commit is locally validated; the older PR head's GitHub CI result is not
-claimed as validation of these unpushed changes. No new GitHub CI run, push,
-merge, external upload, Issue closure or human playtest was performed here.
-
-### Checks before the VM86 firmware correction
-
-All CI fixture preparation commands were run, including complete pinned legal
-FreeDOS/source/license preparation and the original IRET probe. The new guest and
-CPU regression fail-before/pass-after evidence was obtained without private
-media in the tests. Validation results for this revision:
-
-- `cargo test --locked`: **525 passed**, no failures; the CPU boundary matrix
-  was also rerun successfully after adding the odd-SP rejection case.
-- `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check` and
-  `git diff --check`: passed.
-- `npm run build` (through `npm test`): production Rust/Wasm build, original
-  media/font checks and approved-assets audit passed, with exactly ten approved
-  publication assets.
-- Chromium/production-Wasm: all **164 distinct tests passed** across `/` and
-  `/pc98-rust/`, including the new IRET cold/reset test at each root. The full
-  eight-worker run had 159 passes and five UI-readiness timeouts, all while the
-  page still displayed “Loading WebAssembly”. Those five passed on a targeted
-  two-worker rerun (`npx playwright test --last-failed --workers=2`). No code or
-  timeout changes were made to obtain that result.
-- Initial browser setup lacked Chromium. The standard Node installer stalled
-  extracting the downloaded archive; the official Playwright build 1194
-  headless-shell ZIP was integrity/path checked and extracted with system
-  `unzip`. Chromium 141.0.7390.37 then executed the tests above. This tooling
-  failure is separate from the private guest's VM86 BIOS blocker.
-
-Historical results below are baseline evidence, not new acceptance results.
-No private media, hashes, detailed traces or screenshots entered the checkout,
-web assets, browser tests or CI. No push, merge or Issue closure was performed.
+The publication revision changes documentation only. Runtime checks are not
+repeated for that edit. Whitespace, links, outgoing text-file scope and absence
+of private media must be checked before updating the draft PR. Publication
+approval and remote-head verification are recorded in the [handoff](issue-113-publication-handoff.md).
+No closing keywords, merge, or new claim of complete game playability is intended.
+Required post-merge verification: None.
 
 ## PR #114 baseline: independent alternatives, private image not tested
 
