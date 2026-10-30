@@ -184,3 +184,57 @@ publication of this worktree is **blocked/incomplete**. Resolving the existing
 publication approval is distinct from the already granted authorization for
 eligible private local-only retrieval and testing; no renewed media-access
 permission is requested.
+
+## Review checkpoint 3e894dd: local boot/input retest — 2026-10-30
+
+The assigned findings still describe published head
+`8d8e7c896a4c0569d7305c517d90628ce8f15f66`. A fresh read-only PR check
+confirms that it is unchanged, draft, open and unmergeable. Both the live base
+`04cb05978486f7413bc79591487d9305f80fa140` and merged VM86 main
+`a33bca6f503c35d9e1aa213497460f260f015abc` are already ancestors of this
+checkpoint. Local merge-tree validation succeeds without conflicts. All 49
+README fixture preparations remain in CI, including IRET and both VM86 guests.
+The VM86 firmware and extended-copy corrections are present; no new emulator
+change is justified by these findings against the assigned files.
+
+The live listing returned HTTP 200 and retained the exact PC-98 archive link;
+the official conditional declaration was reread. Existing owner authorization
+and adult-operator confirmation were reused, without a new download or any
+assertion of independent human age for the agent. The earlier unsupported
+access assumptions and component-provenance limits remain as audited above.
+
+This node rebuilt the native release library and **actually reran the existing
+unmodified private working HDI** outside the checkout. Cold and reset both
+reached a DOS prompt and produced a standalone successful `ECHO OK` result,
+with no host error and unchanged media. The recorded 900 virtualization faults
+match the previously documented monitor path. Separate paired cold/reset runs
+started with identical rendered frames, remained equal after Escape, and
+diverged after Enter was injected only into the input instance. These paired
+runs recorded zero CPU faults and no host error; the media remained unchanged.
+No frame pixels, guest text, private hashes, dumps, code or detailed traces
+were printed or added to the repository. This establishes fresh bounded local
+boot/input evidence, not full playability or an updated published PR.
+
+Publication remains **blocked/incomplete**: this node is expressly prohibited
+from pushing or merging, and the earlier automatic approval rejection of the
+tree upload remains unresolved. No upload, approval retry, alternative upload
+mechanism, remote mutation or Issue closure was attempted. The existing
+integration and corrections must reach a subsequently authorized published
+head before the remote findings can be considered resolved. Keep #113 open.
+
+Fresh verification of this unchanged implementation passed all 49 documented
+fixture preparations, font/media checks and seven fixture-fetch unit tests.
+`cargo test --locked` passed **546 tests**, with zero failures or ignored tests;
+Clippy with warnings denied, formatting and whitespace checks also passed.
+The native release and production Rust/Wasm builds passed; the site audit
+confirmed ten approved assets. The initial native attempt encountered missing
+fixtures, resolved by running the documented preparation before the full pass.
+The first focused browser attempt could not launch because the pinned browser
+was not installed. Playwright's Node-based installer stalled extracting its
+official ZIP; CRC validation and Python extraction of that same pinned headless
+ZIP completed successfully. No repository dependency, test or timeout was changed.
+The complete 168-test browser result above remains inherited evidence; only the
+IRET and two VM86 acceptance files were selected for this node's fresh browser
+rerun at both roots: **all six passed**, without skips or test retries after
+browser installation. The tracked-file audit found no HDI, ZIP/RAR, dump or trace
+files. Private retest harnesses and media remained outside the checkout.
