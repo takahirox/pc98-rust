@@ -1,20 +1,87 @@
 # FreeDOS(98) HDD investigation — Issues #111 and #113
 
-## Issue #113 continuation: independent alternatives, private image not tested
+## Current restart — 2026-10-30: blocked/incomplete
 
-**Bounded mandatory investigation complete; the reported hang remains unresolved.**
-[Issue #113](https://github.com/takahirox/pc98-rust/issues/113) continues #111,
-which was administratively closed after PR #112. The investigation path for
-unavailable private media is complete and ready for review, with each mandatory
-criterion accounted for [below](#mandatory-acceptance-disposition). This continuation establishes
-neither a compatibility fix nor game boot, input or playability.
-[PR #114](https://github.com/takahirox/pc98-rust/pull/114) references #113 without
-a closing keyword, so merging it leaves #113 open for the unresolved reported
-symptom. Optional private access or discovery of an otherwise unevidenced defect
-is not a condition for reviewing
-these completed experiments. The sections below this continuation preserve the
-#111 checkpoint's evidence and validation; their access decisions describe that
-earlier run.
+The current [Issue #113 objective](https://github.com/takahirox/pc98-rust/issues/113)
+requires addressing the actual HDI boot/input failure. Merged
+[PR #114](https://github.com/takahirox/pc98-rust/pull/114) supplies existing
+independent controls only. Neither those passing controls nor this access audit
+completes the restart. **The reported hang remains unresolved; keep #113 open.**
+
+The assigned checkpoint is `3636778cb3f18a7e29233a3b2b3ff3116c5a6969`.
+Read-only `git ls-remote https://github.com/takahirox/pc98-rust.git refs/heads/main`
+confirmed current main at `04cb05978486f7413bc79591487d9305f80fa140`;
+`git diff 04cb059 HEAD --stat` was empty before this restart. PR #114's merge
+`83f120d38681d22fe8f87fb64ba31b39bea75e19` is already in this history.
+No upstream technical diagnosis was supplied.
+
+### Access audit and exact missing fact
+
+The live Issue and its comments were read, including the
+[existing owner authorization](https://github.com/takahirox/pc98-rust/issues/113#issuecomment-6513464041).
+Owner permission for eligible private local testing is established and was not
+requested again. The earlier Run's actual recorded reason for stopping was
+unestablished age eligibility and environment permission, as recorded in its
+[access decision](#source-verification-and-access-decision-2026-10-30).
+It did not attempt an archive request. That record demonstrates neither a
+download failure nor an applicable environment prohibition.
+
+This restart reread the live [listing](https://alicefree.fastlast.org/) and
+inspected its HTML links without requesting archive media. The PC-98 entry still
+targets <https://d1.alicefree.fastlast.org/d/alice_yakata3.zip>; the separate CD
+entry targets <https://d1.alicefree.fastlast.org/d/zip/alice_yakata3_CD.zip>.
+The listing asks under-18s not to use its files. The current
+[official declaration](https://www.alicesoft.com/about/#cont08) still lists the
+game, retains copyright, and prohibits supplying AliceSoft-brand software to
+under-18s. It identifies its latest revision as 2019-01-21. The other conditional
+distribution requirements remain applicable; the declaration does not establish
+licenses for unidentified bundled OS, driver, utility or font components.
+
+No explicit ban on this private compatibility investigation was found in the
+supplied execution instructions or repository guidance. Local shell/filesystem
+access and outbound requests to the public listing and GitHub worked. This is
+not evidence of archive availability: no archive request, including HEAD or
+range retrieval, was attempted. Unknown bundled licenses are an inspection task,
+not an identified licensing violation or a proven reason that the earlier Run
+could not download.
+
+**The unresolved fact is whether the human operator on whose behalf retrieval
+would run is at least 18.** Neither the live owner comment nor the execution
+inputs establish that fact. An age-eligibility question was submitted in this
+Run; no affirmative answer is recorded at this checkpoint. The Issue explicitly
+requires eligibility before retrieval and forbids fabricating it. An affirmative
+operator eligibility statement would resolve this particular constraint without
+repeating owner permission. It would not establish bundled-component rights;
+those must then be inspected separately before guest execution. This records a
+missing eligibility fact, not a claim that the operator is under 18 or that the
+environment prohibits testing.
+
+No ZIP/HDI was retrieved, extracted or tested in this restart. Archive integrity,
+HDI identity/geometry, actual kernel/drivers, symptom reproduction, first
+architectural divergence, correction and affected-image retest remain pending.
+No emulator change or new regression is justified by the present evidence.
+Once eligibility is established, resume with private extraction/license inventory
+outside the checkout, an intact original and separate working HDI, then bounded
+Ap/IDE diagnostics and keyboard retesting against the existing controls. Keep
+all media, hashes and raw output local; headless output must be redirected to
+private files, not returned as tool output or sent to model services.
+
+### Checks in this restart
+
+`cargo build --locked --release --bin headless` passed, preparing the existing
+runner without private media. Documentation links, Markdown structure and
+`git diff --check` were checked. No emulator, fixture, build or dependency source
+changed. Native test suites, fixture downloads, production-Wasm/browser acceptance
+and private-media tests were not rerun; historical results below are not new
+validation. This documentation checkpoint is a blocked handoff, not completion
+or a compatibility fix. No GitHub mutation is part of this Run.
+
+## PR #114 baseline: independent alternatives, private image not tested
+
+The remaining sections preserve historical #113/#111 evidence and validation.
+Their statements about completed bounded investigation and review readiness
+describe PR #114's earlier scope, superseded by the current restart objective;
+they do not discharge the pending work above or resolve the reported hang.
 
 ### Source verification and access decision (2026-10-30)
 
