@@ -33,6 +33,22 @@ full 486 fidelity remain unsupported.
 Ap provides only bounded x87 environment initialization and control/status readback.
 See [guest provenance, commands and exact profile limits](docs/dos-compatibility.md).
 
+## UI/UX
+
+Apply these principles to the browser emulator's controls, messages and layout,
+and to headless commands, messages and examples:
+
+1. **Keep it simple.** Show only necessary information and actions; avoid
+   unnecessary UI elements.
+2. **Show, don't tell.** Prefer layout, spacing and visual hierarchy over
+   explanatory labels or prose to communicate structure.
+3. **Intuitive and predictable.** Keep appearance and behavior consistent with
+   user expectations; don't interrupt the user's work.
+
+Preserve necessary control labels, accessible names, error messages and information
+needed to use the interface. Simplification must preserve meaningful consent,
+destructive-action safeguards, necessary warnings and user decisions.
+
 ## Build and play
 
 Install Rust through rustup (including the Wasm target), Python 3.12+, NASM 2.16+,
