@@ -86,9 +86,10 @@ Component rights were inspected separately from AliceSoft's game declaration:
 | --- | --- |
 | AliceSoft game | Listed in the current conditional declaration; copyright is retained. No game or extracted asset redistribution is authorized by this work. |
 | FDXMS | The private binary exactly matches `FDXMS.SYS` in the author's [2004-09-10 port package](http://retropc.net/tori/freedos/fdxms_20040910.zip), which includes source and GPL notices. Its identifier is 0.9.Sand, dated 2002-12-30. This component has a concrete upstream license match. |
-| Kernel/partition loader | The archive attributes FreeDOS(98), and the partition loader contains the FreeDOS identifier. The author's [2004-09-10 kernel package](http://retropc.net/tori/freedos/kernel_20040910.zip) and [2028 package dated 2005-07-24](http://retropc.net/tori/freedos/kernel_2028_20050724.zip) were inspected privately; they include GPL sources/notices, but neither supplied kernel binary equals the private one. The exact kernel build and partition-loader provenance remain unverified. A different GPL build's license alone does not establish the origin of these particular bytes. |
+| Kernel/partition loader | The archive attributes FreeDOS(98), and the partition loader contains the FreeDOS identifier. All three kernel packages on the author's page were inspected privately: [2028 dated 2004-09-10](http://retropc.net/tori/freedos/kernel_20040910.zip), [2028 dated 2005-07-24](http://retropc.net/tori/freedos/kernel_2028_20050724.zip), and [2035a dated 2005-07-25](http://retropc.net/tori/freedos/kernel_2035a_20050725.zip). All include GPL sources/notices, but none of their supplied kernel binaries equals the private one. These comparisons leave the exact build unidentified; they do not establish a non-GPL origin or a use prohibition. The separate partition loader also remains unmatched. |
 | EMM386 | The private version identifier is EMM386(98) 1.14, dated 2005-02-23. The author's [2005-02-23 package](http://retropc.net/tori/freedos/emm386_20050223.zip) contains an Artistic License and sources, but neither supplied executable exactly matches the private binary. Its exact variant/provenance remains unverified; it must not simply be labelled GPL because FreeDOS is bundled. |
-| Disk IPL and XMZ | The disk IPL has an `IPL1` identifier, which does not identify its author or license. No use terms or provenance for this IPL or `XMZ.SYS` were established from the supplied archive. Neither is covered merely by AliceSoft's declaration. |
+| Disk IPL | The disk IPL has an `IPL1` identifier, which does not identify its author or license. A privately assembled public-domain BTNPART MBR candidate also has this identifier but does not match the supplied IPL. No applicable terms for the supplied IPL were established. |
+| XMZ | Private identifier inspection is consistent with ZOBplus Hayami's XMZ v1.02 XMS driver. No accompanying XMZ license notice was found. The historical distribution host identified by its API documentation no longer resolves; identification alone does not establish use terms. XMZ is not referenced by CONFIG, so this is not evidence that it causes or participates in the boot hang. |
 
 The archive's ancillary files comprise the game declaration and a short FreeDOS/
 Anex86 note. Neither establishes the missing IPL/XMZ terms. The filesystem has
@@ -101,6 +102,44 @@ assuming all support code shared the game's permission. The two historical
 Nifty source URLs in the ancillary note failed DNS resolution. The port site's
 HTTPS handshake failed, but its HTTP source page and packages were accessible;
 that TLS error did not prevent the component audit or the archive download.
+
+### Review follow-up: remaining upstream candidates
+
+The review correctly identified an untested lead: the live port-author page also
+lists `kernel_2035a_20050725.zip`. This revision retrieved it privately over HTTP
+(200), validated ZIP integrity, and inspected its kernel, build instructions,
+boot/SYS sources and GPLv2-or-later notices. Integrity was also rechecked for both
+2028 packages. The 2035a binary is not the private kernel, and its boot sources
+do not identify the supplied disk-level IPL. All three listed kernel candidates
+have now been checked; the earlier two-package search was insufficient.
+
+The private kernel contains a UPX marker. The public `kernel/makefile` and
+`utils/exeflat.c` describe compression followed by EXE flattening. A private
+unpacking attempt with checksum-verified Homebrew UPX 5.3.0 returned
+`NotPackedException: not packed by UPX`; no unpacked output was produced and no
+guest code was executed. Thus a compressed/flattened build remains a provenance
+lead, not a verified kernel identity. Direct byte inequality alone cannot decide
+its license. Both executables in the EMM386 package, including the Anex86
+variant, were compared again; neither matches the supplied executable.
+
+Component-specific investigation also followed the current
+[FreeDOS(98) maintainer's page](https://bauxite.sakura.ne.jp/software/dos/freedos.htm).
+The public-domain [BTNPART IPL source](https://github.com/lpproj/btnpart/blob/ff3baa4a114d02d5f5e895bce6df7b7f4b20640b/btnp_mbr.nas)
+was assembled with NASM outside the checkout and compared with the supplied
+512-byte disk IPL: no match. The GPL
+[NEC98 partition-loader source](https://github.com/lpproj/fdkernel/blob/fa81d6e7c524f95f4ed6a903c28bf98817d80a9e/nec98/boot/boot.asm)
+was assembled separately; its 512 bytes do not match the supplied partition
+loader's first 512 bytes even excluding BPB bytes 3–61. These are negative
+candidate comparisons, not proof about every historical variant. Neither source
+is an emulator implementation, and no source or compiled component was imported
+into this repository or substituted into the private image.
+
+[XMZ's API documentation](https://fd.lod.bz/rbil/interrup/memory/2f4310.html)
+identifies its author/version and historical distribution directory
+`ftp://ftp.tohoku.ac.jp/pub/msdos/Memory/xmz/`. A local DNS lookup of
+`ftp.tohoku.ac.jp` failed with “nodename nor servname provided, or not known”.
+The API documentation supplies no XMZ use license. This is a specific unavailable
+component source, not a failure to retrieve the game ZIP.
 
 ### Exact remaining constraint and next technical work
 
@@ -116,8 +155,17 @@ has occurred. No emulator correction is supported by this evidence.
 Resolve the constraint by establishing the supplied IPL/XMZ provenance and
 applicable use terms and identifying the remaining boot-component variants from
 lawful upstream documentation/source packages or other component-specific rights
-evidence. This is a component investigation, not a request for another owner
-permission statement. Replacing these files with known licensed alternatives
+evidence. In particular, the missing evidence is an origin/license record for
+the supplied disk IPL (which booting the unmodified HDI would execute), and the
+XMZ author's applicable notice. The archive's notes, all three listed historical
+kernel packages and the additional candidates above did not supply that record.
+If no further lawful public source identifies it, the archive assembler or the
+component author must provide the missing attribution/terms; project-owner
+permission cannot establish an unidentified third party's rights. The failed
+kernel unpacking attempt is an unresolved technical identification step, not an
+external approval requirement or an independently sufficient reason to prohibit
+all FreeDOS execution. This is a component investigation, not a request for
+another owner permission statement. Replacing these files with known licensed alternatives
 could support a separate control, but would not establish a retest of the exact
 supplied HDI. Once the component boundary is resolved, run bounded Ap/IDE boot
 and input diagnostics on the separate working copy, locate the first actual
@@ -127,14 +175,20 @@ and this restart blocked/incomplete; this inspection is not a compatibility fix.
 
 ### Checks in this revision
 
-`cargo build --locked --release --bin headless` passed. ZIP integrity, HDI extent/
-geometry, read-only FAT inventory and the component comparisons above were
+The preceding revision's `cargo build --locked --release --bin headless` passed.
+ZIP integrity, HDI extent/geometry, read-only FAT inventory and component comparisons were
 performed privately. Documentation structure, changed relative links/anchors and
 `git diff --check` passed. No emulator, fixture, build or dependency source changed.
 Native suites and production-Wasm/browser acceptance were not rerun for this
 documentation-only change; historical results below are not new validation.
 Private guest execution was not attempted because of the exact component
-constraint above. No GitHub mutation was performed during this revision.
+constraint above. In the review follow-up, the live distribution listing and
+official declaration were rechecked; the listing returned HTTP 200 with the same
+PC-98/CD ZIP targets. All three historical kernel ZIP integrity checks passed;
+the additional candidate comparisons yielded no matches. Neither result is a
+boot/input acceptance result. Both public boot candidates assembled successfully.
+The UPX unpacking attempt failed as recorded above. Documentation links/anchors
+and `git diff --check` were checked again. No GitHub mutation was performed.
 
 ## PR #114 baseline: independent alternatives, private image not tested
 
