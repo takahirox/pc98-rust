@@ -1648,16 +1648,43 @@ command/result FIFO, seek, DMA and scheduler paths as guest-issued I/O.
 | INT 1B low AH=0,3,4,7,A | Reset/recalibrate, sense and read ID; unavailable drive reports carry/error |
 | INT 1B low AH=1,5,6 | Verify/read, write, read; CHRN and ES:BP/BX byte-count contract; uses controller/DMA |
 | INT 1C AH=0,2 | VM fixed BCD date; Ap [guest-clocked calendar snapshot](#ap-calendar-read-path); separate one-shot interval callback (see below) |
-| INT 1F | Unsupported extended memory, returns carry set |
+| INT 1F AH=90 (Ap) | Checked extended-RAM byte copy via ES:BX descriptors; 386 limit/granularity supported; invalid requests return carry |
 | Guest-registered F990h ROM entry | Graph LIO GINIT; other directory entries fail explicitly (see below) |
 
-Unknown BIOS services fail visibly except INT 1F's documented unavailable-memory
+Unknown BIOS services fail visibly except INT 1F's checked error
 response and disk-controller error returns. Verify currently performs an actual
-read into the supplied buffer. Bootstrap is 1 KiB-sector media; other raw geometries
-are accepted for data, but boot firmware for 512-byte-sector IPLs is not validated.
-No BASIC fallback, proprietary firmware identity string, HDD bootstrap or extended
-memory is provided. Firmware work-area initialization includes conventional RAM
+read into the supplied buffer. Floppy bootstrap uses 1 KiB-sector media; other raw geometries are accepted for
+data. The Ap IDE bootstrap reads a 512-byte HDD IPL.
+No BASIC fallback or proprietary firmware identity string is provided. The Ap
+profile additionally supports the IDE HDD bootstrap and extended RAM described above. Firmware work-area initialization includes conventional RAM
 size, floppy equipment, boot DA/UA, text attributes and keyboard ring pointers.
+
+### Synthetic firmware in VM86
+
+Supported services execute inside the CPU's OUT instruction transaction. VM86
+memory operands use user paging permissions, including saved flags and BIOS work
+areas; nonidentity mappings never silently fall back to physical identity RAM.
+Service outputs are preflighted before consuming device input. Page faults set
+CR2 and the ordinary user read/write error code, enter the guest monitor, and
+retry the original OUT after repair. Timer callbacks preserve VM/CPL3 and use
+ordinary guest IRET. Blocking keyboard reads execute an original STI/HLT/retry
+ROM sequence so the monitor receives normal IOPL and HLT exceptions. F0 is a
+synthetic firmware entry; CPU execution still checks the caller's I/O bitmap for
+the OUT itself. This is not a general protected-mode BIOS interface.
+
+INT 1Fh/90 accepts present expand-up data descriptors, with a writable destination,
+valid 386 byte/page-granular limits, and RAM ranges within conventional or modeled
+extended memory. Reserved descriptor bits, code, expand-down, holes and short
+limits are rejected. The real-mode extended copy retains its physical/A20 policy;
+VM86 table/data operands follow the caller's paging and physical bus decoding.
+A VM86 floppy DMA sector must resolve to contiguous physical storage below
+1 MiB and stay within one physical 64 KiB DMA window; an unsupported mapping
+fails explicitly before controller execution. DMA remains a physical bus master
+and does not set CPU page dirty bits. IDE PIO buffers
+can span noncontiguous pages. The independent
+[firmware guest](../guest/vm86_firmware.asm) and native matrices verify this
+contract without private media. See the [investigation](hdd-boot-investigation.md)
+for the separately verified private boot/input outcome.
 
 ### BIOS held-key bitmap
 

@@ -1,13 +1,13 @@
 # FreeDOS(98) HDD investigation — Issues #111 and #113
 
-## Current restart — 2026-10-30: blocked/incomplete
+## Current restart — 2026-10-30: boot/input correction verified
 
 The current [Issue #113 objective](https://github.com/takahirox/pc98-rust/issues/113)
 requires addressing the actual HDI boot/input failure. Merged
 [PR #114](https://github.com/takahirox/pc98-rust/pull/114) supplies existing
-independent controls only. Actual private testing below diagnoses and corrects
-the first IRET failure, then reaches a separate VM86 BIOS limitation. **Full
-boot/input recovery remains unresolved; keep #113 open.**
+independent controls only. The IRET, paged VM86 firmware and extended-copy
+corrections below now have actual private cold/reset shell-command and game-input
+evidence. **Full game playability is not claimed; #113 stays open for review.**
 
 The initial restart's assigned checkpoint was
 `3636778cb3f18a7e29233a3b2b3ff3116c5a6969`.
@@ -220,7 +220,7 @@ separate CPU matrix covers valid wraps, rejected dwords that straddle the limit,
 restart IP, intact guard memory and diagnostic bounds. Both the guest and CPU
 matrix failed against the unchanged assigned checkpoint and pass after the fix.
 
-### Exact remaining technical blocker: VM86 synthetic BIOS service
+### Previous technical blocker: VM86 synthetic BIOS service
 
 The affected private HDI was rerun after correction, cold and after reset, with
 the same 20,000,000-slot ceiling. Both runs passed the prior fault and kernel
@@ -236,15 +236,129 @@ shell, command execution and game launch/input have not been established.**
 Removing the firmware guard alone is not a safe correction: firmware currently
 uses direct Bus/physical accesses, whereas VM86 requires guest paging and
 protection semantics, including BIOS work areas, buffers, saved flags, interrupt
-returns and callbacks. The remaining work is tracked in [task #118](https://github.com/takahirox/pc98-rust/issues/118):
+returns and callbacks. That revision tracked the remaining work in [task #118](https://github.com/takahirox/pc98-rust/issues/118):
 a cohesive VM86-compatible synthetic BIOS path, verified with independent guests
 using nonidentity mappings and faults, then affected-image boot/input retesting. This is a reproducible
 technical limitation, not an age, environment, archive-download or unproven
-component-use restriction. **Keep #113 open and the restart incomplete.** Fixing
+component-use restriction. **That revision remained incomplete.** Fixing
 the first demonstrated defect does not establish full boot/input recovery or
 commercial-game compatibility.
 
-### Checks in this revision
+### Review correction: VM86 firmware and extended-copy descriptors — 2026-10-30
+
+This revision resolves the two subsequent, independently demonstrated firmware
+failures rather than treating the IRET correction or independent controls as
+completion. It reused the original extraction and separate working copy outside
+the checkout. The live distributor listing again returned HTTP 200 with the same
+exact PC-98 ZIP link and separate CD link; the official declaration was reread.
+Existing adult-operator confirmation and owner authorization remain applicable.
+No new download, eligibility assertion or permission request was needed. The
+historical access audit above explains the earlier unsupported stopping decisions;
+these technical failures are not access or licensing restrictions.
+
+**VM86 service boundary.** Firmware requests now execute within the CPU's
+restartable OUT instruction transaction. Supported BIOS and GINIT operands use
+the VM86 caller's user paging translations, including work areas, saved carry,
+font/RTC/IDE buffers and extended-copy tables/data. Complete output spans are
+preflighted before consuming queued keys, controller bytes or timer state. A
+missing, supervisor-only or read-only page produces the ordinary guest #PF with
+CR2/error code and restarts the original OUT after monitor repair; it does not
+become a host error or silently touch the physical identity alias. CPU operand writes
+set page dirty bits. Floppy DMA resolves mapped physical sectors and explicitly
+rejects noncontiguity, addresses above its 1 MiB range, and physical 64 KiB
+boundary crossings before device execution; physical DMA does not set PTE D. General
+protected-mode BIOS calls remain unsupported.
+
+Timer callbacks retain CPL3, VM and a 16-bit VM86 CS cache. The ordinary guest
+IRET consumes the mapped return frame. Blocking keyboard input enters an
+original ROM STI/HLT/retry sequence: those instructions retain normal IOPL/#GP
+and monitor behavior instead of host code forcing IF or secretly halting VM86.
+
+**Extended-copy descriptor failure.** Once the timer stop was removed, private
+startup reached FreeCOM's XMS swapping. All 46 observed INT 1Fh/90 requests in a
+bounded run were rejected; the later bad return and #SS were consequences, not
+evidence that PUSH should ignore VM86 stack limits. The checked public
+[FDXMS source package](http://retropc.net/tori/freedos/fdxms_20040910.zip)
+constructs ordinary writable data descriptors with a 20-bit byte limit: the upper
+limit nibble is `0Fh`. Firmware incorrectly required the entire descriptor byte
+containing that nibble to be zero. It now decodes the complete 386 limit and
+4 KiB granularity using the existing descriptor parser. Present/type/write,
+reserved-bit, effective-limit and RAM-range checks remain enforced. No private
+code was copied, disassembled into model input, substituted or special-cased.
+
+**Actual private cold/reset outcomes.** With both corrections, the unmodified
+working HDI passes the earlier stops, completes startup by launching `ADV.COM`,
+reaches its display and runs past 100,000,000 slots with zero CPU faults and no host error. The prior
+persistent fallback screen is absent: both NUL and literal `3F` visible text-cell
+counts are zero. An uncontrolled animated frame change was deliberately not
+counted as input evidence. Paired runs began with identical rendered frames;
+they still matched after an Escape trial, then diverged when Enter was injected
+into only the input run. This comparison was repeated cold and after reset.
+It establishes bounded game launch/input progress, not complete playability.
+
+A separate test on the same unmodified HDI interrupted its startup batch with
+Ctrl+C followed by Y/Enter, then typed `ECHO OK`.
+Cold and reset both produced a standalone `ok` output line and a DOS prompt.
+Each run recorded 900 expected #GP deliveries from the synthetic ROM's actual
+STI/HLT instructions to EMM386's monitor and **zero other CPU faults**. These
+virtualization traps are distinct from the former #SS loop and firmware host
+stop. The original and working media stayed byte-for-byte unchanged throughout
+these tests. All frame comparisons, logs, byte comparisons and harnesses stayed
+private outside the checkout; no screenshots, media, private hashes, code bytes,
+raw memory or detailed traces are publication artifacts.
+
+**Independent regressions.** The original MIT
+[VM86 firmware guest](../guest/vm86_firmware.asm),
+[pinned manifest](../fixtures/vm86-firmware-manifest.json) and
+[offline builder](../tools/prepare_vm86_firmware_fixture.py) require no DOS or
+private media. Cold/reset native and production-Wasm acceptance exercise mapped
+BIOS/stack/RTC buffers, monitor repair/retry of user #PF(7/6), saved carry,
+20-bit-limit extended copies, timer callbacks and real host Enter injection.
+Native matrices additionally cover absent/supervisor/read-only pages, atomic
+IDE buffers across noncontiguous pages, descriptor validation, mapped copy
+source/destination and protected STI/HLT waits. The guest failed at the VM86
+firmware guard on this fix node's assigned review checkpoint
+`d83993654ce9399c91da9d3d583ccd4befbb796b`. With VM86 support present but the old
+upper-limit rejection restored, both the guest and the descriptor regression
+failed; both pass with the complete correction. No commercial guest is used by
+public tests, CI or the build.
+
+These results address the reported boot/input failure in the bounded tested
+configuration. They do not certify every bundled component's provenance, full
+commercial-game compatibility, a manual playthrough, or other hardware profiles.
+Issue #113 remains open pending publication/review; this node performs no push,
+merge or Issue closure. The earlier blocked milestone and its validation below
+are historical records, not the current outcome.
+
+### Final checks for the VM86 firmware correction
+
+- All README/CI fixture preparation commands passed, including complete pinned
+  legal FreeDOS source/license preparation. The new original guest was rebuilt
+  offline and verified against its committed manifest. Fixture-fetch unit tests:
+  **7 passed**.
+- `cargo test --locked`: **535 passed**, no failures. This includes the new
+  floppy DMA mapping/bounds matrix as well as unchanged legal HDD shell,
+  fragmented FAT12/FAT16, high-cylinder, persistent-NUL and IRET controls.
+- `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`,
+  `git diff --check` and modified documentation local-link checks passed.
+- `npm run build`: production Rust/Wasm compilation, reproducible original media
+  and font checks, and approved-assets audit passed; exactly **10 approved
+  publication assets**. No private image or new regression disk is a web asset.
+- `npx playwright test --workers=2`: **166 passed** across `/` and
+  `/pc98-rust/`, with the production Wasm and original VM86 BIOS guest cold/reset.
+  No skipped tests, timeout changes or failing-test rerun was needed in this
+  final full pass. A preceding full pass also passed all 166 tests.
+- This worktree initially lacked the expected Chromium executable. The standard
+  installer stalled during extraction; the official Playwright build 1194
+  headless-shell ZIP passed integrity/path checks and was extracted with system
+  `unzip`, after which Chromium 141.0.7390.37 ran the tests above. This setup
+  problem did not prevent private media access or guest testing.
+
+The new commit is locally validated; the older PR head's GitHub CI result is not
+claimed as validation of these unpushed changes. No new GitHub CI run, push,
+merge, external upload, Issue closure or human playtest was performed here.
+
+### Checks before the VM86 firmware correction
 
 All CI fixture preparation commands were run, including complete pinned legal
 FreeDOS/source/license preparation and the original IRET probe. The new guest and
@@ -279,7 +393,8 @@ web assets, browser tests or CI. No push, merge or Issue closure was performed.
 The remaining sections preserve historical #113/#111 evidence and validation.
 Their statements about completed bounded investigation and review readiness
 describe PR #114's earlier scope, superseded by the current restart objective;
-they do not discharge the pending work above or resolve the reported hang.
+they do not establish the current correction; the new private evidence is
+recorded above.
 
 ### Source verification and access decision (2026-10-30)
 

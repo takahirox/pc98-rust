@@ -1,0 +1,20 @@
+{
+  "source": "guest/vm86_firmware.asm",
+  "license": "MIT; LICENSE and original assembly copied alongside image",
+  "assembly": "nasm -f bin guest/vm86_firmware.asm -o vm86_firmware.bin",
+  "source_sha256": "a39d3b84fb2b7e8264972c265c93a20e73b9a2a45600af542b10b15ff60fe96a",
+  "boot_sha256": "f65164c186e6db78731c8984b650cf209f5c6cea1c496eceff1efcae0be55062",
+  "image": "fixtures/vm86_firmware/vm86_firmware.hdm",
+  "image_sha256": "f092e7e71c9f284fa49a83f7cbac277cbb5f6905235edc51a9852a2ec4199f7a",
+  "geometry": "77 cylinders, 2 heads, 8 sectors, 1024 bytes per sector",
+  "profile": "Ap paged VM86; no DOS, proprietary ROM or emulator code",
+  "contract": "Paged VM86 timer, callback, RTC across nonidentity pages, saved carry, 386 extended-copy descriptors, keyboard FIFO and recoverable user page faults; cold/reset",
+  "markers": [
+    "VM86 BIOS PASS",
+    "VM86 BIOS FAIL"
+  ],
+  "slot_budget": 2000000,
+  "result_address": "0x8000",
+  "result_length": 8,
+  "distribution": "Test only; excluded from web/"
+}

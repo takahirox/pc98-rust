@@ -171,7 +171,7 @@ impl Default for Cpu {
     }
 }
 #[derive(Debug)]
-enum ExecError {
+pub(crate) enum ExecError {
     /// Control writes reject undefined/unsupported state before any mutation.
     ControlWriteRejected(String),
     Fault(u8),
@@ -182,7 +182,7 @@ enum ExecError {
     },
     Unsupported(String),
 }
-type ExecResult<T> = Result<T, ExecError>;
+pub(crate) type ExecResult<T> = Result<T, ExecError>;
 impl From<String> for ExecError {
     fn from(s: String) -> Self {
         Self::Unsupported(s)
@@ -757,7 +757,14 @@ impl Cpu {
         if self.protected_mode() || self.paging_enabled() {
             b.begin_cpu_memory();
         }
-        let execution = self.execute(b);
+        let execution = self.execute(b).and_then(|()| {
+            if std::mem::take(&mut b.firmware_request) {
+                crate::firmware::execute_service(self, b)?;
+            }
+            Ok(())
+        });
+        // A rejected OUT must not leave a pending host request for the next slot.
+        b.firmware_request = false;
         b.finish_cpu_memory(execution.is_ok());
         match execution {
             Ok(()) => {

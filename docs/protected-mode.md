@@ -303,8 +303,10 @@ NMI/debug-breakpoint machinery, DPMI, DOS extenders, Windows and Windows drivers
 remain outside the implemented subsystem. Existing x87 initialization
 and metadata stores work through protected segments; CLTS and WAIT MP/TS checks
 are implemented. Arithmetic and pending numeric exception completion remain
-unsupported. Synthetic real-mode BIOS services are explicitly rejected
-while PE=1; protected handlers execute guest code through IDT gates.
+unsupported. Synthetic BIOS services from ordinary protected mode are explicitly rejected
+while PE=1 and VM=0; protected handlers execute guest code through IDT gates.
+Supported [VM86 firmware services](hardware.md#synthetic-firmware-in-vm86) instead
+use user paging, restartable faults and ordinary guest returns.
 
 These restrictions do not promote the project's protected-mode/CPU386 inventory
 to full architectural fidelity. Unsupported execution terminates diagnostically;

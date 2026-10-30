@@ -33,6 +33,7 @@ jobs:
       - run: python3 tools/prepare_clts_fixture.py
       - run: python3 tools/prepare_paging_fixture.py
       - run: python3 tools/prepare_vm86_fixture.py
+      - run: python3 tools/prepare_vm86_firmware_fixture.py
       - run: python3 tools/prepare_iret_wrap_fixture.py
       - run: python3 tools/prepare_fpu_init_fixture.py
       - run: python3 tools/prepare_pic_fixture.py

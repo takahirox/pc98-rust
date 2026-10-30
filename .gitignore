@@ -51,3 +51,4 @@ __pycache__/
 # Local HDD media must normally live outside this checkout. Generated legal
 # fixtures are rebuilt and hash checked; no HDD image is a source asset.
 *.[hH][dD][iI]
+/fixtures/vm86_firmware/

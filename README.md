@@ -116,6 +116,7 @@ python3 tools/prepare_task_register_fixture.py
 python3 tools/prepare_clts_fixture.py
 python3 tools/prepare_paging_fixture.py
 python3 tools/prepare_vm86_fixture.py
+python3 tools/prepare_vm86_firmware_fixture.py
 python3 tools/prepare_iret_wrap_fixture.py
 python3 tools/prepare_fpu_init_fixture.py
 python3 tools/prepare_pic_fixture.py
@@ -185,14 +186,11 @@ the same.
 The [HDD investigation](docs/hdd-boot-investigation.md) provides an
 independent GPL FreeDOS HDD shell control, exact kernel-handoff acceptance and
 `headless --progress --ap` summaries for silent loops and raw text-VRAM glyph
-selection. Private `aliceY3.hdi` testing now reproduces a real-mode IRET stack
-wrap defect. Its correction advances boot to a separate VM86 synthetic-BIOS
-limitation; shell/input recovery and game playability remain unconfirmed.
-The [Issue #113 continuation](docs/hdd-boot-investigation.md#issue-113-continuation-independent-alternatives-private-image-not-tested)
-verifies the exact PC-98 archive listing separately from the CD-image download
-and records the local access decision. It also adds native/production-Wasm
-fragmented FAT12/FAT16, high-cylinder and original persistent-NUL keyboard/IRQ
-controls; the private-image hang remains unresolved.
+selection. Private `aliceY3.hdi` testing diagnosed real-mode IRET wrapping,
+paged VM86 firmware access and extended-copy descriptor defects. Their corrections
+now have cold/reset DOS command and bounded game-input evidence; full game
+playability is not claimed. The report separates current results from historical
+access blockers and independent controls. Private media never enters CI or web/.
 
 The original MIT [CLTS probe](guest/clts.asm) checks CR0.TS/#NM recovery in real
 and protected mode, all four supported x87 metadata forms, WAIT MP/TS and EM
@@ -235,7 +233,18 @@ Prepare offline with `python3 tools/prepare_vm86_fixture.py`; run
 `npm test`. The [manifest](fixtures/vm86-manifest.json) pins source/license/media
 and exact context/guards; see [capabilities and limits](docs/protected-mode.md#i486-virtual-8086-mode-issue-109)
 and [validation](docs/vm86-validation.md). This does not establish DOS-extender,
-Windows or commercial-game compatibility. Private `aliceY3.hdi`: **not retested**.
+Windows or general commercial-game compatibility. See the
+[current private investigation](docs/hdd-boot-investigation.md) for its separate,
+bounded boot/input outcome.
+
+The original MIT [VM86 BIOS guest](guest/vm86_firmware.asm) covers paged BIOS work
+areas and stack, recoverable service page faults, noncontiguous RTC buffers,
+saved carry, 386 extended-copy descriptors, timer callbacks and keyboard input.
+Prepare offline with `python3 tools/prepare_vm86_firmware_fixture.py`; run
+`cargo test --locked --test vm86 --test vm86_firmware --test devices_ap` and
+`npm test`. Its [manifest](fixtures/vm86-firmware-manifest.json) pins only original
+rights-cleared material. Native and production-Wasm checks run cold/reset at both
+roots; no private media is needed.
 
 The original MIT [paging guest](guest/paging.asm) executes nonidentity code,
 data and stack pages, checks a guest #PF handler's PTE repair and IRETD retry,
