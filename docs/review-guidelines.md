@@ -27,6 +27,8 @@ or necessary validation.
 
 ## Check the result and validation
 
+Review applicable interface changes against the [UI/UX principles](../README.md#uiux).
+
 Verify correctness, consistency with the repository, relevant documentation, and
 evidence for mandatory pre-merge acceptance. Select checks appropriate to the
 changed files and actual tooling. Emulator changes require the
