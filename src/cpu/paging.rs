@@ -83,7 +83,7 @@ impl Cpu {
     /// Segmentation has already checked the complete operand. Walk physical
     /// tables only; apply PC-98 A20/bus decoding after translation at every level.
     /// A preflight may set A, but D is set only for the actual write operation.
-    pub(super) fn translate(
+    pub(crate) fn translate(
         &self,
         b: &mut Bus,
         linear: u32,
@@ -147,7 +147,7 @@ impl Cpu {
         }
         Ok(entry.frame | (linear & 4095))
     }
-    pub(super) fn check_pages(
+    pub(crate) fn check_pages(
         &self,
         b: &mut Bus,
         linear: u32,

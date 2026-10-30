@@ -116,6 +116,8 @@ python3 tools/prepare_task_register_fixture.py
 python3 tools/prepare_clts_fixture.py
 python3 tools/prepare_paging_fixture.py
 python3 tools/prepare_vm86_fixture.py
+python3 tools/prepare_vm86_bios_fixture.py
+python3 tools/prepare_vm86_firmware_fixture.py
 python3 tools/prepare_iret_wrap_fixture.py
 python3 tools/prepare_fpu_init_fixture.py
 python3 tools/prepare_pic_fixture.py
@@ -185,14 +187,22 @@ the same.
 The [HDD investigation](docs/hdd-boot-investigation.md) provides an
 independent GPL FreeDOS HDD shell control, exact kernel-handoff acceptance and
 `headless --progress --ap` summaries for silent loops and raw text-VRAM glyph
-selection. Private `aliceY3.hdi` testing now reproduces a real-mode IRET stack
-wrap defect. Its correction advances boot to a separate VM86 synthetic-BIOS
-limitation; shell/input recovery and game playability remain unconfirmed.
+selection. It does not establish a fix for private `aliceY3.hdi`; that image was
+not obtained or retested and game playability remains unconfirmed.
 The [Issue #113 continuation](docs/hdd-boot-investigation.md#issue-113-continuation-independent-alternatives-private-image-not-tested)
 verifies the exact PC-98 archive listing separately from the CD-image download
 and records the local access decision. It also adds native/production-Wasm
 fragmented FAT12/FAT16, high-cylinder and original persistent-NUL keyboard/IRQ
 controls; the private-image hang remains unresolved.
+
+The original MIT [VM86 BIOS probe](guest/vm86_bios.asm) reproduces the paged
+VM86 timer firmware stop, then checks translated BIOS work areas, buffer faults,
+saved flags, IRQ callbacks and keyboard input across identity/nonidentity paging
+and PG=0, cold/reset. Prepare it with
+`python3 tools/prepare_vm86_bios_fixture.py`; native and production-Wasm Chromium
+checks use the same pinned disk at both roots. See the
+[supported contract and validation evidence](docs/vm86-bios-validation.md).
+This does not establish recovery of the private Issue #113 boot/input path.
 
 The original MIT [CLTS probe](guest/clts.asm) checks CR0.TS/#NM recovery in real
 and protected mode, all four supported x87 metadata forms, WAIT MP/TS and EM
@@ -773,3 +783,12 @@ source archives beside the generated image. See [file-level audit](docs/licenses
 - [Review and merge guidelines](docs/review-guidelines.md)
 - [Issue template](.github/ISSUE_TEMPLATE/issue.md) and [PR template](.github/pull_request_template.md)
 - [AI agent instructions](AGENTS.md)
+
+### Additional original CPU/firmware regression fixtures
+
+The original MIT IRET and VM86 firmware fixtures are included in the preparation
+commands above. They exercise architectural stack returns, paged firmware copies
+and protected keyboard waits independently of external application media. See
+the [Issue #113 independent regression evidence](docs/issue-113-independent-regressions.md)
+for the tested behavior, reproduction commands and limits of the inherited
+private retest observation.
