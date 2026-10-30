@@ -46,6 +46,7 @@ __pycache__/
 /fixtures/paging/
 
 /fixtures/vm86/
+/fixtures/iret_wrap/
 
 # Local HDD media must normally live outside this checkout. Generated legal
 # fixtures are rebuilt and hash checked; no HDD image is a source asset.
