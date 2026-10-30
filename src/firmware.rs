@@ -410,15 +410,25 @@ pub(crate) fn execute_service(c: &mut Cpu, b: &mut Bus) -> ExecResult<()> {
                         return Err("invalid BIOS disk transfer size".into());
                     }
                     while left > 0 {
-                        let dma_address = memory::resolve(c, b, addr, op != 5)?;
-                        if !disk_transfer(
+                        // Preserve #118's BIOS-only scatter transfer. Raw guest
+                        // DMA still uses physical channel addresses.
+                        if c.vm86() {
+                            b.firmware_dma = Some(
+                                (0..sector_size)
+                                    .map(|i| memory::resolve(c, b, addr + i, op != 5))
+                                    .collect::<ExecResult<_>>()?,
+                            );
+                        }
+                        let transferred = disk_transfer(
                             b,
                             drive,
                             [cylinder, h, r, n],
                             sector_size as u16,
-                            dma_address,
+                            addr,
                             op == 5,
-                        ) {
+                        );
+                        b.firmware_dma = None;
+                        if !transferred {
                             ok = false;
                             break;
                         }
@@ -426,7 +436,11 @@ pub(crate) fn execute_service(c: &mut Cpu, b: &mut Bus) -> ExecResult<()> {
                         if left == 0 {
                             break;
                         }
-                        addr = (addr + sector_size) & 0xfffff;
+                        addr = if c.vm86() {
+                            addr + sector_size
+                        } else {
+                            (addr + sector_size) & 0xfffff
+                        };
                         if let Some(next) = r.checked_add(1).filter(|&next| {
                             b.disks[drive as usize]
                                 .as_ref()
@@ -524,8 +538,8 @@ fn preflight(c: &Cpu, b: &mut Bus, int: u8, ah: u8) -> ExecResult<()> {
     use memory::{check, check_seg};
     match int {
         8 => {
-            check(c, b, 0x58a, 2, false)?;
             check(c, b, 0x58a, 2, true)?;
+            check(c, b, 0x58a, 2, false)?;
         }
         9 if b.keyboard.scan_pending() => {
             check(c, b, 0x502, 0x39, true)?;
@@ -589,34 +603,6 @@ fn preflight(c: &Cpu, b: &mut Bus, int: u8, ah: u8) -> ExecResult<()> {
                     if matches!(op, 1 | 5 | 6) && drive < 2 && b.disks[drive].is_some() {
                         let len = c.r[BX] as usize;
                         check(c, b, addr, len, op != 5)?;
-                        // DMA receives physical addresses; each sector must be
-                        // physically contiguous. Never silently DMA into a
-                        // different physical alias under nonidentity paging.
-                        if c.vm86() && c.byte(5) <= 3 {
-                            let sector = 128usize << c.byte(5);
-                            for start in (0..len).step_by(sector) {
-                                let first = memory::resolve(c, b, addr + start, op != 5)?;
-                                if first + sector > 0x100000 {
-                                    return Err(
-                                        "VM86 BIOS DMA sector requires physical memory below 1 MiB"
-                                            .into(),
-                                    );
-                                }
-                                if (first & 0xffff) + sector > 0x10000 {
-                                    return Err(
-                                        "VM86 BIOS DMA sector crosses a physical 64 KiB boundary"
-                                            .into(),
-                                    );
-                                }
-                                for i in 1..sector.min(len - start) {
-                                    if memory::resolve(c, b, addr + start + i, op != 5)?
-                                        != first + i
-                                    {
-                                        return Err("VM86 BIOS DMA sector requires contiguous physical pages".into());
-                                    }
-                                }
-                            }
-                        }
                     }
                 }
             }

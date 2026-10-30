@@ -116,6 +116,7 @@ python3 tools/prepare_task_register_fixture.py
 python3 tools/prepare_clts_fixture.py
 python3 tools/prepare_paging_fixture.py
 python3 tools/prepare_vm86_fixture.py
+python3 tools/prepare_vm86_bios_fixture.py
 python3 tools/prepare_vm86_firmware_fixture.py
 python3 tools/prepare_iret_wrap_fixture.py
 python3 tools/prepare_fpu_init_fixture.py
@@ -191,6 +192,15 @@ paged VM86 firmware access and extended-copy descriptor defects. Their correctio
 now have cold/reset DOS command and bounded game-input evidence; full game
 playability is not claimed. The report separates current results from historical
 access blockers and independent controls. Private media never enters CI or web/.
+
+The original MIT [VM86 BIOS probe](guest/vm86_bios.asm) reproduces the paged
+VM86 timer firmware stop, then checks translated BIOS work areas, buffer faults,
+saved flags, IRQ callbacks and keyboard input across identity/nonidentity paging
+and PG=0, cold/reset. Prepare it with
+`python3 tools/prepare_vm86_bios_fixture.py`; native and production-Wasm Chromium
+checks use the same pinned disk at both roots. See the
+[supported contract and validation evidence](docs/vm86-bios-validation.md).
+The separate HDD investigation records the private Issue #113 boot/input retest.
 
 The original MIT [CLTS probe](guest/clts.asm) checks CR0.TS/#NM recovery in real
 and protected mode, all four supported x87 metadata forms, WAIT MP/TS and EM

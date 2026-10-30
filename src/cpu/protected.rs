@@ -86,7 +86,7 @@ impl Cpu {
     pub(super) fn linear(&self, s: usize, off: u32) -> usize {
         self.segment_cache(s).base.wrapping_add(off) as usize
     }
-    pub(super) fn check_access(
+    pub(crate) fn check_access(
         &self,
         b: &mut Bus,
         s: usize,

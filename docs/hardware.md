@@ -1677,11 +1677,12 @@ valid 386 byte/page-granular limits, and RAM ranges within conventional or model
 extended memory. Reserved descriptor bits, code, expand-down, holes and short
 limits are rejected. The real-mode extended copy retains its physical/A20 policy;
 VM86 table/data operands follow the caller's paging and physical bus decoding.
-A VM86 floppy DMA sector must resolve to contiguous physical storage below
-1 MiB and stay within one physical 64 KiB DMA window; an unsupported mapping
-fails explicitly before controller execution. DMA remains a physical bus master
-and does not set CPU page dirty bits. IDE PIO buffers
-can span noncontiguous pages. The independent
+The synthetic VM86 floppy service preserves the BIOS-only scatter map from
+Issue #118, resolving each sector's guest buffer after request-wide permission
+checks. It can span noncontiguous physical pages and extended RAM; the FDC still
+uses its FIFO, scheduler and channel-2 progression. Raw guest DMA retains physical
+addressing and its existing boundary behavior. Physical DMA does not set CPU page
+dirty bits. IDE PIO buffers can also span noncontiguous pages. The independent
 [firmware guest](../guest/vm86_firmware.asm) and native matrices verify this
 contract without private media. See the [investigation](hdd-boot-investigation.md)
 for the separately verified private boot/input outcome.

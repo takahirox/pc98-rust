@@ -17,6 +17,65 @@ confirmed current main at `04cb05978486f7413bc79591487d9305f80fa140`;
 `83f120d38681d22fe8f87fb64ba31b39bea75e19` is already in this history.
 No upstream technical diagnosis was supplied.
 
+### Integration with current main — review revision
+
+The fix node fetched `main` at
+`a33bca6f503c35d9e1aa213497460f260f015abc` (merged PR #119) and integrated it
+locally. Both independent VM86 guests and the IRET-wrap fixture remain in README
+and CI preparation. The overlapping implementations now retain #119's BIOS-only
+floppy scatter map, request-wide fault preflight and write-access timer fault
+codes, together with #113's descriptor-limit correction, mapped extended copies,
+GINIT accesses and architectural STI/HLT keyboard wait. Raw DMA remains physical.
+The original #119 monitor was extended to validate and resume the ROM HLT #GP;
+its four deliberate page faults retain separate exact checks and trap accounting.
+Unsupported-service controls now select services outside the expanded contract.
+
+The current public listing returned HTTP 200 and retained the exact PC-98 ZIP
+link and distinct CD-image link. The official declaration was reread. Existing
+adult-operator confirmation, owner authorization and the recorded access reassessment
+remain applicable; no new media download or permission assertion was needed.
+The prior Run's initial no-download decision was an unestablished eligibility/
+environment assumption, not an observed server failure or a verified prohibition.
+The subsequent VM86 and descriptor failures were actual technical constraints.
+
+The integrated native release was privately retested using the existing separate
+unmodified working HDI. Cold and reset both reached a DOS prompt and produced a
+standalone `ok` line from `ECHO OK`. Each reported 900 expected ROM STI/HLT #GP
+traps, zero other CPU faults and no host error. Paired game runs were advanced
+100,000,000 slots before input: their frames initially matched and still matched
+after Escape; injecting Enter into only one run then changed its rendered frame.
+Cold and reset repeated that outcome with zero CPU faults and no host error.
+Working media remained unchanged and matched the preserved original. This is
+bounded boot/input evidence, not a full playthrough or a claim about every profile.
+All harnesses, frames, comparisons and detailed diagnostics stayed outside Git.
+
+Validation of the integrated tree:
+
+- All 52 documented Python preparation/check commands passed, including seven
+  fixture-fetch unit tests and matching complete FreeDOS sources/license copies.
+  Both original VM86 fixtures and IRET media were rebuilt and manifest-checked
+  after integration; all 49 fixture preparations are present in both README and CI.
+- `cargo test --locked`: **546 passed**, zero failed or ignored.
+  An isolated archive of current main with the same original descriptor regression
+  fails on a valid 20-bit-limit descriptor; the integrated revision passes it.
+- `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`, whitespace,
+  documentation file-link checks and tracked-media/archive/dump audits passed.
+- Production native and Rust/Wasm builds passed. `npm test -- --workers=2`
+  includes the reproducible media/font checks and asset audit: **10 approved
+  publication assets**, with no private media or regression disks in `web/`.
+
+- `npm test -- --workers=2`: **168 Chromium tests passed** at `/` and
+  `/pc98-rust/`, including both original VM86 guests, IRET wrapping, legal DOS
+  shell/keyboard and HDD controls, cold/reset. No skipped cases or final-run
+  retries. The pinned Chromium shell installer stalled during extraction;
+  integrity/path-checked official build 1194 was extracted with system `unzip`,
+  then Chromium 141.0.7390.37 executed the full suite on the standard local ports.
+
+Publication remains separate: PR #117's published head is still
+`8d8e7c896a4c0569d7305c517d90628ce8f15f66`. This node performs no push, GitHub PR merge,
+Issue closure or publication-approval retry. The existing human publication
+question remains pending; see the [handoff](issue-113-publication-handoff.md).
+
 ### Access audit after the operator's age answer
 
 The live Issue and its comments were read, including the
@@ -264,9 +323,10 @@ preflighted before consuming queued keys, controller bytes or timer state. A
 missing, supervisor-only or read-only page produces the ordinary guest #PF with
 CR2/error code and restarts the original OUT after monitor repair; it does not
 become a host error or silently touch the physical identity alias. CPU operand writes
-set page dirty bits. Floppy DMA resolves mapped physical sectors and explicitly
-rejects noncontiguity, addresses above its 1 MiB range, and physical 64 KiB
-boundary crossings before device execution; physical DMA does not set PTE D. General
+set page dirty bits. After integration with PR #119, the VM86 floppy service
+preserves its BIOS-only scatter map across noncontiguous pages and extended RAM,
+with request-wide permission checks before controller execution. Raw guest DMA
+retains physical addressing; physical DMA does not set PTE D. General
 protected-mode BIOS calls remain unsupported.
 
 Timer callbacks retain CPL3, VM and a 16-bit VM86 CS cache. The ordinary guest

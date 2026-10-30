@@ -925,7 +925,7 @@ fn vm86_firmware_timer_uses_user_mapping_and_returns_through_mapped_stack() {
 
 #[test]
 fn vm86_firmware_fault_restarts_out_without_eoi_or_data_mutation_then_retries() {
-    for (permissions, code) in [(0, 4), (3, 5), (5, 7)] {
+    for (permissions, code) in [(0, 6), (3, 7), (5, 7)] {
         let (mut c, mut b) = firmware_setup(8, permissions);
         b.mem[0x34058a..0x34058c].copy_from_slice(&41u16.to_le_bytes());
         b.pics[0].isr = 1;
@@ -1145,7 +1145,7 @@ fn vm86_blocking_bios_keyboard_wait_executes_sti_hlt_with_monitor_protection() {
 }
 
 #[test]
-fn vm86_firmware_floppy_dma_uses_mapped_sector_and_rejects_unserviceable_mappings() {
+fn vm86_firmware_floppy_dma_preserves_scatter_mapping_and_fault_atomicity() {
     for case in 0..6 {
         let (mut c, mut b) = firmware_setup(0x1b, 7);
         let mut image = vec![0; 1_261_568];
@@ -1204,14 +1204,15 @@ fn vm86_firmware_floppy_dma_uses_mapped_sector_and_rejects_unserviceable_mapping
                 assert_eq!(b.fdc.reads, 1);
             }
             1 | 2 => {
-                assert!(result.unwrap_err().contains(if case == 1 {
-                    "contiguous physical"
+                result.unwrap();
+                let (first, second, prefix) = if case == 1 {
+                    (0x85f00, 0x96000, 0x100)
                 } else {
-                    "64 KiB boundary"
-                }));
-                assert_eq!(b.fdc.reads, 0);
-                assert!(b.mem[0x85000..0x90000].iter().all(|v| *v == 0xa5));
-                assert_eq!(get(&b, 0x2100) & 0x40, 0);
+                    (0x8ff00, 0x96000, 0x100)
+                };
+                assert_eq!(&b.mem[first..first + prefix], &image[..prefix]);
+                assert_eq!(&b.mem[second..second + 1024 - prefix], &image[prefix..1024]);
+                assert_eq!(b.fdc.reads, 1);
             }
             3 => {
                 result.unwrap();
@@ -1229,9 +1230,9 @@ fn vm86_firmware_floppy_dma_uses_mapped_sector_and_rejects_unserviceable_mapping
                 assert_eq!(get(&b, 0x2104) & 0x60, 0x20);
             }
             _ => {
-                assert!(result.unwrap_err().contains("below 1 MiB"));
-                assert_eq!(b.fdc.reads, 0);
-                assert_eq!(&b.mem[0x350000..0x350400], &[0; 1024]);
+                result.unwrap();
+                assert_eq!(b.fdc.reads, 1);
+                assert_eq!(&b.mem[0x350000..0x350400], &image[..1024]);
             }
         }
         assert_eq!(b.disks[0].as_ref().unwrap().bytes, image);
