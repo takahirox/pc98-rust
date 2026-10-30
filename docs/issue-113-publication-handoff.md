@@ -42,6 +42,48 @@ history, so the conflict resolution is retained. Publish no
 private media, private hashes, detailed traces, disassembly, memory dumps or
 screenshots. Keep #113 open; do not merge or add automatic closing keywords.
 
+## Review-fix checkpoint verification — 2026-10-30
+
+The next fix node starts at `1dfb7c2b55018bed6ec26277770344d1d60af7d5`.
+Its assigned review findings describe the older published tree. Read-only live
+checks still find main at `a33bca6f503c35d9e1aa213497460f260f015abc` and PR #117
+at `8d8e7c896a4c0569d7305c517d90628ce8f15f66`, with `mergeable=false`.
+Locally, main is already an ancestor; `git merge-tree --write-tree HEAD a33bca6`
+succeeds without conflicts. All 49 README fixture preparation commands remain
+in CI, including both VM86 guests and the IRET guest. The VM86 firmware path,
+CPU paging/fault transaction and extended-copy descriptor correction are already
+present in the checkpoint. No additional emulator change is justified by these
+findings against this local tree.
+
+The live distributor listing was checked successfully with a direct HTTP
+request (200), retaining the exact PC-98 ZIP link and separate CD-image link.
+The official declaration was reread. This node neither retrieved nor executed
+private media; the earlier integrated cold/reset results above are inherited
+evidence, not new observations. The historical access audit and remaining
+component-provenance qualifications remain applicable.
+
+Fresh checks on this checkpoint passed all 52 documented Python preparation/check
+commands (49 fixture builders, seven fixture-fetch unit tests, media and font
+checks), `cargo test --locked` (546 passed, zero failed or ignored),
+`cargo clippy --all-targets -- -D warnings`, `cargo fmt --check` and the native
+release build. Documentation local-link checks and the tracked-file audit passed;
+no HDI, ZIP/RAR, dump or trace files are tracked.
+`npm ci` and `npm test -- --workers=2` passed: production Rust/Wasm compilation,
+the audit of ten approved publication assets, and **168 Chromium tests** at `/`
+and `/pc98-rust/` (6.5 minutes), with no failures, skips or retries. Both VM86
+guests and IRET cold/reset acceptance passed at each root. No emulator, guest,
+fixture, test or CI files changed during this revalidation.
+
+The assigned node explicitly prohibits pushing or merging. It therefore cannot
+resolve the findings on the published PR or validate a new GitHub head. The prior
+automatic approval rejection of the tree upload, classified as publishing
+private diagnostic/provenance data, is also preserved above; this node makes no
+upload attempt or approval retry. Do not treat this validation record as
+publication, a substitute for resolving that rejection, or completion of the
+remote review. Keep #113 open. A subsequent authorized publication step must
+preserve both histories, update the PR evidence and run checks on its resulting
+head before approval.
+
 ## Proposed PR title
 
 Fix HDI boot/input with IRET wrapping, paged VM86 BIOS and XMS copies
