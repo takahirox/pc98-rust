@@ -8,14 +8,15 @@ requires addressing the actual HDI boot/input failure. Merged
 independent controls only. Neither those passing controls nor this access audit
 completes the restart. **The reported hang remains unresolved; keep #113 open.**
 
-The assigned checkpoint is `3636778cb3f18a7e29233a3b2b3ff3116c5a6969`.
+The initial restart's assigned checkpoint was
+`3636778cb3f18a7e29233a3b2b3ff3116c5a6969`.
 Read-only `git ls-remote https://github.com/takahirox/pc98-rust.git refs/heads/main`
 confirmed current main at `04cb05978486f7413bc79591487d9305f80fa140`;
 `git diff 04cb059 HEAD --stat` was empty before this restart. PR #114's merge
 `83f120d38681d22fe8f87fb64ba31b39bea75e19` is already in this history.
 No upstream technical diagnosis was supplied.
 
-### Access audit and exact missing fact
+### Access audit after the operator's age answer
 
 The live Issue and its comments were read, including the
 [existing owner authorization](https://github.com/takahirox/pc98-rust/issues/113#issuecomment-6513464041).
@@ -26,7 +27,7 @@ unestablished age eligibility and environment permission, as recorded in its
 It did not attempt an archive request. That record demonstrates neither a
 download failure nor an applicable environment prohibition.
 
-This restart reread the live [listing](https://alicefree.fastlast.org/) and
+The initial restart reread the live [listing](https://alicefree.fastlast.org/) and
 inspected its HTML links without requesting archive media. The PC-98 entry still
 targets <https://d1.alicefree.fastlast.org/d/alice_yakata3.zip>; the separate CD
 entry targets <https://d1.alicefree.fastlast.org/d/zip/alice_yakata3_CD.zip>.
@@ -37,44 +38,103 @@ under-18s. It identifies its latest revision as 2019-01-21. The other conditiona
 distribution requirements remain applicable; the declaration does not establish
 licenses for unidentified bundled OS, driver, utility or font components.
 
-No explicit ban on this private compatibility investigation was found in the
-supplied execution instructions or repository guidance. Local shell/filesystem
-access and outbound requests to the public listing and GitHub worked. This is
-not evidence of archive availability: no archive request, including HEAD or
-range retrieval, was attempted. Unknown bundled licenses are an inspection task,
-not an identified licensing violation or a proven reason that the earlier Run
-could not download.
+The [operator's answer](https://github.com/takahirox/pc98-rust/issues/113#issuecomment-6516387665)
+confirms that the requesting human operator is at least 18. **That question is
+answered; no renewed age or owner-permission request is pending.** It does not
+certify the independent eligibility of an AI service or waive component terms.
+Review revision `e1a2820b68b08603705fa8b5ae8756459d911a6a` reassessed the actual
+environment: the supplied rules permit local shell/filesystem and network
+operations, authorize this private inspection for the adult operator, and contain
+no explicit prohibition on this compatibility investigation. No age/access gate
+was bypassed and no independent human age was asserted for the agent. The
+earlier generic environment concern was not a verified restriction.
 
-**The unresolved fact is whether the human operator on whose behalf retrieval
-would run is at least 18.** Neither the live owner comment nor the execution
-inputs establish that fact. An age-eligibility question was submitted in this
-Run; no affirmative answer is recorded at this checkpoint. The Issue explicitly
-requires eligibility before retrieval and forbids fabricating it. An affirmative
-operator eligibility statement would resolve this particular constraint without
-repeating owner permission. It would not establish bundled-component rights;
-those must then be inspected separately before guest execution. This records a
-missing eligibility fact, not a claim that the operator is under 18 or that the
-environment prohibits testing.
+### Actual private retrieval and component inspection — 2026-10-30
 
-No ZIP/HDI was retrieved, extracted or tested in this restart. Archive integrity,
-HDI identity/geometry, actual kernel/drivers, symptom reproduction, first
-architectural divergence, correction and affected-image retest remain pending.
-No emulator change or new regression is justified by the present evidence.
-Once eligibility is established, resume with private extraction/license inventory
-outside the checkout, an intact original and separate working HDI, then bounded
-Ap/IDE diagnostics and keyboard retesting against the existing controls. Keep
-all media, hashes and raw output local; headless output must be redirected to
-private files, not returned as tool output or sent to model services.
+Before retrieval, this revision rechecked the live listing over HTTP (200), its
+exact PC-98/CD links, and the current official declaration linked above. The
+previously missing operator age fact is resolved. Private retrieval and metadata/
+license inspection proceeded on that operator's behalf under the existing
+authorization; execution of unidentified bundled components did not.
 
-### Checks in this restart
+The exact PC-98 ZIP request returned **HTTP 200**. ZIP integrity passed for all
+four members. There is exactly one HDI member, with basename **`aliceY3.hdi`**.
+The ZIP, extracted original, separate identical working copy, filesystem
+inventory and downloaded public component packages are outside the checkout in
+a private directory. No private hashes, payloads, game text, screenshots,
+disassembly or execution traces are published. This verifies the current
+archive's target member, not byte identity with the user's original local file.
 
-`cargo build --locked --release --bin headless` passed, preparing the existing
-runner without private media. Documentation links, Markdown structure and
-`git diff --check` were checked. No emulator, fixture, build or dependency source
-changed. Native test suites, fixture downloads, production-Wasm/browser acceptance
-and private-media tests were not rerun; historical results below are not new
-validation. This documentation checkpoint is a blocked handoff, not completion
-or a compatibility fix. No GitHub mutation was performed during implementation.
+Short format observations from a read-only parser:
+
+- HDI: 4,096-byte header, 11,141,120-byte payload, 320 cylinders, 4 heads,
+  17 physical sectors/track, 512 bytes/physical sector; header and file extent
+  agree. Partition 0 starts at physical LBA 68.
+- FAT12 BPB: 1,024-byte logical sectors, 4 sectors/cluster, 1 reserved sector,
+  2 FAT copies of 4 logical sectors each, 1,024 root entries, 10,846 volume
+  logical sectors. The logical/physical sector-size difference is an observation,
+  **not a diagnosed emulator defect**.
+- The private FAT reader extracted an inventory of 52 files. Boot/support files
+  include `KERNEL.SYS`, FreeCOM `COMMAND.COM`, `FDXMS.SYS`, `EMM386.EXE` and
+  `XMZ.SYS`. CONFIG references FDXMS and EMM386; XMZ is present but not referenced
+  there. No separate font file was identified in this inventory; that does not
+  certify all game assets or establish every component's rights.
+
+Component rights were inspected separately from AliceSoft's game declaration:
+
+| Component | Evidence and remaining limit |
+| --- | --- |
+| AliceSoft game | Listed in the current conditional declaration; copyright is retained. No game or extracted asset redistribution is authorized by this work. |
+| FDXMS | The private binary exactly matches `FDXMS.SYS` in the author's [2004-09-10 port package](http://retropc.net/tori/freedos/fdxms_20040910.zip), which includes source and GPL notices. Its identifier is 0.9.Sand, dated 2002-12-30. This component has a concrete upstream license match. |
+| Kernel/partition loader | The archive attributes FreeDOS(98), and the partition loader contains the FreeDOS identifier. The author's [2004-09-10 kernel package](http://retropc.net/tori/freedos/kernel_20040910.zip) and [2028 package dated 2005-07-24](http://retropc.net/tori/freedos/kernel_2028_20050724.zip) were inspected privately; they include GPL sources/notices, but neither supplied kernel binary equals the private one. The exact kernel build and partition-loader provenance remain unverified. A different GPL build's license alone does not establish the origin of these particular bytes. |
+| EMM386 | The private version identifier is EMM386(98) 1.14, dated 2005-02-23. The author's [2005-02-23 package](http://retropc.net/tori/freedos/emm386_20050223.zip) contains an Artistic License and sources, but neither supplied executable exactly matches the private binary. Its exact variant/provenance remains unverified; it must not simply be labelled GPL because FreeDOS is bundled. |
+| Disk IPL and XMZ | The disk IPL has an `IPL1` identifier, which does not identify its author or license. No use terms or provenance for this IPL or `XMZ.SYS` were established from the supplied archive. Neither is covered merely by AliceSoft's declaration. |
+
+The archive's ancillary files comprise the game declaration and a short FreeDOS/
+Anex86 note. Neither establishes the missing IPL/XMZ terms. The filesystem has
+two text-notice candidates; neither supplies a component license notice. These
+are inspection results, **not proof of infringement or a prohibition on every
+FreeDOS build**. Matching source packages were sought at the
+[port author's page](http://retropc.net/tori/freedos/) and the
+[FDXMS author's page](https://www.ludd.ltu.se/~ams/freedos/fdxms/), rather than
+assuming all support code shared the game's permission. The two historical
+Nifty source URLs in the ancillary note failed DNS resolution. The port site's
+HTTPS handshake failed, but its HTTP source page and packages were accessible;
+that TLS error did not prevent the component audit or the archive download.
+
+### Exact remaining constraint and next technical work
+
+**Guest execution is blocked by incomplete component provenance/use terms,
+specifically the supplied disk IPL and XMZ, with the kernel/loader and EMM386
+variants still unmatched.** The Issue explicitly says not to use the HDI when
+additional component terms are unclear. There is now concrete inventory evidence
+for that constraint; it is no longer a missing owner-age answer, an assumed
+environment ban or a supposed archive/server failure. No HDI boot, symptom
+reproduction, keyboard test, architectural diagnosis or affected-image retest
+has occurred. No emulator correction is supported by this evidence.
+
+Resolve the constraint by establishing the supplied IPL/XMZ provenance and
+applicable use terms and identifying the remaining boot-component variants from
+lawful upstream documentation/source packages or other component-specific rights
+evidence. This is a component investigation, not a request for another owner
+permission statement. Replacing these files with known licensed alternatives
+could support a separate control, but would not establish a retest of the exact
+supplied HDI. Once the component boundary is resolved, run bounded Ap/IDE boot
+and input diagnostics on the separate working copy, locate the first actual
+divergence, then implement evidenced corrections and independent regressions.
+Redirect all raw output to private files outside the checkout. **Keep #113 open
+and this restart blocked/incomplete; this inspection is not a compatibility fix.**
+
+### Checks in this revision
+
+`cargo build --locked --release --bin headless` passed. ZIP integrity, HDI extent/
+geometry, read-only FAT inventory and the component comparisons above were
+performed privately. Documentation structure, changed relative links/anchors and
+`git diff --check` passed. No emulator, fixture, build or dependency source changed.
+Native suites and production-Wasm/browser acceptance were not rerun for this
+documentation-only change; historical results below are not new validation.
+Private guest execution was not attempted because of the exact component
+constraint above. No GitHub mutation was performed during this revision.
 
 ## PR #114 baseline: independent alternatives, private image not tested
 
