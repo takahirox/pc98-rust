@@ -74,7 +74,7 @@ runner without private media. Documentation links, Markdown structure and
 changed. Native test suites, fixture downloads, production-Wasm/browser acceptance
 and private-media tests were not rerun; historical results below are not new
 validation. This documentation checkpoint is a blocked handoff, not completion
-or a compatibility fix. No GitHub mutation is part of this Run.
+or a compatibility fix. No GitHub mutation was performed during implementation.
 
 ## PR #114 baseline: independent alternatives, private image not tested
 
