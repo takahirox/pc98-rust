@@ -5,8 +5,9 @@
 The current [Issue #113 objective](https://github.com/takahirox/pc98-rust/issues/113)
 requires addressing the actual HDI boot/input failure. Merged
 [PR #114](https://github.com/takahirox/pc98-rust/pull/114) supplies existing
-independent controls only. Neither those passing controls nor this access audit
-completes the restart. **The reported hang remains unresolved; keep #113 open.**
+independent controls only. Actual private testing below diagnoses and corrects
+the first IRET failure, then reaches a separate VM86 BIOS limitation. **Full
+boot/input recovery remains unresolved; keep #113 open.**
 
 The initial restart's assigned checkpoint was
 `3636778cb3f18a7e29233a3b2b3ff3116c5a6969`.
@@ -49,13 +50,14 @@ no explicit prohibition on this compatibility investigation. No age/access gate
 was bypassed and no independent human age was asserted for the agent. The
 earlier generic environment concern was not a verified restriction.
 
-### Actual private retrieval and component inspection — 2026-10-30
+### Prior private retrieval and component inspection — 2026-10-30
 
 Before retrieval, this revision rechecked the live listing over HTTP (200), its
 exact PC-98/CD links, and the current official declaration linked above. The
 previously missing operator age fact is resolved. Private retrieval and metadata/
 license inspection proceeded on that operator's behalf under the existing
-authorization; execution of unidentified bundled components did not.
+authorization. Those earlier revisions stopped before guest execution; the
+reassessment and actual execution below supersede that stopping decision.
 
 The exact PC-98 ZIP request returned **HTTP 200**. ZIP integrity passed for all
 four members. There is exactly one HDI member, with basename **`aliceY3.hdi`**.
@@ -141,54 +143,136 @@ identifies its author/version and historical distribution directory
 The API documentation supplies no XMZ use license. This is a specific unavailable
 component source, not a failure to retrieve the game ZIP.
 
-### Exact remaining constraint and next technical work
+### Owner clarification: reassessment of the asserted use restriction
 
-**Guest execution is blocked by incomplete component provenance/use terms,
-specifically the supplied disk IPL and XMZ, with the kernel/loader and EMM386
-variants still unmatched.** The Issue explicitly says not to use the HDI when
-additional component terms are unclear. There is now concrete inventory evidence
-for that constraint; it is no longer a missing owner-age answer, an assumed
-environment ban or a supposed archive/server failure. No HDI boot, symptom
-reproduction, keyboard test, architectural diagnosis or affected-image retest
-has occurred. No emulator correction is supported by this evidence.
+The [latest owner clarification](https://github.com/takahirox/pc98-rust/issues/113#issuecomment-6516921898)
+requests public component research and distinguishes missing provenance from an
+actual restriction on private use. The previous section's negative binary
+comparisons remain valid, but the previous conclusion that they prevented any
+execution was unsupported. No applicable private-execution prohibition was found
+in the checked sources or environment rules. Existing adult-operator confirmation
+and local-testing authorization remain sufficient for this bounded investigation;
+no new age, owner-permission or component-author confirmation was requested.
+This is not certification of every component's origin or redistribution rights.
 
-Resolve the constraint by establishing the supplied IPL/XMZ provenance and
-applicable use terms and identifying the remaining boot-component variants from
-lawful upstream documentation/source packages or other component-specific rights
-evidence. In particular, the missing evidence is an origin/license record for
-the supplied disk IPL (which booting the unmodified HDI would execute), and the
-XMZ author's applicable notice. The archive's notes, all three listed historical
-kernel packages and the additional candidates above did not supply that record.
-If no further lawful public source identifies it, the archive assembler or the
-component author must provide the missing attribution/terms; project-owner
-permission cannot establish an unidentified third party's rights. The failed
-kernel unpacking attempt is an unresolved technical identification step, not an
-external approval requirement or an independently sufficient reason to prohibit
-all FreeDOS execution. This is a component investigation, not a request for
-another owner permission statement. Replacing these files with known licensed alternatives
-could support a separate control, but would not establish a retest of the exact
-supplied HDI. Once the component boundary is resolved, run bounded Ap/IDE boot
-and input diagnostics on the separate working copy, locate the first actual
-divergence, then implement evidenced corrections and independent regressions.
-Redirect all raw output to private files outside the checkout. **Keep #113 open
-and this restart blocked/incomplete; this inspection is not a compatibility fix.**
+The live distributor listing was rechecked (HTTP 200, unchanged exact PC-98 and
+separate CD links), along with the official declaration. Further public-source
+checks covered the port author's live HTTP page, its already downloaded GPL
+kernel/FDXMS sources and Artistic EMM386 notice, the current maintainer's page,
+and historical-source leads. GPLv2 section 0 explicitly excludes running from its
+restrictions; source-provision requirements for distribution do not automatically
+restrict private execution. The Artistic notice separately describes customary
+use and distribution; exact build identity is still unverified. Neither permits
+relabelling an unknown IPL as GPL. The public-domain BTNPART candidate remains a
+negative comparison, not an identification of that IPL.
+
+Historical index requests for the two Nifty paths in the archive's note and the
+Tohoku XMZ directory did not recover notices (HTTP failure/timeouts). Public
+searches also located [Namikaze's ZOBplus-associated author page](https://www.namikaze.org/software/98dos/),
+which describes another driver's release, not XMZ's terms. Neither a dead host
+nor another driver's notice establishes an XMZ restriction or license. **IPL/XMZ
+provenance remains unresolved; no specific term prohibiting this private boot
+was identified.** XMZ is absent from CONFIG and is not evidence for this failure.
+These unresolved redistribution/attribution questions are retained without
+turning them into an unsupported execution ban.
+
+### Actual Ap/IDE reproduction and correction — 2026-10-30
+
+The existing separate, unmodified working HDI was booted privately with the
+original Rust interpreter and a 20,000,000-slot budget:
+
+```sh
+cargo run --locked --release --bin headless -- /private/local/working.hdi 20000000 --progress --ap
+```
+
+The path is illustrative. All detailed logs, inventories, private diagnostic
+harnesses and media remain outside the checkout. Only short architectural
+observations are reported here; no guest code, media payloads, disassembly or detailed traces were
+supplied to a model or external service.
+
+Before correction, the reported persistent display and lack of Enter response
+were reproduced. There were **zero literal `3F` cells and 1,973 NUL fallback
+cells**, with no host error. The first CPU fault occurred at slot 1,211,605:
+a real-mode synthetic BIOS IRET attempted to return through a frame at SP=FFFC.
+The guest's software interrupt had entered at SP=0002, wrapping between word
+pushes. The return incorrectly validated all six bytes as one contiguous
+operand. It raised #SS, then repeatedly faulted returning from the default
+exception handler. At 20,000,000 slots there were 6,262,799 faults; Enter remained
+queued with no further IRQ acknowledgements. This distinguishes an actual
+execution failure from a renderer-only interpretation of the question marks.
+No IDE read error or protected-mode transition preceded that first fault.
+
+The [Intel486 PRM (1992), IRET pp.26-173–177](https://manuals.plus/m/d86207aaebd9b10464f2058efc61559e6141d3b072db100e89bfe17c8187e143)
+specifies successive pops in real-address mode. The correction preflights each
+real-mode return operand independently and applies the stack address size
+between operands. Each individual word/dword must still fit its segment;
+protected-mode and VM86 contiguous-frame checks remain intact. The read-only
+IRET bounds metadata uses the same distinction. No guest-specific branch,
+filename check, code substitution or forced guest state was added.
+
+The new original MIT [IRET guest](../guest/iret_wrap.asm) exercises a BIOS
+interrupt at SP=0002, two word frames and two dword frames that wrap between
+operands, saved carry, final SP and result guards. Its
+[pinned manifest](../fixtures/iret-wrap-manifest.json) and offline
+[preparation](../tools/prepare_iret_wrap_fixture.py) contain only original test
+material. Native and production-Wasm tests boot it cold and after reset. A
+separate CPU matrix covers valid wraps, rejected dwords that straddle the limit,
+restart IP, intact guard memory and diagnostic bounds. Both the guest and CPU
+matrix failed against the unchanged assigned checkpoint and pass after the fix.
+
+### Exact remaining technical blocker: VM86 synthetic BIOS service
+
+The affected private HDI was rerun after correction, cold and after reset, with
+the same 20,000,000-slot ceiling. Both runs passed the prior fault and kernel
+handoff, retired **5,025,484 instructions with zero CPU faults**, initialized
+EMM386 and entered paged VM86 execution. Both then stopped at the existing
+`synthetic real-mode firmware requested from protected mode` guard in
+[firmware service](../src/firmware.rs). The pending service is timer IRQ0's
+INT 08h thunk invoked in VM86, rather than the original IRET loop. There were
+500 IRQ acknowledgements; the mounted disk remained byte-for-byte unchanged.
+An Enter submitted after this host stop cannot be serviced. **A responsive DOS
+shell, command execution and game launch/input have not been established.**
+
+Removing the firmware guard alone is not a safe correction: firmware currently
+uses direct Bus/physical accesses, whereas VM86 requires guest paging and
+protection semantics, including BIOS work areas, buffers, saved flags, interrupt
+returns and callbacks. The remaining work is tracked in [task #118](https://github.com/takahirox/pc98-rust/issues/118):
+a cohesive VM86-compatible synthetic BIOS path, verified with independent guests
+using nonidentity mappings and faults, then affected-image boot/input retesting. This is a reproducible
+technical limitation, not an age, environment, archive-download or unproven
+component-use restriction. **Keep #113 open and the restart incomplete.** Fixing
+the first demonstrated defect does not establish full boot/input recovery or
+commercial-game compatibility.
 
 ### Checks in this revision
 
-The preceding revision's `cargo build --locked --release --bin headless` passed.
-ZIP integrity, HDI extent/geometry, read-only FAT inventory and component comparisons were
-performed privately. Documentation structure, changed relative links/anchors and
-`git diff --check` passed. No emulator, fixture, build or dependency source changed.
-Native suites and production-Wasm/browser acceptance were not rerun for this
-documentation-only change; historical results below are not new validation.
-Private guest execution was not attempted because of the exact component
-constraint above. In the review follow-up, the live distribution listing and
-official declaration were rechecked; the listing returned HTTP 200 with the same
-PC-98/CD ZIP targets. All three historical kernel ZIP integrity checks passed;
-the additional candidate comparisons yielded no matches. Neither result is a
-boot/input acceptance result. Both public boot candidates assembled successfully.
-The UPX unpacking attempt failed as recorded above. Documentation links/anchors
-and `git diff --check` were checked again. No GitHub mutation was performed.
+All CI fixture preparation commands were run, including complete pinned legal
+FreeDOS/source/license preparation and the original IRET probe. The new guest and
+CPU regression fail-before/pass-after evidence was obtained without private
+media in the tests. Validation results for this revision:
+
+- `cargo test --locked`: **525 passed**, no failures; the CPU boundary matrix
+  was also rerun successfully after adding the odd-SP rejection case.
+- `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check` and
+  `git diff --check`: passed.
+- `npm run build` (through `npm test`): production Rust/Wasm build, original
+  media/font checks and approved-assets audit passed, with exactly ten approved
+  publication assets.
+- Chromium/production-Wasm: all **164 distinct tests passed** across `/` and
+  `/pc98-rust/`, including the new IRET cold/reset test at each root. The full
+  eight-worker run had 159 passes and five UI-readiness timeouts, all while the
+  page still displayed “Loading WebAssembly”. Those five passed on a targeted
+  two-worker rerun (`npx playwright test --last-failed --workers=2`). No code or
+  timeout changes were made to obtain that result.
+- Initial browser setup lacked Chromium. The standard Node installer stalled
+  extracting the downloaded archive; the official Playwright build 1194
+  headless-shell ZIP was integrity/path checked and extracted with system
+  `unzip`. Chromium 141.0.7390.37 then executed the tests above. This tooling
+  failure is separate from the private guest's VM86 BIOS blocker.
+
+Historical results below are baseline evidence, not new acceptance results.
+No private media, hashes, detailed traces or screenshots entered the checkout,
+web assets, browser tests or CI. No push, merge or Issue closure was performed.
 
 ## PR #114 baseline: independent alternatives, private image not tested
 

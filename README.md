@@ -116,6 +116,7 @@ python3 tools/prepare_task_register_fixture.py
 python3 tools/prepare_clts_fixture.py
 python3 tools/prepare_paging_fixture.py
 python3 tools/prepare_vm86_fixture.py
+python3 tools/prepare_iret_wrap_fixture.py
 python3 tools/prepare_fpu_init_fixture.py
 python3 tools/prepare_pic_fixture.py
 python3 tools/prepare_pic_smm_fixture.py
@@ -184,8 +185,9 @@ the same.
 The [HDD investigation](docs/hdd-boot-investigation.md) provides an
 independent GPL FreeDOS HDD shell control, exact kernel-handoff acceptance and
 `headless --progress --ap` summaries for silent loops and raw text-VRAM glyph
-selection. It does not establish a fix for private `aliceY3.hdi`; that image was
-not obtained or retested and game playability remains unconfirmed.
+selection. Private `aliceY3.hdi` testing now reproduces a real-mode IRET stack
+wrap defect. Its correction advances boot to a separate VM86 synthetic-BIOS
+limitation; shell/input recovery and game playability remain unconfirmed.
 The [Issue #113 continuation](docs/hdd-boot-investigation.md#issue-113-continuation-independent-alternatives-private-image-not-tested)
 verifies the exact PC-98 archive listing separately from the CD-image download
 and records the local access decision. It also adds native/production-Wasm

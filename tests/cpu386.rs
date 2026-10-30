@@ -453,6 +453,47 @@ fn iretd_restores_an_explicit_dword_frame_including_ac() {
 }
 
 #[test]
+fn real_iret_wraps_between_stack_operands_but_not_inside_them() {
+    for wide in [false, true] {
+        let bytes = if wide { 4u16 } else { 2 };
+        for sp in [0xfff0u16, 0xfff8, 0xfffc, 0xfffe, 0xffff] {
+            let (mut c, mut b) = cpu(if wide { &[0x66, 0xcf] } else { &[0xcf] });
+            c.s[SS] = 0x3000;
+            c.r[SP] = sp;
+            c.flags = 2;
+            let fits = (0..3).all(|i| sp.wrapping_add(i * bytes) as u32 + bytes as u32 <= 0x10000);
+            for (i, value) in [0x1234u32, 0x200, 0x40203].into_iter().enumerate() {
+                let off = sp.wrapping_add(i as u16 * bytes) as usize;
+                let raw = value.to_le_bytes();
+                // A rejected dword's bytes beyond the limit are guards, not
+                // wrapped pieces of a legal operand.
+                b.mem[0x30000 + off..0x30000 + off + bytes as usize]
+                    .copy_from_slice(&raw[..bytes as usize]);
+            }
+            let memory = b.mem[0x30000..0x40004].to_vec();
+            assert_eq!(c.iret_frame_metadata(&b, wide).3, fits);
+            c.step(&mut b).unwrap();
+            if fits {
+                assert_eq!(c.fault_count, 0, "wide={wide} sp={sp:04x}");
+                assert_eq!(
+                    (c.s[CS], c.ip, c.r[SP]),
+                    (0x200, 0x1234, sp.wrapping_add(3 * bytes))
+                );
+                assert_eq!(c.flags & (CF | IF), CF | IF);
+                assert_eq!(c.flags_upper & 4, if wide { 4 } else { 0 });
+                assert_eq!(&b.mem[0x30000..0x40004], memory);
+            } else {
+                assert_eq!(c.last_fault, Some((12, 0)));
+                assert_eq!(c.ip, 0x20c0);
+                assert_eq!(c.r[SP], sp.wrapping_sub(6));
+                assert_eq!(b.read16(0x30000 + c.r[SP] as usize), 0x1000);
+                assert_eq!(&b.mem[0x40000..0x40004], &memory[0x10000..]);
+            }
+        }
+    }
+}
+
+#[test]
 fn hardware_irq_and_fault_entry_clear_ac() {
     let (mut c, mut b) = cpu(&[0x90]);
     b.mem[9 * 4..9 * 4 + 4].copy_from_slice(&[0, 0x30, 0, 0]);
