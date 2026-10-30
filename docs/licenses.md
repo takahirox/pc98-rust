@@ -310,6 +310,20 @@ IPL and all selected files. Keep the entire generated `fixtures/freedos` folder,
 complete corresponding kernel/FreeCOM source archives and licenses with the disk.
 It is a test fixture, excluded from Pages.
 
+`tools/prepare_hdd_investigation.py` builds four separate Issue #113 controls
+in the same ignored folder, using those same verified inputs and notices. FAT12
+and FAT16 boot sectors are assembled from the **unmodified** pinned GPL boot
+source. The fragmented FAT layouts, configurations and
+[POSTWAIT source](../guest/postwait.asm) are original MIT work; each disk includes
+the original assembly sources and `RUST.LIC`. No memory manager or additional
+third-party driver is added. [The manifest](../fixtures/hdd-investigation-manifest.json)
+pins every image and selected file, and preparation independently walks all FAT
+chains to verify their contents. `hdd-kernel.sys` is a generated copy of the
+same pinned GPL kernel for byte comparison, subject to the same source/notices
+obligations. Keep the **entire** `fixtures/freedos` directory with matching
+complete sources and notices when redistributing any of these controls. No
+generated image or kernel copy is a web asset.
+
 The [lawful-access record](hdd-boot-investigation.md#baseline-and-lawful-access-decision)
 does not clear `aliceY3.hdi`: no exact-image provenance/component inventory was
 verified, no game media was acquired, and no private-image retest occurred.
