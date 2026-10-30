@@ -116,6 +116,7 @@ python3 tools/prepare_task_register_fixture.py
 python3 tools/prepare_clts_fixture.py
 python3 tools/prepare_paging_fixture.py
 python3 tools/prepare_vm86_fixture.py
+python3 tools/prepare_vm86_bios_fixture.py
 python3 tools/prepare_fpu_init_fixture.py
 python3 tools/prepare_pic_fixture.py
 python3 tools/prepare_pic_smm_fixture.py
@@ -191,6 +192,15 @@ verifies the exact PC-98 archive listing separately from the CD-image download
 and records the local access decision. It also adds native/production-Wasm
 fragmented FAT12/FAT16, high-cylinder and original persistent-NUL keyboard/IRQ
 controls; the private-image hang remains unresolved.
+
+The original MIT [VM86 BIOS probe](guest/vm86_bios.asm) reproduces the paged
+VM86 timer firmware stop, then checks translated BIOS work areas, buffer faults,
+saved flags, IRQ callbacks and keyboard input across identity/nonidentity paging
+and PG=0, cold/reset. Prepare it with
+`python3 tools/prepare_vm86_bios_fixture.py`; native and production-Wasm Chromium
+checks use the same pinned disk at both roots. See the
+[supported contract and validation evidence](docs/vm86-bios-validation.md).
+This does not establish recovery of the private Issue #113 boot/input path.
 
 The original MIT [CLTS probe](guest/clts.asm) checks CR0.TS/#NM recovery in real
 and protected mode, all four supported x87 metadata forms, WAIT MP/TS and EM

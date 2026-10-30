@@ -1,0 +1,21 @@
+{
+  "source": "guest/vm86_bios.asm",
+  "license": "MIT; LICENSE and original assembly copied alongside image",
+  "assembly": "nasm -f bin guest/vm86_bios.asm -o vm86_bios.bin",
+  "license_sha256": "683f43140f1823d6cb474f386264b70b35eab24fc6c59d5f19d0067ba1e3e164",
+  "source_sha256": "d557978087bdd412ac202fac9245c03adc02789f1d827d52463c75afd2f05ffe",
+  "boot_sha256": "fa5ae08c1277a87c361e2baa98e97ae285a6e64cb2f53366a2e2cecc6b41dcdc",
+  "image": "fixtures/vm86_bios/vm86_bios.hdm",
+  "image_sha256": "5aa6f97e0f67ba62f7590842132fd1d4dd8b61e7f895d2c42af10f7cf1c781b8",
+  "geometry": "77 cylinders, 2 heads, 8 sectors, 1024 bytes per sector",
+  "contract": "Original VM86 monitor reflects timer/keyboard IRQ and BIOS INT gates; PG=0, identity and nonidentity paging; work-area and cross-page buffer #PF with repair/retry; flags, callbacks, blocking keyboard; cold/reset",
+  "result_address": "0x8000",
+  "result_length": 4,
+  "result_hex": "03000400",
+  "markers": [
+    "VM86 BIOS PASS",
+    "VM86 BIOS FAIL"
+  ],
+  "slot_budget": 2000000,
+  "distribution": "Test only; excluded from web/"
+}
