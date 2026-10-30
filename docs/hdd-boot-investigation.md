@@ -2,12 +2,17 @@
 
 ## Issue #113 continuation: independent alternatives, private image not tested
 
-**Partial investigation; the reported hang remains unresolved.**
+**Bounded mandatory investigation complete; the reported hang remains unresolved.**
 [Issue #113](https://github.com/takahirox/pc98-rust/issues/113) continues #111,
-which was administratively closed after PR #112. This continuation does not
-establish a compatibility fix or claim game boot, input or playability. Leave
-#113 open. The sections below this continuation preserve the #111 checkpoint's
-evidence and validation; their access decisions describe that earlier run.
+which was administratively closed after PR #112. The investigation path for
+unavailable private media is complete and ready for review, with each mandatory
+criterion accounted for [below](#mandatory-acceptance-disposition). This continuation establishes
+neither a compatibility fix nor game boot, input or playability. Leave #113 open
+because its reported symptom remains unresolved; optional private access or
+discovery of an otherwise unevidenced defect is not a condition for reviewing
+these completed experiments. The sections below this continuation preserve the
+#111 checkpoint's evidence and validation; their access decisions describe that
+earlier run.
 
 ### Source verification and access decision (2026-10-30)
 
@@ -250,9 +255,42 @@ The exact private HDI's geometry, kernel/version, driver initialization and firs
 divergence remain unknown. Its hang, shell reachability and game interaction are
 **not independently reproduced or retested**. Optional legitimate private access
 can compare its first differing bounded checkpoint with these controls; it is
-not required for CI or review. No independent large missing feature was found
-that would justify a speculative task. **Leave #113 open** and make no closing
-or game-playability claim. No human confirmation or post-merge check is required.
+not required for CI or review. These unknowns limit the compatibility conclusions;
+they are not unfinished mandatory work when private media is unavailable. No
+independent large missing feature was found that would justify a speculative
+task. **Leave #113 open** and make no closing or game-playability claim. No human
+confirmation or post-merge check is required.
+
+### Mandatory acceptance disposition
+
+This accounts for all seven pre-merge criteria in #113, in their original order.
+The completed work includes the four new independent alternatives above, beyond
+the shell baseline and telemetry already delivered by #112. It is sufficient to
+review and publish this bounded investigation without claiming that the private
+HDI now boots.
+
+| Issue #113 criterion | Disposition and evidence |
+| --- | --- |
+| 1. Exact archive provenance, current terms and access decision | Complete. [Source verification and access decision](#source-verification-and-access-decision-2026-10-30) records the exact PC-98 and separate CD-image URLs, official conditional terms, absent established eligibility/environment permission, and the decision not to retrieve media. Bundled component rights remain unverified, separately from game rights. Private inspection is optional. |
+| 2. Bounded progress investigation and independent checks | Complete. [Independent alternatives](#review-revision-bounded-independent-alternatives-2026-10-30) reuse the existing reporter to compare instruction repetition/faults, PIC/PIT/BIOS/IDE and raw NUL/literal `3F`/fallback counts. POSTWAIT provides persistent-display and deferred-input negative controls without host errors or private traces. |
+| 3. Legal HDD baseline, handoff, kernel bytes and command execution cold/reset | Complete. The unchanged `shell.hdi` and all four alternatives assert exact kernel bytes before entry, the handoff and real PROBE/ECHO execution with returned FreeCOM prompts. Native and production-Wasm cold/reset runs at both serving paths pass; deterministic results are tabulated above. Baseline success is not called a bug fix. |
+| 4. Minimal fail-before/pass-after regression for every corrected emulator defect | Conditional; no correction warranted by the observations. All controls pass on the unchanged interpreter; no emulator defect was diagnosed or corrected. The intentional guest IRQ mask has a measured recovery path and is not a defect. Inventing a failure or speculative execution workaround would not satisfy this criterion. A demonstrated future defect will require its own independent regression. |
+| 5. Unreproduced behavior and optional private retest | Complete reporting. ZIP/HDI identity, components and first divergence remain unknown; the actual hang, shell and game were not tested. The independent controls establish only the results above. No commercial media, manual playthrough or age confirmation is required to accept them. |
+| 6. Fixture/license preparation and native, production-Wasm, asset and browser checks | Complete. [Revision validation](#revision-validation-and-remaining-limits) records all 46 preparations, 523 native tests, Clippy, formatting, production build/approved-assets audit and 162 real-Wasm Chromium tests across `/` and `/pc98-rust/`. The subsequent review independently passed fixture preparation, 523 native tests, Clippy, formatting, production build/asset audit and the ten focused HDD Chromium cases across both paths. No private media is tracked or required. |
+| 7. Honest completion and Issue lifecycle | Complete for this bounded investigation: ready for review, with no closing reference for #113. The reported hang remains unresolved, so #113 stays open. There is no evidenced independent large missing feature requiring another task and no administrative closure requiring a continuation at this checkpoint. |
+
+There is no outstanding lawful agent-executable investigation justified by these
+observations in this bounded scope. Private retrieval, gameplay and finding a
+defect are not additional acceptance gates. The negative results narrow the
+tested hypotheses without establishing the private image's cause. This report
+and the passing controls therefore support a ready investigation PR while the
+reported compatibility problem remains open.
+
+The completion revision changes only this report. Its checks passed for all
+17 relative links/heading anchors, all seven criterion rows, the unchanged
+original guest source hashes/four-control manifest and `git diff --check`.
+Runtime suites were not rerun for this documentation-only revision; the
+implementation and subsequent review results above remain the execution evidence.
 
 ## Issue #111 checkpoint (historical)
 
