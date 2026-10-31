@@ -226,7 +226,7 @@ and protected mode, all four supported x87 metadata forms, WAIT MP/TS and EM
 independent of CLTS. Prepare with `python3 tools/prepare_clts_fixture.py`; native
 and production-Wasm tests boot the [same pinned disk](fixtures/clts-manifest.json)
 cold/reset at both roots. See the [validation evidence](docs/clts-validation.md)
-and [system-instruction audit](docs/protected-mode.md#adjacent-system-instruction-source-audit-issue-105).
+and [system-instruction audit](docs/protected-mode.md#historical-adjacent-system-instruction-source-audit-issue-105).
 
 The original MIT [task-register probe](guest/task_register.asm) initializes 16/32-bit
 TSS descriptors with LTR, queries TR with STR, checks busy bits and guest reload,
@@ -799,6 +799,7 @@ The downloaded FreeDOS/FreeCOM guests are GPLv2 or later and keep corresponding
 source archives beside the generated image. See [file-level audit](docs/licenses.md).
 
 - [Development flow and English collaboration convention](docs/development-flow.md)
+- [Test and CI performance principles](docs/development-flow.md#test-and-ci-performance-principles)
 - [Review and merge guidelines](docs/review-guidelines.md)
 - [Issue template](.github/ISSUE_TEMPLATE/issue.md) and [PR template](.github/pull_request_template.md)
 - [AI agent instructions](AGENTS.md)
