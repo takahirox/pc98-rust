@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import { exportHdd } from './helpers/disk.js';
 
 test('Ap Auto: cleared FreeDOS HDD kernel handoff and responsive shell cold/reset', async ({ page }) => {
   test.setTimeout(120000);
@@ -82,7 +83,7 @@ test('Ap Auto: cleared FreeDOS HDD kernel handoff and responsive shell cold/rese
     expect(stats.instructions).toBeLessThanOrEqual(manifest.slot_budget);
     expect(stats.reads).toBe(0); expect(stats.hddReads).toBeGreaterThan(122);
     expect(stats.hddWrites).toBe(0);
-    expect(Buffer.from(await page.evaluate(() => pc98.exportDisk(2))).equals(image)).toBe(true);
+    expect((await exportHdd(page)).equals(image)).toBe(true);
     expect(errors).toEqual([]);
     await expect(page.locator('#error')).toBeHidden();
     console.log(`FreeDOS HDD boot ${run}: handoff ${handoff.slots} slots; responsive PROBE/ECHO shell`);

@@ -2,6 +2,7 @@
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import { exportHdd } from './helpers/disk.js';
 
 for (const name of ['fragmented12', 'fragmented16', 'wait', 'maskwait']) {
   test(`Ap: independent HDD ${name} handoff/input cold/reset`, async ({ page }) => {
@@ -141,7 +142,7 @@ for (const name of ['fragmented12', 'fragmented16', 'wait', 'maskwait']) {
       expect(final.stats.error).toBe('');
       expect(final.stats.hddWrites).toBe(0);
       expect(final.stats.reads).toBe(0);
-      expect(Buffer.from(await page.evaluate(() => pc98.exportDisk(2))).equals(image)).toBe(true);
+      expect((await exportHdd(page)).equals(image)).toBe(true);
       expect(errors).toEqual([]);
       console.log(`${name} run ${run}: handoff reads=${handoff.stats.hddReads}; shell reads=${beforeInput.stats.hddReads}; final instructions=${final.stats.instructions}, IRQs=${final.irq}`);
     }

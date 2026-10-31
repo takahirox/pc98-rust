@@ -649,6 +649,8 @@ Unexpected files, directories or symlinks fail the check. `npm test` runs the sa
 local root and at a simulated Pages project subpath whose root asset URLs fail.
 To repeat just the project-path browser checks after building, run
 `npx playwright test --project=pages`.
+For the diagnosed HDD export timeout and its byte-preserving harness correction,
+see the [Issue #122 investigation](docs/browser-acceptance-validation.md).
 
 `cargo test --test dos`, `cargo test --test ap` and `cargo test --test cpu386`
 deliberately fail if their legal guest fixtures are missing; they are never

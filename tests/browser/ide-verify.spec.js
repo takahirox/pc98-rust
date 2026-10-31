@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import { exportHdd } from './helpers/disk.js';
 
 for (const [profile, name] of [['1', 'Ap']]) {
   test(`${name}: IDE VERIFY edge IRQ silence, cascade recovery and task-file results before and after reset`, async ({ page }) => {
@@ -54,7 +55,7 @@ for (const [profile, name] of [['1', 'Ap']]) {
       expect(await page.evaluate(() => Array.from({ length: 1024 }, (_, i) => pc98.read(0x8000 + i)))).toEqual(expected);
       expect(await page.evaluate(() => pc98.stats().hddWrites)).toBe(0);
       expect(await page.evaluate(() => pc98.stats().hddReads)).toBe(17);
-      expect(Buffer.from(await page.evaluate(() => pc98.exportDisk(2))).equals(image)).toBe(true);
+      expect((await exportHdd(page)).equals(image)).toBe(true);
       expect(errors).toEqual([]);
       await expect(page.locator('#error')).toBeHidden();
       console.log(`${name} boot ${run}: ${slots} slots`);

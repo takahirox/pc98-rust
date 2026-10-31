@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs/promises';
+import { exportHdd } from './helpers/disk.js';
 
 async function boot(page, name, sound = false, extension = 'hdm') {
   await page.goto('./');
@@ -167,20 +168,6 @@ function hdiFile(image, name) {
     cluster = (volume.readUInt16LE(1024 + Math.floor(cluster * 3 / 2)) >>> (cluster & 1 ? 4 : 0)) & 0xfff;
   }
   return Buffer.concat(chunks).subarray(0, entry.readUInt32LE(28));
-}
-
-async function exportHdd(page) {
-  // Transfer the full image as one base64 string. Serializing millions of
-  // individual numbers through Playwright can exhaust the CI timeout.
-  const encoded = await page.evaluate(() => {
-    const bytes = pc98.exportDisk(2);
-    let binary = '';
-    for (let at = 0; at < bytes.length; at += 32768) {
-      binary += String.fromCharCode(...bytes.slice(at, at + 32768));
-    }
-    return btoa(binary);
-  });
-  return Buffer.from(encoded, 'base64');
 }
 
 test('Ap IDE HDD boots DOS and ADV98; mouse reaches IRQ driver and game; export preserves DOS saves', async ({ page }) => {
