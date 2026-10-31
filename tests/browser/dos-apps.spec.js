@@ -199,6 +199,8 @@ test('Ap IDE HDD boots DOS and ADV98; mouse reaches IRQ driver and game; export 
     throw Error('resident mouse driver not found');
   });
   await page.locator('#mouse').check();
+  // Enabling mouse input may scroll the canvas above the viewport.
+  await page.locator('#screen').scrollIntoViewIfNeeded();
   const box = await page.locator('#screen').boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.move(box.x + box.width * (352 / 640), box.y + box.height * (184 / 400));

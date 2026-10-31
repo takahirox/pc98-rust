@@ -18,8 +18,10 @@ async function press(page, code, moves) {
   await expect.poll(() => page.evaluate((addr) => pc98.read(addr) | pc98.read(addr+1)<<8, BASE+12)).toBe(moves);
 }
 
-test('actual Wasm guest gameplay, PCM audio, pause, save export and import work offline', async ({ page }) => {
+for (const profile of ['1', '0']) {
+test(`${profile === '1' ? 'Ap' : 'VM'}: actual Wasm guest gameplay, PCM audio, pause, save export and import work offline`, async ({ page }) => {
   const errors = await ready(page);
+  if (profile === '0') await page.locator('#profile').selectOption(profile);
   await page.locator('#game').click();
   await value(page, 8, 1);
   await expect.poll(() => page.evaluate(() => pc98.text())).toContain('STAR TRAIL');
@@ -61,8 +63,10 @@ test('actual Wasm guest gameplay, PCM audio, pause, save export and import work 
   expect(errors).toEqual([]);expect(unexpected).toEqual([]);
 });
 
-test('independent hello disk boots through FDC and guest BEEP reaches Web Audio', async ({ page }) => {
-  const errors=await ready(page);await page.locator('#hello').click();
+test(`${profile === '1' ? 'Ap' : 'VM'}: independent hello disk boots through FDC and guest BEEP reaches Web Audio`, async ({ page }) => {
+  const errors=await ready(page);
+  if (profile === '0') await page.locator('#profile').selectOption(profile);
+  await page.locator('#hello').click();
   await expect.poll(()=>page.evaluate(()=>pc98.text())).toContain('Hello world!!');
   await expect.poll(()=>page.evaluate(()=>pc98.stats().audioEnergy)).toBeGreaterThan(1);
   const state=await page.evaluate(()=>{
@@ -73,6 +77,8 @@ test('independent hello disk boots through FDC and guest BEEP reaches Web Audio'
   expect(state.reads).toBe(1);expect(state.beep).toBe(97);expect(state.beepEdges).toBe(1);expect(state.white).toBeGreaterThan(100);
   expect(state.error).toBe('');expect(errors).toEqual([]);
 });
+
+}
 
 test('floppy validation, second drive, eject, and virtual PC-98 keyboard', async ({ page })=>{
   await ready(page);await page.locator('#game').click();await value(page,8,1);

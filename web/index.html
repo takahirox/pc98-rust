@@ -3,23 +3,24 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>pc98-rust · Star Trail</title>
+<title>pc98-rust · PC-9821Ap DOS</title>
 <link rel="stylesheet" href="style.css">
 <script type="module" src="app.js"></script>
 <body>
 <main>
-  <header><div><span class="eyebrow">AN ORIGINAL RUST / WASM EMULATOR</span><h1>pc98<span>-rust</span></h1></div><span id="profile-label" class="badge">PC-9801VM · experimental</span></header>
+  <header><div><span class="eyebrow">AN ORIGINAL RUST / WASM EMULATOR</span><h1>pc98<span>-rust</span></h1></div><span id="profile-label" class="badge">PC-9821Ap DOS · experimental</span></header>
   <section class="intro"><div><h2>A little machine. A new adventure.</h2><p>Boot Star Trail, collect three stars, and find your way through the maze. The game runs entirely inside the emulated PC-98.</p></div><div class="demo-actions"><button id="game" disabled>▶ Play Star Trail</button><button id="hello" disabled>Hello world + BEEP</button></div></section>
   <section class="machine" aria-label="Emulator">
     <div class="toolbar"><div><span id="lamp" class="lamp"></span><span id="status" role="status">Loading WebAssembly…</span></div><div><button id="pause" disabled>Pause</button><button id="reset" disabled>Reset</button><button id="sound" disabled aria-pressed="false">Enable sound</button></div></div>
     <div class="display" id="drop"><canvas id="screen" width="640" height="400" tabindex="0" aria-label="PC-98 screen. Click here to send keyboard input to the guest."></canvas></div>
-    <div class="screen-caption"><span id="display-mode">640 × 400 · 8 colors · replacement Latin font</span><span>Click screen to type · arrows to move · R to restart</span></div>
-    <div class="media"><label>Machine <select id="profile" disabled><option value="0">PC-9801VM</option><option value="1">PC-9821Ap DOS · experimental</option></select></label><label>Drive <select id="drive"><option value="0">1 · boot</option><option value="1">2</option><option value="2">IDE · HDI boot</option></select></label><span id="media-name">No disk</span><label class="file-button">Insert media<input id="file" type="file" accept=".tfd,.hdm,.xdf,.2hd,.d88,.d98,.img,.hdi"></label><button id="eject" disabled>Eject</button><button id="export" disabled>Export disk</button></div>
+    <div class="screen-caption"><span id="display-mode">640 × 400 · 16 colors · Shinonome Japanese CG · approximate OPN</span><span>Click screen to type · arrows to move · R to restart</span></div>
+    <div class="media"><label>Machine <select id="profile" disabled><option value="0">PC-9801VM</option><option value="1" selected>PC-9821Ap DOS · experimental</option></select></label><label>Drive <select id="drive"><option value="auto" selected>Auto</option><option value="0">Floppy 1</option><option value="1">Floppy 2</option><option value="2">IDE HDD</option></select></label><span id="media-drive">Auto</span><span id="media-name">No disk</span><label class="file-button">Insert media<input id="file" type="file" accept=".tfd,.hdm,.xdf,.2hd,.d88,.d98,.img,.hdi"></label><button id="eject" disabled>Eject</button><button id="export" disabled>Export disk</button></div>
+    <p id="boot-source" class="boot-source" aria-live="polite">Reset boots: Floppy 1 · No disk</p>
     <label><input id="mouse" type="checkbox"> Send mouse movement and buttons to Ap guest</label>
     <p id="error" role="alert" hidden></p>
   </section>
   <details><summary>PC-98 keyboard</summary><p>Mouse or touch keys below, or focus the screen and use your physical keyboard. Shift, Ctrl, GRPH (Alt), XFER (right Alt), and NFER (left Meta) are supported.</p><div id="keyboard" aria-label="PC-98 keyboard"></div></details>
-  <footer><p>Drop a supported floppy onto the screen to insert and boot it. Bootable PC-98 media required; compatibility is limited to the documented CPU and device subsets. The Ap DOS profile adds replacement Japanese CG, 16/256-color graphics and approximate FM/86 PCM sound. Ap also supports an IDE HDD and a bus mouse. Guest software must support these devices; mouse use through INT 33h requires a guest DOS driver. Ap supports a bounded paging-disabled ring-0 protected mode; paging, DPMI and privilege transitions remain unsupported.</p><p><a href="licenses.html">Licenses &amp; media credits</a> · No proprietary ROMs or network service required.</p></footer>
+  <footer><p>PC-9821Ap DOS is the default; PC-9801VM remains selectable. Insert or drop bootable PC-98 media: Auto sends HDI to IDE HDD (Ap only) and supported floppy images to Floppy 1. Choose a drive to override Auto; Floppy 2 inserts without rebooting. Eject and Export disk use the displayed drive. Reset retains media, writes and the shown boot source. Both demos boot Floppy 1 on either machine.</p><p>Compatibility is limited to the documented CPU/device subsets. Ap adds Japanese CG, 16/256-color video, approximate FM/86 PCM, IDE and bus mouse input. INT 33h requires a guest DOS mouse driver. Ap supports bounded ring-0 protected mode, 4 KiB paging and VM86; DPMI, privilege transitions and numerical FPU execution remain unsupported.</p><p><a href="licenses.html">Licenses &amp; media credits</a> · No proprietary ROMs or network service required.</p></footer>
 </main>
 </body>
 </html>

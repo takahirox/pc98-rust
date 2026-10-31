@@ -5,6 +5,8 @@ let core, running = false, audio, outputGain, nextAudio = 0, muted = true, loadi
 let audioEnergy = 0, scheduledSamples = 0;
 const mounted = [null, null, null], held = new Set();
 let pointerPosition;
+let lastDrive = null;
+const driveNames = ['Floppy 1', 'Floppy 2', 'IDE HDD'];
 const controls = ['game', 'hello', 'pause', 'reset', 'sound', 'eject', 'export', 'profile'];
 function message(kind = 0) {
   const ptr = core.message(kind), len = core.message_len();
@@ -55,23 +57,39 @@ function setRunning(value) {
   status(value ? 'Running · click screen to type' : 'Paused');
 }
 function showMedia() {
-  const drive = Number($('drive').value);
+  const drive = mediaDrive();
+  $('media-drive').textContent = drive === null ? 'Auto' : driveNames[drive]
+    + (drive === 2 && core.metric(21) === 0 ? ' (requires Ap)' : '');
   $('media-name').textContent = mounted[drive]?.name ?? 'No disk';
   $('eject').disabled = !mounted[drive]; $('export').disabled = !mounted[drive];
+  // Match the firmware's reset fallback, including an IDE retained on VM.
+  const boot = core.metric(21) === 1 && mounted[2] && (core.metric(22) || !mounted[0]) ? 2 : 0;
+  $('boot-source').textContent = `Reset boots: ${driveNames[boot]} · ${mounted[boot]?.name ?? 'No disk'}`;
+}
+function mediaDrive() { return $('drive').value === 'auto' ? lastDrive : Number($('drive').value); }
+function resolveDrive(name) {
+  const hdi = /\.hdi$/i.test(name), floppy = /\.(tfd|hdm|xdf|2hd|d88|d98|img)$/i.test(name);
+  if (!hdi && !floppy) throw Error('Unsupported media extension. Use HDI or a supported floppy image.');
+  if (hdi && core.metric(21) !== 1) throw Error('IDE requires PC-9821Ap DOS. Select that machine to insert an HDI.');
+  const drive = $('drive').value === 'auto' ? (hdi ? 2 : 0) : Number($('drive').value);
+  if (drive === 2 && !hdi) throw Error('IDE HDD requires an HDI image. Choose Auto or a floppy drive for this image.');
+  if (drive !== 2 && hdi) throw Error('HDI requires IDE HDD. Choose Auto or IDE HDD for this image.');
+  return drive;
+}
+function checkSize(size, drive) {
+  if (size > (drive === 2 ? 32 : 4) * 1024 * 1024) throw Error(drive === 2 ? 'HDI exceeds 32 MiB.' : 'Floppy image exceeds 4 MiB.');
 }
 function insert(bytes, name, drive) {
-  const hdd = drive === 2;
-  if (bytes.length > (hdd ? 32 : 4) * 1024 * 1024) throw Error(hdd ? 'HDI exceeds 32 MiB.' : 'Floppy image exceeds 4 MiB.');
-  if (hdd && $('profile').value !== '1') throw Error('Select PC-9821Ap DOS for IDE.');
-  if (hdd ? !/\.hdi$/i.test(name) : !/\.(tfd|hdm|xdf|2hd|d88|d98|img)$/i.test(name)) throw Error(hdd ? 'IDE requires an HDI image.' : 'Unsupported floppy extension.');
+  checkSize(bytes.length, drive);
   const ptr = core.input_buffer(bytes.length);
   if (!ptr) throw Error('Unable to allocate media buffer.');
   new Uint8Array(core.memory.buffer, ptr, bytes.length).set(bytes);
   if (!core.insert(drive, /\.(d88|d98)$/i.test(name) ? 1 : 0)) throw Error(message(2));
   mounted[drive] = { name, format: /\.(d88|d98)$/i.test(name) ? 'd88' : 'hdm' };
+  lastDrive = drive;
   showMedia();
 }
-async function loadBytes(bytes, name, drive = Number($('drive').value)) {
+async function loadBytes(bytes, name, drive) {
   clearError(); insert(bytes, name, drive);
   if (drive === 0 || drive === 2) { releaseKeys(); core.reset(); core.audio_clear(); render(); setRunning(true); screen.focus(); }
 }
@@ -95,25 +113,31 @@ function exportBytes(drive) {
 $('game').onclick = () => bundled('startrail.hdm');
 $('hello').onclick = () => bundled('hello98.tfd');
 $('pause').onclick = () => { if (core) setRunning(!running); };
-$('reset').onclick = () => { releaseKeys(); core.reset(); nextAudio = 0; clearError(); setRunning(true); render(); screen.focus(); };
+$('reset').onclick = () => { releaseKeys(); core.reset(); nextAudio = 0; clearError(); showMedia(); setRunning(true); render(); screen.focus(); };
 $('sound').onclick = async () => {
   try { if (muted) await enableAudio(); else { muted = true; outputGain.gain.value = 0; $('sound').textContent = 'Enable sound'; $('sound').setAttribute('aria-pressed', 'false'); } }
   catch (error) { fail(error); }
 };
-$('profile').onchange = () => {
+function selectProfile() {
   releaseKeys();
-  if (!core.set_profile(Number($('profile').value))) { fail(Error('Unsupported machine profile')); return; }
+  if (!core.set_profile(Number($('profile').value))) throw Error('Unsupported machine profile');
+  document.title = `pc98-rust · ${$('profile').value === '1' ? 'PC-9821Ap DOS' : 'PC-9801VM'}`;
   $('profile-label').textContent = $('profile').value === '1' ? 'PC-9821Ap DOS · experimental' : 'PC-9801VM · experimental';
   $('display-mode').textContent = $('profile').value === '1'
     ? '640 × 400 · 16 colors · Shinonome Japanese CG · approximate OPN'
     : '640 × 400 · 8 colors · replacement Latin font';
-  clearError(); nextAudio = 0; core.audio_clear(); render();
-  if (mounted[0]) setRunning(true);
-};
+  $('mouse').disabled = $('profile').value !== '1';
+  if ($('mouse').disabled) $('mouse').checked = false;
+  clearError(); nextAudio = 0; core.audio_clear(); render(); showMedia();
+  setRunning(Boolean(mounted[0] || (mounted[2] && $('profile').value === '1')));
+}
+$('profile').onchange = () => { try { selectProfile(); } catch (error) { fail(error); } };
 $('drive').onchange = showMedia;
-$('eject').onclick = () => { const drive = Number($('drive').value); core.eject(drive); mounted[drive] = null; showMedia(); };
+$('eject').onclick = () => { const drive = mediaDrive(); if (!mounted[drive]) return; core.eject(drive); mounted[drive] = null; showMedia(); };
 $('export').onclick = () => {
-  const drive = Number($('drive').value), data = exportBytes(drive);
+  const drive = mediaDrive();
+  if (!mounted[drive]) return;
+  const data = exportBytes(drive);
   const link = document.createElement('a'), url = URL.createObjectURL(new Blob([data]));
   link.href = url; link.download = mounted[drive].name; link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -121,9 +145,10 @@ $('export').onclick = () => {
 async function loadFile(file) {
   if (!file || !core) return;
   try {
-    const hdd = Number($('drive').value) === 2;
-    if (file.size > (hdd ? 32 : 4) * 1024 * 1024) throw Error(hdd ? 'HDI exceeds 32 MiB.' : 'Floppy image exceeds 4 MiB.');
-    await loadBytes(new Uint8Array(await file.arrayBuffer()), file.name);
+    clearError();
+    const drive = resolveDrive(file.name);
+    checkSize(file.size, drive);
+    await loadBytes(new Uint8Array(await file.arrayBuffer()), file.name, drive);
   }
   catch (error) { fail(error); }
 }
@@ -194,10 +219,11 @@ try {
   if (!response.ok) throw Error(`Missing Wasm bundle (HTTP ${response.status}). Run npm run build.`);
   const result = await WebAssembly.instantiate(await response.arrayBuffer(), {});
   core = result.instance.exports;
+  selectProfile();
   // Machine-readable inspection of the actual Wasm core for deterministic tests.
   window.pc98 = { core, text: () => message(1), read: (addr) => core.peek(addr),
     stats: () => ({instructions:core.metric(0),reads:core.metric(1),writes:core.metric(2),hddReads:core.metric(9),hddWrites:core.metric(10),mouseEvents:core.metric(11),mouseLatches:core.metric(12),pegc:core.metric(13),pcmWrites:core.metric(14),pcmSamples:core.metric(15),beepEdges:core.metric(3),fmWrites:core.metric(6),fmKeyEdges:core.metric(7),error:message(),beep:core.beep(),running,audioState:audio?.state,audioGain:outputGain?.gain.value,audioEnergy,scheduledSamples}),
     exportDisk: (drive=0) => Array.from(exportBytes(drive)),
   };
-  controls.forEach((id)=>$(id).disabled=false); showMedia(); status('Ready · choose a demo or insert a floppy'); render(); requestAnimationFrame(animate);
+  controls.forEach((id)=>$(id).disabled=false); showMedia(); status('Ready · choose a demo or insert media'); render(); requestAnimationFrame(animate);
 } catch (error) { status('Unable to start'); fail(error); }

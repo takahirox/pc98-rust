@@ -5025,3 +5025,77 @@ metadata while keeping restricted media and raw traces outside Git and hosted
 artifacts. Actual new requirements for CR writes/protected execution/paging or
 other hardware must be recorded in a separate `task` Issue. No such requirement
 was established from private media here. No post-merge verification is required.
+
+## Issue #120: browser Ap default and automatic media routing (2026-10-31)
+
+The browser explicitly applies its selected PC-9821Ap DOS profile to the
+production Wasm core before enabling controls. Rust library/headless defaults
+remain PC-9801VM. Auto routes case-insensitive floppy extensions to Floppy 1 and
+HDI to IDE; explicit drive selections retain their destination and reboot
+semantics. Rust still validates the actual disk bytes. No emulator CPU/device
+behavior, firmware, guest assets or publication allowlist changed.
+
+The displayed drive/filename controls Eject and Export, independently of the
+retained boot source. The Reset boots line reflects the firmware's next boot,
+including profile/media availability. Tests cover both bootable disks mounted,
+Floppy 2 insertion without changing execution, profile changes retaining disks,
+and IDE becoming available again on Ap. Both bundled guest demos still boot
+Floppy 1 after IDE or Floppy 2 selections and a previously mounted HDD.
+
+`tests/browser/media-routing.spec.js` uses the existing original MIT IDE VERIFY
+HDI (hash checked against its manifest) and MIT HelloWorld-PC98 floppy. Its D88
+wrapper adds normal MFM CHRN headers and write protection around unchanged guest
+sectors; no guest outcomes are written by the host. All seven floppy extensions,
+mount/export of all three supported raw geometries, both upload paths,
+cold/reset boots, malformed formats, size limits, unsupported extensions, manual mismatches,
+VM/HDI errors and no-media actions are covered. The existing FreeDOS HDD shell
+control now uses Auto with an image larger than 4 MiB; its GPL sources/notices
+remain in prepared fixtures outside `web/`. Full gameplay, keyboard, audio,
+pause and save/export/import tests run on both VM and Ap.
+
+All fixture/license preparation commands in README's **Reproduce the checks**
+block passed, including the fetch-policy unit tests, offline MIT probes, pinned
+FreeDOS binaries and complete matching sources, DOS applications, music, device
+and font checks. Generated fixtures remain ignored and outside `web/`.
+
+| Check | Result |
+| --- | --- |
+| `cargo test --locked` | Passed: 546 tests, zero failed or ignored |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `cargo fmt --check` | Passed |
+| `npm ci` | Passed; zero vulnerabilities |
+| Production `npm run build` and exact `npm run check:site` audit | Passed: real release Wasm, ten approved public assets |
+| `npm test -- --config=.playwright-120.config.js --workers=4` | Passed: 194 Chromium tests across `/` and `/pc98-rust/`, zero failed or skipped |
+| `git diff --check` | Passed |
+
+The default browser test server encountered an occupied port 8000. Temporary
+copies of the checked-in config and project server changed only the serving
+ports to 18000 and 18001 (and the corresponding server commands). Both `/` and
+`/pc98-rust/`, project-path root-asset rejection, all test assertions and guest
+budgets were retained. Existing listeners were left untouched. The final full
+command is `npm test -- --config=.playwright-120.config.js --workers=4`.
+The temporary config/server files were removed after validation. A redundant
+`npx playwright install chromium` download stalled and was stopped; the tests
+use the already installed Chromium matching locked Playwright 1.56.1.
+
+During implementation the HDD mouse test exposed viewport scrolling after the
+new media row: checking the mouse control scrolled the target coordinates above
+the screen. The test now scrolls the actual canvas into view before pointer input;
+its real guest mouse, keyboard and save assertions pass. An initial input-counter
+assertion confused a zero-motion release event with held input and was corrected.
+Raw 512-byte-sector geometries are mount/export/reset controls: the existing
+synthetic IPL requests a 1024-byte boot sector, so they do not establish new guest
+boot support. An exploratory run also encountered a test-name mismatch while a
+test was being renamed; the final full run uses fixed test files.
+
+The reported upstream [Emulator acceptance run #41146277227](https://github.com/takahirox/pc98-rust/actions/runs/41146277227)
+had **167 passed, one failed**: `hdd-investigation.spec.js`, Pages project,
+`fragmented16` exceeded its 120-second test timeout. It was not a native/build or
+asset-audit failure. That same HDD control passed locally at both roots with the
+unchanged 120-second budget. No external deployment, private media or manual
+playthrough is needed, and no required post-merge verification was added.
+
+The final full run passed without reproducing the upstream timeout or any other
+persistent infrastructure/test failure; no separate follow-up Issue was needed.
+An additional local layout check found no horizontal overflow at 375 px and
+1280 px with the actual Ap core and Auto selected.
