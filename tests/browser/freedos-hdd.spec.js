@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 
-test('Ap: cleared FreeDOS HDD kernel handoff and responsive shell cold/reset', async ({ page }) => {
+test('Ap Auto: cleared FreeDOS HDD kernel handoff and responsive shell cold/reset', async ({ page }) => {
   test.setTimeout(120000);
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -19,9 +19,11 @@ test('Ap: cleared FreeDOS HDD kernel handoff and responsive shell cold/reset', a
   expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
   const at = manifest.header_bytes + (manifest.partition_lba + 26) * 512;
   const kernel = image.subarray(at, at + manifest.files['KERNEL  SYS'].bytes);
-  await page.locator('#drive').selectOption({ value: '2' });
+  expect(image.length).toBeGreaterThan(4 * 1024 * 1024);
+  await expect(page.locator('#drive')).toHaveValue('auto');
   await page.locator('#file').setInputFiles({ name: 'shell.hdi', mimeType: 'application/octet-stream', buffer: image });
   await expect(page.locator('#media-name')).toHaveText('shell.hdi');
+  await expect(page.locator('#media-drive')).toHaveText('IDE HDD');
   for (let run = 0; run < 2; run++) {
     if (run) await page.locator('#reset').click();
     // Only step/read the actual Rust interpreter. Observe the unmodified GPL

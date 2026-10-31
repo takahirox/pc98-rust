@@ -11,13 +11,14 @@ The anticipated public demo is <https://takahirox.github.io/pc98-rust/> once the
 GitHub Pages deployment succeeds. **Publication is currently unverified**; the
 pre-merge checks below do not establish that the public URL works.
 
-The default experimental profile targets a **PC-9801VM with 640 KiB RAM, V30 real
-mode, 640×400 display and three graphics planes**. Compatibility is the subset exercised
+The Rust library/headless default remains the experimental **PC-9801VM with
+640 KiB RAM, V30 real mode, 640×400 display and three graphics planes**.
+Compatibility is the subset exercised
 by the included guests and the pinned FreeDOS(98) smoke test. This is not a general
 PC-98 compatibility claim. See [hardware, ports, firmware and limits](docs/hardware.md).
 
-A selectable **PC-9821Ap DOS subset** adds four-plane 16-color graphics,
-replacement Japanese CG/text and approximate OPN sound. Independent ADV98 and
+The browser starts with the **PC-9821Ap DOS subset**, which adds four-plane
+16-color graphics, replacement Japanese CG/text and approximate OPN sound. Independent ADV98 and
 98VIDEOP programs now run through guest FreeDOS, with native and actual-Wasm
 browser tests. The Ap profile also supports a tested 386/486 real-mode integer
 subset, including 32-bit operands and addresses, SIB, FS/GS and guest faults.
@@ -28,8 +29,8 @@ sequenced ADV98 music through a guest PMD driver, and OPNA/86 PCM subsets.
 See [device contracts, fixtures and unsupported features](docs/ap-devices.md).
 Ap also supports a [ring-0 protected-mode and 4 KiB paging subset](docs/protected-mode.md),
 including 16/32-bit segments, GDT/LDT, IDT gates and return to real mode.
-Privilege transitions, task switching, DPMI, numerical FPU execution and
-full 486 fidelity remain unsupported.
+A bounded VM86 subset is also supported. Privilege transitions, task switching,
+DPMI, numerical FPU execution and full 486 fidelity remain unsupported.
 Ap provides only bounded x87 environment initialization and control/status readback.
 See [guest provenance, commands and exact profile limits](docs/dos-compatibility.md).
 
@@ -70,15 +71,31 @@ independently authored MIT HelloWorld-PC98 fixture. Sound starts after a user
 click; **Enable sound / Mute** controls browser audio. All runtime assets are local;
 there are no network requests after the selected media loads.
 
+The browser defaults to **PC-9821Ap DOS** and drive **Auto**; **PC-9801VM**
+remains selectable for software requiring its V30 profile. **Insert media** and
+screen drag-and-drop use the same case-insensitive routing: `.hdi` mounts IDE HDD
+and boots on Ap; supported floppy extensions mount **Floppy 1** and boot.
+The Rust parsers validate geometry, headers and sizes. HDI is limited to 32 MiB
+and requires Ap; choosing an HDI on VM reports an error without changing machines.
+
+Choose **Floppy 1**, **Floppy 2**, or **IDE HDD** to override Auto. Mismatched
+media fails without rerouting. Floppy 2 inserts without rebooting or changing
+the boot source. Both demo buttons always select, mount and boot Floppy 1.
 **Pause / Resume** controls execution. **Reset** reboots the CPU and devices while
-preserving inserted media and its writes. Select drive 1 or 2, then **Insert
-media** or drop an image on the screen. Inserting drive 1 boots it; inserting drive
-2 changes media without rebooting. **Eject** removes the selected disk. **Export
-disk** downloads that drive's current bytes, preserving D88/HDI headers and
-floppy write protection. Reinsert the export to restore saved disk data. Star Trail records the
-last run's moves and score in sector 8; a new game starts at zero.
-For Ap, **IDE · HDI boot** mounts a geometry-validated HDI up to 32 MiB.
-Inserting IDE selects HDD boot; inserting floppy 1 selects floppy boot.
+preserving inserted media, writes and the boot source. Inserting IDE selects HDD
+boot; inserting Floppy 1 selects floppy boot, even with both mounted. Changing the
+Drive selector alone never changes boot. The **Reset boots** line identifies the
+next boot drive and filename, including fallback between Floppy 1 and IDE
+when a disk is ejected. Profile changes reset the machine and retain
+all media and writes; VM cannot boot a retained IDE disk, which becomes available
+again on Ap.
+
+Auto displays the last successfully inserted drive and filename. **Eject** and
+**Export disk** act on that displayed drive, or on the explicitly selected manual
+drive. Eject does not reboot. Export downloads current bytes, preserving D88/HDI
+headers and floppy write protection. Reinsert the export to restore saved data.
+Star Trail records the last run's moves and score in sector 8; a new game starts
+at zero.
 Enable **Send mouse movement and buttons** for guest mouse input; INT 33h
 applications require a guest driver. The prepared HDD includes one. There is no
 automatic browser storage or CPU save-state persistence.

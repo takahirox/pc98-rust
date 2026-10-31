@@ -244,6 +244,9 @@ mod wasm {
                 18 => m.cpu.ip as f64,
                 19 => m.cpu.fault_count as f64,
                 20 => m.cpu.irq_acks as f64,
+                // Actual profile and retained boot preference for browser controls.
+                21 => u8::from(m.bus.profile == Profile::Pc9821ApDos) as f64,
+                22 => u8::from(m.bus.boot_hdd) as f64,
                 _ => m.bus.cycles as f64,
             }
         })
