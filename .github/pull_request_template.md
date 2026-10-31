@@ -19,7 +19,8 @@ Summarize the changes and why they are needed to solve the Issue.
 Record checks actually performed and their results against the pre-merge acceptance
 criteria. Report failures, skipped checks, and unperformed checks with reasons.
 Keep optional validation distinct. Choose checks appropriate to the changed files
-and existing tooling; no build/test commands are currently configured.
+and existing tooling; see the
+[current validation guidance](../docs/development-flow.md#validation-for-the-current-repository).
 
 ## Required post-merge verification
 

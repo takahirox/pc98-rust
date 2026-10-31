@@ -38,6 +38,12 @@ structure,
 links, whitespace, and consistency checks, not unrelated runtime suites or new
 tooling. See [current validation guidance](development-flow.md#validation-for-the-current-repository).
 
+Apply the [test and CI performance principles](development-flow.md#test-and-ci-performance-principles):
+review the additional defect coverage, duplication and execution/maintenance cost
+of new or expanded checks. Ask:
+
+> Does this change provide sufficient confidence with the lightest appropriate validation, without redundant execution?
+
 Check that the PR accurately reports checks actually performed and their results,
 including failures, skipped checks, and unperformed checks with reasons. Optional
 validation is separate from mandatory completion criteria.
