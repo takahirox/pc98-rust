@@ -1,6 +1,7 @@
 //! Newly written synthetic firmware services behind executable ROM thunks.
 //! INT 21h is deliberately not implemented: DOS must execute its own kernel.
 use crate::{bus::Bus, cpu::*};
+mod crt;
 pub(crate) mod memory;
 use memory::{read, read_seg, write, write_seg};
 const KEY_WAIT: u32 = 0x1800;
@@ -42,7 +43,7 @@ pub fn initialize(b: &mut Bus) {
     } else {
         0x20
     };
-    b.mem[0x53c] = 1; // 80 columns, 25 rows
+    crt::initialize(b);
 
     // DISK_EQUIP: both profiles have two installed 2HD units, even when empty.
     // FreeDOS(98) builds its DOS drive table from these bits only at boot.
@@ -177,6 +178,19 @@ pub fn disk_transfer(
 pub fn service(c: &mut Cpu, b: &mut Bus) -> Result<(), String> {
     execute_service(c, b).map_err(|e| format!("{e:?}"))
 }
+fn font_read_len(code: u16) -> ExecResult<u16> {
+    // NEC BIOS p.48: these Japanese half-width codes use 16, not 32,
+    // pattern bytes. The replacement CG does not contain these glyphs.
+    if matches!(code, 0x2920..=0x297d | 0x2a20..=0x2a5f) {
+        return Err("unsupported CRT half-width font code".into());
+    }
+    match (code >> 8) as u8 {
+        0 => Ok(8),
+        0x80 => Ok(16),
+        0x21..=0x7e => Ok(32),
+        _ => Err("unsupported CRT font code".into()),
+    }
+}
 pub(crate) fn execute_service(c: &mut Cpu, b: &mut Bus) -> ExecResult<()> {
     if c.protected_mode() && !c.vm86() {
         return Err("synthetic real-mode firmware requested from protected mode".into());
@@ -274,27 +288,16 @@ pub(crate) fn execute_service(c: &mut Cpu, b: &mut Bus) -> ExecResult<()> {
                     },
                 )
             }
-            0x0a => write(c, b, 0x53c, c.byte(0))?,
-            0x0b => c.set_byte(0, read(c, b, 0x53c)?),
-            0x0c => b.gdcs[0].enabled = true,
-            0x0d => b.gdcs[0].enabled = false,
-            0x0e => {
-                let start = c.r[DX] as usize / 2;
-                b.gdcs[0].start = start as u32
-            }
-            0x10 => {
-                b.gdcs[0].cursor_top = c.byte(1) & 31;
-                b.gdcs[0].cursor_bottom = c.byte(5) & 31
-            }
-            0x11 => b.gdcs[0].cursor_visible = true,
-            0x12 => b.gdcs[0].cursor_visible = false,
-            0x13 => b.gdcs[0].cursor = (c.r[DX] / 2) as u32,
-            0x14 if b.profile == crate::Profile::Pc9821ApDos
-                && (0x21..=0x7e).contains(&c.byte(6)) =>
-            {
-                // Full-width JIS read: scratch word, then 16 left/right rows.
-                for i in 0..32u16 {
-                    let byte = b.user_characters.byte(c.byte(6), c.byte(2), i as usize);
+            0x0a..=0x13 | 0x1b..=0x1e => crt::service(c, b, ah)?,
+            0x14 => {
+                let dh = c.byte(6);
+                let len = font_read_len(c.r[DX])?;
+                for i in 0..len {
+                    let byte = if len == 32 {
+                        b.user_characters.byte(dh, c.byte(2), i as usize)
+                    } else {
+                        crate::font::row(c.byte(2), if dh == 0 { i as u8 * 2 + 1 } else { i as u8 })
+                    };
                     write_seg(
                         c,
                         b,
@@ -305,20 +308,8 @@ pub(crate) fn execute_service(c: &mut Cpu, b: &mut Bus) -> ExecResult<()> {
                     )?;
                 }
             }
-            0x14 => {
-                for y in 0..16 {
-                    write_seg(
-                        c,
-                        b,
-                        c.s[ES],
-                        c.r[BX].wrapping_add(y),
-                        crate::font::row(c.byte(6), y as u8) as u16,
-                        false,
-                    )?
-                }
-            }
             0x16 => {
-                for i in 0..2000 {
+                for i in 0..4096 {
                     write_seg(c, b, 0xa000, i * 2, c.r[DX] & 255, true)?;
                     write_seg(c, b, 0xa200, i * 2, (c.r[DX] >> 8) & 255, true)?;
                 }
@@ -558,22 +549,28 @@ fn preflight(c: &Cpu, b: &mut Bus, int: u8, ah: u8) -> ExecResult<()> {
         0x18 => match ah {
             0 | 5 if !b.keyboard.bios.is_empty() => check(c, b, 0x502, 0x39, true)?,
             3 => check(c, b, 0x502, 0x39, true)?,
-            0x0a => check(c, b, 0x53c, 1, true)?,
+            0x0a | 0x1b | 0x1c => check(c, b, 0x53c, 1, true)?,
+            0x0b => check(c, b, 0x53c, 1, false)?,
+            0x0f => {
+                let count = c.byte(2).min(4);
+                for i in 0..u16::from(count) * 4 {
+                    check_seg(c, b, c.r[BX], c.r[CX].wrapping_add(i), false, false)?;
+                }
+            }
             0x14 | 0x1a => {
-                let wide =
-                    b.profile == crate::Profile::Pc9821ApDos && (0x21..=0x7e).contains(&c.byte(6));
-                let (seg, off, len) = if ah == 0x1a || wide {
-                    (c.r[BX], c.r[CX].wrapping_add(2), 32)
+                let len = if ah == 0x1a {
+                    32
                 } else {
-                    (c.s[ES], c.r[BX], 16)
+                    font_read_len(c.r[DX])?
                 };
+                let (seg, off) = (c.r[BX], c.r[CX].wrapping_add(2));
                 for i in 0..len {
                     check_seg(c, b, seg, off.wrapping_add(i), false, ah == 0x14)?;
                 }
             }
             0x16 => {
-                check(c, b, 0xa0000, 4000, true)?;
-                check(c, b, 0xa2000, 4000, true)?;
+                check(c, b, 0xa0000, 8192, true)?;
+                check(c, b, 0xa2000, 8192, true)?;
             }
             0x40 | 0x41 if b.profile == crate::Profile::Pc9821ApDos => {
                 check(c, b, 0x54c, 1, false)?;

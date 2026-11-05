@@ -37,9 +37,8 @@ model windows without an installed device read `FF` and ignore writes.
 | `00000–003FF` | Writable interrupt vector table |
 | `00400–005FF` | BIOS work area in conventional RAM |
 | `00600–9FFFF` | Conventional RAM (640 KiB including the two rows above) |
-| `A0000–A1FFF` | Text characters (low bytes of words; 2048 cells) |
-| `A2000–A2FFF` | Text attributes (low bytes of words) |
-| `A3000–A3FFF` | Character-generator window uninstalled; no Kanji ROM |
+| `A0000–A1FFF` | Text characters (4096 words; Ap Kanji also uses high bytes) |
+| `A2000–A3FFF` | Text attributes (4096 words; [CRT scanout](crt-bios.md)) |
 | `A4000–A7FFF` | Uninstalled windows, open bus |
 | `A8000–AFFFF` | Blue plane, selected CPU page, 32 KiB |
 | `B0000–B7FFF` | Red plane, selected CPU page, 32 KiB |
@@ -764,9 +763,9 @@ this table is not a claim of complete chip emulation.
 | `01–0F` odd, `11–1F` odd, `21,23,25,27` | 8237 address/count flip-flop, controller disable, channel masks, direction/decrement, terminal count and auto-init reload, master clear, bank registers | FDC uses channel 2; count/address change with actual byte transfers |
 | `31,33,35,37` | PPI startup inputs, output C, bit set/reset, active-low beep gate | Input straps are fixed VM-profile constants; Ap RTC DATA OUT replaces bit 0 of 33h |
 | `41,43` | Keyboard byte FIFO, ready status, command acknowledgements, down/up scan bytes | IR1 / INT 09; firmware maintains BIOS ring, held-key bitmap and modifier state |
-| `60,62` | Master text GDC parameter/status and command/data readback | RESET, display enable, PITCH, CURS, CCHAR, PRAM start, CSRR |
+| `60,62` | Master text GDC parameter/status and command/data readback | RESET, display enable, PITCH, CURS, CCHAR shape/blink/row height, four PRAM scanout areas, CSRR |
 | `A0,A2` | Slave bitmap GDC command/parameter/status/readback | Same register subset; 640×400 direct VRAM path |
-| `68` | Text display enable; graphics 200/400-line selection | Fixed 80-column 25-row text; 200-line graphics doubles rows |
+| `68` | Text display enable, 80/40-column and attribute flip-flops; graphics 200/400-line selection; Ap KCG code/dot access | [CRT contracts](crt-bios.md); BIOS supports 25/20 text rows; 200-line graphics doubles rows |
 | `6A,A8,AA,AC,AE` | Digital 8-color pairs; analog index and 4-bit RGB levels when enabled | Eight palette entries only; no fourth graphics plane / 16-color board |
 | `A4,A6` | Display and CPU graphics page select | Two independent three-plane pages |
 | `7C,7E` | GRCG mode/tile writes | TDW and RMW, plane masks; no EGC |
@@ -1642,7 +1641,8 @@ command/result FIFO, seek, DMA and scheduler paths as guest-issued I/O.
 | --- | --- |
 | INT 08–17 | Timer tick, keyboard scan processing and appropriate PIC EOI; guest-installed vectors supersede firmware |
 | INT 18 AH=00,01,02,03,04,05 | Blocking get, peek, modifier status, FIFO clear, held-key group, conditional get |
-| INT 18 AH=0A–0E,10–14,16–18 | CRT mode query/set, enable/disable, start, cursor, replacement font read, fill, beep on/off |
+| INT 18 AH=0A–14,16–18,1B | CRT mode/sense, display start/stop, one/four areas, cursor, font read, fill, beep and KCG code/dot selection; see [CRT contracts](crt-bios.md) |
+| INT 18 AH=1C–1E (Ap compatibility extension) | CRT initialization, physical text pitch and cursor shape/blink on the normal-resolution GDC; NEC documents these as high-resolution-only, not native Ap ROM services; [profile distinction and matrix](crt-bios.md#profile-boundary) |
 | INT 18 AH=40–42 | Bitmap display on/off, 640×400 color mode |
 | INT 18 AH=4A (Ap only) | Flash/flashless drawing timing selection; see contract below |
 | INT 1B low AH=0,3,4,7,A | Reset/recalibrate, sense and read ID; unavailable drive reports carry/error |

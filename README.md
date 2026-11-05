@@ -148,6 +148,7 @@ Japanese CG glyphs. FEP input is not implemented.
 ```sh
 python3 -m unittest discover -s tools -p test_fixture_fetch.py
 # Build the independent MIT boot probes offline.
+python3 tools/prepare_crt_fixture.py
 python3 tools/prepare_dma_fixture.py
 python3 tools/prepare_gdtr_fixture.py
 python3 tools/prepare_idtr_fixture.py
