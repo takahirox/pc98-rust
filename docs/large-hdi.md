@@ -157,3 +157,26 @@ were frozen and the complete suite rerun successfully against the final build.
 An initial Wasm check/extra lint invocation selected Homebrew Rust without its
 Wasm standard library; using the rustup compiler and matching toolchain PATH
 resolved it. No failing check or required validation remains pending.
+
+## Stable-toolchain review revision (2026-11-05)
+
+Reproduced the review's `clippy::chunks_exact_to_as_chunks` failure in the
+FAT16 root-directory assertion with Rust/Clippy 1.99.0. Replaced
+`chunks_exact(32)` with `as_chunks::<32>().0.iter()`, preserving the lookup of
+complete 32-byte directory entries. The following acceptance rerun used the
+rustup stable toolchain's bin directory first in PATH for every Rust/build command,
+matching CI's stable-toolchain selection rather than the host's Homebrew Clippy
+1.94.0. These are local macOS arm64 results, not a new GitHub Actions run.
+
+* All fixture/source/license preparation and Python checks from
+  `.github/workflows/emulator.yml` passed in 10.06 s.
+* `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` passed.
+* `cargo test --locked`: **554 passed**, zero failed/ignored, 287.15 s wall time.
+  All four `large_hdi` tests passed in 9.07 s, including the affected FreeDOS
+  FAT16 assertion above 128 MiB and the 512 MiB/1 GiB guest I/O/reset probe.
+* `npm ci` and `npx playwright install chromium` passed.
+  `npm test -- --workers=4` passed the production release-Wasm build, the
+  ten-approved-asset publication audit, and **201 Chromium tests** at `/` and
+  `/pc98-rust/`, with zero failures and the same three intentional Pages
+  duplicates skipped. Total build/test wall time was 168.54 s (Playwright: 2.8
+  minutes), including the 512 MiB export/reimport at both roots.

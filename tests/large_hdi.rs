@@ -221,7 +221,9 @@ fn large_fat16_freedos_reads_and_creates_file_above_128mib() {
         disk.read_bytes(4096 + (512 + 258) * 512, &mut root)
             .unwrap();
         let entry = root
-            .chunks_exact(32)
+            .as_chunks::<32>()
+            .0
+            .iter()
             .find(|entry| &entry[..11] == b"NEW     TXT")
             .unwrap();
         let cluster = u16::from_le_bytes([entry[26], entry[27]]) as usize;
