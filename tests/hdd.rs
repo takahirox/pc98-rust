@@ -105,7 +105,7 @@ fn hdd_boots_freedos_and_independent_adv98_with_durable_writes() {
         m.bus.mem[0x584]
     );
     assert_eq!(
-        file(&m.bus.ide.disk.as_ref().unwrap().bytes, b"HDDSAVE TXT"),
+        file(&m.bus.ide.disk.as_ref().unwrap().to_vec(), b"HDDSAVE TXT"),
         b"DURABLE DOS WRITE\r\n"
     );
     assert_eq!(m.bus.fdc.reads, 0);
@@ -117,9 +117,9 @@ fn hdd_boots_freedos_and_independent_adv98_with_durable_writes() {
     key(&mut m, 0);
     key(&mut m, 0x1c);
     key(&mut m, 0x1c);
-    let saved = file(&m.bus.ide.disk.as_ref().unwrap().bytes, b"SAVE1   DAT");
+    let saved = file(&m.bus.ide.disk.as_ref().unwrap().to_vec(), b"SAVE1   DAT");
     assert_eq!(&saved[..8], b"ADV98SAV");
-    let bytes = m.bus.ide.disk.as_ref().unwrap().bytes.clone();
+    let bytes = m.bus.ide.disk.as_ref().unwrap().to_vec();
     let writes = m.bus.ide.writes;
     m.reset();
     assert_eq!(m.bus.ide.writes, 0);
@@ -133,7 +133,7 @@ fn hdd_boots_freedos_and_independent_adv98_with_durable_writes() {
     key(&mut m, 0x1c);
     key(&mut m, 0x1c);
     assert_eq!(
-        file(&m.bus.ide.disk.as_ref().unwrap().bytes, b"SAVE1   DAT"),
+        file(&m.bus.ide.disk.as_ref().unwrap().to_vec(), b"SAVE1   DAT"),
         saved
     );
 }
@@ -314,7 +314,7 @@ fn ide_verify_counts_modes_carries_last_sector_and_no_data() {
                     // and completion exactly at the last physical sector.
                     for start in [7, 31, 127, 255, 512 - n] {
                         let mut m = verify_machine();
-                        let before = m.bus.ide.disk.as_ref().unwrap().bytes.clone();
+                        let before = m.bus.ide.disk.as_ref().unwrap().to_vec();
                         verify_issue(&mut m, opcode, count, verify_address(start, mode, controls));
                         verify_result(&mut m, 0, verify_address(start + n - 1, mode, controls), 0);
                         assert!(m.bus.ide.irq);
@@ -325,7 +325,7 @@ fn ide_verify_counts_modes_carries_last_sector_and_no_data() {
                         assert_eq!((m.bus.ide.reads, m.bus.ide.writes), (0, 0));
                         let d = m.bus.ide.disk.as_ref().unwrap();
                         assert_eq!(d.writes, 0);
-                        assert_eq!(d.bytes, before);
+                        assert_eq!(d.to_vec(), before);
                     }
                 }
             }
@@ -340,10 +340,10 @@ fn ide_verify_first_error_residual_invalid_addresses_and_recovery() {
             let controls = if mode { 0xe0 } else { 0xa0 };
             for (start, count, residual) in [(510, 4, 2), (510, 0, 254), (511, 2, 1), (257, 0, 1)] {
                 let mut m = verify_machine();
-                let before = m.bus.ide.disk.as_ref().unwrap().bytes.clone();
+                let before = m.bus.ide.disk.as_ref().unwrap().to_vec();
                 verify_issue(&mut m, opcode, count, verify_address(start, mode, controls));
                 verify_result(&mut m, residual, verify_address(512, mode, controls), 0x10);
-                assert_eq!(m.bus.ide.disk.as_ref().unwrap().bytes, before);
+                assert_eq!(m.bus.ide.disk.as_ref().unwrap().to_vec(), before);
                 assert_eq!(m.bus.ide.disk.as_ref().unwrap().writes, 0);
                 assert!(m.bus.ide.irq);
                 verify_issue(&mut m, opcode, 2, verify_address(31, mode, controls));
@@ -362,13 +362,13 @@ fn ide_verify_first_error_residual_invalid_addresses_and_recovery() {
         ] {
             for count in [1, 2, 255, 0] {
                 let mut m = verify_machine();
-                let before = m.bus.ide.disk.as_ref().unwrap().bytes.clone();
+                let before = m.bus.ide.disk.as_ref().unwrap().to_vec();
                 verify_issue(&mut m, opcode, count, address);
                 verify_result(&mut m, count, address, 0x10);
                 assert!(m.bus.ide.irq);
                 verify_issue(&mut m, opcode, 1, [1, 0, 0, 0xa0]);
                 verify_result(&mut m, 0, [1, 0, 0, 0xa0], 0);
-                assert_eq!(m.bus.ide.disk.as_ref().unwrap().bytes, before);
+                assert_eq!(m.bus.ide.disk.as_ref().unwrap().to_vec(), before);
                 assert_eq!(
                     (
                         m.bus.ide.reads,
@@ -388,7 +388,7 @@ fn ide_verify_completion_irq_ack_nien_and_subsequent_pio() {
         for error in [false, true] {
             let mut m = verify_machine();
             m.bus.pics[1].mask = 0xfd;
-            let before = m.bus.ide.disk.as_ref().unwrap().bytes.clone();
+            let before = m.bus.ide.disk.as_ref().unwrap().to_vec();
             let address = if error {
                 [0xfe, 1, 0, 0xe0]
             } else {
@@ -426,7 +426,7 @@ fn ide_verify_completion_irq_ack_nien_and_subsequent_pio() {
             assert_eq!(m.bus.pics[1].irr & 2, 2);
             assert_eq!(m.bus.input(0x64e), status);
             assert!(!m.bus.ide.irq);
-            assert_eq!(m.bus.ide.disk.as_ref().unwrap().bytes, before);
+            assert_eq!(m.bus.ide.disk.as_ref().unwrap().to_vec(), before);
             assert_eq!(
                 (
                     m.bus.ide.reads,
@@ -505,7 +505,7 @@ fn ide_verify_original_guest_before_and_after_reset() {
         assert!(slots <= 500_000);
         assert!(m.bus.text().contains("IDE VERIFY PASS"), "{}", m.bus.text());
         assert_eq!(&m.bus.mem[0x8000..0x8400], expected.as_slice());
-        assert_eq!(m.bus.ide.disk.as_ref().unwrap().bytes, image);
+        assert_eq!(m.bus.ide.disk.as_ref().unwrap().to_vec(), image);
         assert_eq!(
             (
                 m.bus.ide.reads,
@@ -735,7 +735,7 @@ fn ide_edge_identify_read_write_transfer_boundaries() {
     assert_eq!(&id[120..124], &[0, 2, 0, 0]);
     assert_eq!(m.bus.input(0x74c), 0x50);
     ide_held_silence(&mut m, 0, 0);
-    let before = m.bus.ide.disk.as_ref().unwrap().bytes.clone();
+    let before = m.bus.ide.disk.as_ref().unwrap().to_vec();
     verify_issue(&mut m, 0x20, 2, [7, 0, 0, 0xe0]);
     let mut data = Vec::new();
     for sector in 0..2 {
@@ -779,5 +779,5 @@ fn ide_edge_identify_read_write_transfer_boundaries() {
     assert_eq!(disk.writes, 2);
     let mut expected = before;
     expected[4096 + 9 * 512..4096 + 11 * 512].copy_from_slice(&data);
-    assert_eq!(disk.bytes, expected);
+    assert_eq!(disk.to_vec(), expected);
 }

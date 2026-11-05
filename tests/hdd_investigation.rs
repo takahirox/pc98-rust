@@ -134,7 +134,7 @@ fn fragmented_fat12_and_fat16_load_exact_kernel_and_execute_commands() {
             }
             shell(&mut e);
             assert!(
-                e.m.bus.ide.disk.as_ref().unwrap().bytes == disk,
+                e.m.bus.ide.disk.as_ref().unwrap().to_vec() == disk,
                 "guest changed the HDD"
             );
             m = e.m;
@@ -199,7 +199,7 @@ fn persistent_nul_display_distinguishes_live_keyboard_from_masked_irq_then_recov
             e.checkpoint("guest restored IRQ1 and consumed Enter");
             shell(&mut e);
             assert!(
-                e.m.bus.ide.disk.as_ref().unwrap().bytes == disk,
+                e.m.bus.ide.disk.as_ref().unwrap().to_vec() == disk,
                 "guest changed the HDD"
             );
             m = e.m;

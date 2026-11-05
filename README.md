@@ -75,8 +75,10 @@ The browser defaults to **PC-9821Ap DOS** and drive **Auto**; **PC-9801VM**
 remains selectable for software requiring its V30 profile. **Insert media** and
 screen drag-and-drop use the same case-insensitive routing: `.hdi` mounts IDE HDD
 and boots on Ap; supported floppy extensions mount **Floppy 1** and boot.
-The Rust parsers validate geometry, headers and sizes. HDI is limited to 32 MiB
-and requires Ap; choosing an HDI on VM reports an error without changing machines.
+The Rust parsers validate geometry, headers and sizes. HDI requires Ap and uses
+chunked local import and changed-page export. 512 MiB and 1 GiB are tested (see
+[large disk bounds and evidence](docs/large-hdi.md)); choosing an HDI on VM
+reports an error without changing machines.
 
 Choose **Floppy 1**, **Floppy 2**, or **IDE HDD** to override Auto. Mismatched
 media fails without rerouting. Floppy 2 inserts without rebooting or changing
@@ -163,6 +165,7 @@ python3 tools/prepare_v30_nibble_mem_fixture.py
 python3 tools/prepare_v30_add4s_fixture.py
 python3 tools/prepare_v30_segment_irq_fixture.py
 python3 tools/prepare_ide_verify_fixture.py
+python3 tools/prepare_large_hdi_fixture.py
 python3 tools/prepare_rtc_fixture.py
 python3 tools/prepare_rtc_set_fixture.py
 python3 tools/prepare_opn_ch3_fixture.py
@@ -172,6 +175,7 @@ python3 tools/prepare_opna_irq_fixture.py
 python3 tools/prepare_freedos.py
 python3 tools/prepare_floppy_data.py
 python3 tools/prepare_freedos_hdd_fixture.py
+python3 tools/prepare_large_dos_fixture.py
 python3 tools/prepare_hdd_investigation.py
 python3 tools/prepare_font_fixture.py
 python3 tools/prepare_dos_apps.py

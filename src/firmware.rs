@@ -603,7 +603,10 @@ fn preflight(c: &Cpu, b: &mut Bus, int: u8, ah: u8) -> ExecResult<()> {
                         if matches!(op, 5 | 6)
                             && len != 0
                             && len.is_multiple_of(512)
-                            && lba.is_some_and(|l| l + len / 512 <= disk.sector_count())
+                            && lba.is_some_and(|l| {
+                                l.checked_add(len / 512)
+                                    .is_some_and(|end| end <= disk.sector_count())
+                            })
                         {
                             check(c, b, addr, len, op == 6)?;
                         }
@@ -734,7 +737,8 @@ fn hdd_service(c: &mut Cpu, b: &mut Bus) -> ExecResult<()> {
     let Some(mut lba) = lba.filter(|&l| {
         count != 0
             && c.r[BX].is_multiple_of(512)
-            && l + count <= disk.sector_count()
+            && l.checked_add(count)
+                .is_some_and(|end| end <= disk.sector_count())
             && matches!(op, 1 | 5 | 6)
     }) else {
         c.set_byte(4, 0x40);

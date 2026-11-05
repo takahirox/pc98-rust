@@ -177,7 +177,7 @@ fn main() {
         if let Some(disk) = &m.bus.ide.disk {
             eprintln!(
                 "format=HDI bytes={} geometry={}x{}x{} sector=512",
-                disk.bytes.len(),
+                disk.len(),
                 disk.cylinders,
                 disk.heads,
                 disk.sectors

@@ -44,7 +44,7 @@ def load_boot(fat_bits=12):
 def image_with_files(boot, files, *, fat_bits=12, fragmented=False):
     # Preserve the established FAT12 image byte for byte. The independent
     # FAT16 control changes geometry, partition origin and cluster width, and
-    # spans cylinder 255; it still fits the emulator's documented 32 MiB limit.
+    # spans cylinder 255; the large FAT16 control is prepared separately.
     assert fat_bits in (12, 16)
     cylinders, heads, sectors = (64, 8, 16) if fat_bits == 12 else (512, 2, 24)
     hidden = heads * sectors * (1 if fat_bits == 12 else 2)
