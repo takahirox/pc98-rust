@@ -111,6 +111,10 @@ read_and_draw:
     mov es,ax
     mov word [es:1600],2156h
     mov word [es:1602],21d6h
+    ; Clear text over the graphics glyph: DOS boot messages may occupy this row
+    ; (for example the installed FDD2 enumeration line). Keep pixel checks exact.
+    mov word [es:1608],0020h
+    mov word [es:1610],0020h
     mov ax,0a200h
     mov es,ax
     mov byte [es:1600],0e1h

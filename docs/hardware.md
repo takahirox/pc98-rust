@@ -1659,6 +1659,19 @@ No BASIC fallback, proprietary firmware identity string, HDD bootstrap or extend
 memory is provided. Firmware work-area initialization includes conventional RAM
 size, floppy equipment, boot DA/UA, text attributes and keyboard ring pointers.
 
+### Installed floppy units and removable media
+
+Both VM and Ap expose two installed 2HD units in `0000:055Ch` (bits 0 and 1),
+even with no media. DOS enumerates physical units at startup; insertion/eject
+only changes readiness. `Bus::mount_floppy` records a ready transition in the
+selected unit's synthetic BIOS saved ST0 (`0564h + unit*8`, IC=11). BIOS transfers
+replace that unit's seven saved result bytes with the actual controller result.
+FreeDOS(98) uses these fields with INT 1Bh sense to revalidate removable media.
+An empty drive still fails reads with CF=1/AH=80h. FDD2 insertion does not reset
+execution or change boot preference. See the [licensed source diagnosis and
+native/production-Wasm regression](floppy-hot-insert-validation.md) for the
+post-boot D88, direct raw swap, eject/reinsert and no-media controls.
+
 ### BIOS held-key bitmap
 
 The work-area table at `0000:052A–0539` has 16 groups of eight scan codes.
