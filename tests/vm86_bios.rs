@@ -306,8 +306,8 @@ fn ide_pio_translates_noncontiguous_buffers_for_reads_and_writes() {
     c.step(&mut b).unwrap();
     assert_eq!(c.byte(4), 0);
     let disk = b.ide.disk.as_ref().unwrap();
-    assert_eq!(&disk.bytes[32..48], &[0x5a; 16]);
-    assert_eq!(&disk.bytes[48..], &[0x69; 1008]);
+    assert_eq!(&disk.to_vec()[32..48], &[0x5a; 16]);
+    assert_eq!(&disk.to_vec()[48..], &[0x69; 1008]);
 }
 
 #[test]

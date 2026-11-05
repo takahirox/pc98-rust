@@ -113,7 +113,7 @@ fn cleared_hdd_loads_exact_kernel_then_runs_shell_commands_cold_and_reset() {
         assert!(m.bus.ide.reads > 122);
         assert_eq!((m.bus.ide.writes, m.bus.fdc.reads), (0, 0));
         assert!(
-            m.bus.ide.disk.as_ref().unwrap().bytes == disk,
+            m.bus.ide.disk.as_ref().unwrap().to_vec() == disk,
             "guest changed the control HDD"
         );
     }
