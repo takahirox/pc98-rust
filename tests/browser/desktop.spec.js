@@ -32,6 +32,25 @@ async function command(page, text) {
     await page.evaluate(() => { pc98.core.step(10000); pc98.core.audio_clear(); });
   }
 }
+async function checkMemory(page, high) {
+  if (high) {
+    await command(page, 'xmscheck');
+    await until(page, 'XMSCHECK HMA/A20/move/invalid/recovery/free OK');
+  }
+  const paragraphs = high ? 38729 : 31116;
+  const bytes = high ? 619664 : 497856;
+  expect(paragraphs * 16).toBe(bytes);
+  if (high) { expect(bytes).toBeGreaterThanOrEqual(552960); expect(bytes).toBeGreaterThan(497856); }
+  // Each command returns its allocations. A second execution must give exactly
+  // the same successful allocation, including after the XMS recovery probe.
+  for (let repeat = 0; repeat < 2; repeat++) {
+    await command(page, 'cls');
+    await command(page, 'memsize');
+    await until(page, `MEMSIZE paragraphs=${paragraphs} bytes=${bytes} allocated/freed/restored OK`);
+    await until(page, 'A:\\>');
+  }
+}
+
 async function ready(page) {
   const time = new Date('2026-01-01T00:00:00Z');
   await page.clock.install({time}); await page.clock.pauseAt(time);
@@ -61,7 +80,10 @@ test('fresh installed desktop: exact kernel handoff, responsive DOS, live floppi
       });
       expect(handoff).not.toBeNull(); expect(Buffer.from(handoff.bytes).equals(kernel)).toBe(true);
       expect(handoff.reads).toBeGreaterThan(100);
-      await until(page,'A:\\>');
+      const boot = await until(page,'A:\\>');
+      expect(boot.text).toContain('NEC PC-98 version');
+      expect(boot.text).toContain('19836 Bytes in HMA');
+      await checkMemory(page, true);
       await command(page,'probe'); await until(page,'PC98 DOS PROBE OK');
       await command(page,'echo responsive'); await until(page,'responsive');
       expect(await page.evaluate(() => pc98.stats().reads)).toBe(0);
@@ -166,6 +188,7 @@ test('dirty desktop: cancel replacement/eject/restore, export guest writes, reim
   await page.locator('#default-hdd').click();
   await expect(page.locator('#media-name')).toHaveText('FreeDOS-128MiB.hdi');
   await until(page,'A:\\>'); expect(await page.evaluate(()=>(pc98.core.hdi_dirty_page(0) >>> 0))).toBe(0xffffffff);
+  await checkMemory(page, true);
 });
 
 for(const [kind, size] of [
@@ -231,10 +254,39 @@ test('startup locks profile/media changes and ignores a competing drop until ass
 test('published license page provides accessible checksum-matching corresponding sources and notices',async({page})=>{
   await page.goto('./licenses.html');
   const hashes=JSON.parse(await fs.readFile('fixtures/desktop-publication.json'));
-  for(const name of ['kernel-source.tar.gz','freecom-source.tar.gz','desktop-source.tar','COPYING','FreeCOM-LICENSE','NOTICE.txt','manifest.json']) {
+  for(const name of ['kernel-source.tar.gz','freecom-source.tar.gz','desktop-source.tar','COPYING','FreeCOM-LICENSE','NOTICE.txt','manifest.json',
+    'himemx-release.zip','himemx-source.tar.gz','HimemX-LICENSE.txt',
+    'HimemX-README.txt','HimemX-HimemX98.txt']) {
     const href=await page.locator(`a[href="freedos/${name}"]`).getAttribute('href');
     const response=await page.request.get(new URL(href,page.url()).href);
     expect(response.ok()).toBe(true);
     expect(createHash('sha256').update(await response.body()).digest('hex')).toBe(hashes[name]);
+  }
+});
+
+
+test('DOS LOW baseline: same Ap desktop and guest allocator, cold and reset', async ({page}) => {
+  const low = Buffer.from(prefix);
+  let start, size;
+  const root = 4096 + manifest.fat.root_lba * 512;
+  for (let at = root; at < root + 512 * 32; at += 32) {
+    if (low.subarray(at, at + 11).toString() !== 'FDCONFIGSYS') continue;
+    start = 4096 + manifest.fat.data_lba * 512 + (low.readUInt16LE(at + 26) - 2) * 4096;
+    size = low.readUInt32LE(at + 28);
+    break;
+  }
+  expect(start).toBeDefined();
+  low.fill(0x1a, start, start + size);
+  low.write('DOS=LOW\r\nSHELL=A:\\COMMAND.COM A:\\ /P /E:256\r\n', start, 'ascii');
+  const digest = createHash('sha256').update(low).digest('hex');
+  await page.route('**/freedos/manifest.json', route => route.fulfill({json: {...manifest, prefix_sha256: digest}}));
+  await page.route('**/freedos/desktop.bin', route => route.fulfill({body: low}));
+  await ready(page);
+  for (let run = 0; run < 2; run++) {
+    if (run) await page.locator('#reset').click();
+    const boot = await until(page, 'A:\\>');
+    expect(boot.text).not.toContain('HimemX 3.34');
+    expect(boot.text).not.toContain('Bytes in HMA');
+    await checkMemory(page, false);
   }
 });

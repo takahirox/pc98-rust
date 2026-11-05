@@ -332,12 +332,14 @@ verified, no game media was acquired, and no private-image retest occurred.
 ## Installed browser desktop (Issue #130)
 
 `tools/prepare_desktop.py` validates the pinned archives above and builds a new,
-cleared 128 MiB FAT16 disk. Only KERNEL.SYS, COMMAND.COM, COPYING, original MIT
-PROBE/source/license and original configuration/AUTOEXEC are installed. The
+cleared 128 MiB FAT16 disk. KERNEL.SYS, COMMAND.COM, COPYING, original MIT
+PROBE/MEMSIZE/XMSCHECK sources/executables/license and original configuration/
+AUTOEXEC are installed, together with the unmodified HimemX(98) guest and its
+license/readme/PC-98 instructions (Issue #132). The
 unchanged GPL HDD boot source is assembled with `NEC98HDD`/`ISFAT16` and configured
 with the generated BPB; the original MIT partition IPL locates that partition.
-No utility, driver, upstream filesystem slack, proprietary firmware/font or game
-content is copied. GPL programs execute as guest software, never emulator code.
+No unrelated utilities, upstream filesystem slack, proprietary firmware/font or
+game content is copied. GPL programs execute as guest software, never emulator code.
 
 [desktop-manifest.json](../fixtures/desktop-manifest.json) pins binary and source
 URLs/hashes, boot-source hash/build command, every guest file, FAT geometry,
@@ -357,9 +359,45 @@ all downloads. This does not rely on upstream availability or a vague source off
 Source downloads are optional user downloads, not startup network payload.
 
 [desktop-publication.json](../fixtures/desktop-publication.json) pins the exact
-nine `web/freedos/` assets. `npm run build` regenerates them and the site audit
+fourteen `web/freedos/` assets. `npm run build` regenerates them and the site audit
 requires exactly these plus the previous ten assets, with matching SHA-256 values.
 Pages builds fail if a source download/hash or source publication fails. Other
 `fixtures/freedos/` files remain ignored and excluded. Keep these accompanying
 sources and notices when redistributing the desktop; GPLv2 text is included in the
 published downloads. The other DOS disks described above remain test-only.
+
+
+### High-memory desktop driver (Issue #132)
+
+The default Ap desktop alone loads `DEVICE=A:\HIMEMX.EXE` before `DOS=HIGH`.
+Historical `DOS=LOW` floppy/HDD controls are unchanged. The unmodified 5,859-byte
+`nec98/himemx.exe` is from the author's
+[v3.34-nec98-20160913 release](https://github.com/lpproj/himemx.nec/releases/tag/v3.34-nec98-20160913).
+The [manifest](../fixtures/desktop-manifest.json) pins the release URL, archive
+SHA-256, exact member, executable size/hash, and source archive at tag commit
+`5dad3f18835c0d028bb7c9e967c548aaf152b15e`. `tools/prepare_himemx.py` limits each
+cached/network archive read to 1 MiB, checks its hash before caching, selects
+only the exact PC-98 executable, and verifies the release's three original
+notices are byte-identical to the tagged source. The complete tagged source
+includes `source/himemx.asm` and `Makefile.wc` (JWasm `-mz -DNEC98` build).
+No source from an emulator is used.
+
+The release's `LICENSE.txt` is the original Artistic License (Artistic-1.0).
+Its `README.txt` states FD Himem copyright Till Gerken and Tom Ehlert, with
+HimemX changes in the public domain; the PC-98 binary credits sava (2016).
+We redistribute the author's unmodified Standard Version under clauses 1 and
+4(a)/(b): original notices retained, instructions identifying the Standard
+Version, and the complete release and matching machine-readable source served
+with equal access. Clause 5 permits aggregation without presenting HimemX as
+our own product. This is a distinct license from the GPL kernel and MIT emulator.
+
+Five intentional assets extend the previous nineteen-file publication allowlist:
+`himemx-release.zip` (complete original release), `himemx-source.tar.gz` (complete
+matching source/build files), `HimemX-LICENSE.txt`, `HimemX-README.txt`, and
+`HimemX-HimemX98.txt` (original Shift-JIS PC-98 instructions). All are linked on
+`web/licenses.html` and pinned in `desktop-publication.json`. The disk retains
+`XMS.LIC`, `XMSREAD.TXT`, and `HIMEMX.TXT`; preserve the accompanying complete
+release, sources and notices with redistributed/exported desktops. Upstream
+links supplement these actual same-site downloads. The helper tar includes
+both original diagnostics and the pinned driver fetcher. No optional third-party
+MEM utility, EMM386, EMS or UMB manager is installed or claimed.

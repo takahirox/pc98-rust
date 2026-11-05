@@ -66,6 +66,7 @@ jobs:
       - run: python3 tools/prepare_freedos.py
       - run: python3 tools/prepare_floppy_data.py
       - run: python3 tools/prepare_freedos_hdd_fixture.py
+      - run: python3 tools/prepare_desktop.py
       - run: python3 tools/prepare_large_dos_fixture.py
       - run: python3 tools/prepare_hdd_investigation.py
       - run: python3 tools/prepare_font_fixture.py

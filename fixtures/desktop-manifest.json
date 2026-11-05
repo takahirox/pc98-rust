@@ -1,8 +1,8 @@
 {
   "bytes": 134221824,
   "prefix_bytes": 655360,
-  "prefix_sha256": "9c7232fd284a87fd2daeb08ff0919b584a89f7729229398e67491e8332b0073e",
-  "image_sha256": "3aac6b03526b7957e3764c6439321e5a742dcf22894ab07e6ac83df86c8726cb",
+  "prefix_sha256": "86c48b522a3901ff92ef1d5f410bea458f6f567ee9908a629e6fa7befb548de0",
+  "image_sha256": "a994056731d0471cefac1c74da12d5f4ba372e41590e6f3e6aeb8e7f8de355b5",
   "geometry": [
     512,
     16,
@@ -18,7 +18,7 @@
     "sectors_per_fat": 128,
     "root_lba": 770,
     "data_lba": 802,
-    "free_clusters": 32622
+    "free_clusters": 32611
   },
   "boot_source_sha256": "8c901c29132416d828a80facf24f973ddb70a1c632e38397593185a1b6939ec8",
   "boot_build": "nasm -f bin -DNEC98HDD -DISFAT16 boot.asm",
@@ -39,6 +39,14 @@
     "freecom-source.tar.gz": {
       "url": "https://codeload.github.com/lpproj/freecom_dbcs2/tar.gz/86a1a89eadbc14d8ff3f52e62dc51e98210de216",
       "sha256": "e04a33594b8ef7347ae8fef96b6071d04985f32fabec4b0de3bbe0fbad9e5528"
+    },
+    "himemx-release.zip": {
+      "url": "https://github.com/lpproj/himemx.nec/releases/download/v3.34-nec98-20160913/himemx334_nec98_20160913.zip",
+      "sha256": "4a8d1321ff91ac43d8996f6940953cdddb5ac3be90e5ad3912aee43c338390f7"
+    },
+    "himemx-source.tar.gz": {
+      "url": "https://codeload.github.com/lpproj/himemx.nec/tar.gz/5dad3f18835c0d028bb7c9e967c548aaf152b15e",
+      "sha256": "151e6cb71e2a177c80cb722385886c5f9e1a65bc1bd2608765c541f587969683"
     }
   },
   "files": {
@@ -54,9 +62,25 @@
       "bytes": 17990,
       "sha256": "0f1e68d9b4a580cdcca4c5f4e3b8046f7a8759da05edd109cff081bc484b3c4b"
     },
+    "HIMEMX  EXE": {
+      "bytes": 5859,
+      "sha256": "f2fb866a66c8807bb70d0b30d21a492c79157c9fb436942d23ca7c02749734da"
+    },
+    "XMS     LIC": {
+      "bytes": 4922,
+      "sha256": "47e9026e597eb214ec7e9c0a5fe72311b67a81d26bcf4a3cfa6ab21eb8ffeca0"
+    },
+    "XMSREAD TXT": {
+      "bytes": 4312,
+      "sha256": "72a25299b8d90fc833a6568113dccb907a72623eab0f0e5b30717c8898d8338c"
+    },
+    "HIMEMX  TXT": {
+      "bytes": 980,
+      "sha256": "806a0aa9695a994c6181633f16dd2aaf53e925438b049078e3f50380aa48f715"
+    },
     "FDCONFIGSYS": {
-      "bytes": 45,
-      "sha256": "35ed2e6fcbd5edebd6376fb2c0522c406f685481de1e8d96be6e351b1b46da48"
+      "bytes": 68,
+      "sha256": "bd08fe8f7e179cdcdc6afaf45c6a27a971e4d74d1898fec877548e8637820ca3"
     },
     "AUTOEXECBAT": {
       "bytes": 52,
@@ -65,6 +89,22 @@
     "PROBE   COM": {
       "bytes": 40,
       "sha256": "418ee70ab5f6b34db1b1f88da607e1b9c1870d555e023f44d582316b052292a5"
+    },
+    "MEMSIZE COM": {
+      "bytes": 317,
+      "sha256": "0fc268c238c0a5a99530f989cba862510199099b60126eea87c0fc494617e6cd"
+    },
+    "MEMSIZE ASM": {
+      "bytes": 2118,
+      "sha256": "818b1cfd76a02554d2c590c4a045cf1102f786477cd689cd73b62a0d22ea2db0"
+    },
+    "XMSCHECKCOM": {
+      "bytes": 654,
+      "sha256": "7f76abffc4a3f1ab19e3802a39a6fc1cbffe430c708f23ec233f12590629798a"
+    },
+    "XMSCHECKASM": {
+      "bytes": 3990,
+      "sha256": "9ab11c7bcef844d8419115b9a913d95ac64c8d3cc4147379316414bc1b0aea25"
     },
     "PROBE   ASM": {
       "bytes": 249,
@@ -75,5 +115,11 @@
       "sha256": "683f43140f1823d6cb474f386264b70b35eab24fc6c59d5f19d0067ba1e3e164"
     }
   },
-  "license": "GPL-2.0-or-later (kernel/FreeCOM/boot); MIT (IPL/PROBE/configuration)"
+  "himemx": {
+    "source_commit": "5dad3f18835c0d028bb7c9e967c548aaf152b15e",
+    "archive_member": "nec98/himemx.exe",
+    "license": "Artistic-1.0",
+    "unmodified": true
+  },
+  "license": "GPL-2.0-or-later (kernel/FreeCOM/boot); Artistic-1.0 (HimemX); MIT (IPL/PROBE/MEMSIZE/XMSCHECK/configuration)"
 }

@@ -22,9 +22,9 @@ pins all inputs, guest files, geometry, template and logical image hashes.
 | CHS / sector | 512 cylinders × 16 heads × 32 sectors × 512 bytes |
 | Partition | LBA 512; 261,632 sectors; active PC-98 FAT16 |
 | FAT | Two 128-sector copies; 4 KiB clusters; 512 root entries |
-| Free space | 32,622 clusters = 133,619,712 bytes |
+| Free space | 32,611 clusters = 133,574,656 bytes |
 | Template transfer | 655,360 bytes = 0.4883% of full HDI transfer |
-| Logical image SHA-256 | `3aac6b03526b7957e3764c6439321e5a742dcf22894ab07e6ac83df86c8726cb` |
+| Logical image SHA-256 | `a994056731d0471cefac1c74da12d5f4ba372e41590e6f3e6aeb8e7f8de355b5` |
 
 All nonzero disk bytes are in a 64 KiB-aligned prefix; the remainder is defined
 as zero. This deliberately simple sparse format needs neither a new archive
@@ -63,7 +63,7 @@ and reject a competing drop while controls are locked. Existing media routing,
 floppy-booted DOS FDD2, independent demos, CPU/device, 512 MiB/1 GiB and occupied
 512 MiB round-trip regressions remain enabled.
 
-## Measurements
+## Historical Issue #130 measurements
 
 Measured locally on macOS arm64 with the installed Chromium/Playwright 1.56.1,
 release Wasm and the Python static servers. These are observations, not timing
@@ -95,16 +95,17 @@ same-site links to the complete matching kernel/boot and FreeCOM/SUPPL sources,
 MIT helpers/configuration and all notices. The browser checks fetch those links
 from both serving roots and verify their hashes.
 
-`npm run check:site` permits exactly nineteen regular files: the previous ten
-assets and the nine entries pinned in
+`npm run check:site` permits exactly twenty-four regular files: the original ten
+assets and the fourteen entries pinned in
 [desktop-publication.json](../fixtures/desktop-publication.json). A corrupted
 published source archive and an extra unapproved disk were each deliberately
 introduced locally: both were rejected, then restored. The published helper
 source archive was also unpacked in a clean temporary directory, supplied with
 only the four checksum-pinned input archives and rebuilt: all nine publication
-artifacts matched byte-for-byte. No test-only DOS disks or raw 128 MiB media ship.
+artifacts matched byte-for-byte for Issue #130. The Issue #132 rebuild of all
+fourteen artifacts is recorded below. No test-only DOS disks or raw 128 MiB media ship.
 
-## Checks
+## Historical Issue #130 checks
 
 Validation commands: all fixture preparations listed in the acceptance workflow;
 Python fixture-fetch tests; `cargo test --locked`; focused HDD regression after
@@ -131,3 +132,134 @@ Results on 2026-11-05:
 
 No live deployment, private media, manual playtest or post-merge verification is
 required for this Issue.
+
+
+## High-memory desktop (Issue #132)
+
+The default Ap disk now loads the unmodified pinned PC-98 HimemX 3.34 before
+`DOS=HIGH`, followed by the same FreeCOM command line. Restore FreeDOS HDD uses
+this identical audited template. No CPU/BIOS/bus corrections or EMM386/UMB/EMS
+assumptions were necessary. VM's built-in demos and every historical low-DOS
+control retain their original bytes/configurations. An uploaded/exported HDD
+keeps its own configuration; restoring the default explicitly replaces it.
+
+### Independent conventional allocation
+
+At the real FreeCOM prompt, run `MEMSIZE`. This original MIT program in
+[guest/memsize.asm](../guest/memsize.asm) releases its COM tail with INT 21h/AH=4Ah,
+retaining 256 paragraphs including its PSP, code and stack. AH=48h/BX=FFFFh must
+fail with AX=8; the returned BX is then **successfully allocated** using AH=48h.
+The program checks the block ends below A0000h, writes/reads both endpoint guards,
+frees it with AH=49h, and requires the next largest-block query to match exactly.
+It reports paragraphs and bytes and exits through DOS. The measurement excludes
+its own 4 KiB allocation and environment, and includes FreeCOM's normal EXEC/XMS
+swap behavior. It is a demonstrated contiguous allocation available to a DOS
+program launched by the resident shell, not total free memory, XMS capacity or a
+host allocator count. It does not claim the diagnostic's own memory is free.
+
+| Same Ap profile (640 KiB conventional + 3 MiB extended) | Largest allocated paragraphs | Bytes |
+| --- | ---: | ---: |
+| Previous `DOS=LOW`, no manager | 31,116 | 497,856 |
+| HimemX(98) + `DOS=HIGH` | 38,729 | 619,664 |
+| Demonstrated improvement | 7,613 | 121,808 |
+| Compatibility target | 34,560 | 552,960 |
+
+Both native and production release-Wasm Chromium tests reproduce these exact
+results on cold boot and reset, including two invocations at each prompt. The
+baseline uses the same FAT16 disk, shell and diagnostic, changing only FDCONFIG
+back to the original `DOS=LOW`/SHELL text with no DEVICE line; no historical
+fixture is rewritten. Native observation records actual real-mode instructions
+executed above 1 MiB with A20 enabled only in the high configuration. The driver
+initializes through guest instructions and DOS reports 19 buffers / 19,836 bytes
+in HMA. The functional diagnostic also checks DOS's INT 21h/3306h HMA flag and
+that HMA is already owned, independently of the boot message.
+
+`XMSCHECK`, from [guest/xmscheck.asm](../guest/xmscheck.asm), discovers the real
+INT 2Fh XMS entry, queries A20, balances local enable/disable (the existing DOS
+HMA lock keeps it enabled), allocates 16 KiB of XMS, copies an original pattern to
+extended memory and back, and verifies its bytes. Out-of-block and invalid-handle
+moves must be rejected without changing the destination; a subsequent valid
+transfer must recover. It locks/unlocks the block, checks its extended physical
+address, frees it and verifies XMS free capacity is restored. The pinned driver's
+range rejection is error A7h (offset plus length exceeds block), invalid source
+handle A3h, and a remaining A20 lock reports 94h. Native tests also require zero
+CPU faults and working IRQs. Existing independent A20/HMA/ROM, segment-protection,
+BIOS extended-copy and invalid-hole tests remain enabled. No test disables A20
+underneath a live DOS HMA kernel or writes to DOS-owned HMA.
+
+The 540 KiB target is exceeded by 66,704 bytes. No commercial game was obtained
+or tested; this result establishes the allocation target, not game compatibility.
+No third-party MEM is bundled: the original MEMSIZE utility gives a direct,
+reproducible measurement without another guest dependency.
+
+### Delivery, source and browser checks
+
+The [driver license audit](licenses.md#high-memory-desktop-driver-issue-132)
+records exact provenance and Artistic redistribution conditions. The new five
+same-site release/source/notice assets are intentional additions: **24 approved
+site files**, including **14 DOS artifacts**. All six upstream input archives
+are pinned. A clean desktop rebuild unpacks `desktop-source.tar`, supplies
+those archives in `fixtures/freedos/`, runs
+`python3 tools/prepare_desktop.py --update-manifest`, and compares all fourteen
+published artifact hashes with `desktop-publication.json`. It matched exactly.
+Normal preparation (without the flag) also passes deterministic manifest checks.
+Corrupting the published HimemX source and adding an unapproved sentinel asset
+were each rejected by the strict audit, then restored and rechecked successfully.
+
+The sparse template remains 655,360 bytes (0.4883% of the logical HDI); no full
+128 MiB image is published or added to source control. The new guest files consume
+11 extra 4 KiB disk clusters. Focused Chromium measurements on macOS arm64,
+Playwright 1.56.1, two workers: mount 113/93 ms and natural cold boot 4,938/4,913 ms
+at `/` and `/pc98-rust/`. Wasm high-water memory was 14,090,240 bytes and resident
+HDD pages 458,752 bytes, unchanged from Issue #130. Sampled renderer peak RSS was
+186,896/185,664 KiB; total browser peak RSS 408,048/405,824 KiB. Process sampling
+has the limitations described above; native validation was also running locally.
+
+Actual startup HTTP bodies totalled 1,241,926 bytes at each root: HTML 4,250,
+CSS 3,356, JS 22,165, Wasm 552,196, manifest 4,599 and template 655,360 bytes.
+Release/source/notice archives are not downloaded at startup. These are local
+uncompressed HTTP observations, not deployed-site timing or compression claims.
+
+The desktop browser tests reuse existing cold/reset, restored-HDD and full
+export/reimport flows for high-memory checks. Only one new lightweight baseline
+scenario per root is added; no additional full 128 MiB export is performed.
+CI prepares the audited desktop before the new native test. The complete suite
+retains floppy hot insert, both demos, boot-source separation, dirty-data warnings,
+profile retention, IDE large-HDI writes and exports. Source links are downloaded
+and verified from both roots, including all five new driver artifacts.
+
+
+### Final pre-merge validation (2026-11-05)
+
+- All documented acceptance-workflow fixture preparations, original media/font
+  hash checks and Python fetch tests passed; combined preparation 18.48 s.
+  The expanded fetch suite separately passed all **10 tests** in 0.006 s.
+- `cargo test --locked`: **556 passed, zero failures**, 327.63 s elapsed.
+  This includes baseline/high allocator controls, HMA execution, XMS recovery,
+  historical DOS/VM controls and all existing CPU/device/disk regressions.
+- `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` passed.
+  The first Clippy run found a redundant comparison in the new test; it was
+  removed before the final successful check (0.66 s for Clippy).
+- Release Wasm built successfully (552,196 bytes; initial compile 1.42 s).
+  `npm test -- --workers=2` performed the final media/font checks, deterministic
+  desktop preparation, release build and **24-asset publication audit**, then
+  ran the full two-root Chromium suite: **231 passed, 3 intentional existing
+  skips, zero failures** of 234 scenarios, 6.3 minutes. Total build-through-suite
+  feedback elapsed was 378.49 s. Local native/browser runs partially overlapped;
+  these are elapsed times, not summed runner computation or CI queue timings.
+- Focused desktop Chromium validation: **30 passed** at both roots in 38.5 s.
+  The focused native allocator/XMS control passed cold/reset for both baseline
+  and high configurations, including repeated measurements, in 23.87 s.
+- Clean helper-source desktop rebuild: all **14 artifacts identical**, 0.19 s.
+  Normal deterministic regeneration, corrupted-source/unapproved-asset rejection,
+  restored strict publication audit, changed Markdown file links and
+  `git diff --check` passed.
+
+Intentionally unchanged historical low-DOS SHA-256 values:
+
+- `minimal.hdm`: `015faaa0dfb4c23f7a8aa4b74bbad2d460afc55c64517c5b4ea7330d4a8f8d1e`
+- `shell.hdi`: `fb44e34131bfa2ca56ffb11ad004446c096718233391f2828b4d488114b40bcb`
+
+All other historical manifests and fixture builders are unchanged and their
+preparation checks passed. No private media, commercial game, proprietary ROM or
+font, manual gameplay, published-site or post-merge check was required or used.
