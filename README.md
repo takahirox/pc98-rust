@@ -111,10 +111,19 @@ Star Trail records moves/score in sector 8; a new game starts at zero.
 Enable **Send mouse movement and buttons** for Ap guest input. INT 33h applications
 require their own guest DOS mouse driver; the default desktop does not install one.
 
-The desktop's GPL guest publication includes **complete matching sources and notices
-on the same site**, available from [Licenses & media credits](web/licenses.html):
-kernel/boot, FreeCOM (including SUPPL), original MIT assembly helpers and disk
-configuration. Build verifies their hashes; the explicit public-asset audit rejects
+The Ap desktop loads pinned PC-98 HimemX before `DOS=HIGH`. At the clean DOS
+prompt, `MEMSIZE` measures and successfully allocates **619,664 conventional
+bytes** (38,729 paragraphs), compared with 497,856 bytes under the previous
+`DOS=LOW` configuration. `XMSCHECK` exercises HMA/A20 and XMS transfers, rejected
+requests and recovery. These original MIT commands run inside guest DOS. This
+exceeds the 540 KiB memory target; no commercial game has been tested. See
+[measurement and validation](docs/desktop-validation.md#high-memory-desktop-issue-132).
+
+The desktop's GPL and Artistic guest publication includes **complete matching
+sources and notices on the same site**, available from [Licenses & media credits](web/licenses.html):
+kernel/boot, FreeCOM (including SUPPL), unmodified HimemX release and complete
+matching source/notices, original MIT assembly helpers and disk configuration.
+Build verifies their hashes; the explicit public-asset audit rejects
 unapproved files. See [license audit](docs/licenses.md#installed-browser-desktop-issue-130).
 
 Supported media: raw `.TFD`, `.HDM`, `.XDF`, `.2HD`, `.IMG` with exactly

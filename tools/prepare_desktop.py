@@ -14,6 +14,7 @@ import tarfile
 from build_media import ROOT, assemble
 from prepare_freedos import ASSETS, DEST, extract_fat_file, main as prepare
 from prepare_hdd_fixture import load_boot, sha
+from prepare_himemx import ASSETS as XMS_ASSETS, COMMIT as XMS_COMMIT, prepare as prepare_xms
 
 PUBLIC = ROOT / 'web/freedos'
 PIN = ROOT / 'fixtures/desktop-manifest.json'
@@ -27,9 +28,17 @@ def build():
     files = {n: extract_fat_file(base, n) for n in
              [b'KERNEL  SYS', b'COMMAND COM', b'COPYING    ']}
     files.update({
-        b'FDCONFIGSYS': b'DOS=LOW\r\nSHELL=A:\\COMMAND.COM A:\\ /P /E:256\r\n',
+        b'HIMEMX  EXE': prepare_xms(),
+        b'XMS     LIC': (DEST / 'HimemX-LICENSE.txt').read_bytes(),
+        b'XMSREAD TXT': (DEST / 'HimemX-README.txt').read_bytes(),
+        b'HIMEMX  TXT': (DEST / 'HimemX-HimemX98.txt').read_bytes(),
+        b'FDCONFIGSYS': b'DEVICE=A:\\HIMEMX.EXE\r\nDOS=HIGH\r\nSHELL=A:\\COMMAND.COM A:\\ /P /E:256\r\n',
         b'AUTOEXECBAT': b'@echo off\r\nPROMPT $p$g\r\necho FreeDOS desktop ready\r\n',
         b'PROBE   COM': assemble('guest/probe.asm'),
+        b'MEMSIZE COM': assemble('guest/memsize.asm'),
+        b'MEMSIZE ASM': (ROOT / 'guest/memsize.asm').read_bytes(),
+        b'XMSCHECKCOM': assemble('guest/xmscheck.asm'),
+        b'XMSCHECKASM': (ROOT / 'guest/xmscheck.asm').read_bytes(),
         b'PROBE   ASM': (ROOT / 'guest/probe.asm').read_bytes(),
         b'RUST    LIC': (ROOT / 'LICENSE').read_bytes(),
     })
@@ -107,9 +116,11 @@ def build():
                 'data_lba': hidden+datastart, 'free_clusters': clusters-(cluster-2)},
         'boot_source_sha256': sha(source), 'boot_build': 'nasm -f bin -DNEC98HDD -DISFAT16 boot.asm',
         'ipl_sha256': sha(ipl),
-        'inputs': {k: {'url': v[0], 'sha256': v[1]} for k, v in ASSETS.items()},
+        'inputs': {k: {'url': v[0], 'sha256': v[1]} for k, v in {**ASSETS, **XMS_ASSETS}.items()},
         'files': {n.decode(): {'bytes': len(d), 'sha256': sha(d)} for n, d in files.items()},
-        'license': 'GPL-2.0-or-later (kernel/FreeCOM/boot); MIT (IPL/PROBE/configuration)',
+        'himemx': {'source_commit': XMS_COMMIT, 'archive_member': 'nec98/himemx.exe',
+                   'license': 'Artistic-1.0', 'unmodified': True},
+        'license': 'GPL-2.0-or-later (kernel/FreeCOM/boot); Artistic-1.0 (HimemX); MIT (IPL/PROBE/MEMSIZE/XMSCHECK/configuration)',
     }
     text = json.dumps(manifest, indent=2)+'\n'
     if '--update-manifest' in sys.argv:
@@ -122,12 +133,15 @@ def build():
     # GPLv2 section 3(a): same-site, complete matching source archives with
     # original notices/build scripts, plus all original disk assembly helpers.
     for name in ['kernel-source.tar.gz', 'freecom-source.tar.gz', 'COPYING',
-                 'FreeCOM-LICENSE', 'distribution-READMEja.htm']:
+                 'FreeCOM-LICENSE', 'distribution-READMEja.htm',
+                 'himemx-release.zip', 'himemx-source.tar.gz', 'HimemX-LICENSE.txt',
+                 'HimemX-README.txt', 'HimemX-HimemX98.txt']:
         shutil.copyfile(DEST/name, PUBLIC/name)
     helpers = ['guest/timer.asm', 'guest/keymap.asm', 'guest/hblank.asm',
                'guest/lioinit.asm', 'guest/liotest.asm', 'guest/drawmode.asm',
-               'guest/drawtest.asm', 'guest/hdd-ipl.asm', 'guest/probe.asm', 'LICENSE',
-               'tools/prepare_desktop.py', 'tools/prepare_freedos.py',
+               'guest/drawtest.asm', 'guest/hdd-ipl.asm', 'guest/probe.asm',
+               'guest/memsize.asm', 'guest/xmscheck.asm', 'LICENSE',
+               'tools/prepare_desktop.py', 'tools/prepare_freedos.py', 'tools/prepare_himemx.py',
                'tools/prepare_hdd_fixture.py', 'tools/build_media.py',
                'fixtures/desktop-manifest.json']
     with tarfile.open(PUBLIC/'desktop-source.tar', 'w', format=tarfile.USTAR_FORMAT) as tar:
@@ -153,10 +167,21 @@ def build():
         'Kernel and FreeCOM binaries are unmodified. GPL HDD boot code is assembled\n'
         'unchanged; its BPB/layout fields and filesystem are configured for FAT16.\n'
         'Original MIT IPL/PROBE/configuration and reproducible assembly scripts:\n'
-        'desktop-source.tar (includes LICENSE). No other DOS utilities are installed.\n'
+        'desktop-source.tar (includes LICENSE and original MEMSIZE diagnostic).\n'
+        'HimemX(98) 3.34, unmodified release v3.34-nec98-20160913, Artistic License.\n'
+        'Derived from FD Himem, copyright Till Gerken and Tom Ehlert; HimemX\n'
+        'changes by Japheth and contributors; PC-98 port copyright 2016 sava.\n'
+        'Original notices: HimemX-LICENSE.txt,\n'
+        'HimemX-README.txt and HimemX-HimemX98.txt (Japanese, Shift-JIS).\n'
+        'Standard Version: https://github.com/lpproj/himemx.nec/releases/tag/v3.34-nec98-20160913\n'
+        'Get the complete unmodified Standard Version here\n'
+        'in himemx-release.zip, with matching complete himemx-source.tar.gz.\n'
+        'Redistribution basis: Artistic License clauses 1 and 4(a)/(b).\n'
         'To redistribute the desktop, accompany it with these complete matching\n'
         'sources and notices, under GPLv2 section 3(a); upstream links alone are\n'
         'not the source distribution. Source downloads have equal access here.\n'
+        'Rebuild: unpack desktop-source.tar, install Python 3 and NASM, run\n'
+        'python3 tools/prepare_desktop.py --update-manifest (downloads pinned inputs).\n'
         'The Rust emulator remains MIT; these programs execute only as guests.\n')
     publication = {p.name: sha(p.read_bytes()) for p in sorted(PUBLIC.iterdir()) if p.is_file()}
     publication_pin = ROOT / 'fixtures/desktop-publication.json'

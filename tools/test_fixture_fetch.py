@@ -8,6 +8,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 
 import prepare_dos_apps as fixtures
+import prepare_himemx as himemx
 
 
 class FixtureFetchTests(unittest.TestCase):
@@ -82,6 +83,44 @@ class FixtureFetchTests(unittest.TestCase):
             self.fetch()
         self.network.assert_not_called()
         self.assertEqual(self.path.read_bytes(), b'corrupt')
+
+
+class HimemXFetchTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.dest = Path(directory.name)
+        self.enterContext(patch.object(himemx, 'DEST', self.dest))
+        self.network = self.enterContext(patch.object(himemx.urllib.request, 'urlopen'))
+        self.data = b'pinned PC-98 driver archive'
+        self.digest = fixtures.sha(self.data)
+
+    def fetch(self):
+        return himemx.fetch('driver.zip', 'https://example.invalid/driver.zip', self.digest)
+
+    def test_download_is_bounded_verified_then_cached(self):
+        response = self.network.return_value.__enter__.return_value
+        response.read.return_value = self.data
+        self.assertEqual(self.fetch(), self.data)
+        response.read.assert_called_once_with(himemx.LIMIT + 1)
+        self.network.reset_mock()
+        self.assertEqual(self.fetch(), self.data)
+        self.network.assert_not_called()
+
+    def test_bad_or_oversize_download_is_not_cached(self):
+        for data in (b'wrong', b'x' * (himemx.LIMIT + 1)):
+            self.network.return_value.__enter__.return_value.read.return_value = data
+            with self.assertRaisesRegex(ValueError, 'checksum or size mismatch'):
+                self.fetch()
+            self.assertFalse((self.dest / 'driver.zip').exists())
+
+    def test_corrupt_cache_fails_without_network_or_overwrite(self):
+        path = self.dest / 'driver.zip'
+        path.write_bytes(b'corrupt')
+        with self.assertRaisesRegex(ValueError, 'checksum or size mismatch'):
+            self.fetch()
+        self.network.assert_not_called()
+        self.assertEqual(path.read_bytes(), b'corrupt')
 
 
 if __name__ == '__main__':
