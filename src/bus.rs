@@ -119,6 +119,10 @@ impl Bus {
     /// Replace or eject floppy media, terminating execution tied to the old disk.
     pub fn mount_floppy(&mut self, drive: usize, disk: Option<Disk>) -> Option<Disk> {
         let previous = std::mem::replace(&mut self.disks[drive], disk);
+        // Synthetic BIOS work area: ST0.IC=11 records a drive ready transition.
+        // FreeDOS(98) checks this saved status before SENSE to invalidate its
+        // removable-media BPB/FAT cache. Keep it until the next BIOS transfer.
+        self.mem[0x564 + drive * 8] = 0xc0 | drive as u8;
         if self
             .fdc
             .pio

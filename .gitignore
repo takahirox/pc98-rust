@@ -54,3 +54,4 @@ __pycache__/
 /fixtures/vm86_firmware/
 /fixtures/vm86_bios/
 /fixtures/large_hdi/
+/fixtures/floppy_data/
