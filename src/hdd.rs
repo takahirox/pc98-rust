@@ -1,10 +1,24 @@
 //! Original PC-9821 IDE PIO subset. PC-98 ports 640–64E/74C, INT 11h.
 //! One master on bank zero; HDI geometry is explicit rather than guessed.
-pub const MAX_HDI_BYTES: usize = 32 * 1024 * 1024;
+// Portable file extent for the wasm32 transfer ABI. The HDI payload itself is
+// a u32 field; exact geometry/extent checks below normally impose a lower bound.
+pub const MAX_HDI_BYTES: u64 = u32::MAX as u64;
+pub const PAGE_BYTES: usize = 64 * 1024;
+pub const TRANSFER_BYTES: usize = 1024 * 1024;
+
+#[derive(Clone)]
+enum Backing {
+    Owned(Vec<u8>),
+    // Missing pages are zero, not asynchronously unavailable. All guest I/O is
+    // synchronous after import. Fallible page allocation keeps replacement safe.
+    Paged(Vec<Option<Vec<u8>>>),
+}
 
 #[derive(Clone)]
 pub struct HardDisk {
-    pub bytes: Vec<u8>,
+    backing: Backing,
+    dirty: Vec<bool>,
+    len: usize,
     pub cylinders: u16,
     pub heads: u8,
     pub sectors: u8,
@@ -13,11 +27,14 @@ pub struct HardDisk {
 }
 
 impl HardDisk {
-    pub fn parse(bytes: Vec<u8>) -> Result<Self, String> {
-        if bytes.len() < 32 || bytes.len() > MAX_HDI_BYTES {
-            return Err("HDI must contain a 32-byte header and fit within 32 MiB".into());
+    fn header(bytes: &[u8], len: u64) -> Result<Self, String> {
+        if bytes.len() < 32 || len > MAX_HDI_BYTES {
+            return Err(
+                "invalid HDI geometry: requires a 32-byte header and file extent below 4 GiB"
+                    .into(),
+            );
         }
-        let field = |p| u32::from_le_bytes(bytes[p..p + 4].try_into().unwrap()) as usize;
+        let field = |p| u32::from_le_bytes(bytes[p..p + 4].try_into().unwrap()) as u64;
         let (offset, size, sector, sectors, heads, cylinders) = (
             field(8),
             field(12),
@@ -26,26 +43,89 @@ impl HardDisk {
             field(24),
             field(28),
         );
-        if !(32..=65536).contains(&offset)
+        if offset < 32
             || sector != 512
             || !(1..=63).contains(&sectors)
             || !(1..=16).contains(&heads)
             || !(1..=65535).contains(&cylinders)
-            || cylinders as u64 * heads as u64 * sectors as u64 * sector as u64 != size as u64
-            || offset.checked_add(size) != Some(bytes.len())
+            || cylinders * heads * sectors * sector != size
+            || offset + size != len
         {
             return Err(
                 "invalid HDI geometry, size or offset (requires 512-byte IDE sectors)".into(),
             );
         }
+        let len = usize::try_from(len).map_err(|_| "HDI extent exceeds host addressing")?;
+        let mut dirty = Vec::new();
+        dirty
+            .try_reserve_exact(len.div_ceil(PAGE_BYTES))
+            .map_err(|_| "Host memory cannot allocate HDI metadata; mounted disk retained")?;
+        dirty.resize(len.div_ceil(PAGE_BYTES), false);
         Ok(Self {
-            bytes,
-            offset,
+            backing: Backing::Owned(Vec::new()),
+            dirty,
+            len,
+            offset: offset as usize,
             cylinders: cylinders as u16,
             heads: heads as u8,
             sectors: sectors as u8,
             writes: 0,
         })
+    }
+    /// Ownership transfer for native callers: no second complete disk copy.
+    pub fn parse(bytes: Vec<u8>) -> Result<Self, String> {
+        let mut disk = Self::header(&bytes, bytes.len() as u64)?;
+        disk.backing = Backing::Owned(bytes);
+        Ok(disk)
+    }
+    pub fn len(&self) -> usize {
+        self.len
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+    /// Bounded inspection/export; callers never need a whole-image allocation.
+    pub fn read_bytes(&self, at: usize, out: &mut [u8]) -> Result<(), String> {
+        if at.checked_add(out.len()).is_none_or(|end| end > self.len) {
+            return Err("HDI read outside file extent".into());
+        }
+        match &self.backing {
+            Backing::Owned(bytes) => out.copy_from_slice(&bytes[at..at + out.len()]),
+            Backing::Paged(pages) => {
+                let mut done = 0;
+                while done < out.len() {
+                    let pos = at + done;
+                    let within = pos % PAGE_BYTES;
+                    let n = (PAGE_BYTES - within).min(out.len() - done);
+                    if let Some(page) = &pages[pos / PAGE_BYTES] {
+                        out[done..done + n].copy_from_slice(&page[within..within + n]);
+                    } else {
+                        out[done..done + n].fill(0);
+                    }
+                    done += n;
+                }
+            }
+        }
+        Ok(())
+    }
+    /// Explicit convenience for small native test images, not browser export.
+    pub fn to_vec(&self) -> Vec<u8> {
+        let mut bytes = vec![0; self.len];
+        self.read_bytes(0, &mut bytes).unwrap();
+        bytes
+    }
+    pub fn dirty_page(&self, from: usize) -> Option<usize> {
+        self.dirty
+            .get(from..)?
+            .iter()
+            .position(|&v| v)
+            .map(|i| from + i)
+    }
+    pub fn resident_bytes(&self) -> usize {
+        match &self.backing {
+            Backing::Owned(bytes) => bytes.len(),
+            Backing::Paged(pages) => pages.iter().flatten().map(Vec::len).sum(),
+        }
     }
     pub fn sector_count(&self) -> usize {
         self.cylinders as usize * self.heads as usize * self.sectors as usize
@@ -59,9 +139,117 @@ impl HardDisk {
                 + sector as usize,
         )
     }
-    fn range(&self, lba: usize) -> std::ops::Range<usize> {
-        let start = self.offset + lba * 512;
-        start..start + 512
+    pub fn read_sector(&self, lba: usize, out: &mut [u8; 512]) -> Result<(), String> {
+        if lba >= self.sector_count() {
+            return Err("HDI sector outside capacity".into());
+        }
+        self.read_bytes(self.offset + lba * 512, out)
+    }
+    pub fn write_sector(&mut self, lba: usize, data: &[u8; 512]) -> Result<(), String> {
+        if lba >= self.sector_count() {
+            return Err("HDI sector outside capacity".into());
+        }
+        let at = self.offset + lba * 512;
+        let first = at / PAGE_BYTES;
+        let last = (at + 511) / PAGE_BYTES;
+        // Allocate all affected pages before changing any bytes, including the
+        // unaligned-header case where a sector crosses a page boundary.
+        if let Backing::Paged(pages) = &mut self.backing {
+            for (index, page) in pages.iter_mut().enumerate().take(last + 1).skip(first) {
+                if page.is_none() {
+                    *page = Some(zero_page((self.len - index * PAGE_BYTES).min(PAGE_BYTES))?);
+                }
+            }
+        }
+        match &mut self.backing {
+            Backing::Owned(bytes) => bytes[at..at + 512].copy_from_slice(data),
+            Backing::Paged(pages) => {
+                for (i, &byte) in data.iter().enumerate() {
+                    let pos = at + i;
+                    pages[pos / PAGE_BYTES].as_mut().unwrap()[pos % PAGE_BYTES] = byte;
+                }
+            }
+        }
+        self.dirty[first..=last].fill(true);
+        self.writes += 1;
+        Ok(())
+    }
+}
+fn zero_page(len: usize) -> Result<Vec<u8>, String> {
+    let mut page = Vec::new();
+    page.try_reserve_exact(len)
+        .map_err(|_| "Browser/host memory cannot hold this HDI; mounted disk retained")?;
+    page.resize(len, 0);
+    Ok(page)
+}
+
+/// Transactional sequential import. Validate the actual File extent first;
+/// never allocate the payload based on untrusted header geometry.
+pub struct HdiImport {
+    disk: HardDisk,
+    received: usize,
+}
+impl HdiImport {
+    pub fn new(header: &[u8], file_len: u64) -> Result<Self, String> {
+        let mut disk = HardDisk::header(header, file_len)?;
+        let mut pages = Vec::new();
+        pages
+            .try_reserve_exact(disk.len.div_ceil(PAGE_BYTES))
+            .map_err(|_| "Host memory cannot allocate HDI page table; mounted disk retained")?;
+        pages.resize_with(disk.len.div_ceil(PAGE_BYTES), || None);
+        disk.backing = Backing::Paged(pages);
+        Ok(Self { disk, received: 0 })
+    }
+    pub fn append(&mut self, bytes: &[u8]) -> Result<(), String> {
+        let end = self
+            .received
+            .checked_add(bytes.len())
+            .filter(|&end| end <= self.disk.len)
+            .ok_or("HDI import exceeds validated file extent")?;
+        if bytes.is_empty()
+            || bytes.len() > TRANSFER_BYTES
+            || (end != self.disk.len && !bytes.len().is_multiple_of(PAGE_BYTES))
+        {
+            return Err("HDI import requires bounded aligned chunks".into());
+        }
+        let Backing::Paged(pages) = &mut self.disk.backing else {
+            unreachable!()
+        };
+        for (i, chunk) in bytes.chunks(PAGE_BYTES).enumerate() {
+            if chunk.iter().any(|&v| v != 0) {
+                let mut page = zero_page(chunk.len())?;
+                page.copy_from_slice(chunk);
+                pages[self.received / PAGE_BYTES + i] = Some(page);
+            } else {
+                pages[self.received / PAGE_BYTES + i] = None;
+            }
+        }
+        self.received = end;
+        Ok(())
+    }
+    pub fn finish(self) -> Result<HardDisk, String> {
+        if self.received != self.disk.len {
+            return Err("HDI import truncated; mounted disk retained".into());
+        }
+        // Header used for validation must be the header actually imported.
+        let mut header = [0; 32];
+        self.disk.read_bytes(0, &mut header)?;
+        let mut expected = [0; 32];
+        // Geometry is rechecked against the imported fields, not just extent.
+        for (at, value) in [
+            (8, self.disk.offset as u32),
+            (12, (self.disk.len - self.disk.offset) as u32),
+            (16, 512),
+            (20, self.disk.sectors as u32),
+            (24, self.disk.heads as u32),
+            (28, self.disk.cylinders as u32),
+        ] {
+            expected[at..at + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        if header[8..32] != expected[8..32] {
+            return Err("HDI header changed during import".into());
+        }
+        Ok(self.disk)
     }
 }
 
@@ -139,7 +327,7 @@ impl Ide {
     }
     fn load(&mut self) {
         let d = self.disk.as_ref().unwrap();
-        self.buffer.copy_from_slice(&d.bytes[d.range(self.lba)]);
+        d.read_sector(self.lba, &mut self.buffer).unwrap();
         self.reads += 1;
         self.cursor = 0;
         self.status = 0x58;
@@ -239,9 +427,10 @@ impl Ide {
                 self.cursor += 1;
                 if self.cursor == 512 {
                     let d = self.disk.as_mut().unwrap();
-                    let range = d.range(self.lba);
-                    d.bytes[range].copy_from_slice(&self.buffer);
-                    d.writes += 1;
+                    if d.write_sector(self.lba, &self.buffer).is_err() {
+                        self.fail(4);
+                        return;
+                    }
                     self.writes += 1;
                     self.advance();
                     self.irq = true;

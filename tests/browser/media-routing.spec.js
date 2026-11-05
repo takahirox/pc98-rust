@@ -240,7 +240,7 @@ for (const path of ['picker', 'drop']) {
       ['auto', 'bad.hdi', Buffer.alloc(100), 'invalid HDI geometry'],
       ['auto', 'large.hdi', Buffer.alloc(5 * 1024 * 1024), 'invalid HDI geometry'],
       ['auto', 'large.hdm', Buffer.alloc(4 * 1024 * 1024 + 1), 'Floppy image exceeds 4 MiB'],
-      ['auto', 'large.hdi', Buffer.alloc(32 * 1024 * 1024 + 1), 'HDI exceeds 32 MiB'],
+      ['auto', 'large.hdi', Buffer.alloc(32 * 1024 * 1024 + 1), 'invalid HDI geometry'],
       ['auto', 'program.exe', Buffer.alloc(100), 'Unsupported media extension'],
       ['0', 'wrong.hdi', hdi, 'HDI requires IDE HDD'],
       ['1', 'wrong.hdi', hdi, 'HDI requires IDE HDD'],

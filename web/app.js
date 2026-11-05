@@ -9,7 +9,7 @@ let lastDrive = null;
 const driveNames = ['Floppy 1', 'Floppy 2', 'IDE HDD'];
 const controls = ['game', 'hello', 'pause', 'reset', 'sound', 'eject', 'export', 'profile'];
 function message(kind = 0) {
-  const ptr = core.message(kind), len = core.message_len();
+  const ptr = (core.message(kind) >>> 0), len = core.message_len();
   return decoder.decode(new Uint8Array(core.memory.buffer, ptr, len));
 }
 function fail(error) {
@@ -18,7 +18,7 @@ function fail(error) {
 function status(text) { $('status').textContent = text; $('lamp').classList.toggle('active', running); }
 function clearError() { $('error').hidden = true; $('error').textContent = ''; }
 function render() {
-  const ptr = core.frame();
+  const ptr = (core.frame() >>> 0);
   // frame() can grow Wasm memory: obtain views only after each exported call.
   const pixels = new Uint8ClampedArray(core.memory.buffer, ptr, 640 * 400 * 4);
   context.putImageData(new ImageData(pixels, 640, 400), 0, 0);
@@ -34,7 +34,7 @@ async function enableAudio() {
 function playAudio() {
   const count = core.audio_len();
   if (count && audio?.state === 'running' && !muted) {
-    const ptr = core.audio_ptr();
+    const ptr = (core.audio_ptr() >>> 0);
     const samples = new Float32Array(core.memory.buffer, ptr, count).slice();
     const buffer = audio.createBuffer(1, count, 48000);
     buffer.copyToChannel(samples, 0);
@@ -77,11 +77,13 @@ function resolveDrive(name) {
   return drive;
 }
 function checkSize(size, drive) {
-  if (size > (drive === 2 ? 32 : 4) * 1024 * 1024) throw Error(drive === 2 ? 'HDI exceeds 32 MiB.' : 'Floppy image exceeds 4 MiB.');
+  if (size > (drive === 2 ? 0xffffffff : 4 * 1024 * 1024)) throw Error(drive === 2
+    ? 'HDI file extent must be below 4 GiB (32-bit container/browser addressing).'
+    : 'Floppy image exceeds 4 MiB.');
 }
 function insert(bytes, name, drive) {
   checkSize(bytes.length, drive);
-  const ptr = core.input_buffer(bytes.length);
+  const ptr = (core.input_buffer(bytes.length) >>> 0);
   if (!ptr) throw Error('Unable to allocate media buffer.');
   new Uint8Array(core.memory.buffer, ptr, bytes.length).set(bytes);
   if (!core.insert(drive, /\.(d88|d98)$/i.test(name) ? 1 : 0)) throw Error(message(2));
@@ -107,7 +109,18 @@ async function bundled(name) {
   } catch (error) { fail(error); } finally { loading = false; }
 }
 function exportBytes(drive) {
-  const ptr = core.export_disk(drive), len = core.export_len();
+  if (drive === 2) {
+    const len = (core.hdi_len() >>> 0);
+    if (len > 16 * 1024 * 1024) throw Error('Use exportBlob for large HDI inspection.');
+    const bytes = new Uint8Array(len);
+    for (let at = 0; at < len; at += chunkBytes) {
+      const n = Math.min(chunkBytes, len - at), ptr = (core.hdi_read_chunk(at, n) >>> 0);
+      if (!ptr) throw Error(message(2) || 'Unable to read disk export.');
+      bytes.set(new Uint8Array(core.memory.buffer, ptr, n), at);
+    }
+    return bytes;
+  }
+  const ptr = (core.export_disk(drive) >>> 0), len = core.export_len();
   return new Uint8Array(core.memory.buffer, ptr, len).slice();
 }
 $('game').onclick = () => bundled('startrail.hdm');
@@ -134,23 +147,85 @@ function selectProfile() {
 $('profile').onchange = () => { try { selectProfile(); } catch (error) { fail(error); } };
 $('drive').onchange = showMedia;
 $('eject').onclick = () => { const drive = mediaDrive(); if (!mounted[drive]) return; core.eject(drive); mounted[drive] = null; showMedia(); };
-$('export').onclick = () => {
+const chunkBytes = 1024 * 1024, pageBytes = 65536;
+const yieldUI = () => globalThis.scheduler?.yield() ?? new Promise(resolve => setTimeout(resolve, 0));
+function mediaBusy(value) {
+  for (const id of [...controls, 'file', 'drive']) $(id).disabled = value;
+  if (!value) showMedia();
+}
+async function exportBlob(drive) {
+  if (drive !== 2) return new Blob([exportBytes(drive)]);
+  const original = mounted[2]?.file;
+  if (!original || original.size !== (core.hdi_len() >>> 0)) throw Error('Original HDI file unavailable for export.');
+  // Snapshot dirty pages while the guest is paused. File slices reference the
+  // unchanged local media; only changed pages cross Wasm memory. Blob snapshots
+  // each small view before the next call can grow linear memory.
+  const resume = running;
+  setRunning(false); mediaBusy(true);
+  try {
+    const parts = [];
+    let at = 0, count = 0;
+    for (let page = core.hdi_dirty_page(0) >>> 0; page !== 0xffffffff; page = core.hdi_dirty_page(page + 1) >>> 0) {
+      const start = page * pageBytes, end = Math.min(start + pageBytes, original.size);
+      if (at < start) parts.push(original.slice(at, start));
+      const ptr = (core.hdi_read_chunk(start, end - start) >>> 0);
+      if (!ptr) throw Error(message(2) || 'Unable to allocate disk export page.');
+      parts.push(new Blob([new Uint8Array(core.memory.buffer, ptr, end - start)]));
+      at = end;
+      if (++count % 16 === 0) await yieldUI();
+    }
+    if (at < original.size) parts.push(original.slice(at));
+    const blob = new Blob(parts, { type: 'application/octet-stream' });
+    if (blob.size !== original.size) throw Error('Incomplete HDI export; please retry.');
+    return blob;
+  } catch (error) {
+    throw Error(`Cannot export HDI: ${error.message}. Disk remains mounted; free browser resources and retry.`);
+  } finally { mediaBusy(false); setRunning(resume); }
+}
+$('export').onclick = async () => {
   const drive = mediaDrive();
-  if (!mounted[drive]) return;
-  const data = exportBytes(drive);
-  const link = document.createElement('a'), url = URL.createObjectURL(new Blob([data]));
-  link.href = url; link.download = mounted[drive].name; link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  if (loading || !mounted[drive]) return;
+  loading = true;
+  try {
+    const data = await exportBlob(drive);
+    const link = document.createElement('a'), url = URL.createObjectURL(data);
+    link.href = url; link.download = mounted[drive].name; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) { fail(error); } finally { loading = false; }
 };
 async function loadFile(file) {
-  if (!file || !core) return;
+  if (!file || !core || loading) return;
+  loading = true;
+  const resume = running;
+  let suspended = false;
   try {
     clearError();
     const drive = resolveDrive(file.name);
     checkSize(file.size, drive);
-    await loadBytes(new Uint8Array(await file.arrayBuffer()), file.name, drive);
-  }
-  catch (error) { fail(error); }
+    mediaBusy(true);
+    if (drive === 2) {
+      setRunning(false); suspended = true;
+      const transfer = bytes => {
+        const ptr = (core.input_buffer(bytes.length) >>> 0);
+        if (!ptr) throw Error('Browser memory cannot allocate the HDI transfer chunk; mounted disk retained.');
+        new Uint8Array(core.memory.buffer, ptr, bytes.length).set(bytes);
+      };
+      transfer(new Uint8Array(await file.slice(0, 32).arrayBuffer()));
+      if (!core.hdi_begin(file.size)) throw Error(message(2));
+      for (let at = 0; at < file.size; at += chunkBytes) {
+        transfer(new Uint8Array(await file.slice(at, at + chunkBytes).arrayBuffer()));
+        if (!core.hdi_append()) throw Error(message(2));
+        status(`Importing HDI · ${Math.min(100, Math.floor((at + chunkBytes) * 100 / file.size))}%`);
+      }
+      if (!core.hdi_commit()) throw Error(message(2));
+      mounted[2] = { name: file.name, format: 'hdi', file };
+      lastDrive = 2;
+      releaseKeys(); core.reset(); core.audio_clear(); render(); setRunning(true); screen.focus();
+    } else {
+      await loadBytes(new Uint8Array(await file.arrayBuffer()), file.name, drive);
+    }
+  } catch (error) { core.hdi_cancel(); fail(error); if (suspended) setRunning(resume); }
+  finally { loading = false; mediaBusy(false); }
 }
 $('file').onchange = (e) => { loadFile(e.target.files[0]); e.target.value = ''; };
 $('drop').ondragover = (e) => { e.preventDefault(); $('drop').classList.add('dragging'); };
@@ -224,6 +299,7 @@ try {
   window.pc98 = { core, text: () => message(1), read: (addr) => core.peek(addr),
     stats: () => ({instructions:core.metric(0),reads:core.metric(1),writes:core.metric(2),hddReads:core.metric(9),hddWrites:core.metric(10),mouseEvents:core.metric(11),mouseLatches:core.metric(12),pegc:core.metric(13),pcmWrites:core.metric(14),pcmSamples:core.metric(15),beepEdges:core.metric(3),fmWrites:core.metric(6),fmKeyEdges:core.metric(7),error:message(),beep:core.beep(),running,audioState:audio?.state,audioGain:outputGain?.gain.value,audioEnergy,scheduledSamples}),
     exportDisk: (drive=0) => Array.from(exportBytes(drive)),
+    exportBlob: (drive=2) => exportBlob(drive),
   };
   controls.forEach((id)=>$(id).disabled=false); showMedia(); status('Ready · choose a demo or insert media'); render(); requestAnimationFrame(animate);
 } catch (error) { status('Unable to start'); fail(error); }

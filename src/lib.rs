@@ -118,21 +118,25 @@ impl Machine {
 mod wasm {
     use super::*;
     use std::cell::RefCell;
-    thread_local! {static MACHINE:RefCell<Machine>=RefCell::new(Machine::default());static TRANSFER:RefCell<Vec<u8>>=const{RefCell::new(Vec::new())};static MESSAGE:RefCell<Vec<u8>>=const{RefCell::new(Vec::new())};}
+    thread_local! {static MACHINE:RefCell<Machine>=RefCell::new(Machine::default());static TRANSFER:RefCell<Vec<u8>>=const{RefCell::new(Vec::new())};static MESSAGE:RefCell<Vec<u8>>=const{RefCell::new(Vec::new())};static PENDING:RefCell<Option<hdd::HdiImport>>=const{RefCell::new(None)};static EXPORTED:std::cell::Cell<usize>=const{std::cell::Cell::new(0)};}
     #[no_mangle]
     pub extern "C" fn input_buffer(len: usize) -> *mut u8 {
-        if len > hdd::MAX_HDI_BYTES {
+        if len > 4 * 1024 * 1024 {
             return std::ptr::null_mut();
         }
         TRANSFER.with(|b| {
             let mut b = b.borrow_mut();
+            let additional = len.saturating_sub(b.len());
+            if b.try_reserve_exact(additional).is_err() {
+                return std::ptr::null_mut();
+            }
             b.resize(len, 0);
             b.as_mut_ptr()
         })
     }
     #[no_mangle]
     pub extern "C" fn insert(drive: usize, format: u32) -> u32 {
-        let bytes = TRANSFER.with(|b| b.borrow().clone());
+        let bytes = TRANSFER.with(|b| std::mem::take(&mut *b.borrow_mut()));
         MACHINE.with(|m| {
             let mut m = m.borrow_mut();
             match m.insert(
@@ -272,31 +276,127 @@ mod wasm {
     pub extern "C" fn message_len() -> usize {
         MESSAGE.with(|b| b.borrow().len())
     }
+    fn import_result(result: Result<(), String>) -> u32 {
+        match result {
+            Ok(()) => 1,
+            Err(e) => {
+                MESSAGE.with(|b| *b.borrow_mut() = e.into_bytes());
+                0
+            }
+        }
+    }
+    #[no_mangle]
+    pub extern "C" fn hdi_begin(file_len: u32) -> u32 {
+        PENDING.with(|p| *p.borrow_mut() = None);
+        let result = TRANSFER.with(|b| hdd::HdiImport::new(&b.borrow(), file_len as u64));
+        import_result(result.map(|disk| PENDING.with(|p| *p.borrow_mut() = Some(disk))))
+    }
+    #[no_mangle]
+    pub extern "C" fn hdi_append() -> u32 {
+        let result = PENDING.with(|p| {
+            let mut pending = p.borrow_mut();
+            let result = pending
+                .as_mut()
+                .ok_or_else(|| "No HDI import in progress".to_string())
+                .and_then(|disk| TRANSFER.with(|b| disk.append(&b.borrow())));
+            if result.is_err() {
+                *pending = None;
+            }
+            result
+        });
+        import_result(result)
+    }
+    #[no_mangle]
+    pub extern "C" fn hdi_cancel() {
+        PENDING.with(|p| *p.borrow_mut() = None);
+    }
+    #[no_mangle]
+    pub extern "C" fn hdi_commit() -> u32 {
+        let result = PENDING.with(|p| {
+            p.borrow_mut()
+                .take()
+                .ok_or_else(|| "No HDI import in progress".to_string())
+                .and_then(hdd::HdiImport::finish)
+        });
+        import_result(result.and_then(|disk| {
+            MACHINE.with(|m| {
+                let mut m = m.borrow_mut();
+                if m.bus.profile != Profile::Pc9821ApDos {
+                    return Err("IDE requires the Ap profile".into());
+                }
+                m.bus.ide.mount(Some(disk));
+                m.bus.boot_hdd = true;
+                Ok(())
+            })
+        }))
+    }
+    #[no_mangle]
+    pub extern "C" fn hdi_dirty_page(from: usize) -> u32 {
+        MACHINE.with(|m| {
+            m.borrow()
+                .bus
+                .ide
+                .disk
+                .as_ref()
+                .and_then(|d| d.dirty_page(from))
+                .map_or(u32::MAX, |page| page as u32)
+        })
+    }
+    #[no_mangle]
+    pub extern "C" fn hdi_len() -> usize {
+        MACHINE.with(|m| m.borrow().bus.ide.disk.as_ref().map_or(0, |d| d.len()))
+    }
+    #[no_mangle]
+    pub extern "C" fn hdi_resident_bytes() -> usize {
+        MACHINE.with(|m| {
+            m.borrow()
+                .bus
+                .ide
+                .disk
+                .as_ref()
+                .map_or(0, |d| d.resident_bytes())
+        })
+    }
+    #[no_mangle]
+    pub extern "C" fn hdi_read_chunk(at: usize, len: usize) -> *const u8 {
+        if len > hdd::TRANSFER_BYTES {
+            return std::ptr::null();
+        }
+        let ptr = input_buffer(len);
+        if ptr.is_null() {
+            return ptr;
+        }
+        let result = MACHINE.with(|m| {
+            let m = m.borrow();
+            m.bus
+                .ide
+                .disk
+                .as_ref()
+                .ok_or_else(|| "No HDI mounted".to_string())
+                .and_then(|d| TRANSFER.with(|b| d.read_bytes(at, &mut b.borrow_mut())))
+        });
+        if import_result(result) == 0 {
+            std::ptr::null()
+        } else {
+            ptr
+        }
+    }
     #[no_mangle]
     pub extern "C" fn export_disk(drive: usize) -> *const u8 {
+        // Floppies are small and directly borrowed; HDD export is chunked.
         MACHINE.with(|m| {
             let m = m.borrow();
-            let bytes = if drive == 2 {
-                m.bus.ide.disk.as_ref().map(|d| &d.bytes)
-            } else {
-                m.bus
-                    .disks
-                    .get(drive)
-                    .and_then(|d| d.as_ref().map(|d| &d.bytes))
-            };
-            if let Some(bytes) = bytes {
-                TRANSFER.with(|b| {
-                    *b.borrow_mut() = bytes.clone();
-                    b.borrow().as_ptr()
-                })
-            } else {
-                TRANSFER.with(|b| b.borrow_mut().clear());
-                std::ptr::null()
-            }
+            let bytes = m
+                .bus
+                .disks
+                .get(drive)
+                .and_then(|d| d.as_ref().map(|d| &d.bytes));
+            EXPORTED.with(|len| len.set(bytes.map_or(0, Vec::len)));
+            bytes.map_or(std::ptr::null(), |bytes| bytes.as_ptr())
         })
     }
     #[no_mangle]
     pub extern "C" fn export_len() -> usize {
-        TRANSFER.with(|b| b.borrow().len())
+        EXPORTED.with(|len| len.get())
     }
 }

@@ -1062,7 +1062,7 @@ fn vm86_firmware_ide_buffer_uses_noncontiguous_user_pages_and_preflights_faults(
             );
             assert_eq!(c.cr2, 0x41000);
             assert_eq!((b.ide.reads, b.ide.writes), (0, 0));
-            assert_eq!(b.ide.disk.as_ref().unwrap().bytes, image);
+            assert_eq!(b.ide.disk.as_ref().unwrap().to_vec(), image);
             assert_eq!(b.mem[0x350fff], 0x5a);
             assert!(b.mem[0x360000..0x3601ff].iter().all(|v| *v == 0xa5));
             assert_eq!(get(&b, 0x2100) & 0x40, 0);
@@ -1072,8 +1072,8 @@ fn vm86_firmware_ide_buffer_uses_noncontiguous_user_pages_and_preflights_faults(
             assert_eq!(b.mem[0x40fff], 0);
             assert_eq!(b.ide.reads, 1);
         } else {
-            assert_eq!(b.ide.disk.as_ref().unwrap().bytes[4096], 0x5a);
-            assert!(b.ide.disk.as_ref().unwrap().bytes[4097..4608]
+            assert_eq!(b.ide.disk.as_ref().unwrap().to_vec()[4096], 0x5a);
+            assert!(b.ide.disk.as_ref().unwrap().to_vec()[4097..4608]
                 .iter()
                 .all(|v| *v == 0xa5));
             assert_eq!(b.ide.writes, 1);
