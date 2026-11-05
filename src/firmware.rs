@@ -43,7 +43,13 @@ pub fn initialize(b: &mut Bus) {
         0x20
     };
     b.mem[0x53c] = 1; // 80 columns, 25 rows
-    b.mem[0x55c] = u8::from(b.disks[0].is_some()) | if b.disks[1].is_some() { 2 } else { 0 };
+
+    // DISK_EQUIP: both profiles have two installed 2HD units, even when empty.
+    // FreeDOS(98) builds its DOS drive table from these bits only at boot.
+    b.mem[0x55c] = 3;
+    for drive in 0..2 {
+        b.mem[0x564 + drive * 8] = 0xc0 | drive as u8;
+    }
     if b.profile == crate::Profile::Pc9821ApDos && b.ide.disk.is_some() {
         b.mem[0x55d] = 1;
     }
@@ -157,8 +163,12 @@ pub fn disk_transfer(
     b.tick(160);
     let st0 = b.input(0x92);
     let st1 = b.input(0x92);
-    for _ in 0..5 {
-        b.input(0x92);
+    // BIOS per-unit result work area, also used by the guest media checker.
+    let status = 0x564 + drive as usize * 8;
+    b.mem[status] = st0;
+    b.mem[status + 1] = st1;
+    for i in 2..7 {
+        b.mem[status + i] = b.input(0x92);
     } // drain result phase
     st0 & 0xc0 == 0 && st1 == 0
 }

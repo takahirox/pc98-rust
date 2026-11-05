@@ -78,3 +78,91 @@ fn reproduce_idle_nd_bios_handoff() {
     }
     assert_eq!(failures, 0);
 }
+
+#[test]
+fn installed_units_are_independent_of_media_and_empty_reads_fail() {
+    for profile in [Profile::Pc9801Vm, Profile::Pc9821ApDos] {
+        for mask in 0..4 {
+            let mut m = Machine::new(profile);
+            for drive in 0..2 {
+                if mask & (1 << drive) != 0 {
+                    m.insert(drive, vec![0x5a; 1_261_568], "data.hdm").unwrap();
+                }
+            }
+            m.reset();
+            assert_eq!(m.bus.mem[0x55c], 3);
+            assert_eq!(m.bus.mem[0x55d], 0); // no IDE advertised by floppy equipment
+            for drive in 0..2 {
+                m.cpu.s = [0; 4];
+                m.cpu.ip = 0x100;
+                m.cpu.r[SP] = 0x7c00;
+                m.cpu.flags = 2;
+                m.cpu.halted = false;
+                m.cpu.r[AX] = 0x0690 | drive as u16;
+                m.cpu.r[CX] = 0x0300;
+                m.cpu.r[DX] = 1;
+                m.cpu.r[BX] = 1024;
+                m.cpu.r[BP] = 0x9000;
+                m.bus.mem[0x9000..0x9400].fill(0xa5);
+                m.bus.mem[0x100..0x103].copy_from_slice(&[0xcd, 0x1b, 0xf4]);
+                m.step(8);
+                assert!(m.error.is_none(), "{:?}", m.error);
+                if mask & (1 << drive) == 0 {
+                    assert_ne!(m.cpu.flags & CF, 0);
+                    assert_eq!(m.cpu.byte(4), 0x80); // not ready
+                    assert_eq!(&m.bus.mem[0x9000..0x9400], &[0xa5; 1024]);
+                } else {
+                    assert_eq!(m.cpu.flags & CF, 0);
+                    assert_eq!(m.cpu.byte(4), 0);
+                    assert_eq!(&m.bus.mem[0x9000..0x9400], &[0x5a; 1024]);
+                    assert_eq!(m.bus.mem[0x564 + drive * 8] & 0xc0, 0);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn media_ready_transitions_invalidate_only_the_selected_bios_unit() {
+    let mut m = Machine::default();
+    for drive in 0..2 {
+        m.insert(drive, vec![0x5a; 1_261_568], "data.hdm").unwrap();
+        assert!(firmware::disk_transfer(
+            &mut m.bus,
+            drive as u8,
+            [0, 0, 1, 3],
+            1024,
+            0x9000,
+            false
+        ));
+    }
+    let first_status = m.bus.mem[0x564..0x56b].to_vec();
+    assert_eq!(m.bus.mem[0x56c] & 0xc0, 0);
+    m.bus.mount_floppy(1, None);
+    assert_eq!(m.bus.mem[0x56c], 0xc1);
+    assert_eq!(&m.bus.mem[0x564..0x56b], first_status);
+    assert!(!firmware::disk_transfer(
+        &mut m.bus,
+        1,
+        [0, 0, 1, 3],
+        1024,
+        0x9000,
+        false
+    ));
+    assert_eq!(m.bus.mem[0x56c] & 0xc0, 0x40);
+    m.insert(1, vec![0x3c; 1_261_568], "replacement.hdm")
+        .unwrap();
+    assert_eq!(m.bus.mem[0x56c], 0xc1);
+    assert!(firmware::disk_transfer(
+        &mut m.bus,
+        1,
+        [0, 0, 1, 3],
+        1024,
+        0x9000,
+        false
+    ));
+    assert_eq!(&m.bus.mem[0x9000..0x9400], &[0x3c; 1024]);
+    assert_eq!(m.bus.mem[0x56c] & 0xc0, 0);
+    assert_eq!(&m.bus.mem[0x564..0x56b], first_status);
+    assert_eq!(m.bus.mem[0x55c], 3);
+}
