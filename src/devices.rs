@@ -801,7 +801,7 @@ impl Gdc {
     /// has 4096 text words; the address wraps at that physical boundary.
     pub fn text_address(&self, mut line: usize, column: usize) -> Option<(usize, usize)> {
         let height = self.character_lines.max(1) as usize;
-        for (area, p) in self.scroll.chunks_exact(4).enumerate() {
+        for (area, p) in self.scroll.as_chunks::<4>().0.iter().enumerate() {
             let lines = (p[2] as usize >> 4) | ((p[3] as usize & 63) << 4);
             if line < lines {
                 let start = if area == 0 {
