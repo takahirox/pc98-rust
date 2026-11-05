@@ -42,19 +42,23 @@ partially changing a sector. An unaligned header can put a sector across two pag
 both allocations precede any data modification. Out-of-range requests are rejected
 before writes. The emulator does not parse guest partitions or filesystems.
 
-Export pauses execution to snapshot changed pages. A Blob is composed of original
-local File slices and snapshots of dirty pages; unchanged bytes never traverse
-Wasm again. Changed-page snapshots are bounded to 64 KiB, and long dirty-page lists
-yield periodically to the browser scheduler. There is no whole-image transfer
-buffer, JavaScript number array, base64 string, or second complete Wasm image in
-the production download path. If every page has changed, the browser must retain
-the changed bytes for its download snapshot; available browser/OS resources still
-matter. Blob/download creation errors are displayed and the disk remains mounted
+Export pauses execution to snapshot the mounted disk into immutable Blob chunks.
+Every byte comes from resident Wasm pages (or known zero pages), through one
+reusable 1 MiB transfer buffer. The browser snapshots each chunk before the buffer
+is reused and yields to the scheduler between chunks. There is no whole-image
+transfer buffer, JavaScript number array, base64 string, or second complete Wasm
+image in the production download path. The browser must retain the complete
+download snapshot in its own Blob storage; this can cost another image's worth of
+memory, including for sparse disks, until it releases or spills that storage.
+Available browser/OS resources still matter. Snapshot/read/Blob creation errors
+are displayed, controls and execution are restored, and the disk remains mounted
 for retry. Browser/process termination cannot be recovered by application code.
 
-The original File stays referenced until replacement/eject. Failed replacement
-never discards it. Export preserves the original full extent, reserved header,
-partition table, untouched nonzero sectors, zero sectors and guest writes. It is
+Export does not retain or read the selected File after import. Chromium can
+invalidate that File's slices when a download overwrites it, even if constructing
+a Blob from those slices succeeded. Independent snapshots allow repeat exports
+after the input is overwritten or removed. Export preserves the full extent,
+reserved header, partition table, untouched nonzero sectors, zero sectors and guest writes. It is
 not a filesystem reconstruction. `read_bytes` and Wasm `hdi_read_chunk` provide
 bounded inspection; the legacy JavaScript number-array inspection helper refuses
 large disks and directs callers to `exportBlob`. Tests stream full-image hashes in
@@ -77,7 +81,8 @@ asset tree.
   IRQ/error/residual, maximal 32-bit BIOS LBA overflow rejection, reset and eject. Existing storage suites retain the broader
   small-disk VERIFY, IRQ, floppy routing and protected/VM86 regression matrix.
 * Production Chromium `large-hdi.spec.js`: 512 MiB attach, failed staged local-file read recovery, guest writes beyond
-  32 MiB, last-sector access, reset, failed replacement, download, streaming
+  32 MiB, last-sector access, reset, failed replacement, recoverable snapshot allocation failure,
+  download over the selected input followed by a second export, streaming
   byte-for-byte expected-image SHA-256 and actual reimport/persistence at both
   `/` and `/pc98-rust/`. One 1 GiB attach/guest probe and one occupied 512 MiB
   resource scenario run at `/`, avoiding redundant expensive combinations.
@@ -100,23 +105,29 @@ actual local file selection and completed browser downloads, including writing t
 
 | Scenario | Import | Export/download | Wasm high water | Sampled browser RSS on import | Sampled browser RSS on export |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Sparse 512 MiB, `/` | 0.867 s | 0.665 s | 13.5 MiB | 398.0 MiB | 399.8 MiB |
-| Sparse 512 MiB, `/pc98-rust/` | 0.866 s | 0.585 s | 13.5 MiB | 399.5 MiB | 398.8 MiB |
-| Occupied 512 MiB (~510 MiB nonzero), `/` | 0.871 s | 0.621 s | 522.8 MiB | 881.1 MiB | 902.0 MiB |
+| Sparse 512 MiB, `/` | 0.873 s | 0.688 s | 13.5 MiB | 369.7 MiB | 939.0 MiB |
+| Sparse 512 MiB, `/pc98-rust/` | 0.870 s | 0.772 s | 13.5 MiB | 368.5 MiB | 937.9 MiB |
+| Occupied 512 MiB (~510 MiB nonzero), `/` | 0.874 s | 0.966 s | 522.8 MiB | 892.6 MiB | 1448.7 MiB |
 
 RSS is sampled every 100 ms across processes reported by Chromium's SystemInfo,
 including the browser/download process and renderers; summed RSS may count shared
 pages twice and may miss short-lived peaks. It excludes OS filesystem cache and
-the Node test runner. Browser baseline for the sparse runs was 331.6/336.7 MiB;
-renderer-only import/export peaks were 192.4/178.8 MiB at `/`, 193.8/177.9 MiB
-at the Pages root, and 662.5/677.5 MiB for occupied media. Occupied disk backing
+the Node test runner. Browser baseline for the sparse runs was 334.0/336.1 MiB;
+renderer-only import/export peaks were 158.2/180.5 MiB at `/`, 157.7/179.9 MiB
+at the Pages root, and 662.2/681.6 MiB for occupied media. Occupied disk backing
 was 534974464 bytes, and Wasm memory remained exactly 548208640 bytes across
 export. This distinguishes native browser costs from the disk's single Wasm
-copy; the application makes no additional full-image JS/Wasm export buffer.
+copy; the application makes no additional full-image JS/Wasm transfer buffer,
+but immutable Blob download storage now accounts for about another 512 MiB in
+the browser. This replaces the former dependence on mutable local File slices.
 
-Sparse 512 MiB reimport took 0.860/0.861 s, with sampled browser RSS peaks of
-456.4/454.3 MiB. The 1 GiB import plus actual guest probe took 0.878 s. The
-focused large-media file ran five scenarios in 15.5 s, with three intentional
+Repeat export after overwriting the input took 0.925/1.087 s. Sparse 512 MiB
+reimport took 0.864/0.866 s, with sampled browser RSS peaks of 1526.5/1524.7 MiB.
+The test freezes the page clock, so the one-second object-URL revocation timers
+do not run: both download snapshots remain referenced until page cleanup. These
+peaks include both snapshots; production revokes each URL after one second.
+The 1 GiB import plus actual guest probe took 0.881 s. The
+focused large-media file ran five scenarios in 18.3 s, with three intentional
 Pages duplicates skipped. That file runtime includes occupied-media generation,
 streaming full-image equality checks, guest execution and cleanup;
 no giant download is retained as an artifact. All runs used local test-generated
@@ -180,3 +191,27 @@ matching CI's stable-toolchain selection rather than the host's Homebrew Clippy
   `/pc98-rust/`, with zero failures and the same three intentional Pages
   duplicates skipped. Total build/test wall time was 168.54 s (Playwright: 2.8
   minutes), including the 512 MiB export/reimport at both roots.
+
+## Repeatable-export review revision (2026-11-05)
+
+The new overwrite/re-export regression reproduced Chromium canceling the second
+download with `download.saveAs: canceled` on the original implementation; failed
+download cleanup also hit a 45-second timeout. Export now snapshots all mounted
+bytes in bounded immutable chunks, removing asynchronous reads from the original
+File. The measurements above describe this revised export, including its extra
+browser Blob storage cost. The regression verifies full-image hashes for both
+exports and actual guest persistence after reimport at both serving roots. It
+also injects a Blob allocation failure, checks the visible recoverable error and
+restored execution/controls, then successfully retries without losing writes.
+
+* All Python fixture/source/license preparation and checks from
+  `.github/workflows/emulator.yml` passed, including seven fixture-fetch tests.
+* `npm ci`, Chromium installation, production release-Wasm build and the
+  ten-approved-asset publication audit passed.
+* The focused large-media run passed five scenarios with three intentional
+  duplicate skips in 18.3 s. The complete final `npm test -- --workers=4` passed
+  **201 tests**, zero failures, and the same **three intentional skips**, in
+  171.87 s total build/test wall time (Playwright: 2.8 minutes).
+* Both changed JavaScript files passed `node --check`; `git diff --check` passed.
+  Rust sources are unchanged by this revision; the native test/Clippy/formatting
+  results in the preceding revision remain the latest native validation.
