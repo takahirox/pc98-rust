@@ -49,7 +49,6 @@ impl Machine {
             }
             let disk = hdd::HardDisk::parse(bytes)?;
             self.bus.ide.mount(Some(disk));
-            self.bus.boot_hdd = true;
             return Ok(());
         }
         if drive > 1 {
@@ -57,10 +56,11 @@ impl Machine {
         }
         let disk = Disk::parse(bytes, name)?;
         self.bus.mount_floppy(drive, Some(disk));
-        if drive == 0 {
-            self.bus.boot_hdd = false;
-        }
         Ok(())
+    }
+    /// Select the next reset device; mounting/ejecting media never changes it.
+    pub fn set_boot_hdd(&mut self, hdd: bool) {
+        self.bus.boot_hdd = hdd;
     }
     pub fn reset(&mut self) {
         let disks = std::mem::take(&mut self.bus.disks);
@@ -164,6 +164,14 @@ mod wasm {
             m.bus.profile = profile;
             m.reset();
         });
+        1
+    }
+    #[no_mangle]
+    pub extern "C" fn set_boot_source(hdd: u32) -> u32 {
+        if hdd > 1 {
+            return 0;
+        }
+        MACHINE.with(|m| m.borrow_mut().set_boot_hdd(hdd == 1));
         1
     }
     #[no_mangle]
@@ -325,7 +333,6 @@ mod wasm {
                     return Err("IDE requires the Ap profile".into());
                 }
                 m.bus.ide.mount(Some(disk));
-                m.bus.boot_hdd = true;
                 Ok(())
             })
         }))

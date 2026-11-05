@@ -12,6 +12,8 @@ for (const [profile, name] of [['0', 'VM'], ['1', 'Ap']]) {
     expect(await page.evaluate(() => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
     const buffer = await fs.readFile(new URL('../../fixtures/freedos/lio.hdm', import.meta.url));
     await page.locator('#file').setInputFiles({ name: 'lio.hdm', mimeType: 'application/octet-stream', buffer });
+    await page.evaluate(() => pc98.core.set_boot_source(0));
+    await page.locator('#reset').click();
     // Observe the entire bounded run, so a later reboot cannot pass unnoticed.
     for (let i = 0; i < 160; i++) {
       await page.evaluate(() => { pc98.core.step(100000); pc98.core.audio_clear(); });

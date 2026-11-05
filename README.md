@@ -60,7 +60,7 @@ dependencies. Run from the repository root:
 ```sh
 rustup target add wasm32-unknown-unknown
 python3 tools/build_media.py --check
-python3 tools/build_web.py
+python3 tools/build_web.py # Includes pinned FreeDOS desktop and complete source downloads.
 python3 -m http.server 8000 --bind 127.0.0.1 --directory web
 ```
 
@@ -71,41 +71,51 @@ independently authored MIT HelloWorld-PC98 fixture. Sound starts after a user
 click; **Enable sound / Mute** controls browser audio. All runtime assets are local;
 there are no network requests after the selected media loads.
 
-The browser defaults to **PC-9821Ap DOS** and drive **Auto**; **PC-9801VM**
-remains selectable for software requiring its V30 profile. **Insert media** and
-screen drag-and-drop use the same case-insensitive routing: `.hdi` mounts IDE HDD
-and boots on Ap; supported floppy extensions mount **Floppy 1** and boot.
-The Rust parsers validate geometry, headers and sizes. HDI requires Ap and uses
-chunked local import and changed-page export. 512 MiB and 1 GiB are tested (see
-[large disk bounds and evidence](docs/large-hdi.md)); choosing an HDI on VM
-reports an error without changing machines.
+A fresh browser visit starts **PC-9821Ap DOS** with a writable **128 MiB FAT16
+FreeDOS(98) IDE HDD** and empty floppies, and automatically boots its real kernel
+and FreeCOM to `A:\>`. No proprietary BIOS or user upload is required. The
+655,360-byte sparse template (0.49% of a full HDI transfer) defines the remaining
+bytes as zero. Bounded import expands it into the existing sparse Rust disk;
+there is no full-sized JavaScript disk copy. See [desktop validation](docs/desktop-validation.md).
 
-Choose **Floppy 1**, **Floppy 2**, or **IDE HDD** to override Auto. Mismatched
-media fails without rerouting. Floppy 2 inserts without rebooting or changing
-the boot source. Both profiles have two installed floppy drives even when empty.
-With the tested FreeDOS(98) floppy boot, select Floppy 2 and insert or swap a
-supported image after `A:\>` appears, then use `B:`, `DIR` and `TYPE` without
-Reset. Empty drives return no-media errors. DOS chooses the drive letters;
-with an IDE HDD, do not assume the second floppy is always `B:`.
-Both demo buttons always select, mount and boot Floppy 1.
-**Pause / Resume** controls execution. **Reset** reboots the CPU and devices while
-preserving inserted media, writes and the boot source. Inserting IDE selects HDD
-boot; inserting Floppy 1 selects floppy boot, even with both mounted. Changing the
-Drive selector alone never changes boot. The **Reset boots** line identifies the
-next boot drive and filename, including fallback between Floppy 1 and IDE
-when a disk is ejected. Profile changes reset the machine and retain
-all media and writes; VM cannot boot a retained IDE disk, which becomes available
-again on Ap.
+**Insert into** selects a destination, independently of **Boot from**. Auto sends
+`.hdi` to IDE HDD (Ap only), and `.tfd/.hdm/.xdf/.2hd/.d88/.d98/.img` to Floppy 1,
+case-insensitively. A manual drive overrides Auto; mismatches fail without
+rerouting. Both floppy drives support live insertion, swap and eject, without
+resetting DOS or changing its boot preference. HDD-booted FreeDOS assigns the HDD
+`A:` and Floppy 1/2 `B:`/`C:`; use `DIR` and `TYPE` on those drives. DOS owns drive
+assignment; a floppy-booted session uses different letters.
 
-Auto displays the last successfully inserted drive and filename. **Eject** and
-**Export disk** act on that displayed drive, or on the explicitly selected manual
-drive. Eject does not reboot. Export downloads current bytes, preserving D88/HDI
-headers and floppy write protection. Reinsert the export to restore saved data.
-Star Trail records the last run's moves and score in sector 8; a new game starts
-at zero.
-Enable **Send mouse movement and buttons** for guest mouse input; INT 33h
-applications require a guest driver. The prepared HDD includes one. There is no
-automatic browser storage or CPU save-state persistence.
+**Boot from** selects IDE HDD (default) or Floppy 1 for the next **Reset**.
+Reset preserves media and writes; an absent selected disk fails without silently
+booting another medium. Demo buttons explicitly mount and boot Floppy 1 on either
+profile. Choose HDD and Reset to return to DOS. **Pause / Resume** controls execution.
+**PC-9801VM** remains selectable with its documented limits: profile changes reset
+CPU/devices and preserve all media/writes. VM always boots Floppy 1, never IDE;
+returning to Ap restores the retained boot preference and default/custom HDD.
+
+Replacing an HDD resets the machine using the selected boot source. A local HDI
+replaces the bundled disk completely. **Restore FreeDOS HDD** creates a clean
+installed disk and also retries a failed startup download. Loading locks media,
+profile and boot controls; failure retains the prior disk and enables recovery.
+The parsers check size/geometry; large local HDI import/export stays chunked.
+512 MiB and 1 GiB are tested ([large disk evidence](docs/large-hdi.md)).
+
+Auto displays the last inserted drive and filename. **Eject** and **Export disk**
+act on that drive, or the explicitly selected manual drive. Eject does not reboot.
+A warning before replacing/ejecting an HDD with guest writes lets you cancel and
+export first. Export includes all writes and the full logical HDI, preserving
+headers and floppy protection. Export and reinsert are the persistence route;
+reload starts a clean desktop. There is no automatic storage, upload or CPU save-state.
+Star Trail records moves/score in sector 8; a new game starts at zero.
+Enable **Send mouse movement and buttons** for Ap guest input. INT 33h applications
+require their own guest DOS mouse driver; the default desktop does not install one.
+
+The desktop's GPL guest publication includes **complete matching sources and notices
+on the same site**, available from [Licenses & media credits](web/licenses.html):
+kernel/boot, FreeCOM (including SUPPL), original MIT assembly helpers and disk
+configuration. Build verifies their hashes; the explicit public-asset audit rejects
+unapproved files. See [license audit](docs/licenses.md#installed-browser-desktop-issue-130).
 
 Supported media: raw `.TFD`, `.HDM`, `.XDF`, `.2HD`, `.IMG` with exactly
 77×2×8×1024, 80×2×15×512 or 80×2×8×512 bytes, and single-disk normal MFM `.D88` /
@@ -176,6 +186,7 @@ python3 tools/prepare_freedos.py
 python3 tools/prepare_floppy_data.py
 python3 tools/prepare_freedos_hdd_fixture.py
 python3 tools/prepare_large_dos_fixture.py
+python3 tools/prepare_desktop.py
 python3 tools/prepare_hdd_investigation.py
 python3 tools/prepare_font_fixture.py
 python3 tools/prepare_dos_apps.py
@@ -653,8 +664,10 @@ and [Issue #81 validation](docs/validation.md#issue-81-bios-floppy-dma-handoff).
 
 `npm run build` checks reproducible media, compiles the real Rust/Wasm core and
 runs `npm run check:site`. The latter verifies a nonempty, compilable Wasm module
-with the emulator exports and an exact list of the ten distributable assets,
-including both approved disks, MIT notices and the replacement font notice.
+with the emulator exports and exactly nineteen distributable assets: the original
+ten assets plus the nine intentionally published desktop template, manifest,
+GPL notices and complete matching source downloads. All nine guest/source hashes
+are pinned; neither test-only DOS disks nor arbitrary files are published.
 Unexpected files, directories or symlinks fail the check. `npm test` runs the same browser acceptance suite at the
 local root and at a simulated Pages project subpath whose root asset URLs fail.
 To repeat just the project-path browser checks after building, run

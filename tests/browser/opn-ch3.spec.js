@@ -19,6 +19,8 @@ test('Ap: guest channel-3 operator PCM pitches and keyed mode transitions before
   const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/opn-ch3-manifest.json', import.meta.url)));
   expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
   await page.locator('#file').setInputFiles({ name: 'opn_ch3.hdm', mimeType: 'application/octet-stream', buffer: image });
+  await page.evaluate(() => pc98.core.set_boot_source(0));
+  await page.locator('#reset').click();
   for (let run = 0; run < 2; run++) {
     if (run) await page.locator('#reset').click();
     const result = await page.evaluate(budget => {

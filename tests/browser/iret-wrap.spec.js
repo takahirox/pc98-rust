@@ -16,6 +16,8 @@ test('Ap: real IRET wraps between operands, BIOS return and flags survive cold/r
   const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/iret-wrap-manifest.json', import.meta.url)));
   expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
   await page.locator('#file').setInputFiles({ name: 'iret_wrap.hdm', mimeType: 'application/octet-stream', buffer: image });
+  await page.evaluate(() => pc98.core.set_boot_source(0));
+  await page.locator('#reset').click();
   for (let run = 0; run < 2; run++) {
     if (run) await page.locator('#reset').click();
     await page.evaluate(budget => {

@@ -55,6 +55,7 @@ test(`${profile === '1' ? 'Ap' : 'VM'}: actual Wasm guest gameplay, PCM audio, p
   expect(disk.length).toBe(1261568); expect(disk[7*1024+10]).toBe(3);
   expect(disk.subarray(7*1024,7*1024+8).toString()).toBe('STAR98SV');
   await page.locator('#file').setInputFiles({name:'saved.hdm',mimeType:'application/octet-stream',buffer:disk});
+  await page.locator('#reset').click();
   await value(page,8,1); await value(page,10,0);
   await expect.poll(()=>page.evaluate(()=>pc98.read(0x2180a))).toBe(3);
   await expect(page.locator('#media-name')).toHaveText('saved.hdm');

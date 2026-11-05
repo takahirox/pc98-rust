@@ -23,6 +23,8 @@ for (const [profile, name] of [['1', 'Ap']]) {
     expect(expected.slice(64, 72)).toEqual(Array(8).fill(0));
     await page.locator('#drive').selectOption({ value: '0' });
     await page.locator('#file').setInputFiles({ name: 'opna_irq.hdm', mimeType: 'application/octet-stream', buffer: image });
+    await page.evaluate(() => pc98.core.set_boot_source(0));
+    await page.locator('#reset').click();
     for (let run = 0; run < 2; run++) {
       if (run) await page.locator('#reset').click();
       let slots = 0;

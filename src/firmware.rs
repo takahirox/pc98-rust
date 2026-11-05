@@ -53,7 +53,7 @@ pub fn initialize(b: &mut Bus) {
     if b.profile == crate::Profile::Pc9821ApDos && b.ide.disk.is_some() {
         b.mem[0x55d] = 1;
     }
-    b.mem[0x584] = if (b.boot_hdd || b.disks[0].is_none()) && b.mem[0x55d] != 0 {
+    b.mem[0x584] = if b.boot_hdd && b.profile == crate::Profile::Pc9821ApDos {
         0x80
     } else {
         0x90

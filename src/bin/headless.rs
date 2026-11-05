@@ -154,6 +154,7 @@ fn main() {
         path,
     )
     .expect("parse image");
+    m.set_boot_hdd(path.to_ascii_lowercase().ends_with(".hdi"));
     m.reset();
     let steps = args
         .get(2)

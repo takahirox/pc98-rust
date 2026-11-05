@@ -53,6 +53,7 @@ fn cleared_hdd_loads_exact_kernel_then_runs_shell_commands_cold_and_reset() {
     let kernel = &volume[26 * 512..26 * 512 + 49938];
     let mut m = Machine::new(Profile::Pc9821ApDos);
     m.insert(2, disk.clone(), "shell.hdi").unwrap();
+    m.set_boot_hdd(true);
     for run in 0..2 {
         m.reset();
         let mut handoff = false;
