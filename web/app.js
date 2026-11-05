@@ -251,6 +251,7 @@ async function defaultHdd() {
     if (!response.ok) throw Error(`Cannot load FreeDOS manifest: HTTP ${response.status}`);
     const manifest = await response.json();
     if (manifest.bytes !== 128 * 1024 * 1024 + 4096 ||
+        !Number.isInteger(manifest.prefix_bytes) ||
         manifest.prefix_bytes <= 32 || manifest.prefix_bytes > chunkBytes ||
         manifest.prefix_bytes % 65536 ||
         JSON.stringify(manifest.geometry) !== '[512,16,32,512]') throw Error('Invalid FreeDOS template geometry/size');
