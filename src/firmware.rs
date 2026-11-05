@@ -178,6 +178,19 @@ pub fn disk_transfer(
 pub fn service(c: &mut Cpu, b: &mut Bus) -> Result<(), String> {
     execute_service(c, b).map_err(|e| format!("{e:?}"))
 }
+fn font_read_len(code: u16) -> ExecResult<u16> {
+    // NEC BIOS p.48: these Japanese half-width codes use 16, not 32,
+    // pattern bytes. The replacement CG does not contain these glyphs.
+    if matches!(code, 0x2920..=0x297d | 0x2a20..=0x2a5f) {
+        return Err("unsupported CRT half-width font code".into());
+    }
+    match (code >> 8) as u8 {
+        0 => Ok(8),
+        0x80 => Ok(16),
+        0x21..=0x7e => Ok(32),
+        _ => Err("unsupported CRT font code".into()),
+    }
+}
 pub(crate) fn execute_service(c: &mut Cpu, b: &mut Bus) -> ExecResult<()> {
     if c.protected_mode() && !c.vm86() {
         return Err("synthetic real-mode firmware requested from protected mode".into());
@@ -278,19 +291,9 @@ pub(crate) fn execute_service(c: &mut Cpu, b: &mut Bus) -> ExecResult<()> {
             0x0a..=0x13 | 0x1b..=0x1e => crt::service(c, b, ah)?,
             0x14 => {
                 let dh = c.byte(6);
-                let wide = (0x21..=0x7e).contains(&dh);
-                if !wide && dh != 0 && dh != 0x80 {
-                    return Err("unsupported CRT font code".into());
-                }
-                let len = if wide {
-                    32
-                } else if dh == 0x80 {
-                    16
-                } else {
-                    8
-                };
+                let len = font_read_len(c.r[DX])?;
                 for i in 0..len {
-                    let byte = if wide {
+                    let byte = if len == 32 {
                         b.user_characters.byte(dh, c.byte(2), i as usize)
                     } else {
                         crate::font::row(c.byte(2), if dh == 0 { i as u8 * 2 + 1 } else { i as u8 })
@@ -306,7 +309,7 @@ pub(crate) fn execute_service(c: &mut Cpu, b: &mut Bus) -> ExecResult<()> {
                 }
             }
             0x16 => {
-                for i in 0..2000 {
+                for i in 0..4096 {
                     write_seg(c, b, 0xa000, i * 2, c.r[DX] & 255, true)?;
                     write_seg(c, b, 0xa200, i * 2, (c.r[DX] >> 8) & 255, true)?;
                 }
@@ -555,12 +558,10 @@ fn preflight(c: &Cpu, b: &mut Bus, int: u8, ah: u8) -> ExecResult<()> {
                 }
             }
             0x14 | 0x1a => {
-                let len = if ah == 0x1a || (0x21..=0x7e).contains(&c.byte(6)) {
+                let len = if ah == 0x1a {
                     32
-                } else if c.byte(6) == 0x80 {
-                    16
                 } else {
-                    8
+                    font_read_len(c.r[DX])?
                 };
                 let (seg, off) = (c.r[BX], c.r[CX].wrapping_add(2));
                 for i in 0..len {
@@ -568,8 +569,8 @@ fn preflight(c: &Cpu, b: &mut Bus, int: u8, ah: u8) -> ExecResult<()> {
                 }
             }
             0x16 => {
-                check(c, b, 0xa0000, 4000, true)?;
-                check(c, b, 0xa2000, 4000, true)?;
+                check(c, b, 0xa0000, 8192, true)?;
+                check(c, b, 0xa2000, 8192, true)?;
             }
             0x40 | 0x41 if b.profile == crate::Profile::Pc9821ApDos => {
                 check(c, b, 0x54c, 1, false)?;

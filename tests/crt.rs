@@ -17,6 +17,76 @@ fn cell(m: &mut Machine, n: usize, ch: u16) {
     m.bus.write(0xa2000 + n * 2, 0xe1);
 }
 #[test]
+fn japanese_half_width_font_requests_are_rejected_without_touching_buffer_guards() {
+    for profile in [Profile::Pc9801Vm, Profile::Pc9821ApDos] {
+        let mut m = Machine::new(profile);
+        m.cpu.r[BX] = 0x3000;
+        m.cpu.r[CX] = 0;
+        // NEC p.48: these Japanese codes require 16 pattern bytes plus scratch.
+        // The replacement font does not supply these half-width glyphs.
+        for code in (0x2920..=0x297d).chain(0x2a20..=0x2a5f) {
+            m.bus.mem[0x30000..0x30032].fill(0xa5);
+            let error = call(&mut m, 0x14, 0, code).unwrap_err();
+            assert!(error.contains("unsupported CRT half-width font"), "{error}");
+            assert_eq!(&m.bus.mem[0x30000..0x30032], &[0xa5; 50]);
+        }
+    }
+}
+
+#[test]
+fn two_byte_text_cursor_command_updates_readback_and_rendered_position() {
+    for profile in [Profile::Pc9801Vm, Profile::Pc9821ApDos] {
+        let mut m = Machine::new(profile);
+        call(&mut m, 0x0c, 0, 0).unwrap();
+        call(&mut m, 0x10, 1, 0).unwrap(); // Full-cell, steady cursor.
+        call(&mut m, 0x11, 0, 0).unwrap();
+        // A previous graphics-sized address must not leak its top bits.
+        m.bus.output(0x62, 0x49);
+        for v in [0xff, 0xff, 3] {
+            m.bus.output(0x60, v);
+        }
+        m.bus.output(0x62, 0x49);
+        m.bus.output(0x60, 0x34);
+        m.bus.output(0x60, 0x02);
+        assert_eq!(m.bus.gdcs[0].cursor, 0x234);
+        m.bus.output(0x62, 0xe0);
+        for expected in [0x34, 0x02, 0, 0, 0] {
+            assert_eq!(m.bus.input(0x62), expected);
+        }
+        // Word 0234h is column 4, row 7 at pitch 80.
+        cell(&mut m, 0x234, b' ' as u16);
+        cell(&mut m, 0, b' ' as u16);
+        assert_eq!(pixel(&mut m, 32, 112), [255; 3]);
+        assert_eq!(pixel(&mut m, 0, 0), [0; 3]);
+        // The third byte remains available to the bitmap GDC's 18-bit address.
+        m.bus.output(0xa2, 0x49);
+        for v in [0x34, 0x02, 3] {
+            m.bus.output(0xa0, v);
+        }
+        assert_eq!(m.bus.gdcs[1].cursor, 0x30234);
+    }
+}
+
+#[test]
+fn text_initialization_clears_all_words_including_selected_offscreen_area() {
+    for profile in [Profile::Pc9801Vm, Profile::Pc9821ApDos] {
+        let mut m = Machine::new(profile);
+        call(&mut m, 0x0c, 0, 0).unwrap();
+        m.bus.mem[0xa0000..0xa4000].fill(0x11);
+        cell(&mut m, 3000, b'Z' as u16);
+        call(&mut m, 0x0e, 0, 6000).unwrap();
+        call(&mut m, 0x16, 0, 0xe141).unwrap();
+        for i in 0..4096 {
+            assert_eq!(m.bus.read16(0xa0000 + i * 2), 0x0041, "cell {i}");
+            assert_eq!(m.bus.read16(0xa2000 + i * 2), 0x00e1, "attr {i}");
+        }
+        assert_eq!(m.bus.gdcs[0].text_address(0, 0), Some((3000, 0)));
+        assert_eq!(pixel(&mut m, 3, 1), [255; 3]); // A in selected area.
+        assert_eq!(pixel(&mut m, 1, 1), [0; 3]); // Z would light this pixel.
+    }
+}
+
+#[test]
 fn normal_mode_set_sense_physical_columns_and_twenty_line_scanout() {
     for profile in [Profile::Pc9801Vm, Profile::Pc9821ApDos] {
         let mut m = Machine::new(profile);

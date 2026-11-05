@@ -88,7 +88,10 @@ code mode restores text Kanji from the unchanged storage. NEC specifies garbage
 text Kanji in dot mode, without defining their pixels; this implementation
 chooses blank glyph pixels deterministically. ANK, attributes, graphics and cursor
 continue to work. This does not promise cycle-exact CG read throughput or ROM
-content, full Japanese ANK, 24-dot glyphs or writable CG ROM.
+content, full Japanese ANK, 24-dot glyphs or writable CG ROM. BIOS font reads
+reject the unsupported Japanese half-width codes 2920h–297Dh and 2A20h–2A5Fh
+before checking or writing the output buffer; these codes require 16 pattern
+bytes, rather than the 32 bytes used for full-width JIS (NEC p.48).
 
 ## Reproduction and validation
 

@@ -853,8 +853,12 @@ impl Gdc {
         let p = &self.params;
         match self.command {
             0x47 if p.len() == 1 => self.pitch = v,
-            0x49 if p.len() >= 3 => {
-                self.cursor = p[0] as u32 | ((p[1] as u32) << 8) | (((p[2] & 3) as u32) << 16)
+            0x49 if p.len() >= 2 => {
+                // Character mode needs only two bytes. A third byte extends
+                // the word address for graphics mode (NEC uPD7220 p.7).
+                self.cursor = p[0] as u32
+                    | ((p[1] as u32) << 8)
+                    | (((p.get(2).copied().unwrap_or(0) & 3) as u32) << 16)
             }
             0x4b if p.len() >= 3 => {
                 self.cursor_visible = p[0] & 128 != 0;

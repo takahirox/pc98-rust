@@ -386,6 +386,42 @@ fn denied_font_source_preserves_mmio_read_latches() {
 }
 
 #[test]
+fn unsupported_half_width_font_is_rejected_before_buffer_page_checks() {
+    for code in [0x2920, 0x2921, 0x297d, 0x2a20, 0x2a5f] {
+        let (mut c, mut b) = request(0x18, 0x14, true);
+        c.r[BX] = 0x3000;
+        c.r[CX] = 0;
+        c.r[DX] = code;
+        b.mem[0x30000..0x30032].fill(0xa5);
+        put(&mut b, 0x2000 + 0x30 * 4, 0); // Unmapped output buffer.
+        let error = c.step(&mut b).unwrap_err();
+        assert!(error.contains("unsupported CRT half-width font"), "{error}");
+        assert_eq!(c.last_fault, None);
+        assert_eq!(&b.mem[0x30000..0x30032], &[0xa5; 50]);
+    }
+}
+
+#[test]
+fn text_clear_preflights_offscreen_character_and_attribute_pages_before_writes() {
+    for page in [0xa1, 0xa3] {
+        let (mut c, mut b) = request(0x18, 0x16, true);
+        c.r[DX] = 0xe141;
+        b.mem[0xa0000..0xa4000].fill(0x5a);
+        put(&mut b, 0x2000 + page * 4, (page as u32 * 4096) | 5);
+        c.step(&mut b).unwrap();
+        assert_eq!(c.last_fault, Some((14, 7)));
+        assert_eq!(c.cr2, page as u32 * 4096);
+        assert!(b.mem[0xa0000..0xa4000].iter().all(|&v| v == 0x5a));
+        put(&mut b, 0x2000 + page * 4, (page as u32 * 4096) | 7);
+        resume_after_fault(&mut c, &mut b);
+        for cell in 0..4096 {
+            assert_eq!(b.read16(0xa0000 + cell * 2), 0x0041);
+            assert_eq!(b.read16(0xa2000 + cell * 2), 0x00e1);
+        }
+    }
+}
+
+#[test]
 fn saved_flags_word_respects_vm86_stack_limit_before_disk_side_effects() {
     let (mut c, mut b) = request(0x1b, 0, true);
     c.r[SP] = 0xfffb; // FLAGS word would cross SS:FFFF

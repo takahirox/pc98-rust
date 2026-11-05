@@ -68,21 +68,28 @@ cmp al,0
 jne fail
 cmp byte [es:0x53c],0
 jne fail
-; Clear all visible and off-screen text ourselves; preserve font scratch guards.
-push es
+; BIOS initialization must clear all text RAM, including off-screen word 3000.
 mov ax,0xa000
-mov es,ax
-xor di,di
-mov cx,4096
-mov ax,0x0020
-rep stosw
+mov fs,ax
+mov word [fs:6000],0x115a
 mov ax,0xa200
-mov es,ax
-xor di,di
-mov cx,4096
-mov ax,0x00e1
-rep stosw
-pop es
+mov fs,ax
+mov word [fs:6000],0x1111
+mov ax,0x1600
+mov dx,0xe120
+call bios
+mov ax,0xa000
+mov fs,ax
+cmp word [fs:6000],0x0020
+jne fail
+cmp word [fs:8190],0x0020
+jne fail
+mov ax,0xa200
+mov fs,ax
+cmp word [fs:6000],0x00e1
+jne fail
+cmp word [fs:8190],0x00e1
+jne fail
 push cs
 pop bx
 mov cx,glyph_buffer
@@ -186,8 +193,14 @@ mov word [es:1200],0x0042         ; B at (0,32), distinguishes pitch from 80
 mov word [es:200],0x0043          ; decoy if partition selection is ignored
 pop es
 mov ax,0x1300
-mov dx,8                      ; cursor in blank cell 4
+mov dx,10                     ; BIOS cursor in blank cell 5, then direct I/O to 4
 call bios
+mov al,0x49
+out 0x62,al
+mov al,4
+out 0x60,al
+xor al,al
+out 0x60,al                   ; legal two-byte character-mode CURS
 mov al,0xe0
 out 0x62,al
 in al,0x62
