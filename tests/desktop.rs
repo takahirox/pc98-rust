@@ -26,7 +26,7 @@ fn until(m: &mut Machine, expected: &str) -> bool {
     panic!("missing {expected}: {}", m.bus.text());
 }
 fn command(m: &mut Machine, text: &str) {
-    for ch in text.bytes().chain([b'\r']) {
+    for ch in text.bytes().chain(*b"\r") {
         let scan = if ch == b'\r' {
             0x1c
         } else {
@@ -50,7 +50,9 @@ fn image(high: bool) -> Vec<u8> {
         // restore the exact previous desktop configuration. Leave old fixtures.
         let root = &disk[4096 + 770 * 512..4096 + 802 * 512];
         let entry = root
-            .chunks_exact(32)
+            .as_chunks::<32>()
+            .0
+            .iter()
             .find(|e| &e[..11] == b"FDCONFIGSYS")
             .unwrap();
         let cluster = u16::from_le_bytes(entry[26..28].try_into().unwrap()) as usize;
