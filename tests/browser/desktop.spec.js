@@ -168,6 +168,24 @@ test('dirty desktop: cancel replacement/eject/restore, export guest writes, reim
   await until(page,'A:\\>'); expect(await page.evaluate(()=>(pc98.core.hdi_dirty_page(0) >>> 0))).toBe(0xffffffff);
 });
 
+for(const [kind, size] of [
+  ['missing', undefined], ['string', String(manifest.prefix_bytes)],
+  ['array', [manifest.prefix_bytes]], ['fractional', manifest.prefix_bytes + 0.5],
+]) {
+  test(`desktop rejects ${kind} prefix size before requesting the template`,async({page})=>{
+    let templateRequests=0;
+    page.on('request',request=>{
+      if(new URL(request.url()).pathname.endsWith('/freedos/desktop.bin')) templateRequests++;
+    });
+    await page.route('**/freedos/manifest.json',route=>route.fulfill({json:{...manifest,prefix_bytes:size}}));
+    await ready(page);
+    await expect(page.locator('#error')).toContainText('Invalid FreeDOS template geometry/size');
+    expect(templateRequests).toBe(0);
+    expect(await page.evaluate(()=>pc98.core.hdi_len())).toBe(0);
+    await expect(page.locator('#default-hdd')).toBeEnabled();
+  });
+}
+
 for(const failure of ['fetch','truncated','checksum','geometry','allocation']) {
   test(`desktop ${failure} failure is recoverable and cannot publish a partial mount`,async({page})=>{
     if(failure==='allocation') {
