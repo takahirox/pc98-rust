@@ -155,18 +155,47 @@ test('512 MiB local HDI: real guest high I/O, reset, full streamed export/reimpo
     await expect(page.locator('#error')).toContainText('Local HDI read failed during import');
     await expect(page.locator('#media-name')).toHaveText('large.hdi');
     await page.locator('#reset').click(); await runGuest(page,true);
+    // A resource failure must be visible and recoverable without losing the
+    // guest's writes or leaving controls disabled.
+    await page.evaluate(() => {
+      const OriginalBlob=Blob;
+      globalThis.Blob=new Proxy(OriginalBlob, {
+        construct() {
+          globalThis.Blob=OriginalBlob;
+          throw new Error('Export snapshot allocation failed');
+        },
+      });
+    });
+    await page.locator('#export').click();
+    await expect(page.locator('#error')).toContainText('Cannot export HDI: Export snapshot allocation failed');
+    await expect(page.locator('#error')).toContainText('Disk remains mounted');
+    await expect(page.locator('#reset')).toBeEnabled();
+    expect(await page.evaluate(() => pc98.stats().running)).toBe(true);
+    const expected=await expectedDigest(input,2048);
     memory.reset();
     start=performance.now();
     const downloadEvent=page.waitForEvent('download');
     await page.locator('#export').click();
     const download=await downloadEvent;
-    await download.saveAs(output);
+    // Saving over the selected file invalidates Chromium's original File
+    // snapshot. Subsequent exports must use the mounted bytes, including all
+    // untouched sectors, rather than that now-unreadable snapshot.
+    await download.saveAs(input);
     expect(await download.failure()).toBeNull();
     timings.exportDownloadMs=Math.round(performance.now()-start);
     await memory.sample(); timings.exportPeakRendererRssKiB=memory.peak();
     timings.exportPeakBrowserRssKiB=memory.totalPeak();
+    expect((await fs.stat(input)).size).toBe(512*1024*1024+4096);
+    expect(await digest(input)).toBe(expected);
+    start=performance.now();
+    const againEvent=page.waitForEvent('download');
+    await page.locator('#export').click();
+    const again=await againEvent;
+    await again.saveAs(output);
+    expect(await again.failure()).toBeNull();
+    timings.repeatExportDownloadMs=Math.round(performance.now()-start);
     expect((await fs.stat(output)).size).toBe(512*1024*1024+4096);
-    expect(await digest(output)).toBe(await expectedDigest(input,2048));
+    expect(await digest(output)).toBe(expected);
     await page.locator('#eject').click();
     await expect(page.locator('#export')).toBeDisabled();
     memory.reset(); start=performance.now();

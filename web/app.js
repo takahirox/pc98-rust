@@ -147,7 +147,7 @@ function selectProfile() {
 $('profile').onchange = () => { try { selectProfile(); } catch (error) { fail(error); } };
 $('drive').onchange = showMedia;
 $('eject').onclick = () => { const drive = mediaDrive(); if (!mounted[drive]) return; core.eject(drive); mounted[drive] = null; showMedia(); };
-const chunkBytes = 1024 * 1024, pageBytes = 65536;
+const chunkBytes = 1024 * 1024;
 const yieldUI = () => globalThis.scheduler?.yield() ?? new Promise(resolve => setTimeout(resolve, 0));
 function mediaBusy(value) {
   for (const id of [...controls, 'file', 'drive']) $(id).disabled = value;
@@ -155,28 +155,24 @@ function mediaBusy(value) {
 }
 async function exportBlob(drive) {
   if (drive !== 2) return new Blob([exportBytes(drive)]);
-  const original = mounted[2]?.file;
-  if (!original || original.size !== (core.hdi_len() >>> 0)) throw Error('Original HDI file unavailable for export.');
-  // Snapshot dirty pages while the guest is paused. File slices reference the
-  // unchanged local media; only changed pages cross Wasm memory. Blob snapshots
-  // each small view before the next call can grow linear memory.
+  // Snapshot the mounted bytes while paused. Local File slices can become
+  // unreadable after saving over the input file, even after Blob construction
+  // succeeds. Blob snapshots own each bounded chunk independently of that file
+  // and of the reusable Wasm transfer buffer.
   const resume = running;
   setRunning(false); mediaBusy(true);
   try {
-    const parts = [];
-    let at = 0, count = 0;
-    for (let page = core.hdi_dirty_page(0) >>> 0; page !== 0xffffffff; page = core.hdi_dirty_page(page + 1) >>> 0) {
-      const start = page * pageBytes, end = Math.min(start + pageBytes, original.size);
-      if (at < start) parts.push(original.slice(at, start));
-      const ptr = (core.hdi_read_chunk(start, end - start) >>> 0);
-      if (!ptr) throw Error(message(2) || 'Unable to allocate disk export page.');
-      parts.push(new Blob([new Uint8Array(core.memory.buffer, ptr, end - start)]));
-      at = end;
-      if (++count % 16 === 0) await yieldUI();
+    const len = (core.hdi_len() >>> 0), parts = [];
+    if (!len) throw Error('No HDI mounted.');
+    for (let at = 0; at < len; at += chunkBytes) {
+      const n = Math.min(chunkBytes, len - at), ptr = (core.hdi_read_chunk(at, n) >>> 0);
+      if (!ptr) throw Error(message(2) || 'Unable to read disk export chunk.');
+      parts.push(new Blob([new Uint8Array(core.memory.buffer, ptr, n)]));
+      status(`Exporting HDI · ${Math.min(100, Math.floor((at + n) * 100 / len))}%`);
+      await yieldUI();
     }
-    if (at < original.size) parts.push(original.slice(at));
     const blob = new Blob(parts, { type: 'application/octet-stream' });
-    if (blob.size !== original.size) throw Error('Incomplete HDI export; please retry.');
+    if (blob.size !== len) throw Error('Incomplete HDI export; please retry.');
     return blob;
   } catch (error) {
     throw Error(`Cannot export HDI: ${error.message}. Disk remains mounted; free browser resources and retry.`);
@@ -187,6 +183,7 @@ $('export').onclick = async () => {
   if (loading || !mounted[drive]) return;
   loading = true;
   try {
+    clearError();
     const data = await exportBlob(drive);
     const link = document.createElement('a'), url = URL.createObjectURL(data);
     link.href = url; link.download = mounted[drive].name; link.click();
@@ -218,7 +215,7 @@ async function loadFile(file) {
         status(`Importing HDI · ${Math.min(100, Math.floor((at + chunkBytes) * 100 / file.size))}%`);
       }
       if (!core.hdi_commit()) throw Error(message(2));
-      mounted[2] = { name: file.name, format: 'hdi', file };
+      mounted[2] = { name: file.name, format: 'hdi' };
       lastDrive = 2;
       releaseKeys(); core.reset(); core.audio_clear(); render(); setRunning(true); screen.focus();
     } else {
