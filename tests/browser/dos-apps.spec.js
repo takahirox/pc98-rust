@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import { exportHdd } from './helpers/disk.js';
 
 async function boot(page, name, sound = false, extension = 'hdm') {
+  page.on('dialog', dialog => dialog.accept());
   await page.goto('./');
   await expect(page.locator('#profile')).toBeEnabled();
   expect(await page.evaluate(() => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
@@ -11,6 +12,10 @@ async function boot(page, name, sound = false, extension = 'hdm') {
   if (sound) await page.locator('#sound').click();
   const buffer = await fs.readFile(new URL(`../../fixtures/dos-apps/${name}.${extension}`, import.meta.url));
   await page.locator('#file').setInputFiles({ name: `${name}.${extension}`, mimeType: 'application/octet-stream', buffer });
+  if (extension !== 'hdi') {
+    await page.evaluate(() => pc98.core.set_boot_source(0));
+    await page.locator('#reset').click();
+  }
 }
 async function hash(page) {
   return page.evaluate(() => {
@@ -80,6 +85,7 @@ test('Ap DOS: independent Japanese ADV game choices and guest save survive expor
   expect(saved.includes(Buffer.from('ADV98SAV'))).toBe(true);
   expect((await page.evaluate(() => pc98.stats())).writes).toBeGreaterThan(0);
   await page.locator('#file').setInputFiles({ name: 'saved.hdm', mimeType: 'application/octet-stream', buffer: saved });
+  await page.locator('#reset').click();
   await until(page, async () => (await hash(page)) === title);
   await press(page, 'ArrowRight'); await press(page, 'Enter'); await press(page, 'Enter');
   expect(await hash(page)).not.toBe(title);
@@ -276,6 +282,8 @@ for (const profile of ['0', '1']) {
     expect(await page.evaluate(() => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
     const buffer = await fs.readFile(new URL('../../fixtures/freedos/timer.hdm', import.meta.url));
     await page.locator('#file').setInputFiles({ name: 'timer.hdm', mimeType: 'application/octet-stream', buffer });
+    await page.evaluate(() => pc98.core.set_boot_source(0));
+    await page.locator('#reset').click();
     await until(page, async () => (await page.evaluate(() => pc98.text())).includes('TIMER CALLBACK PASS'), 160);
     const state = await page.evaluate(() => {
       const signature = [...'T98STATE'].map(c => c.charCodeAt(0));

@@ -6,6 +6,7 @@ import shutil
 import subprocess
 from build_media import ROOT
 
+subprocess.run(['python3', 'tools/prepare_desktop.py'], cwd=ROOT, check=True)
 env = os.environ.copy()
 if shutil.which('rustup') and not env.get('RUSTC'):
     env['RUSTC'] = subprocess.check_output(['rustup', 'which', 'rustc'], text=True).strip()

@@ -13,6 +13,8 @@ for (const [profile, name] of [['0', 'VM'], ['1', 'Ap']]) {
     await page.locator('#profile').selectOption(profile);
     const buffer = await fs.readFile(new URL('../../fixtures/freedos/keymap.hdm', import.meta.url));
     await page.locator('#file').setInputFiles({ name: 'keymap.hdm', mimeType: 'application/octet-stream', buffer });
+    await page.evaluate(() => pc98.core.set_boot_source(0));
+    await page.locator('#reset').click();
     expect(await page.evaluate(() => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
     const advance = async slices => {
       const error = await page.evaluate(count => {

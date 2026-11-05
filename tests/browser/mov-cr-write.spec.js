@@ -17,6 +17,8 @@ test('Ap: MOV CR WRITE from all GPRs, CR0/CR3 readback and guest fault repair be
   expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
   const expected = [...Buffer.from(manifest.result_hex, 'hex')];
   await page.locator('#file').setInputFiles({ name: 'mov_cr_write.hdm', mimeType: 'application/octet-stream', buffer: image });
+  await page.evaluate(() => pc98.core.set_boot_source(0));
+  await page.locator('#reset').click();
   await expect(page.locator('#media-name')).toContainText('mov_cr_write.hdm');
   for (let run = 0; run < 2; run++) {
     if (run) await page.locator('#reset').click();
@@ -52,6 +54,8 @@ for (const name of ['pe_pg']) {
     const variant = manifest.transition_variants[name];
     expect(createHash('sha256').update(image).digest('hex')).toBe(variant.image_sha256);
     await page.locator('#file').setInputFiles({ name: `${name}.hdm`, mimeType: 'application/octet-stream', buffer: image });
+    await page.evaluate(() => pc98.core.set_boot_source(0));
+    await page.locator('#reset').click();
     await expect(page.locator('#media-name')).toContainText(`${name}.hdm`);
     for (let run = 0; run < 2; run++) {
       if (run) await page.locator('#reset').click();

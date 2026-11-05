@@ -12,11 +12,17 @@ test('Ap: VM86 BIOS paging faults, mapped flags, callback and Enter, cold/reset'
   await page.goto('./');
   await expect(page.locator('#profile')).toBeEnabled();
   await page.locator('#profile').selectOption('1');
+  // This independent probe deliberately checks an absent-HDD BIOS query.
+  await page.locator('#drive').selectOption('2');
+  await page.locator('#eject').click();
+  await page.locator('#drive').selectOption('auto');
   expect(await page.evaluate(() => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
   const image = await fs.readFile(new URL('../../fixtures/vm86_firmware/vm86_firmware.hdm', import.meta.url));
   const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/vm86-firmware-manifest.json', import.meta.url)));
   expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
   await page.locator('#file').setInputFiles({ name: 'probe.hdm', mimeType: 'application/octet-stream', buffer: image });
+  await page.evaluate(() => pc98.core.set_boot_source(0));
+  await page.locator('#reset').click();
   for (let run = 0; run < 2; run++) {
     if (run) await page.locator('#reset').click();
     await page.locator('#screen').focus();

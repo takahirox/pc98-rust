@@ -21,6 +21,8 @@ for (const [profile, name] of [['0', 'VM']]) {
     expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
     const expected = [...Buffer.from(manifest.result_hex, 'hex')];
     await page.locator('#file').setInputFiles({ name: 'v30_bound.hdm', mimeType: 'application/octet-stream', buffer: image });
+    await page.evaluate(() => pc98.core.set_boot_source(0));
+    await page.locator('#reset').click();
     for (let run = 0; run < 2; run++) {
       if (run) await page.locator('#reset').click();
       let slots = 0;

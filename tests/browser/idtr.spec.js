@@ -13,6 +13,8 @@ test('Ap: IDTR probe, relocated vectors, wrapping addresses and terminal shutdow
   const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/idtr-manifest.json', import.meta.url)));
   const expected = [...Buffer.from(manifest.result_hex, 'hex')];
   await page.locator('#file').setInputFiles({ name: 'idtr.hdm', mimeType: 'application/octet-stream', buffer: image });
+  await page.evaluate(() => pc98.core.set_boot_source(0));
+  await page.locator('#reset').click();
   for (let run = 0; run < 2; run++) {
     if (run) await page.locator('#reset').click();
     expect(await page.evaluate(() => pc98.core.metric(16))).toBe(0);

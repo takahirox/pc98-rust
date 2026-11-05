@@ -115,6 +115,7 @@ fn fragmented_fat12_and_fat16_load_exact_kernel_and_execute_commands() {
         let disk = fixture(&format!("{name}.hdi"));
         let mut m = Machine::new(Profile::Pc9821ApDos);
         m.insert(2, disk.clone(), name).unwrap();
+        m.set_boot_hdd(true);
         for run in 0..2 {
             m.reset();
             let mut e = Experiment {
@@ -149,6 +150,7 @@ fn persistent_nul_display_distinguishes_live_keyboard_from_masked_irq_then_recov
         let disk = fixture(&format!("{name}.hdi"));
         let mut m = Machine::new(Profile::Pc9821ApDos);
         m.insert(2, disk.clone(), name).unwrap();
+        m.set_boot_hdd(true);
         for run in 0..2 {
             m.reset();
             let mut e = Experiment {

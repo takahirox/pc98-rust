@@ -74,6 +74,8 @@ test('Ap DOS enumerates empty FDD2, reads post-boot D88, swaps/ejects/reinserts 
   expect(await page.evaluate(() => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
   await page.locator('#file').setInputFiles({ name: 'minimal.hdm', mimeType: 'application/octet-stream', buffer: boot });
   await expect(page.locator('#media-drive')).toHaveText('Floppy 1');
+  await page.evaluate(() => pc98.core.set_boot_source(0));
+  await page.locator('#reset').click();
   await until(page, 'A:\\>');
   expect(await page.evaluate(() => [pc98.read(0x55c), pc98.read(0x66c), pc98.read(0x66d)]))
     .toEqual([3, 0x90, 0x91]);

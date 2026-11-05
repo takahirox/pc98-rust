@@ -7,7 +7,7 @@ const mounted = [null, null, null], held = new Set();
 let pointerPosition;
 let lastDrive = null;
 const driveNames = ['Floppy 1', 'Floppy 2', 'IDE HDD'];
-const controls = ['game', 'hello', 'pause', 'reset', 'sound', 'eject', 'export', 'profile'];
+const controls = ['game', 'hello', 'pause', 'reset', 'sound', 'eject', 'export', 'profile', 'boot', 'default-hdd'];
 function message(kind = 0) {
   const ptr = (core.message(kind) >>> 0), len = core.message_len();
   return decoder.decode(new Uint8Array(core.memory.buffer, ptr, len));
@@ -61,9 +61,13 @@ function showMedia() {
   $('media-drive').textContent = drive === null ? 'Auto' : driveNames[drive]
     + (drive === 2 && core.metric(21) === 0 ? ' (requires Ap)' : '');
   $('media-name').textContent = mounted[drive]?.name ?? 'No disk';
+  $('media-origin').textContent = mounted[drive] ? (mounted[drive].source === 'bundled' ? 'Bundled' : 'Local file') : '';
   $('eject').disabled = !mounted[drive]; $('export').disabled = !mounted[drive];
-  // Match the firmware's reset fallback, including an IDE retained on VM.
-  const boot = core.metric(21) === 1 && mounted[2] && (core.metric(22) || !mounted[0]) ? 2 : 0;
+  // Rust owns the preference. VM always boots its floppy, retaining Ap's choice.
+  const boot = core.metric(21) === 1 && core.metric(22) ? 2 : 0;
+  $('boot').value = String(core.metric(22));
+  $('boot').disabled = loading || core.metric(21) !== 1;
+  $('default-hdd').disabled = loading || core.metric(21) !== 1;
   $('boot-source').textContent = `Reset boots: ${driveNames[boot]} · ${mounted[boot]?.name ?? 'No disk'}`;
 }
 function mediaDrive() { return $('drive').value === 'auto' ? lastDrive : Number($('drive').value); }
@@ -93,11 +97,11 @@ function insert(bytes, name, drive) {
 }
 async function loadBytes(bytes, name, drive) {
   clearError(); insert(bytes, name, drive);
-  if (drive === 0 || drive === 2) { releaseKeys(); core.reset(); core.audio_clear(); render(); setRunning(true); screen.focus(); }
+  // Floppy insertion is live media access, independent of the next boot.
 }
 async function bundled(name) {
   if (!core || loading) return;
-  loading = true;
+  loading = true; mediaBusy(true);
   try {
     // Audio is initialized inside the user gesture, before waiting for assets.
     const enable = enableAudio().catch((error) => fail(error));
@@ -105,8 +109,10 @@ async function bundled(name) {
     if (!response.ok) throw Error(`Cannot load demo: HTTP ${response.status}`);
     $('drive').value = '0';
     await loadBytes(new Uint8Array(await response.arrayBuffer()), name, 0);
+    mounted[0].source = 'bundled';
+    core.set_boot_source(0); resetMachine();
     await enable;
-  } catch (error) { fail(error); } finally { loading = false; }
+  } catch (error) { fail(error); } finally { loading = false; mediaBusy(false); }
 }
 function exportBytes(drive) {
   if (drive === 2) {
@@ -126,7 +132,13 @@ function exportBytes(drive) {
 $('game').onclick = () => bundled('startrail.hdm');
 $('hello').onclick = () => bundled('hello98.tfd');
 $('pause').onclick = () => { if (core) setRunning(!running); };
-$('reset').onclick = () => { releaseKeys(); core.reset(); nextAudio = 0; clearError(); showMedia(); setRunning(true); render(); screen.focus(); };
+function showActiveBoot() {
+  const drive = core.peek(0x584) === 0x80 ? 2 : 0;
+  $('active-boot').textContent = `Booted: ${driveNames[drive]} · ${mounted[drive]?.name ?? 'No disk'}`;
+}
+function resetMachine() { releaseKeys(); core.reset(); showActiveBoot(); nextAudio = 0; clearError(); showMedia(); setRunning(true); render(); screen.focus(); }
+$('reset').onclick = resetMachine;
+$('boot').onchange = () => { core.set_boot_source(Number($('boot').value)); showMedia(); };
 $('sound').onclick = async () => {
   try { if (muted) await enableAudio(); else { muted = true; outputGain.gain.value = 0; $('sound').textContent = 'Enable sound'; $('sound').setAttribute('aria-pressed', 'false'); } }
   catch (error) { fail(error); }
@@ -141,12 +153,16 @@ function selectProfile() {
     : '640 × 400 · 8 colors · replacement Latin font';
   $('mouse').disabled = $('profile').value !== '1';
   if ($('mouse').disabled) $('mouse').checked = false;
-  clearError(); nextAudio = 0; core.audio_clear(); render(); showMedia();
+  clearError(); nextAudio = 0; core.audio_clear(); render(); showMedia(); showActiveBoot();
   setRunning(Boolean(mounted[0] || (mounted[2] && $('profile').value === '1')));
 }
 $('profile').onchange = () => { try { selectProfile(); } catch (error) { fail(error); } };
 $('drive').onchange = showMedia;
-$('eject').onclick = () => { const drive = mediaDrive(); if (!mounted[drive]) return; core.eject(drive); mounted[drive] = null; showMedia(); };
+function mayReplace(drive) {
+  return drive !== 2 || !mounted[2] || (core.hdi_dirty_page(0) >>> 0) === 0xffffffff ||
+    confirm(`${mounted[2].name} has guest writes. Discard them? Cancel to keep the disk and use Export disk first.`);
+}
+$('eject').onclick = () => { const drive = mediaDrive(); if (!mounted[drive] || !mayReplace(drive)) return; core.eject(drive); mounted[drive] = null; showMedia(); };
 const chunkBytes = 1024 * 1024;
 const yieldUI = () => globalThis.scheduler?.yield() ?? new Promise(resolve => setTimeout(resolve, 0));
 function mediaBusy(value) {
@@ -188,7 +204,7 @@ $('export').onclick = async () => {
     const link = document.createElement('a'), url = URL.createObjectURL(data);
     link.href = url; link.download = mounted[drive].name; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-  } catch (error) { fail(error); } finally { loading = false; }
+  } catch (error) { fail(error); } finally { loading = false; mediaBusy(false); }
 };
 async function loadFile(file) {
   if (!file || !core || loading) return;
@@ -199,6 +215,7 @@ async function loadFile(file) {
     clearError();
     const drive = resolveDrive(file.name);
     checkSize(file.size, drive);
+    if (!mayReplace(drive)) return;
     mediaBusy(true);
     if (drive === 2) {
       setRunning(false); suspended = true;
@@ -217,13 +234,72 @@ async function loadFile(file) {
       if (!core.hdi_commit()) throw Error(message(2));
       mounted[2] = { name: file.name, format: 'hdi' };
       lastDrive = 2;
-      releaseKeys(); core.reset(); core.audio_clear(); render(); setRunning(true); screen.focus();
+      resetMachine();
     } else {
       await loadBytes(new Uint8Array(await file.arrayBuffer()), file.name, drive);
     }
   } catch (error) { core.hdi_cancel(); fail(error); if (suspended) setRunning(resume); }
   finally { loading = false; mediaBusy(false); }
 }
+async function defaultHdd() {
+  if (!core || loading || core.metric(21) !== 1 || !mayReplace(2)) return;
+  loading = true; mediaBusy(true);
+  const resume = running;
+  setRunning(false); clearError(); status('Loading FreeDOS HDD…');
+  try {
+    const response = await fetch('freedos/manifest.json');
+    if (!response.ok) throw Error(`Cannot load FreeDOS manifest: HTTP ${response.status}`);
+    const manifest = await response.json();
+    if (manifest.bytes !== 128 * 1024 * 1024 + 4096 ||
+        manifest.prefix_bytes <= 32 || manifest.prefix_bytes > chunkBytes ||
+        manifest.prefix_bytes % 65536 ||
+        JSON.stringify(manifest.geometry) !== '[512,16,32,512]') throw Error('Invalid FreeDOS template geometry/size');
+    const template = await fetch('freedos/desktop.bin');
+    if (!template.ok) throw Error(`Cannot load FreeDOS template: HTTP ${template.status}`);
+    // Bound even a misconfigured server response before any large allocation.
+    const reader = template.body.getReader(), parts = [];
+    let received = 0;
+    try {
+      while (true) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        received += value.length;
+        if (received > manifest.prefix_bytes) throw Error('FreeDOS template exceeds expected size');
+        parts.push(value);
+      }
+    } finally { await reader.cancel(); }
+    if (received !== manifest.prefix_bytes) throw Error('Truncated FreeDOS template');
+    const prefix = new Uint8Array(received);
+    let offset = 0;
+    for (const part of parts) { prefix.set(part, offset); offset += part.length; }
+    const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', prefix)),
+      byte => byte.toString(16).padStart(2, '0')).join('');
+    if (digest !== manifest.prefix_sha256) throw Error('FreeDOS template checksum mismatch');
+    const transfer = bytes => {
+      const ptr = core.input_buffer(bytes.length) >>> 0;
+      if (!ptr) throw Error('Browser memory cannot allocate FreeDOS transfer buffer');
+      new Uint8Array(core.memory.buffer, ptr, bytes.length).set(bytes);
+    };
+    transfer(prefix.subarray(0, 32));
+    if (!core.hdi_begin(manifest.bytes)) throw Error(message(2));
+    transfer(prefix);
+    if (!core.hdi_append()) throw Error(message(2));
+    const zero = new Uint8Array(chunkBytes);
+    for (let at = received; at < manifest.bytes; at += chunkBytes) {
+      transfer(zero.subarray(0, Math.min(chunkBytes, manifest.bytes-at)));
+      if (!core.hdi_append()) throw Error(message(2));
+      if (at % (8*chunkBytes) === received % (8*chunkBytes)) await yieldUI();
+    }
+    if (!core.hdi_commit()) throw Error(message(2));
+    mounted[2] = {name: 'FreeDOS-128MiB.hdi', format: 'hdi', source: 'bundled'};
+    lastDrive = 2;
+    resetMachine();
+  } catch (error) {
+    core.hdi_cancel(); setRunning(resume);
+    fail(`${error.message}. Disk retained. Use Restore FreeDOS HDD to retry, or insert local media.`);
+  } finally { loading = false; mediaBusy(false); }
+}
+$('default-hdd').onclick = defaultHdd;
 $('file').onchange = (e) => { loadFile(e.target.files[0]); e.target.value = ''; };
 $('drop').ondragover = (e) => { e.preventDefault(); $('drop').classList.add('dragging'); };
 $('drop').ondragleave = () => $('drop').classList.remove('dragging');
@@ -291,6 +367,7 @@ try {
   if (!response.ok) throw Error(`Missing Wasm bundle (HTTP ${response.status}). Run npm run build.`);
   const result = await WebAssembly.instantiate(await response.arrayBuffer(), {});
   core = result.instance.exports;
+  core.set_boot_source(1);
   selectProfile();
   // Machine-readable inspection of the actual Wasm core for deterministic tests.
   window.pc98 = { core, text: () => message(1), read: (addr) => core.peek(addr),
@@ -298,5 +375,6 @@ try {
     exportDisk: (drive=0) => Array.from(exportBytes(drive)),
     exportBlob: (drive=2) => exportBlob(drive),
   };
-  controls.forEach((id)=>$(id).disabled=false); showMedia(); status('Ready · choose a demo or insert media'); render(); requestAnimationFrame(animate);
+  mediaBusy(true); render(); requestAnimationFrame(animate);
+  await defaultHdd();
 } catch (error) { status('Unable to start'); fail(error); }
