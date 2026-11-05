@@ -34,6 +34,8 @@ for (const [profile, name] of [['0', 'VM'], ['1', 'Ap']]) {
       [0xb800, image.subarray(33792, 34816)], [0xc000, image.subarray(1024, 2048)],
     ]) bytes.copy(expectedRam, address - 0x8000);
     await page.locator('#file').setInputFiles({ name: 'fdc_bios.hdm', mimeType: 'application/octet-stream', buffer: image });
+    await page.evaluate(() => pc98.core.set_boot_source(0));
+    await page.locator('#reset').click();
     for (let run = 0; run < 2; run++) {
       if (run) await page.locator('#reset').click();
       // Guest issues every command, verifies results and produces PASS itself.

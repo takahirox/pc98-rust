@@ -98,9 +98,9 @@ test('fresh page selects Ap in DOM and Rust, Auto, matching display and released
     await expect(page.locator('#display-mode')).toContainText('16 colors · Shinonome Japanese CG');
     await expect(page.locator('#mouse')).toBeEnabled();
     await expect(page.locator('#mouse')).not.toBeChecked();
-    await expect(page.locator('#media-name')).toHaveText('No disk');
-    await expect(page.locator('#eject')).toBeDisabled();
-    await expect(page.locator('#export')).toBeDisabled();
+    await expect(page.locator('#media-name')).toHaveText('FreeDOS-128MiB.hdi');
+    await expect(page.locator('#eject')).toBeEnabled();
+    await expect(page.locator('#export')).toBeEnabled();
     expect(await page.evaluate(() => ({ profile: pc98.core.metric(21), memory: pc98.read(0x401),
       keyboard: Array.from({ length: 16 }, (_, i) => pc98.read(0x52a + i)) })))
       .toEqual({ profile: 1, memory: 24, keyboard: Array(16).fill(0) });
@@ -109,7 +109,7 @@ test('fresh page selects Ap in DOM and Rust, Auto, matching display and released
 });
 
 for (const path of ['picker', 'drop']) {
-  test(`Auto ${path}: every floppy extension boots real guest cold/reset, D88 exports intact`, async ({ page }) => {
+  test(`Auto ${path}: every floppy extension mounts live then explicitly boots real guest cold/reset, D88 exports intact`, async ({ page }) => {
     test.setTimeout(120000);
     const errors = await ready(page);
     for (const extension of ['TfD', 'HDm', 'xDf', '2Hd', 'D88', 'd98', 'IMG']) {
@@ -118,6 +118,8 @@ for (const path of ['picker', 'drop']) {
       await upload(page, path, name, image);
       await mounted(page, name, 'Floppy 1');
       await expect(page.locator('#drive')).toHaveValue('auto');
+      await page.locator('#boot').selectOption('0');
+      await page.locator('#reset').click();
       await expect(page.locator('#boot-source')).toHaveText(`Reset boots: Floppy 1 · ${name}`);
       await boot(page, 'Hello world!!', 0);
       await page.locator('#reset').click();
@@ -133,6 +135,7 @@ for (const path of ['picker', 'drop']) {
       await upload(page, path, `geometry-${size}.img`, image);
       await mounted(page, `geometry-${size}.img`, 'Floppy 1');
       expect(await page.evaluate(() => pc98.read(0x584))).toBe(0x90);
+      await page.locator('#reset').click();
       expect(await page.evaluate(() => pc98.stats().instructions)).toBe(0);
       await exported(page, `geometry-${size}.img`, image);
       await page.locator('#reset').click();
@@ -170,10 +173,14 @@ for (const path of ['picker', 'drop']) {
     await page.locator('#drive').selectOption('0');
     await upload(page, path, 'first.tfd', hello);
     await mounted(page, 'first.tfd', 'Floppy 1');
+    await page.locator('#boot').selectOption('0');
+    await page.locator('#reset').click();
     await boot(page, 'Hello world!!', 0);
     await page.locator('#drive').selectOption('2');
     await upload(page, path, 'boot.hdi', hdi);
     await mounted(page, 'boot.hdi', 'IDE HDD');
+    await page.locator('#boot').selectOption('1');
+    await page.locator('#reset').click();
     await boot(page, 'IDE VERIFY PASS', 2);
     const before = await page.evaluate(() => ({ stats: pc98.stats(), text: pc98.text() }));
     await page.locator('#drive').selectOption('1');
@@ -193,6 +200,8 @@ for (const path of ['picker', 'drop']) {
     await page.locator('#drive').selectOption('0');
     await exported(page, 'first.tfd', hello);
     await upload(page, path, 'floppy-boot.tfd', hello);
+    await page.locator('#boot').selectOption('0');
+    await page.locator('#reset').click();
     await boot(page, 'Hello world!!', 0);
     await page.locator('#drive').selectOption('auto');
     await page.locator('#reset').click();
@@ -200,6 +209,8 @@ for (const path of ['picker', 'drop']) {
     await expect(page.locator('#boot-source')).toHaveText('Reset boots: Floppy 1 · floppy-boot.tfd');
     await page.locator('#drive').selectOption('2');
     await upload(page, path, 'boot.hdi', hdi);
+    await page.locator('#boot').selectOption('1');
+    await page.locator('#reset').click();
     await boot(page, 'IDE VERIFY PASS', 2);
     await page.locator('#mouse').check();
     await page.locator('#screen').focus();
@@ -223,8 +234,15 @@ for (const path of ['picker', 'drop']) {
     await boot(page, 'IDE VERIFY PASS', 2); // Preferred source is retained.
     await page.locator('#drive').selectOption('auto');
     await mounted(page, 'boot.hdi', 'IDE HDD');
+    await page.locator('#boot').selectOption('1');
+    await page.locator('#reset').click();
     await page.locator('#eject').click();
-    await expect(page.locator('#boot-source')).toHaveText('Reset boots: Floppy 1 · floppy-boot.tfd');
+    await expect(page.locator('#boot-source')).toHaveText('Reset boots: IDE HDD · No disk');
+    await page.locator('#reset').click();
+    // No implicit fallback to the mounted floppy.
+    await page.evaluate(() => pc98.core.step(10000));
+    expect(await page.evaluate(() => pc98.stats().reads)).toBe(0);
+    await page.locator('#boot').selectOption('0');
     await page.locator('#reset').click();
     await boot(page, 'Hello world!!', 0);
     expect(errors).toEqual([]);

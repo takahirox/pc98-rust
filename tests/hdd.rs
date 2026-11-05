@@ -64,6 +64,7 @@ fn title(m: &mut Machine) {
 fn adv98_consumes_mouse_through_guest_driver_and_irq13() {
     let mut m = Machine::new(Profile::Pc9821ApDos);
     m.insert(2, fixture(), "adv98.hdi").unwrap();
+    m.set_boot_hdd(true);
     m.reset();
     advance(&mut m, 160);
     title(&mut m);
@@ -92,6 +93,7 @@ fn adv98_consumes_mouse_through_guest_driver_and_irq13() {
 fn hdd_boots_freedos_and_independent_adv98_with_durable_writes() {
     let mut m = Machine::new(Profile::Pc9821ApDos);
     m.insert(2, fixture(), "adv98.hdi").unwrap();
+    m.set_boot_hdd(true);
     m.reset();
     assert_eq!(m.bus.mem[0x584], 0x80);
     assert_eq!(m.bus.mem[0x55d], 1);
@@ -125,6 +127,7 @@ fn hdd_boots_freedos_and_independent_adv98_with_durable_writes() {
     assert_eq!(m.bus.ide.writes, 0);
     assert_eq!(m.bus.ide.disk.as_ref().unwrap().writes, writes);
     m.insert(2, bytes, "export.hdi").unwrap();
+    m.set_boot_hdd(true);
     m.reset();
     advance(&mut m, 160);
     assert!(m.bus.ide.writes > 0);
@@ -169,6 +172,7 @@ fn hdi_rejects_inconsistent_geometry_offsets_truncation_and_overflow() {
 fn ide_pio_chs_multisector_identify_irq_errors_and_media_replacement() {
     let mut m = Machine::new(Profile::Pc9821ApDos);
     m.insert(2, fixture(), "test.hdi").unwrap();
+    m.set_boot_hdd(true);
     let b = &mut m.bus;
     b.output(0x64e, 0xec);
     assert!(b.ide.irq_enabled());
@@ -239,6 +243,7 @@ fn verify_machine() -> Machine {
     }
     let mut m = Machine::new(Profile::Pc9821ApDos);
     m.insert(2, image, "synthetic.hdi").unwrap();
+    m.set_boot_hdd(true);
     m
 }
 
@@ -483,6 +488,7 @@ fn ide_verify_original_guest_before_and_after_reset() {
     assert_eq!(&expected[1..12], &[2, 0, 2, 0, 0, 2, 0, 1, 2, 2, 0x80]);
     let mut m = Machine::new(Profile::Pc9821ApDos);
     m.insert(2, image.clone(), "ide_verify.hdi").unwrap();
+    m.set_boot_hdd(true);
     for run in 0..2 {
         m.reset();
         let mut slots = 0;
@@ -780,4 +786,32 @@ fn ide_edge_identify_read_write_transfer_boundaries() {
     let mut expected = before;
     expected[4096 + 9 * 512..4096 + 11 * 512].copy_from_slice(&data);
     assert_eq!(disk.to_vec(), expected);
+}
+
+#[test]
+fn media_insertion_preserves_explicit_boot_and_missing_device_never_falls_back() {
+    let mut m = Machine::new(Profile::Pc9821ApDos);
+    let floppy = std::fs::read("web/media/hello98.tfd").unwrap();
+    m.insert(2, fixture(), "disk.hdi").unwrap();
+    assert!(!m.bus.boot_hdd, "mounting HDD must not change preference");
+    m.set_boot_hdd(true);
+    m.insert(0, floppy.clone(), "hello.tfd").unwrap();
+    m.reset();
+    assert_eq!(m.bus.mem[0x584], 0x80);
+    m.bus.ide.mount(None);
+    m.reset();
+    assert_eq!(m.bus.mem[0x584], 0x80, "missing HDD must not boot floppy");
+    m.insert(2, fixture(), "disk.hdi").unwrap();
+    m.set_boot_hdd(false);
+    m.bus.mount_floppy(0, None);
+    m.reset();
+    assert_eq!(m.bus.mem[0x584], 0x90, "missing floppy must not boot HDD");
+    m.set_boot_hdd(true);
+    m.bus.profile = Profile::Pc9801Vm;
+    m.reset();
+    assert_eq!(m.bus.mem[0x584], 0x90);
+    assert!(m.bus.ide.disk.is_some());
+    m.bus.profile = Profile::Pc9821ApDos;
+    m.reset();
+    assert_eq!(m.bus.mem[0x584], 0x80);
 }

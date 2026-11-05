@@ -17,6 +17,8 @@ async function boot(page, name) {
   await page.locator('#profile').selectOption('1');
   const buffer = await fs.readFile(new URL(`../../fixtures/freedos/${name}.hdm`, import.meta.url));
   await page.locator('#file').setInputFiles({ name: `${name}.hdm`, mimeType: 'application/octet-stream', buffer });
+  await page.evaluate(() => pc98.core.set_boot_source(0));
+  await page.locator('#reset').click();
   expect(await page.evaluate(() => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
 }
 async function assertGlyph(page, expected) {

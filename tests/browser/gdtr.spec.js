@@ -11,6 +11,8 @@ test('Ap: original GDTR boot probe checks exact bytes and faults before and afte
   expect(await page.evaluate(() => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
   const image = await fs.readFile(new URL('../../fixtures/gdtr/gdtr.hdm', import.meta.url));
   await page.locator('#file').setInputFiles({ name: 'gdtr.hdm', mimeType: 'application/octet-stream', buffer: image });
+  await page.evaluate(() => pc98.core.set_boot_source(0));
+  await page.locator('#reset').click();
   for (let run = 0; run < 2; run++) {
     if (run) await page.locator('#reset').click();
     let text = '';

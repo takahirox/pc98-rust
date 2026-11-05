@@ -18,6 +18,8 @@ test('Ap: LTR/STR 16/32-bit TSS initialization and guest reload, cold/reset', as
   expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
   const expected = [...Buffer.from(manifest.result_hex, 'hex')];
   await page.locator('#file').setInputFiles({ name: 'task_register.hdm', mimeType: 'application/octet-stream', buffer: image });
+  await page.evaluate(() => pc98.core.set_boot_source(0));
+  await page.locator('#reset').click();
   await expect(page.locator('#media-name')).toContainText('task_register.hdm');
   for (let run = 0; run < 2; run++) {
     if (run) await page.locator('#reset').click();

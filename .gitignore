@@ -55,3 +55,6 @@ __pycache__/
 /fixtures/vm86_bios/
 /fixtures/large_hdi/
 /fixtures/floppy_data/
+
+# Explicitly audited desktop assets are regenerated with their matching sources.
+/web/freedos/

@@ -136,8 +136,9 @@ This is bare-metal floppy software, **not a firmware ROM**.
 
 `tools/prepare_freedos.py` fetches pinned public guest releases and matching source
 archives, checking SHA-256 before using any download. Outputs live in the ignored
-`fixtures/freedos/` directory; no GPL DOS binaries are included in the static
-`web/` distribution or linked into the Rust core.
+`fixtures/freedos/` directory; these test disks are not published. The separately audited browser desktop below
+publishes selected GPL guest binaries and complete matching sources; none are linked
+into the Rust core.
 
 The [WebNP2 packaging notes](https://github.com/uraraworks/WebNP2/blob/master/README.md#bundled-freedos98-boot-floppy)
 identified the original guest release. We verified its `fd98_2hd.img` is identical
@@ -169,7 +170,7 @@ configuration with the original MIT `TIMER.COM`, its `TIMER.ASM` source and
 `RUST.LIC`, replacing PROBE and starting TIMER from AUTOEXEC. Its generated
 `timer-manifest.json` records per-file and image hashes. Keep the same complete
 FreeDOS source/license folder and preparation script with this fixture; neither
-DOS fixture is part of the ten-asset Pages publication tree.
+DOS fixture is part of the Pages publication tree.
 
 The generated `manifest.json` records hashes for every selected file, the final
 image, input archives, source archives and exact source URLs. Expected minimal
@@ -253,7 +254,7 @@ Run `python3 tools/prepare_cpu_fixture.py` after the existing FreeDOS setup. Kee
 its archive/source and the entire `fixtures/freedos` output, including complete
 GPL DOS sources and notices, when redistributing this optional disk. The generated
 batch/configuration and preparation script are original MIT files. CPULEVEL and
-its disk remain outside `web/` and the unchanged Pages asset allowlist.
+its disk remain outside `web/` and the Pages asset allowlist.
 
 ## Issue #11 HDD, music and device fixtures
 
@@ -293,7 +294,7 @@ notices. Its pinned full source archive and extracted source/notices remain in
 the fixture output. It is not a runtime dependency and is never placed in Pages
 or linked into a guest executable as a library. Only guest programs and a compiler
 are acquired; no emulator/chip source or ROM is introduced. Rust dependencies
-remain empty. Pages' ten-asset publication allowlist is unchanged.
+remain empty. These test assets remain outside the publication allowlist.
 
 The original MIT `guest/fpu_init.asm` probe and offline
 `tools/prepare_fpu_init_fixture.py` use no third-party guest software or ROM.
@@ -327,3 +328,38 @@ generated image or kernel copy is a web asset.
 The [lawful-access record](hdd-boot-investigation.md#baseline-and-lawful-access-decision)
 does not clear `aliceY3.hdi`: no exact-image provenance/component inventory was
 verified, no game media was acquired, and no private-image retest occurred.
+
+## Installed browser desktop (Issue #130)
+
+`tools/prepare_desktop.py` validates the pinned archives above and builds a new,
+cleared 128 MiB FAT16 disk. Only KERNEL.SYS, COMMAND.COM, COPYING, original MIT
+PROBE/source/license and original configuration/AUTOEXEC are installed. The
+unchanged GPL HDD boot source is assembled with `NEC98HDD`/`ISFAT16` and configured
+with the generated BPB; the original MIT partition IPL locates that partition.
+No utility, driver, upstream filesystem slack, proprietary firmware/font or game
+content is copied. GPL programs execute as guest software, never emulator code.
+
+[desktop-manifest.json](../fixtures/desktop-manifest.json) pins binary and source
+URLs/hashes, boot-source hash/build command, every guest file, FAT geometry,
+free clusters, logical-image and template hashes. Preparation independently walks
+all file FAT chains. The published `desktop.bin` is just the page-aligned nonzero
+prefix; all remaining logical bytes are zero. No raw 128 MiB disk is committed or
+published. Local export includes the full disk and all guest writes.
+
+Publication uses GPLv2 section 3(a)'s accompanying source route: complete matching
+`kernel-source.tar.gz` and `freecom-source.tar.gz` (including SUPPL and original
+per-file notices, makefiles/build scripts/instructions) are served **at the same
+site with equal access**. `desktop-source.tar` supplies original MIT IPL, PROBE,
+configuration and preparation helpers. `COPYING`, `FreeCOM-LICENSE`, original
+`distribution-READMEja.htm` and `NOTICE.txt` retain notices and explain provenance,
+modifications and redistribution. [web/licenses.html](../web/licenses.html) links
+all downloads. This does not rely on upstream availability or a vague source offer.
+Source downloads are optional user downloads, not startup network payload.
+
+[desktop-publication.json](../fixtures/desktop-publication.json) pins the exact
+nine `web/freedos/` assets. `npm run build` regenerates them and the site audit
+requires exactly these plus the previous ten assets, with matching SHA-256 values.
+Pages builds fail if a source download/hash or source publication fails. Other
+`fixtures/freedos/` files remain ignored and excluded. Keep these accompanying
+sources and notices when redistributing the desktop; GPLv2 text is included in the
+published downloads. The other DOS disks described above remain test-only.

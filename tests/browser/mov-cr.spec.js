@@ -17,6 +17,8 @@ test('Ap: MOV CR reads to all GPRs, prefixes and guest fault repair before and a
   expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
   const expected = [...Buffer.from(manifest.result_hex, 'hex')];
   await page.locator('#file').setInputFiles({ name: 'mov_cr.hdm', mimeType: 'application/octet-stream', buffer: image });
+  await page.evaluate(() => pc98.core.set_boot_source(0));
+  await page.locator('#reset').click();
   await expect(page.locator('#media-name')).toContainText('mov_cr.hdm');
   for (let run = 0; run < 2; run++) {
     if (run) await page.locator('#reset').click();

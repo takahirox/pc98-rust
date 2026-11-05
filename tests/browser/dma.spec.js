@@ -12,6 +12,8 @@ for (const [profile, name] of [['0', 'VM'], ['1', 'Ap']]) {
     expect(await page.evaluate(() => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
     const image = await fs.readFile(new URL('../../fixtures/dma/autoinit.hdm', import.meta.url));
     await page.locator('#file').setInputFiles({ name: 'autoinit.hdm', mimeType: 'application/octet-stream', buffer: image });
+    await page.evaluate(() => pc98.core.set_boot_source(0));
+    await page.locator('#reset').click();
     let text = '';
     for (let i = 0; i < 20; i++) {
       await page.evaluate(() => { pc98.core.step(100000); pc98.core.audio_clear(); });

@@ -17,6 +17,8 @@ test('Ap: paged VM86 timer BIOS, work/buffer faults, IRQ callbacks and keyboard,
   const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/vm86-bios-manifest.json', import.meta.url)));
   expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
   await page.locator('#file').setInputFiles({ name: 'vm86_bios.hdm', mimeType: 'application/octet-stream', buffer: image });
+  await page.evaluate(() => pc98.core.set_boot_source(0));
+  await page.locator('#reset').click();
   await expect(page.locator('#media-name')).toContainText('vm86_bios.hdm');
   for (let run = 0; run < 2; run++) {
     if (run) await page.locator('#reset').click();

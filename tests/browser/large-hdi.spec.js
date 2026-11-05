@@ -4,8 +4,7 @@ import { createReadStream } from 'node:fs';
 import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { trackMemory } from './helpers/memory.js';
 
 const probe = await fs.readFile(new URL('../../fixtures/large_hdi/probe.bin', import.meta.url));
 const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/large-hdi-manifest.json', import.meta.url)));
@@ -71,42 +70,6 @@ async function runGuest(page, persisted, maxResident = 6*65536) {
   expect(await page.evaluate(() => pc98.core.hdi_resident_bytes())).toBeLessThanOrEqual(maxResident);
 }
 
-async function trackMemory(browser) {
-  const session = await browser.newBrowserCDPSession();
-  let peakRendererRssKiB=0, peakBrowserRssKiB=0, sampling=false;
-  const sample = async () => {
-    if (sampling) return;
-    sampling=true;
-    try {
-      const {processInfo}=await session.send('SystemInfo.getProcessInfo');
-      const renderers=new Set(processInfo.filter(p=>p.type==='renderer').map(p=>p.id));
-      const pids=processInfo.map(p=>String(p.id));
-      if (pids.length) {
-        const {stdout}=await promisify(execFile)('ps',['-o','pid=,rss=','-p',pids.join(',')]);
-        let rendererRss=0, totalRss=0;
-        for(const line of stdout.trim().split('\n')) {
-          const [pid,rss]=line.trim().split(/\s+/).map(Number);
-          totalRss+=rss;
-          if(renderers.has(pid)) rendererRss+=rss;
-        }
-        peakRendererRssKiB=Math.max(peakRendererRssKiB,rendererRss);
-        peakBrowserRssKiB=Math.max(peakBrowserRssKiB,totalRss);
-      }
-    } finally { sampling=false; }
-  };
-  // Sample all browser-reported process RSS as well as renderers, including
-  // native download allocations; neither is an exact OS high-water measurement.
-  // Summed RSS can count shared pages more than once.
-  const timer=setInterval(()=>sample().catch(()=>{}),100);
-  return {
-    sample,
-    peak: () => peakRendererRssKiB,
-    totalPeak: () => peakBrowserRssKiB,
-    reset: () => { peakRendererRssKiB=0; peakBrowserRssKiB=0; },
-    stop: async () => { clearInterval(timer); await session.detach(); },
-  };
-}
-
 test('512 MiB local HDI: real guest high I/O, reset, full streamed export/reimport and bounded memory', async ({ page, browser }, testInfo) => {
   test.setTimeout(120000);
   const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'pc98-large-'));
@@ -116,6 +79,7 @@ test('512 MiB local HDI: real guest high I/O, reset, full streamed export/reimpo
   const timings={};
   try {
     await makeImage(input,2048);
+    page.on('dialog', dialog => dialog.accept());
     const now=new Date('2026-01-01T00:00:00Z');
     await page.clock.install({time:now}); await page.clock.pauseAt(now);
     await page.goto('./');
@@ -221,6 +185,7 @@ test('1 GiB local HDI: actual Ap high-sector guest I/O', async ({ page },testInf
   const folder=await fs.mkdtemp(path.join(os.tmpdir(),'pc98-gib-'));
   try {
     const input=path.join(folder,'one-gib.hdi'); await makeImage(input,4096);
+    page.on('dialog', dialog => dialog.accept());
     const now=new Date('2026-01-01T00:00:00Z');
     await page.clock.install({time:now}); await page.clock.pauseAt(now);
     await page.goto('./'); await expect(page.locator('#profile')).toBeEnabled();
@@ -235,6 +200,7 @@ test('1 GiB local HDI: actual Ap high-sector guest I/O', async ({ page },testInf
 test('512 MiB FAT16: unmodified FreeDOS shell reads and writes files above 128 MiB', async ({ page },testInfo) => {
   test.skip(testInfo.project.name !== 'local','DOS integration sampled once; capacity/media round-trip covers both roots.');
   test.setTimeout(120000);
+  page.on('dialog', dialog => dialog.accept());
   const now=new Date('2026-01-01T00:00:00Z');
   await page.clock.install({time:now}); await page.clock.pauseAt(now);
   await page.goto('./'); await expect(page.locator('#profile')).toBeEnabled();
@@ -308,6 +274,7 @@ test('occupied 512 MiB HDI imports once and exports without a second Wasm image'
   try {
     const input=path.join(folder,'occupied.hdi'), output=path.join(folder,'saved.hdi');
     await makeImage(input,2048,true);
+    page.on('dialog', dialog => dialog.accept());
     const now=new Date('2026-01-01T00:00:00Z');
     await page.clock.install({time:now}); await page.clock.pauseAt(now);
     await page.goto('./'); await expect(page.locator('#profile')).toBeEnabled();

@@ -20,6 +20,8 @@ for (const [profile, name] of [['1', 'Ap']]) {
     const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/rtc-set-manifest.json', import.meta.url)));
     expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
     await page.locator('#file').setInputFiles({ name: 'rtc_set.hdm', mimeType: 'application/octet-stream', buffer: image });
+    await page.evaluate(() => pc98.core.set_boot_source(0));
+    await page.locator('#reset').click();
     await expect(page.locator('#media-name')).toHaveText('rtc_set.hdm');
     for (let run = 0; run < 2; run++) {
       if (run) await page.locator('#reset').click();

@@ -25,6 +25,8 @@ for (const [profile, name] of [['0', 'VM'], ['1', 'Ap']]) {
     payload.copy(expectedMedia, 1024);
     expect(createHash('sha256').update(expectedMedia).digest('hex')).toBe(manifest.expected_media_sha256);
     await page.locator('#file').setInputFiles({ name: 'fdc_write.hdm', mimeType: 'application/octet-stream', buffer: image });
+    await page.evaluate(() => pc98.core.set_boot_source(0));
+    await page.locator('#reset').click();
     for (let run = 0; run < 2; run++) {
       if (run) await page.locator('#reset').click();
       // The host only steps and reads: all requests and results originate in guest code.
