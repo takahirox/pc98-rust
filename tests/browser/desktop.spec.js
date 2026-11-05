@@ -134,6 +134,10 @@ test('fresh installed desktop: exact kernel handoff, responsive DOS, live floppi
     }
     expect(await page.evaluate(()=>pc98.stats().writes)).toBe(0);
     await page.locator('#drive').selectOption('0'); await page.locator('#hello').click();
+    // The bundled image is fetched asynchronously. Wait for media loading and
+    // reset to finish before a synchronous Wasm loop occupies the page thread.
+    await expect(page.locator('#media-name')).toHaveText('hello98.tfd');
+    await expect(page.locator('#reset')).toBeEnabled();
     await until(page,'Hello world!!');
     await page.locator('#boot').selectOption('1'); await page.locator('#reset').click();
     await until(page,'A:\\>'); await command(page,'echo back'); await until(page,'back');

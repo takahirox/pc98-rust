@@ -1569,7 +1569,9 @@ fn task_register_segment_preflight_prevents_partial_words_and_descriptor_updates
 
 #[test]
 fn ltr_non_ram_tables_and_sources_stop_before_device_reads_or_busy_writes() {
-    for base in [0xa2fda, 0xa7fda, 0xeffda, 0x3fffda, 0xffff_ffda] {
+    // The complete 4096-word text attribute RAM now ends at A3FFFh.
+    // Keep the descriptor crossing into the non-RAM CG aperture at A4000h.
+    for base in [0xa3fda, 0xa7fda, 0xeffda, 0x3fffda, 0xffff_ffda] {
         let (mut c, mut b) = protected(&[0x0f, 0x00, 0xd8], true, true);
         c.r[AX] = 0x23;
         c.gdtr_base = base;

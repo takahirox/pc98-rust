@@ -6,6 +6,8 @@ pub struct Bus {
     cg_code: [u8; 2],
     cg_line: u8,
     cg_dot: bool,
+    text_40: bool,
+    text_graph: bool,
     pub user_characters: crate::font::UserCharacters,
     vsync_armed: bool,
     pub mem: Vec<u8>,
@@ -153,6 +155,8 @@ impl Bus {
             cg_code: [0; 2],
             cg_line: 0,
             cg_dot: false,
+            text_40: false,
+            text_graph: false,
             user_characters: crate::font::UserCharacters::default(),
             vsync_armed: false,
             mem: vec![
@@ -232,7 +236,7 @@ impl Bus {
     /// System-table preflight must not touch graphics read latches or MMIO.
     pub(crate) fn is_plain_ram(&self, a: u32) -> bool {
         match self.address(a as usize) {
-            0..=0xa2fff => true,
+            0..=0xa3fff => true,
             0x100000..=0x3fffff => self.profile == Profile::Pc9821ApDos,
             _ => false,
         }
@@ -300,7 +304,7 @@ impl Bus {
             return self.graphics[base + off];
         }
         match a {
-            0..=0x9ffff | 0xa0000..=0xa2fff | 0xf0000..=0xfffff => self.mem[a],
+            0..=0x9ffff | 0xa0000..=0xa3fff | 0xf0000..=0xfffff => self.mem[a],
             0xa4000..=0xa4fff if self.profile == Profile::Pc9821ApDos && self.cg_dot => {
                 if crate::font::UserCharacters::index(u16::from_be_bytes([
                     self.cg_code[1].wrapping_add(0x20),
@@ -375,7 +379,7 @@ impl Bus {
             return;
         }
         match a {
-            0..=0xa2fff => {
+            0..=0xa3fff => {
                 self.remember_memory(false, a);
                 self.mem[a] = v;
             }
@@ -828,6 +832,12 @@ impl Bus {
             0x60 | 0xa0 => self.gdcs[usize::from(p == 0xa0)].data(v),
             0x62 | 0xa2 => self.gdcs[usize::from(p == 0xa2)].command(v),
             0x68 => {
+                if v & 0xfe == 0 {
+                    self.text_graph = v & 1 != 0;
+                }
+                if v & 0xfe == 2 {
+                    self.text_40 = v & 1 != 0;
+                }
                 if v & 0xfe == 8 {
                     self.graphics_200 = v & 1 != 0;
                 }
@@ -1214,30 +1224,71 @@ impl Bus {
                     }
                 }
                 if text {
-                    let cell = (((y / 16) * 80 + x / 8) + self.gdcs[0].start as usize) % 2048;
+                    let gdc = &self.gdcs[0];
+                    let height = gdc.character_lines.max(1) as usize;
+                    let dot = if self.text_40 { x / 2 } else { x };
+                    // Forty-column mode doubles the pixel clock and skips the
+                    // odd VRAM words; PITCH remains a physical word stride.
+                    let column = if self.text_40 { dot / 8 * 2 } else { dot / 8 };
+                    let Some((cell, glyph_y)) = gdc.text_address(y, column) else {
+                        let idx = (y * 640 + x) * 4;
+                        let rgb = if self.pegc {
+                            &self.pegc_palette[color as usize]
+                        } else {
+                            &self.palette[color as usize]
+                        };
+                        out[idx..idx + 3].copy_from_slice(rgb);
+                        out[idx + 3] = 255;
+                        continue;
+                    };
                     let ch = self.mem[0xa0000 + cell * 2];
                     let attr = self.mem[0xa2000 + cell * 2];
                     let high = self.mem[0xa0000 + cell * 2 + 1];
                     let glyph = if self.profile == Profile::Pc9821ApDos && high != 0 {
-                        self.user_characters.byte(
-                            (ch & 127).wrapping_add(0x20),
-                            high,
-                            (y % 16) * 2 + usize::from(ch & 128 != 0),
-                        )
+                        // In dot access the shared KCG cannot supply text Kanji.
+                        // Real hardware's garbage pixels are unspecified; blank
+                        // them deterministically, retaining VRAM and glyph RAM.
+                        if self.cg_dot || glyph_y >= 16 {
+                            0
+                        } else {
+                            self.user_characters.byte(
+                                (ch & 127).wrapping_add(0x20),
+                                high,
+                                glyph_y * 2 + usize::from(ch & 128 != 0),
+                            )
+                        }
+                    } else if self.text_graph && attr & 16 != 0 {
+                        // Eight 4-by-4 blocks selected by the character byte.
+                        if glyph_y < 16 && ch & (1 << (glyph_y / 4 * 2 + dot % 8 / 4)) != 0 {
+                            255
+                        } else {
+                            0
+                        }
+                    } else if glyph_y < 16 {
+                        crate::font::row(ch, glyph_y as u8)
                     } else {
-                        crate::font::row(ch, (y % 16) as u8)
+                        0
                     };
-                    let mut ink = glyph & (128 >> (x % 8)) != 0;
+                    let mut ink = glyph & (128 >> (dot % 8)) != 0;
                     if attr & 4 != 0 {
                         ink = !ink
                     }
-                    if attr & 8 != 0 && y % 16 == 15 {
+                    if attr & 8 != 0 && glyph_y == height - 1 {
                         ink = true
                     }
-                    if self.gdcs[0].cursor_visible
+                    if !self.text_graph && attr & 16 != 0 && dot % 8 == 7 {
+                        ink = true;
+                    }
+                    if attr & 2 != 0
+                        && (self.cycles / 133_333) % (8 * u64::from(gdc.blink_rate.max(1)))
+                            >= 6 * u64::from(gdc.blink_rate.max(1))
+                    {
+                        ink = false;
+                    }
+                    if self.gdcs[0].cursor_on(self.cycles / 133_333)
                         && cell == self.gdcs[0].cursor as usize
                         && (self.gdcs[0].cursor_top..=self.gdcs[0].cursor_bottom)
-                            .contains(&((y % 16) as u8))
+                            .contains(&(glyph_y as u8))
                     {
                         ink = !ink
                     }

@@ -1,0 +1,32 @@
+{
+  "source": "guest/crt.asm",
+  "license": "MIT; original pc98-rust contributors; LICENSE",
+  "provenance": "Original x86 probe, no ROM, private game, third-party font or DOS",
+  "assembly": "nasm -f bin guest/crt.asm -o crt.bin; -DFIRST=0xNN for independent entry",
+  "source_sha256": "31e883ae93bf31186a518fce2f71a243fabc0367a2a1774031187f3ed4c36161",
+  "boot_sha256": "c0f8fe74468693ebc82a26aa2b8a61a3ffabe2754e80201b0f762f2d2573648d",
+  "image_sha256": "58df03e2fc504fe223f53aef4f7e7cf0d8f5b25f7975c08ce433f4ea972182ad",
+  "geometry": "77 cylinders, 2 heads, 8 sectors, 1024-byte sectors",
+  "profile": "Ap, including explicit normal-resolution compatibility extension for 1Ch..1Eh",
+  "contract": "INT/ROM/IRET register and flags preservation; KCG ROM/user RAM BIOS/port/window agreement; mode set/sense; four staged real scanouts: split/pitch/cursor, dot restriction, blink, 40x20; restore",
+  "result_address": "0x8000",
+  "result_length": 128,
+  "result_hex": "a55aa5a502a5a5a5a5a53844447c44444400a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a58054404620701062086c041e0208013a802440d620c010f208fc04ee0298018aa5a58054404620701062086c041e0208013a802440d620c010f208fc04ee0298018aa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+  "stages": [
+    1,
+    2,
+    3,
+    4,
+    90
+  ],
+  "slot_budget_per_stage": 200000,
+  "reset": "identical disk, guest sequence and assertions after CPU reset",
+  "red_before": [
+    "0fh",
+    "1bh",
+    "1ch",
+    "1dh",
+    "1eh"
+  ],
+  "distribution": "Generated fixtures/crt only; excluded from public web/"
+}

@@ -164,7 +164,7 @@ complete reproduction of those specifications.
 | RAM | 640 KiB conventional plus 3 MiB at physical 100000–3FFFFF; BWA 401h reports 24 × 128 KiB; holes and firmware retain PC-98 mapping | HMA is reachable with A20 enabled, including dword accesses. Address override does not enlarge the real-mode 64 KiB segment limit, and INT 1F/90 now provides validated byte copies to extended RAM. XMS/EMS managers remain absent; selected guests need conventional RAM and/or this BIOS service |
 | A20 | PC-98 F2 write enables A20; F6=02/03 enables/disables; F2/F6 read bit 0 reports masked state; reset masks it | No IBM port 92 or AT keyboard-controller gate. F0 remains the private synthetic-firmware trap, not an emulated CPU reset port |
 | Bitmap | Two four-plane 128 KiB pages; B/R/G at A8000/B0000/B8000, intensity at E0000; independent CPU/display pages; analog palette 16 × 12-bit RGB; four-plane GRCG TDW/RMW/TCR | Aligned EGC raster operations and 512 KiB PEGC packed 256-color storage/windows/palette are now tested by independent DEBUG; see the device audit. No arbitrary EGC shifts, PEGC planar mode, 480-line mode or GDC vector engine |
-| Text/CG | Shinonome JIS X 0208 16×16 glyphs; A1/A3 glyph selection, A5 half/line, A9 data, A4000 CG window in dot access mode; text VRAM low byte JIS row minus 20h, high byte cell, right-half flag; text color independent of bitmap analog palette | CG window implements the selected 32-byte ordinary glyph, mirrored across the decoded window. [Ap BIOS user characters](user-characters.md) now share mutable RAM across text, CG and full-width BIOS reads. No NEC extended glyphs, FEP or full Japanese ANK/kana coverage; ANK still uses the original simplified Latin font |
+| Text/CG | [CRT BIOS family](crt-bios.md): 80/40 columns, 25/20 rows, four GDC areas, physical pitch, timed cursor and KCG code/dot switching. Shinonome JIS X 0208 16×16 glyphs; A1/A3 glyph selection, A5 half/line, A9 data, A4000 CG window in dot access mode; text VRAM low byte JIS row minus 20h, high byte cell, right-half flag; text color independent of bitmap analog palette | CG window implements the selected 32-byte ordinary glyph, mirrored across the decoded window. [Ap BIOS user characters](user-characters.md) now share mutable RAM across text, CG and full-width BIOS reads. No NEC extended glyphs, FEP or full Japanese ANK/kana coverage; ANK still uses the original simplified Latin font |
 | Display IRQ | Port 64 arms one IRQ2 at the next scheduled vertical frame; guest rearming required | Fixed 133333 scheduling clocks/frame, not authentic Ap raster frequencies or cycle accuracy |
 | Sound | Original 26K-compatible OPN subset, three four-operator FM voices, key-on/off, algorithm/feedback, pitch/TL and approximate envelopes; SSG tone/noise/envelope; busy flag and timers A/B, slave IRQ4 | Not full YM2203 fidelity: no prescaler changes, channel-3 special mode, exact detune/rate scaling or SSG-EG operator envelopes. OPNA extended FM bank and 86 playback FIFO now exist; 98VIDEOP uses PCM and ADV98 starts guest PMD FM/SSG music in `music.hdm`. Rhythm, ADPCM, recording and sound ROM remain absent |
 | Storage/input | Existing raw/D88 floppy validation, FDC/DMA, PC-98 BIOS, keyboard; guest DOS FAT files survive export/reimport | IDE HDI boot/persistence, bus mouse ports and original guest INT 33 driver are now tested with unchanged ADV98. No additional floppy format, DOS extender or Windows support |
@@ -398,3 +398,14 @@ For no-host-error hangs or question-like glyphs, start with the compact
 The cleared disk already passes the `FAT Kernel GO!` handoff on the baseline,
 including a transient NUL/fallback background, and reaches responsive FreeCOM.
 This does not identify or fix the reported private image's persistent hang.
+
+## Issue #134 CRT/KCG family
+
+The [contract matrix and original guest probe](crt-bios.md) cover the reported
+INT 18h/AH=1Bh stop and the related text-mode, area and cursor services. NEC's
+1992 manual actually labels 1Ch–1Eh as high-resolution-only. They are explicitly
+an Ap compatibility extension here, adapted to the existing normal-resolution
+GDC; VM retains only documented common normal-mode functions. No high-resolution
+hardware or native Ap ROM parity is claimed. The private game was neither
+obtained nor tested; progressing through this family establishes no claim about
+its later requirements.

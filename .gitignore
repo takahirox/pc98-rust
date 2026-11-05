@@ -58,3 +58,4 @@ __pycache__/
 
 # Explicitly audited desktop assets are regenerated with their matching sources.
 /web/freedos/
+/fixtures/crt/

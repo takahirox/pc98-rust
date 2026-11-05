@@ -752,7 +752,7 @@ impl Keyboard {
         Some(key)
     }
 }
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Gdc {
     pub enabled: bool,
     /// Requested drawing timing: true permits drawing during active display.
@@ -766,9 +766,68 @@ pub struct Gdc {
     pub cursor_visible: bool,
     pub cursor_top: u8,
     pub cursor_bottom: u8,
+    pub character_lines: u8,
+    pub cursor_blink: bool,
+    pub blink_rate: u8,
+    /// uPD7220 parameter RAM: four character-mode scanout partitions.
+    pub scroll: [u8; 16],
     pub fifo: VecDeque<u8>,
 }
+impl Default for Gdc {
+    fn default() -> Self {
+        let mut scroll = [0; 16];
+        scroll[3] = 25; // One 400-raster-line partition.
+        Self {
+            enabled: false,
+            draw_during_display: false,
+            command: 0,
+            params: Vec::new(),
+            cursor: 0,
+            pitch: 0,
+            start: 0,
+            cursor_visible: false,
+            cursor_top: 0,
+            cursor_bottom: 15,
+            character_lines: 16,
+            cursor_blink: true,
+            blink_rate: 12,
+            scroll,
+            fifo: VecDeque::new(),
+        }
+    }
+}
 impl Gdc {
+    /// Character-mode partitions count raster lines, not VRAM rows. The PC-98
+    /// has 4096 text words; the address wraps at that physical boundary.
+    pub fn text_address(&self, mut line: usize, column: usize) -> Option<(usize, usize)> {
+        let height = self.character_lines.max(1) as usize;
+        for (area, p) in self.scroll.chunks_exact(4).enumerate() {
+            let lines = (p[2] as usize >> 4) | ((p[3] as usize & 63) << 4);
+            if line < lines {
+                let start = if area == 0 {
+                    self.start as usize
+                } else {
+                    p[0] as usize | ((p[1] as usize & 31) << 8)
+                };
+                let stride = if self.pitch == 0 {
+                    256
+                } else {
+                    self.pitch as usize
+                };
+                let wide = if p[3] & 128 != 0 { 2 } else { 1 };
+                return Some((
+                    (start + line / height * stride + column * wide) & 4095,
+                    line % height,
+                ));
+            }
+            line -= lines;
+        }
+        None
+    }
+    pub fn cursor_on(&self, frame: u64) -> bool {
+        self.cursor_visible
+            && (!self.cursor_blink || (frame / (2 * u64::from(self.blink_rate.max(1)))) & 1 == 0)
+    }
     pub fn command(&mut self, c: u8) {
         self.command = c;
         self.params.clear();
@@ -799,11 +858,20 @@ impl Gdc {
             }
             0x4b if p.len() >= 3 => {
                 self.cursor_visible = p[0] & 128 != 0;
+                self.character_lines = (p[0] & 31) + 1;
                 self.cursor_top = p[1] & 31;
-                self.cursor_bottom = (p[2] >> 3) & 31
+                self.cursor_bottom = (p[2] >> 3) & 31;
+                self.cursor_blink = p[1] & 32 == 0;
+                self.blink_rate = (p[1] >> 6) | ((p[2] & 7) << 2);
             }
-            0x70..=0x7f if p.len() >= 4 => {
-                self.start = p[0] as u32 | ((p[1] as u32) << 8) | (((p[2] & 3) as u32) << 16)
+            0x70..=0x7f => {
+                let offset = (self.command & 15) as usize + p.len() - 1;
+                if offset < 16 {
+                    self.scroll[offset] = v;
+                    self.start = self.scroll[0] as u32
+                        | ((self.scroll[1] as u32) << 8)
+                        | (((self.scroll[2] & 3) as u32) << 16);
+                }
             }
             _ => {}
         }
