@@ -80,7 +80,12 @@ and requires Ap; choosing an HDI on VM reports an error without changing machine
 
 Choose **Floppy 1**, **Floppy 2**, or **IDE HDD** to override Auto. Mismatched
 media fails without rerouting. Floppy 2 inserts without rebooting or changing
-the boot source. Both demo buttons always select, mount and boot Floppy 1.
+the boot source. Both profiles have two installed floppy drives even when empty.
+With the tested FreeDOS(98) floppy boot, select Floppy 2 and insert or swap a
+supported image after `A:\>` appears, then use `B:`, `DIR` and `TYPE` without
+Reset. Empty drives return no-media errors. DOS chooses the drive letters;
+with an IDE HDD, do not assume the second floppy is always `B:`.
+Both demo buttons always select, mount and boot Floppy 1.
 **Pause / Resume** controls execution. **Reset** reboots the CPU and devices while
 preserving inserted media, writes and the boot source. Inserting IDE selects HDD
 boot; inserting Floppy 1 selects floppy boot, even with both mounted. Changing the
@@ -165,6 +170,7 @@ python3 tools/prepare_opna_irq_fixture.py
 # Fetch checksum-pinned guest binaries AND matching complete source archives.
 # This makes a minimal GPL guest disk; it downloads no emulator code.
 python3 tools/prepare_freedos.py
+python3 tools/prepare_floppy_data.py
 python3 tools/prepare_freedos_hdd_fixture.py
 python3 tools/prepare_hdd_investigation.py
 python3 tools/prepare_font_fixture.py
