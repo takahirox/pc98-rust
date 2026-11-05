@@ -51,6 +51,8 @@ async function upload(page, path, name, buffer) {
       drop.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer }));
     }, { name, base64: buffer.toString('base64') });
   }
+  // Event dispatch returns before chunked HDI import and the guest reset finish.
+  await expect(page.locator('#file')).toBeEnabled();
 }
 async function mounted(page, name, drive) {
   await expect(page.locator('#media-name')).toHaveText(name);
