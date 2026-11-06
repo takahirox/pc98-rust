@@ -88,7 +88,10 @@ jobs:
           CARGO_PROFILE_TEST_OVERFLOW_CHECKS: "true"
       - run: npm ci
       - run: npx playwright install --with-deps chromium
-      - run: npm test
+      # Give wall-clock audio one emulator's host CPU budget, separately from
+      # accelerated guest probes. Preserve both serving roots and all assertions.
+      - run: npm test -- tests/browser/audio-continuity.spec.js --workers=1
+      - run: npx playwright test --grep-invert 'ADV98 production playback remains continuous through scene changes'
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

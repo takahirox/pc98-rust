@@ -233,6 +233,11 @@ npx playwright install chromium
 npm test
 ```
 
+CI runs the two ADV98 production-audio cases one at a time, then functional
+browser probes using the same release Wasm and fixtures. This separates
+wall-clock playback from accelerated guest probes while retaining every audio
+assertion and both serving paths; see the [acceptance workflow](.github/workflows/emulator.yml).
+
 CPULEVEL and DEBUG preparation automatically try the pinned FreeDOS mirrors when
 the primary download fails. Every source uses the original SHA-256 and size
 checks before caching; existing cached archives are verified for offline reuse.

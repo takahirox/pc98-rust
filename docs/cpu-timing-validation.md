@@ -135,3 +135,14 @@ reduce host interpreter cost for guest-time workloads. Debug assertions and
 overflow checks are explicitly enabled; test selection, guest-time budgets,
 assertions, browser checks and the job timeout are retained. This changes host
 validation throughput, not emulated clock rates or guest behavior.
+
+The [next GitHub run](https://github.com/takahirox/pc98-rust/actions/runs/42235234785)
+passed native validation and 243 Chromium cases, with the three existing skips.
+Both production-audio cases failed while running alongside accelerated guest
+probes: observed production was approximately 35,000–38,000 source samples per
+second, below the 48,000-sample playback demand. These are real underruns, not a
+passing continuity result. CI now schedules the two wall-clock audio cases
+sequentially before the functional browser probes, reusing the release Wasm build
+and fixtures. Both serving roots/sample rates and every continuity, pitch, tempo,
+scene-change and transport assertion remain required. The application, its clock
+rates, audio reserve and work caps are unchanged by this scheduling adjustment.
