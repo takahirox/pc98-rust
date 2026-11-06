@@ -90,6 +90,101 @@ fn fault_frame(c: &Cpu, b: &Bus, vector: u8, error: u32) {
 }
 
 #[test]
+fn dx2_unaccessed_data_descriptor_loads_add_core_clocks_separately_from_bus_writes() {
+    // Intel486 DX2 data book, table 10.1 note 9: +11 clocks per
+    // unaccessed descriptor load, in addition to physical bus costs.
+    let cases: &[(&[u8], usize, u32)] = &[
+        (&[0x8e, 0xd8], DS, 9), // MOV DS,AX
+        (&[0x8e, 0x1f], DS, 9), // MOV DS,[BX]
+        (&[0x8e, 0xd0], SS, 9), // MOV SS,AX
+        (&[0x07], ES, 9),
+        (&[0x17], SS, 9),
+        (&[0x1f], DS, 9),
+        (&[0x0f, 0xa1], 4, 9),
+        (&[0x0f, 0xa9], 5, 9),
+        (&[0xc4, 0x07], ES, 12),
+        (&[0xc5, 0x07], DS, 12),
+        (&[0x0f, 0xb2, 0x07], SS, 12),
+        (&[0x0f, 0xb4, 0x07], 4, 12),
+        (&[0x0f, 0xb5, 0x07], 5, 12),
+    ];
+    for &(code, segment, base_clocks) in cases {
+        let mut bus_clocks = [0; 2];
+        for accessed in [0, 1] {
+            let (mut c, mut b) = protected(code, false, false);
+            c.r[AX] = 24;
+            c.r[BX] = 0x10;
+            // MOV's selector, or a far pointer's offset followed by selector.
+            b.mem[0x20010..0x20014].copy_from_slice(&[24, 0, 24, 0]);
+            b.mem[0x8000..0x8002].copy_from_slice(&24u16.to_le_bytes());
+            b.mem[0x501d] = 0x92 | accessed;
+            let (timing, result) = c.step_timed(&mut b);
+            result.unwrap();
+            assert_eq!(c.fault_count, 0, "{code:02x?}");
+            assert_eq!(
+                if segment < 4 {
+                    c.s[segment]
+                } else {
+                    c.extra_segments[segment - 4]
+                },
+                24
+            );
+            assert_eq!(c.segment_cache(segment).access, 0x93);
+            assert_eq!(b.mem[0x501d], 0x93);
+            assert_eq!(
+                timing.execution,
+                base_clocks + 11 * u32::from(accessed == 0),
+                "{code:02x?}"
+            );
+            bus_clocks[accessed as usize] = timing.bus;
+        }
+        assert_eq!(bus_clocks[0], bus_clocks[1] + 4, "{code:02x?}");
+    }
+}
+
+#[test]
+fn dx2_unaccessed_code_descriptor_loads_add_core_clocks_on_transfers_and_entry() {
+    let cases: &[(&[u8], u32)] = &[
+        (&[0x9a, 0x20, 0, 32, 0], 20), // far CALL
+        (&[0xff, 0x1f], 20),
+        (&[0xea, 0x20, 0, 32, 0], 19), // far JMP
+        (&[0xff, 0x2f], 18),
+        (&[0xcb], 17), // far RET
+        (&[0xca, 2, 0], 18),
+        (&[0xcf], 20),       // IRET
+        (&[0xcd, 0x30], 44), // software INT
+        (&[], 55),           // external interrupt: 44 entry + 11 recognition
+    ];
+    for &(code, base_clocks) in cases {
+        let mut bus_clocks = [0; 2];
+        for accessed in [0, 1] {
+            let (mut c, mut b) = protected(code, false, false);
+            descriptor(&mut b, 32, 0x10000, 0xffff, 0x9a | accessed, 0);
+            c.r[BX] = 0x10;
+            b.mem[0x20010..0x20014].copy_from_slice(&[0x20, 0, 32, 0]);
+            b.mem[0x8000..0x8006].copy_from_slice(&[0x20, 0, 32, 0, 2, 0]);
+            gate(&mut b, 0x30, 32, 0x20, 0x86);
+            let (timing, result) = if code.is_empty() {
+                c.interrupt_timed(&mut b, 0x30)
+            } else {
+                c.step_timed(&mut b)
+            };
+            result.unwrap();
+            assert_eq!(c.fault_count, 0, "{code:02x?}");
+            assert_eq!((c.s[CS], c.ip), (32, 0x20));
+            assert_eq!(b.mem[0x5025], 0x9b);
+            assert_eq!(
+                timing.execution,
+                base_clocks + 11 * u32::from(accessed == 0),
+                "{code:02x?}"
+            );
+            bus_clocks[accessed as usize] = timing.bus;
+        }
+        assert_eq!(bus_clocks[0], bus_clocks[1] + 4, "{code:02x?}");
+    }
+}
+
+#[test]
 fn descriptor_parsing_granularity_base_and_default_size() {
     let d = SegmentCache::parse(raw(0xfedcba98, 0xabcde, 0x97, 0xc0));
     assert_eq!(

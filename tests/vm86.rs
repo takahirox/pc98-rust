@@ -84,6 +84,33 @@ fn enter(c: &mut Cpu, b: &mut Bus) {
     assert_eq!(c.cr0 & 1, 1);
 }
 #[test]
+fn dx2_vm86_entry_charges_each_unaccessed_code_and_stack_descriptor() {
+    // Table 10.1 note 9 applies once per loaded descriptor, including both
+    // CS and SS when an interrupt leaves VM86 for the CPL0 monitor.
+    let mut bus_clocks = [[0; 2]; 2];
+    for code_accessed in [0, 1] {
+        for stack_accessed in [0, 1] {
+            let (mut c, mut b) = setup(&[0xcd, 0x30], false, 0x23002);
+            enter(&mut c, &mut b);
+            b.mem[0x500d] = 0x9a | code_accessed;
+            b.mem[0x5015] = 0x92 | stack_accessed;
+            let (timing, result) = c.step_timed(&mut b);
+            result.unwrap();
+            assert_eq!(c.fault_count, 0);
+            assert!(!c.vm86());
+            assert_eq!((c.s[CS], c.s[SS]), (8, 16));
+            assert_eq!(b.mem[0x500d], 0x9b);
+            assert_eq!(b.mem[0x5015], 0x93);
+            let loads = u32::from(code_accessed == 0) + u32::from(stack_accessed == 0);
+            assert_eq!(timing.execution, 86 + 11 * loads);
+            bus_clocks[code_accessed as usize][stack_accessed as usize] = timing.bus;
+        }
+    }
+    assert_eq!(bus_clocks[0][1], bus_clocks[1][1] + 4);
+    assert_eq!(bus_clocks[1][0], bus_clocks[1][1] + 4);
+    assert_eq!(bus_clocks[0][0], bus_clocks[1][1] + 8);
+}
+#[test]
 fn dx2_successful_vm86_instructions_use_real_virtual_timing_tables() {
     // Intel486 DX2 data book (July 1992), pp.10-7..10-9, RV/P entries.
     let cases: &[(&[u8], u32)] = &[

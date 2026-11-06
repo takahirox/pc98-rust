@@ -148,6 +148,11 @@ impl Cpu {
     ) -> ExecResult<SegmentCache> {
         if d.access & 1 == 0 {
             self.write_system_byte(b, address.wrapping_add(5), d.access | 1)?;
+            // Intel486 DX2 data book, table 10.1 note 9: each unaccessed
+            // descriptor load adds 11 core clocks, separate from bus writes.
+            if b.timing.active && b.profile == crate::Profile::Pc9821ApDos {
+                b.timing.extra_execution += 11;
+            }
         }
         Ok(SegmentCache {
             access: d.access | 1,
