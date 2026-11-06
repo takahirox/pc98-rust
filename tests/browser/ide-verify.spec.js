@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { exportHdd } from './helpers/disk.js';
@@ -16,14 +16,14 @@ for (const [profile, name] of [['1', 'Ap']]) {
     await page.goto('./');
     await expect(page.locator('#profile')).toBeEnabled();
     await page.locator('#profile').selectOption(profile);
-    expect(await page.evaluate(() => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
+    expect(await inspect(page, () => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
     const image = await fs.readFile(new URL('../../fixtures/ide_verify/ide_verify.hdi', import.meta.url));
     const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/ide-verify-manifest.json', import.meta.url)));
     expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
     const expected = [...Buffer.from(manifest.result_hex, 'hex')];
     expect(expected.slice(1, 12)).toEqual([2, 0, 2, 0, 0, 2, 0, 1, 2, 2, 0x80]);
     await page.locator('#drive').selectOption({ value: '2' });
-    await page.locator('#file').setInputFiles({ name: 'ide_verify.hdi', mimeType: 'application/octet-stream', buffer: image });
+    await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'ide_verify.hdi', mimeType: 'application/octet-stream', buffer: image });
     for (let run = 0; run < 2; run++) {
       if (run) await page.locator('#reset').click();
       let slots = 0;
@@ -31,7 +31,7 @@ for (const [profile, name] of [['1', 'Ap']]) {
       // Guest checks every completion/error record, IRQ observation and guard.
       // Host only steps the production core and reads its outputs.
       while (slots < manifest.slot_budget) {
-        const snapshot = await page.evaluate(remaining => {
+        const snapshot = await inspect(page, remaining => {
           let slots = 0;
           let text = '';
           while (slots < Math.min(100000, remaining)) {
@@ -52,9 +52,9 @@ for (const [profile, name] of [['1', 'Ap']]) {
       }
       expect(slots).toBeLessThanOrEqual(manifest.slot_budget);
       expect(text).toContain('IDE VERIFY PASS');
-      expect(await page.evaluate(() => Array.from({ length: 1024 }, (_, i) => pc98.read(0x8000 + i)))).toEqual(expected);
-      expect(await page.evaluate(() => pc98.stats().hddWrites)).toBe(0);
-      expect(await page.evaluate(() => pc98.stats().hddReads)).toBe(17);
+      expect(await inspect(page, () => Array.from({ length: 1024 }, (_, i) => pc98.read(0x8000 + i)))).toEqual(expected);
+      expect(await inspect(page, () => pc98.stats().hddWrites)).toBe(0);
+      expect(await inspect(page, () => pc98.stats().hddReads)).toBe(17);
       expect((await exportHdd(page)).equals(image)).toBe(true);
       expect(errors).toEqual([]);
       await expect(page.locator('#error')).toBeHidden();

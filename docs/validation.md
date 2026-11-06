@@ -1,5 +1,60 @@
 # Validation evidence
 
+## Issue #136 Worker ownership and independent audio (2026-11-06)
+
+The browser now instantiates release Wasm only in the dedicated emulation Worker.
+Its single timer yields between finite slices, preserving the existing Rust
+Machine, guest clock and device order. Canvas receives one acknowledged,
+recycled RGBA snapshot; an independent AudioWorklet consumes a six-buffer PCM
+queue directly from the Worker. Media commands and chunked HDD transactions run
+between guest slices. See the [ownership, queue and pause contract](../README.md#browser-execution-and-audio-ownership).
+
+The following checks ran in the assigned macOS arm64 worktree:
+
+| Check | Result |
+| --- | --- |
+| All fixture/license preparation and font verification listed in README's reproduction commands | Passed; checksum-pinned cleared guests and corresponding sources prepared, including FreeDOS/HimemX, CPU/device, font, FM/PMD/PCM, CRT and large disks |
+| `python3 -m unittest discover -s tools -p test_fixture_fetch.py` | 10 passed |
+| `cargo test --locked` | 568 passed, no failures or ignored tests, across 40 targets including doc-tests |
+| `cargo clippy --all-targets -- -D warnings` | Passed |
+| `cargo fmt --check` | Passed |
+| `npm ci`, `npx playwright install chromium` | Passed |
+| `npm test -- --workers=2 --max-failures=8` | Production release Wasm build and 26-asset strict audit passed; three PCM queue unit tests passed; full two-root Chromium run: 238 passed, three failures subsequently corrected and rerun, three existing skips |
+| `npx playwright test tests/browser/worker-runtime.spec.js tests/browser/dos-apps.spec.js tests/browser/emulator.spec.js --workers=2 --max-failures=3` | All 40 cases overlapping the full suite passed, including its three prior failures; the two newly added control/visibility cases required an acknowledgement wait before the next action |
+| `npx playwright test tests/browser/worker-runtime.spec.js --grep 'visibility, repeated' --workers=2` | Both new control/visibility cases passed after that wait |
+| `npx playwright test tests/browser/worker-runtime.spec.js --workers=2` | Final runtime suite: all 10 cases passed at both roots |
+| `npx playwright test tests/browser/user-font.spec.js tests/browser/drawing-timing.spec.js tests/browser/keyboard.spec.js tests/browser/lio.spec.js tests/browser/dos-apps.spec.js --workers=2` | Final adapter/reset regression run: all 32 passed at both roots; reset uses production controls directly |
+| `node --test tests/audio-worklet.test.js` | Three passed: block continuity, underflow/overflow/capacity, flush epochs/first new sample and sample-rate phase |
+| `npm run check:site`, JS syntax checks and `git diff --check` | Passed |
+
+Together the full run and focused reruns cover all 243 runnable Chromium cases
+at both serving roots. The three existing skipped combinations sample 1 GiB,
+occupied 512 MiB and large FAT16 DOS once at the local root. The full 512 MiB
+export/reimport and byte equality checks still run at both roots. No redundant
+giant disk runs were added.
+
+The full run exposed two harness defects: Chromium AudioWorklet module fetches
+bypass Playwright routing (so the intended missing-asset injection never failed),
+and the PMD test sampled consumed audio immediately after guest register writes.
+The corrected fault test calls the real browser loader with a missing local URL,
+then restores it and verifies recovery. The PMD test awaits actual sink energy
+without lowering its assertions. The new repeated-control test also waits for
+Resume acknowledgement before submitting profile changes. No guest/device
+behavior is mocked and no second emulator runs on the DOM thread.
+
+Runtime tests disable main-thread Wasm instantiation and stop rAF while the
+independent DOS video/86 PCM guest completes, with DOM events and guest-progress
+assertions. They cover real BEEP/FM/SSG/PCM playback, queue flush on mute/pause/
+reset/context suspension, memory growth and text pixels on VM/Ap, delayed frame
+presentation, visibility pause, repeated reset/profile actions, fatal Worker
+failure and reload. Existing probes retain cold/reset CRT/KCG, Japanese glyphs,
+keyboard/mouse IRQ, DOS/HimemX/MEMSIZE, hot floppies, dirty-HDD confirmation,
+failure-safe import/export, guest writes and large-disk byte equality.
+
+No private game or physical hardware was used. No profiling baseline, FPS target,
+speedup, arbitrary game compatibility or complete music fidelity is claimed.
+Required post-merge verification: none.
+
 ## Issue #25 BIOS held-key bitmap validation (2026-10-21)
 
 The INT 09 firmware now consumes each ready keyboard port byte, updates only its

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 
@@ -15,7 +15,7 @@ for (const [profile, name] of [['0', 'VM'], ['1', 'Ap']]) {
     await page.goto('./');
     await expect(page.locator('#profile')).toBeEnabled();
     await page.locator('#profile').selectOption(profile);
-    expect(await page.evaluate(() => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
+    expect(await inspect(page, () => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
     const image = await fs.readFile(new URL('../../fixtures/fdc_bios/fdc_bios.hdm', import.meta.url));
     const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/fdc-bios-manifest.json', import.meta.url)));
     expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
@@ -33,13 +33,13 @@ for (const [profile, name] of [['0', 'VM'], ['1', 'Ap']]) {
       [0xa000, write0], [0xa800, write2], [0xb000, write2],
       [0xb800, image.subarray(33792, 34816)], [0xc000, image.subarray(1024, 2048)],
     ]) bytes.copy(expectedRam, address - 0x8000);
-    await page.locator('#file').setInputFiles({ name: 'fdc_bios.hdm', mimeType: 'application/octet-stream', buffer: image });
-    await page.evaluate(() => pc98.core.set_boot_source(0));
+    await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'fdc_bios.hdm', mimeType: 'application/octet-stream', buffer: image });
+    await inspect(page, () => pc98.core.set_boot_source(0));
     await page.locator('#reset').click();
     for (let run = 0; run < 2; run++) {
       if (run) await page.locator('#reset').click();
       // Guest issues every command, verifies results and produces PASS itself.
-      const result = await page.evaluate(budget => {
+      const result = await inspect(page, budget => {
         let slots = 0;
         let text = '';
         while (slots < budget) {
@@ -59,7 +59,7 @@ for (const [profile, name] of [['0', 'VM'], ['1', 'Ap']]) {
       expect(result.ram.slice(0, 32)).toEqual([...Buffer.from(manifest.record_hex, 'hex')]);
       expect(Buffer.from(result.ram).equals(expectedRam)).toBe(true);
       expect(result.writes).toBe(2);
-      expect(Buffer.from(await page.evaluate(() => pc98.exportDisk())).equals(expectedMedia)).toBe(true);
+      expect(Buffer.from(await inspect(page, () => pc98.exportDisk())).equals(expectedMedia)).toBe(true);
       expect(errors).toEqual([]);
       await expect(page.locator('#error')).toBeHidden();
       console.log(`${name} FDC BIOS boot ${run}: ${result.slots} slots, seven INT 1Bh calls, two PIO reads and two writes`);

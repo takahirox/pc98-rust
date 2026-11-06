@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 
@@ -15,7 +15,7 @@ for (const [profile, name] of [['0', 'VM'], ['1', 'Ap']]) {
     await page.goto('./');
     await expect(page.locator('#profile')).toBeEnabled();
     await page.locator('#profile').selectOption(profile);
-    expect(await page.evaluate(() => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
+    expect(await inspect(page, () => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
     const image = await fs.readFile(new URL('../../fixtures/fdc_write_multi/fdc_write_multi.hdm', import.meta.url));
     const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/fdc-write-multi-manifest.json', import.meta.url)));
     expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
@@ -24,15 +24,15 @@ for (const [profile, name] of [['0', 'VM'], ['1', 'Ap']]) {
     const expectedMedia = Buffer.from(image);
     payload.copy(expectedMedia, 1024);
     expect(createHash('sha256').update(expectedMedia).digest('hex')).toBe(manifest.expected_media_sha256);
-    await page.locator('#file').setInputFiles({ name: 'fdc_write_multi.hdm', mimeType: 'application/octet-stream', buffer: image });
-    await page.evaluate(() => pc98.core.set_boot_source(0));
+    await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'fdc_write_multi.hdm', mimeType: 'application/octet-stream', buffer: image });
+    await inspect(page, () => pc98.core.set_boot_source(0));
     await page.locator('#reset').click();
     // File.arrayBuffer() and the mount/reset finish after the change event.
     await expect(page.locator('#media-name')).toHaveText('fdc_write_multi.hdm');
     for (let run = 0; run < 2; run++) {
       if (run) await page.locator('#reset').click();
       // The host only steps and reads: all requests and results originate in guest code.
-      const result = await page.evaluate(budget => {
+      const result = await inspect(page, budget => {
         let slots = 0;
         let text = '';
         while (slots < budget) {
@@ -60,7 +60,7 @@ for (const [profile, name] of [['0', 'VM'], ['1', 'Ap']]) {
       expect(result.guards).toEqual(Array(0xf90).fill(0xa5));
       expect(result.writes).toBe(2);
       console.log(`${name} FDC WRITE MULTI boot ${run}: ${result.slots} slots, 2048 write + 2048 read byte IRQs and 2 result IRQs`);
-      expect(Buffer.from(await page.evaluate(() => pc98.exportDisk())).equals(expectedMedia)).toBe(true);
+      expect(Buffer.from(await inspect(page, () => pc98.exportDisk())).equals(expectedMedia)).toBe(true);
       expect(errors).toEqual([]);
       await expect(page.locator('#error')).toBeHidden();
     }

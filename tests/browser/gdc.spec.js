@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 
 for (const [profile, name] of [['0', 'VM'], ['1', 'Ap']]) {
@@ -9,17 +9,17 @@ for (const [profile, name] of [['0', 'VM'], ['1', 'Ap']]) {
     await page.clock.pauseAt(time);
     await page.goto('./');
     await expect(page.locator('#profile')).toBeEnabled();
-    expect(await page.evaluate(() => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
+    expect(await inspect(page, () => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
     await page.locator('#profile').selectOption(profile);
     const buffer = await fs.readFile(new URL('../../fixtures/freedos/hblank.hdm', import.meta.url));
-    await page.locator('#file').setInputFiles({ name: 'hblank.hdm', mimeType: 'application/octet-stream', buffer });
-    await page.evaluate(() => pc98.core.set_boot_source(0));
+    await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'hblank.hdm', mimeType: 'application/octet-stream', buffer });
+    await inspect(page, () => pc98.core.set_boot_source(0));
     await page.locator('#reset').click();
     let text = '';
     for (let i = 0; i < 160; i++) {
-      await page.evaluate(() => pc98.core.step(100000));
-      expect((await page.evaluate(() => pc98.stats())).error).toBe('');
-      text = await page.evaluate(() => pc98.text());
+      await inspect(page, () => pc98.core.step(100000));
+      expect((await inspect(page, () => pc98.stats())).error).toBe('');
+      text = await inspect(page, () => pc98.text());
       if (text.includes('HBLANK PROBE RETURNED') && text.includes('A:\\>')) break;
     }
     expect(text).toContain('TEXT GDC 0060 PASS');

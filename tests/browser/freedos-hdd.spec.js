@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { exportHdd } from './helpers/disk.js';
@@ -14,7 +14,7 @@ test('Ap Auto: cleared FreeDOS HDD kernel handoff and responsive shell cold/rese
   await page.goto('./');
   await expect(page.locator('#profile')).toBeEnabled();
   await page.locator('#profile').selectOption('1');
-  expect(await page.evaluate(() => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
+  expect(await inspect(page, () => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
   const image = await fs.readFile(new URL('../../fixtures/freedos/shell.hdi', import.meta.url));
   const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/freedos-hdd-manifest.json', import.meta.url)));
   expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
@@ -22,14 +22,14 @@ test('Ap Auto: cleared FreeDOS HDD kernel handoff and responsive shell cold/rese
   const kernel = image.subarray(at, at + manifest.files['KERNEL  SYS'].bytes);
   expect(image.length).toBeGreaterThan(4 * 1024 * 1024);
   await expect(page.locator('#drive')).toHaveValue('auto');
-  await page.locator('#file').setInputFiles({ name: 'shell.hdi', mimeType: 'application/octet-stream', buffer: image });
+  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'shell.hdi', mimeType: 'application/octet-stream', buffer: image });
   await expect(page.locator('#media-name')).toHaveText('shell.hdi');
   await expect(page.locator('#media-drive')).toHaveText('IDE HDD');
   for (let run = 0; run < 2; run++) {
     if (run) await page.locator('#reset').click();
     // Only step/read the actual Rust interpreter. Observe the unmodified GPL
     // loader's jump, before the kernel can overwrite its initialization image.
-    const handoff = await page.evaluate(() => {
+    const handoff = await inspect(page, () => {
       for (let slots = 0; slots < 100000; slots++) {
         if (pc98.core.metric(17) === 0x60 && pc98.core.metric(18) === 0) {
           return {
@@ -46,7 +46,7 @@ test('Ap Auto: cleared FreeDOS HDD kernel handoff and responsive shell cold/rese
     expect(handoff.reads).toBe(122);
     expect(Buffer.from(handoff.bytes).equals(kernel)).toBe(true);
     async function until(expected) {
-      const text = await page.evaluate(({ expected, budget }) => {
+      const text = await inspect(page, ({ expected, budget }) => {
         for (let slots = 0; slots < budget; slots += 10000) {
           const text = pc98.text();
           if (text.includes(expected) || pc98.stats().error) return text;
@@ -56,13 +56,13 @@ test('Ap Auto: cleared FreeDOS HDD kernel handoff and responsive shell cold/rese
         return pc98.text();
       }, { expected, budget: manifest.slot_budget });
       expect(text).toContain(expected);
-      expect((await page.evaluate(() => pc98.stats())).error).toBe('');
+      expect((await inspect(page, () => pc98.stats())).error).toBe('');
       return text;
     }
     await until('A:\\>');
-    expect(await page.evaluate(() => pc98.text())).toContain('HDD SHELL READY');
+    expect(await inspect(page, () => pc98.text())).toContain('HDD SHELL READY');
     async function type(scans) {
-      await page.evaluate(scans => {
+      await inspect(page, scans => {
         for (const scan of scans) {
           pc98.core.key(scan, 1); pc98.core.step(50000);
           pc98.core.key(scan, 0); pc98.core.step(10000);
@@ -73,13 +73,13 @@ test('Ap Auto: cleared FreeDOS HDD kernel handoff and responsive shell cold/rese
     await until('PC98 DOS PROBE OK');
     await type([0x12, 0x2b, 0x22, 0x18, 0x34, 0x18, 0x24, 0x1c]);
     await until('\nok');
-    await page.evaluate(() => pc98.core.step(100000));
-    const text = await page.evaluate(() => pc98.text());
+    await inspect(page, () => pc98.core.step(100000));
+    const text = await inspect(page, () => pc98.text());
     expect(text.split('\n').some(line => line.trim() === 'ok')).toBe(true);
     expect(text.split('A:\\>').length - 1).toBeGreaterThanOrEqual(3);
-    expect(await page.evaluate(() => pc98.core.metric(19))).toBe(0);
-    expect(await page.evaluate(() => pc98.core.metric(20))).toBeGreaterThan(0);
-    const stats = await page.evaluate(() => pc98.stats());
+    expect(await inspect(page, () => pc98.core.metric(19))).toBe(0);
+    expect(await inspect(page, () => pc98.core.metric(20))).toBeGreaterThan(0);
+    const stats = await inspect(page, () => pc98.stats());
     expect(stats.instructions).toBeLessThanOrEqual(manifest.slot_budget);
     expect(stats.reads).toBe(0); expect(stats.hddReads).toBeGreaterThan(122);
     expect(stats.hddWrites).toBe(0);

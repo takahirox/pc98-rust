@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { trackMemory } from './helpers/memory.js';
@@ -9,7 +9,7 @@ const data = await fs.readFile('fixtures/floppy_data/second.d88');
 data[0x1a] = 1; // Same independent FAT data, explicitly write-protected D88.
 const swapped = await fs.readFile('fixtures/floppy_data/swapped.hdm');
 async function until(page, expected) {
-  const state = await page.evaluate(expected => {
+  const state = await inspect(page, expected => {
     for (let slots=0; slots<8000000; slots+=10000) {
       if (pc98.text().includes(expected) || pc98.stats().error) break;
       pc98.core.step(10000); pc98.core.audio_clear();
@@ -26,10 +26,10 @@ async function command(page, text) {
       char==='>' ? 'Period' : char==='\r' ? 'Enter' : `Key${char.toUpperCase()}`;
     if (char==='>') await page.keyboard.down('Shift');
     await page.keyboard.down(code);
-    await page.evaluate(() => { pc98.core.step(50000); pc98.core.audio_clear(); });
+    await inspect(page, () => { pc98.core.step(50000); pc98.core.audio_clear(); });
     await page.keyboard.up(code);
     if (char==='>') await page.keyboard.up('Shift');
-    await page.evaluate(() => { pc98.core.step(10000); pc98.core.audio_clear(); });
+    await inspect(page, () => { pc98.core.step(10000); pc98.core.audio_clear(); });
   }
 }
 async function checkMemory(page, high) {
@@ -65,12 +65,12 @@ test('fresh installed desktop: exact kernel handoff, responsive DOS, live floppi
   try {
     await ready(page);
     const mountedMs=Math.round(performance.now()-start);
-    expect(await page.evaluate(() => [pc98.core.hdi_len(), pc98.core.export_disk(0), pc98.core.export_len(), pc98.core.export_disk(1), pc98.core.export_len()]))
+    expect(await inspect(page, () => [pc98.core.hdi_len(), pc98.core.export_disk(0), pc98.core.export_len(), pc98.core.export_disk(1), pc98.core.export_len()]))
       .toEqual([manifest.bytes,0,0,0,0]);
     const kernel=prefix.subarray(4096+manifest.fat.data_lba*512,4096+manifest.fat.data_lba*512+49938);
     for(let run=0;run<2;run++) {
       if(run) await page.locator('#reset').click();
-      const handoff=await page.evaluate(() => {
+      const handoff=await inspect(page, () => {
         for(let slots=0;slots<100000;slots++) {
           if(pc98.core.metric(17)===0x60 && pc98.core.metric(18)===0) return {
             bytes:Array.from({length:49938},(_,i)=>pc98.read(0x600+i)), reads:pc98.stats().hddReads};
@@ -86,10 +86,10 @@ test('fresh installed desktop: exact kernel handoff, responsive DOS, live floppi
       await checkMemory(page, true);
       await command(page,'probe'); await until(page,'PC98 DOS PROBE OK');
       await command(page,'echo responsive'); await until(page,'responsive');
-      expect(await page.evaluate(() => pc98.stats().reads)).toBe(0);
+      expect(await inspect(page, () => pc98.stats().reads)).toBe(0);
     }
     await memory.sample();
-    const measurements=await page.evaluate(() => ({
+    const measurements=await inspect(page, () => ({
       assets:performance.getEntriesByType('resource').map(r=>({name:new URL(r.name).pathname,bytes:r.encodedBodySize})),
       wasmBytes:pc98.core.memory.buffer.byteLength, residentBytes:pc98.core.hdi_resident_bytes(),
       jsHeapBytes:performance.memory?.usedJSHeapSize,
@@ -99,43 +99,43 @@ test('fresh installed desktop: exact kernel handoff, responsive DOS, live floppi
     measurements.rendererPeakRssKiB=memory.peak(); measurements.browserPeakRssKiB=memory.totalPeak();
     expect(measurements.wasmBytes).toBeLessThan(32*1024*1024);
     expect(measurements.residentBytes).toBeLessThan(1024*1024);
-    // Real Resource Timing is measured in the unmocked animation test below.
+    // Real Resource Timing is measured in the automatic Worker boot test below.
     delete measurements.assets;
     console.log(`${info.project.name} desktop startup ${JSON.stringify(measurements)}`);
     // Guest DOS assigns HDD A:, physical floppies B:/C:. Verify BIOS enumeration.
-    expect(await page.evaluate(() => [pc98.read(0x66c),pc98.read(0x66d),pc98.read(0x66e)]))
+    expect(await inspect(page, () => [pc98.read(0x66c),pc98.read(0x66d),pc98.read(0x66e)]))
       .toEqual([0x80,0x90,0x91]);
     for (const [drive, letter] of [['0','b'],['1','c']]) {
       await page.locator('#drive').selectOption(drive);
-      const before=await page.evaluate(()=>({text:pc98.text(),stats:pc98.stats()}));
-      await page.locator('#file').setInputFiles({name:'second.d88',mimeType:'application/octet-stream',buffer:data});
+      const before=await inspect(page, ()=>({text:pc98.text(),stats:pc98.stats()}));
+      await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({name:'second.d88',mimeType:'application/octet-stream',buffer:data});
       await expect(page.locator('#media-name')).toHaveText('second.d88');
-      expect(await page.evaluate(()=>({text:pc98.text(),stats:pc98.stats()}))).toEqual(before);
+      expect(await inspect(page, ()=>({text:pc98.text(),stats:pc98.stats()}))).toEqual(before);
       await expect(page.locator('#boot')).toHaveValue('1');
       await command(page,letter+':'); await until(page,letter.toUpperCase()+':\\>');
       await command(page,'dir'); await until(page,'SECOND');
-      const reads=await page.evaluate(()=>pc98.stats().reads);
+      const reads=await inspect(page, ()=>pc98.stats().reads);
       await command(page,'type second.txt'); await until(page,'ORIGINAL FDD2 FILE CONTENTS');
-      expect(await page.evaluate(()=>pc98.stats().reads)).toBeGreaterThan(reads);
-      expect(Buffer.from(await page.evaluate(d=>pc98.exportDisk(d),Number(drive))).equals(data)).toBe(true);
-      await page.locator('#file').setInputFiles({name:'swapped.hdm',mimeType:'application/octet-stream',buffer:swapped});
+      expect(await inspect(page, ()=>pc98.stats().reads)).toBeGreaterThan(reads);
+      expect(Buffer.from(await inspect(page, d=>pc98.exportDisk(d),Number(drive))).equals(data)).toBe(true);
+      await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({name:'swapped.hdm',mimeType:'application/octet-stream',buffer:swapped});
       await expect(page.locator('#media-name')).toHaveText('swapped.hdm');
       await command(page,'cls'); await command(page,'dir');
       expect((await until(page,'SWAPPED')).text).not.toContain('SECOND');
       await command(page,'type swapped.txt'); await until(page,'REPLACEMENT FDD2 FILE CONTENTS');
-      expect(Buffer.from(await page.evaluate(d=>pc98.exportDisk(d),Number(drive))).equals(swapped)).toBe(true);
+      expect(Buffer.from(await inspect(page, d=>pc98.exportDisk(d),Number(drive))).equals(swapped)).toBe(true);
       await page.locator('#eject').click();
       await command(page,'cls'); await command(page,'dir'); await until(page,'(R)');
-      await page.locator('#file').setInputFiles({name:'second.d88',mimeType:'application/octet-stream',buffer:data});
+      await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({name:'second.d88',mimeType:'application/octet-stream',buffer:data});
       await expect(page.locator('#media-name')).toHaveText('second.d88');
       await command(page,'r'); // Reinsert, then retry through the real DOS error handler.
       await until(page,letter.toUpperCase()+':\\>');
       await command(page,'a:');
     }
-    expect(await page.evaluate(()=>pc98.stats().writes)).toBe(0);
+    expect(await inspect(page, ()=>pc98.stats().writes)).toBe(0);
     await page.locator('#drive').selectOption('0'); await page.locator('#hello').click();
     // The bundled image is fetched asynchronously. Wait for media loading and
-    // reset to finish before a synchronous Wasm loop occupies the page thread.
+    // reset to finish before inspecting the Worker-owned Wasm core.
     await expect(page.locator('#media-name')).toHaveText('hello98.tfd');
     await expect(page.locator('#reset')).toBeEnabled();
     await until(page,'Hello world!!');
@@ -145,7 +145,7 @@ test('fresh installed desktop: exact kernel handoff, responsive DOS, live floppi
   } finally { await memory.stop(); }
 });
 
-test('default desktop boots by animation without user action and reset reaches an interactive prompt', async ({page}, info) => {
+test('default desktop boots in the Worker without user action and reset reaches an interactive prompt', async ({page}, info) => {
   const start=performance.now(); await page.goto('./');
   await expect.poll(()=>page.evaluate(()=>window.pc98?.text()),{timeout:20000}).toContain('A:\\>');
   const coldBootMs=Math.round(performance.now()-start);
@@ -157,9 +157,9 @@ test('default desktop boots by animation without user action and reset reaches a
   console.log(`${info.project.name} actual startup downloads ${JSON.stringify(assets)}`);
   // Physical events with actual frame scheduling, no manual core stepping.
   await page.locator('#screen').focus(); await page.keyboard.type('echo alive',{delay:70}); await page.keyboard.press('Enter');
-  await expect.poll(()=>page.evaluate(()=>pc98.text())).toContain('\nalive');
+  await expect.poll(()=>inspect(page, ()=>pc98.text())).toContain('\nalive');
   await page.locator('#reset').click();
-  await expect.poll(()=>page.evaluate(()=>pc98.text()),{timeout:20000}).toContain('A:\\>');
+  await expect.poll(()=>inspect(page, ()=>pc98.text()),{timeout:20000}).toContain('A:\\>');
   console.log(`${info.project.name} automatic cold boot ${coldBootMs} ms`);
 });
 
@@ -167,11 +167,16 @@ test('dirty desktop: cancel replacement/eject/restore, export guest writes, reim
   test.setTimeout(120000);
   await ready(page); await until(page,'A:\\>');
   await command(page,'echo saved>saved.txt'); await command(page,'type saved.txt'); await until(page,'saved');
-  expect(await page.evaluate(()=>(pc98.core.hdi_dirty_page(0) >>> 0))).not.toBe(0xffffffff);
+  expect(await inspect(page, ()=>(pc98.core.hdi_dirty_page(0) >>> 0))).not.toBe(0xffffffff);
   const dialogs=[];
   page.on('dialog',async d=>{dialogs.push(d.message());await d.dismiss();});
-  await page.locator('#eject').click(); await page.locator('#default-hdd').click();
-  await page.locator('#file').setInputFiles('fixtures/freedos/shell.hdi');
+  await page.locator('#eject').click(); await expect.poll(()=>dialogs.length).toBe(1);
+  await expect(page.locator('#profile')).toBeEnabled();
+  await page.locator('#default-hdd').click(); await expect.poll(()=>dialogs.length).toBe(2);
+  await expect(page.locator('#profile')).toBeEnabled();
+  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles('fixtures/freedos/shell.hdi');
+  await expect.poll(()=>dialogs.length).toBe(3);
+  await expect(page.locator('#profile')).toBeEnabled();
   await expect(page.locator('#media-name')).toHaveText('FreeDOS-128MiB.hdi');
   expect(dialogs).toHaveLength(3); expect(dialogs.every(t=>t.includes('guest writes'))).toBe(true);
   const downloadEvent=page.waitForEvent('download'); await page.locator('#export').click();
@@ -181,17 +186,17 @@ test('dirty desktop: cancel replacement/eject/restore, export guest writes, reim
   // All logical bytes export, and DOS changes make the saved disk differ.
   const bytes=await fs.readFile(file); expect(createHash('sha256').update(bytes).digest('hex')).not.toBe(manifest.image_sha256);
   page.removeAllListeners('dialog'); page.on('dialog',d=>d.accept());
-  await page.locator('#eject').click(); await page.locator('#file').setInputFiles(file);
+  await page.locator('#eject').click(); await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles(file);
   await expect(page.locator('#media-name')).toHaveText('saved.hdi');
   await until(page,'A:\\>'); await command(page,'type saved.txt'); await until(page,'\nsaved');
   await page.locator('#profile').selectOption('0');
-  expect(await page.evaluate(()=>pc98.read(0x584))).toBe(0x90);
+  expect(await inspect(page, ()=>pc98.read(0x584))).toBe(0x90);
   await expect(page.locator('#boot')).toBeDisabled(); await expect(page.locator('#default-hdd')).toBeDisabled();
   await page.locator('#profile').selectOption('1'); await until(page,'A:\\>');
   await command(page,'type saved.txt'); await until(page,'\nsaved');
   await page.locator('#default-hdd').click();
   await expect(page.locator('#media-name')).toHaveText('FreeDOS-128MiB.hdi');
-  await until(page,'A:\\>'); expect(await page.evaluate(()=>(pc98.core.hdi_dirty_page(0) >>> 0))).toBe(0xffffffff);
+  await until(page,'A:\\>'); expect(await inspect(page, ()=>(pc98.core.hdi_dirty_page(0) >>> 0))).toBe(0xffffffff);
   await checkMemory(page, true);
 });
 
@@ -208,7 +213,7 @@ for(const [kind, size] of [
     await ready(page);
     await expect(page.locator('#error')).toContainText('Invalid FreeDOS template geometry/size');
     expect(templateRequests).toBe(0);
-    expect(await page.evaluate(()=>pc98.core.hdi_len())).toBe(0);
+    expect(await inspect(page, ()=>pc98.core.hdi_len())).toBe(0);
     await expect(page.locator('#default-hdd')).toBeEnabled();
   });
 }
@@ -230,7 +235,7 @@ for(const failure of ['fetch','truncated','checksum','geometry','allocation']) {
         route.fulfill({body:failure==='truncated' ? prefix.subarray(0,100) : Buffer.alloc(prefix.length)}));
     }
     await ready(page); await expect(page.locator('#error')).toBeVisible();
-    expect(await page.evaluate(()=>pc98.core.hdi_len())).toBe(0);
+    expect(await inspect(page, ()=>pc98.core.hdi_len())).toBe(0);
     await page.unrouteAll(); await page.locator('#default-hdd').click();
     await expect(page.locator('#media-name')).toHaveText('FreeDOS-128MiB.hdi');
     await until(page,'A:\\>');
@@ -251,7 +256,7 @@ test('startup locks profile/media changes and ignores a competing drop until ass
   });
   release(); await expect(page.locator('#profile')).toBeEnabled();
   await expect(page.locator('#media-name')).toHaveText('FreeDOS-128MiB.hdi');
-  expect(await page.evaluate(()=>{pc98.core.export_disk(0);return pc98.core.export_len();})).toBe(0);
+  expect(await inspect(page, ()=>{pc98.core.export_disk(0);return pc98.core.export_len();})).toBe(0);
 });
 
 

@@ -1,5 +1,6 @@
+import { inspect } from './helpers/runtime.js';
 // Issue #126: production Rust/Wasm + unchanged GPL DOS + independent MIT data.
-import { test, expect } from '@playwright/test';
+import { test, expect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 
@@ -13,7 +14,7 @@ for (const [name, image] of [['second.d88', data], ['swapped.hdm', replacement]]
 }
 
 async function until(page, expected) {
-  const state = await page.evaluate(expected => {
+  const state = await inspect(page, expected => {
     for (let slots = 0; slots < 8_000_000; slots += 10000) {
       if (pc98.text().includes(expected) || pc98.stats().error) break;
       pc98.core.step(10000);
@@ -32,24 +33,24 @@ async function keys(page, text) {
     const code = char === ':' ? 'Quote' : char === '.' ? 'Period' :
       char === ' ' ? 'Space' : char === '\r' ? 'Enter' : `Key${char.toUpperCase()}`;
     await page.keyboard.down(code);
-    await page.evaluate(() => { pc98.core.step(50000); pc98.core.audio_clear(); });
+    await inspect(page, () => { pc98.core.step(50000); pc98.core.audio_clear(); });
     await page.keyboard.up(code);
-    await page.evaluate(() => { pc98.core.step(10000); pc98.core.audio_clear(); });
+    await inspect(page, () => { pc98.core.step(10000); pc98.core.audio_clear(); });
   }
 }
 const command = (page, text) => keys(page, `${text}\r`);
 async function mount(page, name, buffer) {
-  await page.locator('#file').setInputFiles({ name, mimeType: 'application/octet-stream', buffer });
+  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name, mimeType: 'application/octet-stream', buffer });
   await expect(page.locator('#media-name')).toHaveText(name);
   await expect(page.locator('#media-drive')).toHaveText('Floppy 2');
   await expect(page.locator('#error')).toBeHidden();
 }
 async function readFile(page, name, contents, requireRead = true) {
   await command(page, 'cls');
-  const reads = await page.evaluate(() => pc98.stats().reads);
+  const reads = await inspect(page, () => pc98.stats().reads);
   await command(page, `type ${name}`);
   await until(page, contents);
-  if (requireRead) expect(await page.evaluate(() => pc98.stats().reads)).toBeGreaterThan(reads);
+  if (requireRead) expect(await inspect(page, () => pc98.stats().reads)).toBeGreaterThan(reads);
   await until(page, 'B:\\>');
 }
 async function exported(page, name, bytes) {
@@ -71,18 +72,18 @@ test('Ap DOS enumerates empty FDD2, reads post-boot D88, swaps/ejects/reinserts 
   await page.goto('./');
   await expect(page.locator('#profile')).toBeEnabled();
   await expect(page.locator('#profile')).toHaveValue('1');
-  expect(await page.evaluate(() => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
-  await page.locator('#file').setInputFiles({ name: 'minimal.hdm', mimeType: 'application/octet-stream', buffer: boot });
+  expect(await inspect(page, () => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
+  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'minimal.hdm', mimeType: 'application/octet-stream', buffer: boot });
   await expect(page.locator('#media-drive')).toHaveText('Floppy 1');
-  await page.evaluate(() => pc98.core.set_boot_source(0));
+  await inspect(page, () => pc98.core.set_boot_source(0));
   await page.locator('#reset').click();
   await until(page, 'A:\\>');
-  expect(await page.evaluate(() => [pc98.read(0x55c), pc98.read(0x66c), pc98.read(0x66d)]))
+  expect(await inspect(page, () => [pc98.read(0x55c), pc98.read(0x66c), pc98.read(0x66d)]))
     .toEqual([3, 0x90, 0x91]);
   await page.locator('#drive').selectOption('1');
-  const before = await page.evaluate(() => ({ stats: pc98.stats(), text: pc98.text() }));
+  const before = await inspect(page, () => ({ stats: pc98.stats(), text: pc98.text() }));
   await mount(page, 'second.d88', data);
-  expect(await page.evaluate(() => ({ stats: pc98.stats(), text: pc98.text() }))).toEqual(before);
+  expect(await inspect(page, () => ({ stats: pc98.stats(), text: pc98.text() }))).toEqual(before);
   await expect(page.locator('#boot-source')).toHaveText('Reset boots: Floppy 1 · minimal.hdm');
   await command(page, 'b:');
   await until(page, 'B:\\>');
@@ -100,13 +101,13 @@ test('Ap DOS enumerates empty FDD2, reads post-boot D88, swaps/ejects/reinserts 
   await page.locator('#eject').click();
   await expect(page.locator('#media-name')).toHaveText('No disk');
   await expect(page.locator('#export')).toBeDisabled();
-  expect(await page.evaluate(() => pc98.read(0x55c))).toBe(3);
+  expect(await inspect(page, () => pc98.read(0x55c))).toBe(3);
   await mount(page, 'second.d88', data);
   await command(page, 'cls');
   await command(page, 'dir');
   await until(page, 'SECOND');
   await readFile(page, 'second.txt', 'ORIGINAL FDD2 FILE CONTENTS');
-  const stats = await page.evaluate(() => pc98.stats());
+  const stats = await inspect(page, () => pc98.stats());
   expect(stats.writes).toBe(0);
   expect(stats.instructions).toBeLessThan(12_000_000);
   console.log(`FDD2 live insert/swap/eject/reinsert: ${stats.instructions} slots`);
@@ -118,7 +119,7 @@ test('Ap DOS enumerates empty FDD2, reads post-boot D88, swaps/ejects/reinserts 
   await command(page, 'dir');
   await until(page, 'SECOND');
   await readFile(page, 'second.txt', 'ORIGINAL FDD2 FILE CONTENTS');
-  expect((await page.evaluate(() => pc98.stats())).writes).toBe(0);
+  expect((await inspect(page, () => pc98.stats())).writes).toBe(0);
   await exported(page, 'second.d88', data);
   await page.locator('#drive').selectOption('0');
   await exported(page, 'minimal.hdm', boot);
@@ -127,6 +128,6 @@ test('Ap DOS enumerates empty FDD2, reads post-boot D88, swaps/ejects/reinserts 
   await command(page, 'cls');
   await command(page, 'dir');
   expect(await until(page, '(R)')).not.toContain('SECOND');
-  expect(await page.evaluate(() => pc98.read(0x55c))).toBe(3);
+  expect(await inspect(page, () => pc98.read(0x55c))).toBe(3);
   expect(errors).toEqual([]);
 });

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 
 for (const [profile, name] of [['0', 'VM'], ['1', 'Ap']]) {
@@ -9,23 +9,23 @@ for (const [profile, name] of [['0', 'VM'], ['1', 'Ap']]) {
     await page.goto('./');
     await expect(page.locator('#profile')).toBeEnabled();
     await page.locator('#profile').selectOption(profile);
-    expect(await page.evaluate(() => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
+    expect(await inspect(page, () => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
     const buffer = await fs.readFile(new URL('../../fixtures/freedos/lio.hdm', import.meta.url));
-    await page.locator('#file').setInputFiles({ name: 'lio.hdm', mimeType: 'application/octet-stream', buffer });
-    await page.evaluate(() => pc98.core.set_boot_source(0));
+    await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'lio.hdm', mimeType: 'application/octet-stream', buffer });
+    await inspect(page, () => pc98.core.set_boot_source(0));
     await page.locator('#reset').click();
     // Observe the entire bounded run, so a later reboot cannot pass unnoticed.
     for (let i = 0; i < 160; i++) {
-      await page.evaluate(() => { pc98.core.step(100000); pc98.core.audio_clear(); });
-      expect((await page.evaluate(() => pc98.stats())).error).toBe('');
+      await inspect(page, () => { pc98.core.step(100000); pc98.core.audio_clear(); });
+      expect((await inspect(page, () => pc98.stats())).error).toBe('');
     }
-    const text = await page.evaluate(() => pc98.text());
+    const text = await inspect(page, () => pc98.text());
     for (const message of ['LIO ENTER', 'LIO RETURNED', 'PROBE SHELL RETURN', 'GINIT CONTRACT PASS', 'A:\\>']) {
       expect(text).toContain(message);
     }
     expect(text).not.toContain('FAILED');
     expect(text.match(/LIO ENTER/g)).toHaveLength(1);
-    const pixels = await page.evaluate(() => {
+    const pixels = await inspect(page, () => {
       const pointer = pc98.core.frame();
       const data = new Uint8Array(pc98.core.memory.buffer, pointer, 640 * 400 * 4);
       return [300, 301, 302, 303].map(y => {
@@ -37,13 +37,14 @@ for (const [profile, name] of [['0', 'VM'], ['1', 'Ap']]) {
       [255, 0, 0, 255], [255, 0, 0, 255]]);
     await expect(page.locator('#error')).toBeHidden();
     // Reset rebuilds the directory and the same DOS controls work a second time.
-    await page.evaluate(() => pc98.core.reset());
-    expect(await page.evaluate(() => pc98.read(0xf9900))).toBe(17);
+    await page.locator('#reset').click();
+    await expect(page.locator('#profile')).toBeEnabled();
+    expect(await inspect(page, () => pc98.read(0xf9900))).toBe(17);
     for (let i = 0; i < 160; i++) {
-      await page.evaluate(() => { pc98.core.step(100000); pc98.core.audio_clear(); });
+      await inspect(page, () => { pc98.core.step(100000); pc98.core.audio_clear(); });
     }
-    expect((await page.evaluate(() => pc98.stats())).error).toBe('');
-    expect(await page.evaluate(() => pc98.text())).toContain('GINIT CONTRACT PASS');
-    expect(await page.evaluate(() => pc98.text())).not.toContain('FAILED');
+    expect((await inspect(page, () => pc98.stats())).error).toBe('');
+    expect(await inspect(page, () => pc98.text())).toContain('GINIT CONTRACT PASS');
+    expect(await inspect(page, () => pc98.text())).not.toContain('FAILED');
   });
 }

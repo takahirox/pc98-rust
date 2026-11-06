@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -55,7 +55,7 @@ async function expectedDigest(file, cylinders) {
   return hash.digest('hex');
 }
 async function runGuest(page, persisted, maxResident = 6*65536) {
-  const result = await page.evaluate(() => {
+  const result = await inspect(page, () => {
     for (let slots=0;slots<500000;slots+=1000) {
       pc98.core.step(1000); pc98.core.audio_clear();
       const text=pc98.text(), error=pc98.stats().error;
@@ -66,8 +66,8 @@ async function runGuest(page, persisted, maxResident = 6*65536) {
   expect(result.error).toBe('');
   expect(result.text).toContain('LARGE HDI PASS');
   expect(result.text.includes('LARGE HDI PERSIST')).toBe(persisted);
-  expect(await page.evaluate(() => pc98.stats().hddWrites)).toBe(9);
-  expect(await page.evaluate(() => pc98.core.hdi_resident_bytes())).toBeLessThanOrEqual(maxResident);
+  expect(await inspect(page, () => pc98.stats().hddWrites)).toBe(9);
+  expect(await inspect(page, () => pc98.core.hdi_resident_bytes())).toBeLessThanOrEqual(maxResident);
 }
 
 test('512 MiB local HDI: real guest high I/O, reset, full streamed export/reimport and bounded memory', async ({ page, browser }, testInfo) => {
@@ -89,7 +89,7 @@ test('512 MiB local HDI: real guest high I/O, reset, full streamed export/reimpo
     timings.baselineBrowserRssKiB=memory.totalPeak();
     memory.reset();
     let start=performance.now();
-    await page.locator('#file').setInputFiles(input);
+    await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles(input);
     await expect(page.locator('#media-name')).toHaveText('large.hdi', {timeout:60000});
     timings.importMs=Math.round(performance.now()-start);
     await memory.sample(); timings.importPeakRendererRssKiB=memory.peak();
@@ -97,10 +97,10 @@ test('512 MiB local HDI: real guest high I/O, reset, full streamed export/reimpo
     await runGuest(page,false);
     await page.locator('#reset').click();
     await runGuest(page,true);
-    timings.wasmHighWaterBytes=await page.evaluate(()=>pc98.core.memory.buffer.byteLength);
+    timings.wasmHighWaterBytes=await inspect(page, ()=>pc98.core.memory.buffer.byteLength);
     expect(timings.wasmHighWaterBytes).toBeLessThan(32*1024*1024);
     // A failed replacement and incomplete staging import cannot lose prior writes.
-    await page.locator('#file').setInputFiles({name:'bad.hdi',mimeType:'application/octet-stream',buffer:Buffer.alloc(32)});
+    await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({name:'bad.hdi',mimeType:'application/octet-stream',buffer:Buffer.alloc(32)});
     await expect(page.locator('#error')).toContainText('invalid HDI geometry');
     await expect(page.locator('#media-name')).toHaveText('large.hdi');
     await page.locator('#reset').click(); await runGuest(page,true);
@@ -115,7 +115,7 @@ test('512 MiB local HDI: real guest high I/O, reset, full streamed export/reimpo
         return original.call(this);
       };
     });
-    await page.locator('#file').setInputFiles(input);
+    await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles(input);
     await expect(page.locator('#error')).toContainText('Local HDI read failed during import');
     await expect(page.locator('#media-name')).toHaveText('large.hdi');
     await page.locator('#reset').click(); await runGuest(page,true);
@@ -134,7 +134,7 @@ test('512 MiB local HDI: real guest high I/O, reset, full streamed export/reimpo
     await expect(page.locator('#error')).toContainText('Cannot export HDI: Export snapshot allocation failed');
     await expect(page.locator('#error')).toContainText('Disk remains mounted');
     await expect(page.locator('#reset')).toBeEnabled();
-    expect(await page.evaluate(() => pc98.stats().running)).toBe(true);
+    expect(await inspect(page, () => pc98.stats().running)).toBe(true);
     const expected=await expectedDigest(input,2048);
     memory.reset();
     start=performance.now();
@@ -163,7 +163,7 @@ test('512 MiB local HDI: real guest high I/O, reset, full streamed export/reimpo
     await page.locator('#eject').click();
     await expect(page.locator('#export')).toBeDisabled();
     memory.reset(); start=performance.now();
-    await page.locator('#file').setInputFiles(output);
+    await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles(output);
     await expect(page.locator('#media-name')).toHaveText('exported.hdi',{timeout:60000});
     timings.reimportMs=Math.round(performance.now()-start);
     await runGuest(page,true);
@@ -190,7 +190,7 @@ test('1 GiB local HDI: actual Ap high-sector guest I/O', async ({ page },testInf
     await page.clock.install({time:now}); await page.clock.pauseAt(now);
     await page.goto('./'); await expect(page.locator('#profile')).toBeEnabled();
     const start=performance.now();
-    await page.locator('#file').setInputFiles(input);
+    await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles(input);
     await expect(page.locator('#media-name')).toHaveText('one-gib.hdi',{timeout:45000});
     await runGuest(page,false);
     console.log(`1 GiB import and guest probe ${Math.round(performance.now()-start)} ms`);
@@ -204,7 +204,7 @@ test('512 MiB FAT16: unmodified FreeDOS shell reads and writes files above 128 M
   const now=new Date('2026-01-01T00:00:00Z');
   await page.clock.install({time:now}); await page.clock.pauseAt(now);
   await page.goto('./'); await expect(page.locator('#profile')).toBeEnabled();
-  await page.locator('#file').setInputFiles(path.resolve('fixtures/freedos/large-fat16.hdi'));
+  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles(path.resolve('fixtures/freedos/large-fat16.hdi'));
   await expect(page.locator('#media-name')).toHaveText('large-fat16.hdi',{timeout:60000});
   const folder=await fs.mkdtemp(path.join(os.tmpdir(),'pc98-fat16-'));
   try {
@@ -217,10 +217,10 @@ test('512 MiB FAT16: unmodified FreeDOS shell reads and writes files above 128 M
         expect(await download.failure()).toBeNull();
         expect((await fs.stat(output)).size).toBe(512*1024*1024+4096);
         await page.locator('#eject').click();
-        await page.locator('#file').setInputFiles(output);
+        await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles(output);
         await expect(page.locator('#media-name')).toHaveText('dos-saved.hdi',{timeout:60000});
       }
-      const result=await page.evaluate(()=>{
+      const result=await inspect(page, ()=>{
         for(let slots=0;slots<8000000;slots+=10000) {
           pc98.core.step(10000); pc98.core.audio_clear();
           const text=pc98.text(),error=pc98.stats().error;
@@ -233,7 +233,7 @@ test('512 MiB FAT16: unmodified FreeDOS shell reads and writes files above 128 M
       expect(result.text.split('LARGE DOS WRITE').length-1).toBe(run===0?1:2);
       expect(result.text).toContain('LARGE DOS READY');
       expect(result.text).toContain('A:\\>');
-      const file=await page.evaluate(()=>{
+      const file=await inspect(page, ()=>{
         const rootAt=4096+(512+258)*512;
         const ptr=pc98.core.hdi_read_chunk(rootAt,16384);
         const root=new Uint8Array(pc98.core.memory.buffer,ptr,16384);
@@ -252,15 +252,15 @@ test('512 MiB FAT16: unmodified FreeDOS shell reads and writes files above 128 M
       expect(file.lba*512).toBeGreaterThan(128*1024*1024);
       expect(file.text).toBe('LARGE DOS WRITE\r\n');
       // Actual DOS application and input handling, not just AUTOEXEC output.
-      await page.evaluate(()=>{
+      await inspect(page, ()=>{
         for(const scan of [0x19,0x13,0x18,0x2d,0x12,0x1c]) {
           pc98.core.key(scan,1); pc98.core.step(50000);
           pc98.core.key(scan,0); pc98.core.step(10000);
         }
         pc98.core.step(100000); pc98.core.audio_clear();
       });
-      expect(await page.evaluate(()=>pc98.text())).toContain('PC98 DOS PROBE OK');
-      expect(await page.evaluate(()=>pc98.stats().error)).toBe('');
+      expect(await inspect(page, ()=>pc98.text())).toContain('PC98 DOS PROBE OK');
+      expect(await inspect(page, ()=>pc98.stats().error)).toBe('');
       console.log(`Large FAT16 DOS boot ${run}: ${result.slots} slots; high-file cluster ${file.cluster}`);
     }
   } finally { await fs.rm(folder,{recursive:true,force:true}); }
@@ -279,14 +279,14 @@ test('occupied 512 MiB HDI imports once and exports without a second Wasm image'
     await page.clock.install({time:now}); await page.clock.pauseAt(now);
     await page.goto('./'); await expect(page.locator('#profile')).toBeEnabled();
     let start=performance.now();
-    await page.locator('#file').setInputFiles(input);
+    await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles(input);
     await expect(page.locator('#media-name')).toHaveText('occupied.hdi',{timeout:60000});
     const importMs=Math.round(performance.now()-start);
     await memory.sample(); const importPeakRendererRssKiB=memory.peak(), importPeakBrowserRssKiB=memory.totalPeak();
     await runGuest(page,false,512*1024*1024+4096);
-    const residentBytes=await page.evaluate(()=>pc98.core.hdi_resident_bytes());
+    const residentBytes=await inspect(page, ()=>pc98.core.hdi_resident_bytes());
     expect(residentBytes).toBeGreaterThan(510*1024*1024);
-    const wasmBytes=await page.evaluate(()=>pc98.core.memory.buffer.byteLength);
+    const wasmBytes=await inspect(page, ()=>pc98.core.memory.buffer.byteLength);
     expect(wasmBytes).toBeLessThan(600*1024*1024);
     start=performance.now();
     memory.reset();
@@ -295,7 +295,7 @@ test('occupied 512 MiB HDI imports once and exports without a second Wasm image'
     expect(await download.failure()).toBeNull();
     const exportMs=Math.round(performance.now()-start);
     await memory.sample(); const exportPeakRendererRssKiB=memory.peak(), exportPeakBrowserRssKiB=memory.totalPeak();
-    expect(await page.evaluate(()=>pc98.core.memory.buffer.byteLength)).toBe(wasmBytes);
+    expect(await inspect(page, ()=>pc98.core.memory.buffer.byteLength)).toBe(wasmBytes);
     expect(await digest(output)).toBe(await expectedDigest(input,2048));
     console.log(`Occupied 512 MiB HDI ${JSON.stringify({importMs,exportMs,residentBytes,wasmBytes,importPeakRendererRssKiB,exportPeakRendererRssKiB,importPeakBrowserRssKiB,exportPeakBrowserRssKiB})}`);
   } finally { await memory.stop(); await fs.rm(folder,{recursive:true,force:true}); }

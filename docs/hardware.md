@@ -1247,9 +1247,10 @@ copies, as used by FreeDOS. Glyphs are newly drawn 5×7 Latin shapes expanded in
 No NEC font or Kanji data is present.
 
 PIT clocks generate capped 48 kHz mono PCM in Rust using the beep gate and counter
-phase, including pulses within a browser frame. The host copies those samples to
-Web Audio buffers after a user gesture. FM/OPNA is absent; none of the acceptance
-guests needs it. The output is a square wave approximation, not analog speaker
+phase, including pulses within a browser frame. The Worker transfers those samples
+to a bounded AudioWorklet queue after a user gesture. See the
+[browser ownership contract](../README.md#browser-execution-and-audio-ownership).
+FM/OPNA is absent on VM; none of its acceptance guests needs it. The output is a square wave approximation, not analog speaker
 fidelity.
 
 ### DMA terminal count and auto-initialization

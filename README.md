@@ -765,6 +765,58 @@ font, complete EGC/PEGC or complete OPNA fidelity is claimed.
 Unsupported CPU/BIOS operations report errors;
 unmapped ports return an open bus and are recorded for headless diagnostics.
 
+## Browser execution and audio ownership
+
+[`web/emulator-worker.js`](web/emulator-worker.js) instantiates the production
+release Wasm and exclusively owns the Machine, memory views, CPU, devices,
+synthesis and media. The DOM thread sends ordered asynchronous commands; it
+never executes Wasm. Rust's deterministic 8 MHz virtual clock and eight clocks
+per instruction slot are unchanged. One Worker timer runs finite 10,000-slot
+slices, yielding between slices. It paces toward 10 ms without accumulating
+catch-up work after suspension. Slow emulation can underflow audio; this change
+makes no game speed or hardware fidelity claim.
+
+Canvas receives one transferable 640×400 RGBA snapshot at a time, at most about
+every 33 ms. The DOM presents it in rAF and returns its buffer. While that buffer
+is in flight the Worker coalesces presentation requests, then renders the newest
+state. Reset/profile generations reject obsolete presentation state. Each Wasm
+memory view is obtained after its exported call, including after memory growth.
+Rendering delays do not stop guest progress or audio transport.
+
+After **Enable sound**, a direct Worker-to-[AudioWorklet](web/audio-worklet.js)
+MessagePort carries guest-generated 48 kHz mono PCM. Six reusable 1,024-sample
+buffers bound all queued/in-flight audio to 128 ms; the normal slices produce
+480 samples each. The sink consumes blocks in order, outputs silence on
+underflow and drops new overflow instead of accumulating latency. It retains
+fractional sample-rate conversion phase for devices running at another rate.
+Mute, pause, reset, profile changes and AudioContext state changes flush the
+queue through an acknowledged epoch barrier. Reset awaits that barrier before
+resetting the core, so old PCM cannot play after reset. Playback resumes with
+fresh samples; no per-frame AudioBufferSourceNodes or guest clock run in the
+worklet. A worklet load failure leaves the emulator usable and sound activation
+retryable; a fatal Worker fault disables controls and offers reload.
+
+HDD replacement/eject first pauses at a Worker boundary, then checks dirty pages
+and retains the discard confirmation. Import stages acknowledged transferable
+chunks of at most 1 MiB before atomic commit; failure cancels staging and retains
+the mounted disk. Export holds a Worker snapshot boundary while bounded chunks
+become independent Blob parts, retaining guest writes and original bytes even
+when saving over the input file. Floppy insertion remains live and does not
+change the selected boot source. Hiding the page releases input and pauses;
+returning requires an explicit Resume. Import/export completion cannot resume a
+hidden page. Controls remain disabled until their operation is acknowledged.
+
+`window.pc98.text()`, `.read(address)` and `.stats()` now return Promises;
+`.exportBlob(drive)` remains asynchronous. There is no DOM `pc98.core` or Wasm
+memory. Browser guest probes use the opt-in `?diagnostics=1` Worker adapter in
+[`tests/browser/helpers/runtime.js`](tests/browser/helpers/runtime.js), ordered
+after pending UI operations. `&manual=1` explicitly disables the timer for
+bounded deterministic stepping of that same production Worker core; freezing
+rAF alone does not pause emulation. Inspection is capped at 16 million slots per
+probe. Native/headless synchronous APIs remain unchanged. Both scripts are
+first-party static assets, resolved relative to their modules at `/` and
+`/pc98-rust/`; no SharedArrayBuffer, isolation headers or service is needed.
+
 ## GitHub Pages deployment
 
 [`.github/workflows/pages.yml`](.github/workflows/pages.yml) rebuilds and deploys
