@@ -362,3 +362,70 @@ Native checks used Homebrew Rust 1.94.0 and Wasm used rustup Rust 1.99.0 via
 `tools/build_web.py`. The failed published-head acceptance remains failed;
 publication and fresh GitHub acceptance are downstream work. This fix node does
 not push or merge, and local playback is not evidence that Actions passed.
+
+## Release-Wasm execution headroom — 2026-11-07
+
+[Acceptance on `c8f4e4c`](https://github.com/takahirox/pc98-rust/actions/runs/42272477332)
+passed native, fixture, Node audio, formatting/Clippy, release-Wasm and packaging
+checks, then failed both production-audio cases. The 48 kHz case missed 1,951
+device frames and the 44.1 kHz case missed 4,029, exceeding the unchanged limits
+of 372.8 and 341.89. The remaining functional browser suite did not run. These
+failures remain failures; local validation below does not supersede them.
+
+This correction reduces host work exposed by instruction-dependent timing. Both
+Machine budget APIs now enter the same timed unit directly, avoiding a second
+capped loop inside every scheduler iteration. PIT, RTC and mouse conversion
+retain their fractional clocks while avoiding division before a divider boundary.
+The web build optimizes the linked release module with Binaryen 132.0.0, pinned
+by npm's lockfile. It retains function names for failure-only CPU profiling and
+requires `npm ci` before `tools/build_web.py`; CI and Pages already install those
+dependencies. The resulting module, including the emulator exports, is checked
+by the existing publication check. No optimizer or dependency assets are added
+to the published site.
+
+CPU reference tables, bus/cache policies, clock conversion, interrupt boundaries,
+PCM synthesis, the 60 ms reserve, playback assertions and inherited scheduler
+negative controls are unchanged. A native regression compares both Machine
+budget APIs' instruction observations, full CPU state, memory, PIT and audio
+across zero budgets, deadline overshoot, work caps and a stopped machine.
+Existing RTC/PIT/mouse regressions retain divider, large-step and IRQ coverage.
+
+A local macOS arm64 Node 26.12.1/release-Wasm sample boots the legal PMD scene
+fixture for 18 guest seconds, enters the scene, advances two more guest seconds,
+then measures three successive five-guest-second windows, rendering once every
+three 10 ms slices. Before/after host times were
+1.951/1.970/1.965 seconds and 1.762/1.761/1.762 seconds (about 10% less host work).
+Both versions consumed exactly 20,812,687/20,812,001/20,812,303 units and
+330,000,011/330,000,002/330,000,009 core clocks in those windows, ending at
+204/340/484 FM key edges and the same complete framebuffer SHA-256
+`64777f801d2af4c0c90df1aa75eafe020712d7ebf9f02ba214b00aa722c713ec`.
+The artifact decreased from 642,301 to 542,430 bytes. These are local host-cost
+observations, not measurements of target hardware or Actions runner performance.
+
+Validation in this fix worktree:
+
+- All fixture/build preparation commands from `.github/workflows/emulator.yml`
+  passed with unchanged manifests; all 10 fixture-fetch tests passed.
+- Release Wasm/media/font/26-asset packaging checks passed. Running the pinned
+  optimizer under Linux Node 22 produced the identical artifact bytes.
+- All 13 Node audio tests passed, including unchanged inherited-code negative
+  controls.
+- Ubuntu 24.04 arm64, Node 22.20.0, Playwright 1.56.1 Chromium, two-CPU container:
+  both production playback cases passed in 1.0 minute, including all transport,
+  scene-change, pitch/tempo, IRQ and discontinuity assertions.
+
+| Device rate | Observation windows | Produced source samples | Missed device frames | FM key edges | Sound IRQ12 edges |
+| --- | --- | --- | --- | --- | --- |
+| 48 kHz | 16 | 806,413 | 0 | 480 | 2,427 |
+| 44.1 kHz | 16 | 792,493 | 0 | 464 | 2,385 |
+
+All 598 native tests passed across 41 targets (zero failed/ignored), with
+test optimization level 1 and debug assertions/overflow checks enabled. Clippy,
+formatting and whitespace checks passed. Native tests used Homebrew Rust 1.94.0;
+Wasm used rustup Rust 1.99.0. The remaining Linux Chromium suite
+(`npx playwright test --workers=2 --grep-invert
+'ADV98 production playback remains continuous through scene changes'`) passed
+243 cases with three existing skips in 13.6 minutes. Together with the separate
+production-audio run, this is **245 passed, 3 existing skips, 0 failed**.
+Publication and fresh exact-head acceptance remain downstream work; this node
+does not push or merge.

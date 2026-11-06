@@ -23,6 +23,45 @@ fn clocks(profile: Profile, code: &[u8]) -> u32 {
     );
     time.execution
 }
+
+#[test]
+fn scheduler_deadlines_and_caps_preserve_unit_observation_and_device_time() {
+    for profile in [Profile::Pc9801Vm, Profile::Pc9821ApDos] {
+        // INC AX; MOV [BX],AX; JMP back. Mix register, memory and control costs.
+        let mut scheduled = machine(profile, &[0x40, 0x89, 0x07, 0xeb, 0xfb]);
+        let mut units = machine(profile, &[0x40, 0x89, 0x07, 0xeb, 0xfb]);
+        for (clocks, cap) in [(0, 20), (20, 0), (1, 20), (79, 31), (u32::MAX, 31)] {
+            let deadline = units.bus.cycles + u64::from(clocks.min(80_000));
+            let mut expected = Vec::new();
+            while units.bus.cycles < deadline && expected.len() < cap as usize {
+                units.step_with_observer(1, |cpu, bus| {
+                    expected.push((cpu.ip, cpu.cycles, bus.cycles));
+                });
+                assert!(units.error.is_none());
+            }
+            let mut observed = Vec::new();
+            let done = scheduled.step_scheduler_with_observer(clocks, cap, |cpu, bus| {
+                observed.push((cpu.ip, cpu.cycles, bus.cycles));
+            });
+            assert_eq!(done as usize, expected.len());
+            assert_eq!(observed, expected);
+            assert_eq!(format!("{:?}", scheduled.cpu), format!("{:?}", units.cpu));
+            assert_eq!(scheduled.bus.cycles, units.bus.cycles);
+            assert_eq!(scheduled.bus.mem, units.bus.mem);
+            assert_eq!(scheduled.bus.pit, units.bus.pit);
+            assert_eq!(scheduled.bus.audio, units.bus.audio);
+        }
+        scheduled.error = Some("stopped".into());
+        let stopped = scheduled.bus.cycles;
+        assert_eq!(
+            scheduled
+                .step_scheduler_with_observer(80_000, 31, |_, _| panic!("observed after error")),
+            0
+        );
+        assert_eq!(scheduled.bus.cycles, stopped);
+    }
+}
+
 #[test]
 fn nec_documented_register_memory_immediate_stack_and_control_forms() {
     // NEC pp.12-4..12-20,12-30..12-83,12-142..12-176. Memory

@@ -101,20 +101,23 @@ impl Machine {
             if self.error.is_some() {
                 break;
             }
-            let (elapsed, result) = self
-                .cpu
-                .step_timed_with_observer(&mut self.bus, &mut before_instruction);
-            let clocks = self
-                .clock_converter
-                .advance(self.bus.profile, elapsed.cpu_cycles());
-            self.bus.tick(clocks);
+            self.step_unit(&mut before_instruction);
             done += 1;
-            if let Err(e) = result {
-                self.error = Some(e);
-                break;
-            }
         }
         done
+    }
+    // Both budget APIs share one timed unit. Inline it into their loops so the
+    // scheduler does not enter a second capped loop for every instruction.
+    #[inline(always)]
+    fn step_unit(&mut self, observer: &mut impl FnMut(&Cpu, &Bus)) {
+        let (elapsed, result) = self.cpu.step_timed_with_observer(&mut self.bus, observer);
+        let clocks = self
+            .clock_converter
+            .advance(self.bus.profile, elapsed.cpu_cycles());
+        self.bus.tick(clocks);
+        if let Err(e) = result {
+            self.error = Some(e);
+        }
     }
     /// Advance toward a device-clock deadline, with an independent work cap.
     /// Returns bounded units executed; callers retain any unfinished time debt.
@@ -131,7 +134,8 @@ impl Machine {
         let deadline = self.bus.cycles + u64::from(clocks.min(80_000));
         let mut done = 0;
         while self.bus.cycles < deadline && done < max_units.min(100_000) && self.error.is_none() {
-            done += self.step_with_observer(1, &mut observer);
+            self.step_unit(&mut observer);
+            done += 1;
         }
         done
     }
