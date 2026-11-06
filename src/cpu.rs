@@ -1062,7 +1062,7 @@ impl Cpu {
                     };
                     // Address calculation only: no operand read or page walk,
                     // including nonpresent pages and offsets beyond segment limit.
-                    self.paging.invalidate(self.linear(s, off) as u32);
+                    b.timing.invlpg_hit = self.paging.invalidate(self.linear(s, off) as u32);
                     return Ok(());
                 }
                 if self.vm86() && matches!(kind, 2 | 3 | 6) {

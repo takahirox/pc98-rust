@@ -23,12 +23,15 @@ impl Paging {
     pub(super) fn flush(&self) {
         self.entries.replace([None; 32]);
     }
-    pub(super) fn invalidate(&self, linear: u32) {
+    pub(super) fn invalidate(&self, linear: u32) -> bool {
         let page = linear >> 12;
         let mut entries = self.entries.borrow_mut();
         let slot = &mut entries[page as usize & 31];
         if slot.is_some_and(|e| e.page == page) {
             *slot = None;
+            true
+        } else {
+            false
         }
     }
 }
