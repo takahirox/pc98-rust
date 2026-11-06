@@ -62,6 +62,9 @@ test('ADV98 production playback remains continuous through scene changes', async
     const deviceFrames=current.scheduledSamples-previous.scheduledSamples;
     const rendered=deviceFrames*48000/current.deviceSampleRate;
     const missed=current.underflows-previous.underflows;
+    const source=current.producedSamples-previous.producedSamples;
+    const evidence=JSON.stringify({source,rendered,missed,queued:current.queuedSamples,
+      outstanding:current.outstandingSamples,deviceSampleRate:current.deviceSampleRate});
     expect(current.audioEpoch).toBe(start.audioEpoch);
     expect(current.error).toBe('');
     expect(current.droppedSamples).toBe(0); expect(current.overflows).toBe(0);
@@ -70,13 +73,12 @@ test('ADV98 production playback remains continuous through scene changes', async
     expect(current.queuedBlocks).toBeLessThanOrEqual(6);
     expect(current.outstandingSamples).toBeGreaterThanOrEqual(0);
     expect(current.outstandingSamples).toBeLessThan(2400); // Target 40 ms + one finite slice.
-    expect(rendered).toBeGreaterThan(45000);
+    expect(rendered,evidence).toBeGreaterThan(45000);
     // Permit isolated host scheduling noise (<0.5%), reject the baseline's
     // ~6% sustained silence. No persistent dropout may exceed 100 ms.
-    expect(missed).toBeLessThan(deviceFrames*0.005+128);
+    expect(missed,evidence).toBeLessThan(deviceFrames*0.005+128);
     expect(current.maxUnderflowRun).toBeLessThan(current.deviceSampleRate/10);
     expect(current.audioEnergy).toBeGreaterThan(previous.audioEnergy+0.1);
-    const source=current.producedSamples-previous.producedSamples;
     const guest=(current.cycles-previous.cycles)*48000/8000000;
     expect(Math.abs(source-guest)).toBeLessThan(2); // No guest-time/sample loss.
     expect(Math.abs(source-rendered)).toBeLessThan(2400);

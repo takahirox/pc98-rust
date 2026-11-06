@@ -9,6 +9,11 @@ const audioBuffers = Array.from({length: 6}, () => new ArrayBuffer(1024 * 4));
 let sinkStats = {}, transaction = null;
 let producedSamples = 0, sentSamples = 0, droppedSamples = 0;
 let deadline = 0, diagnostics = false;
+let tickToken = 0;
+const tickTasks = new MessageChannel();
+tickTasks.port1.onmessage = ({data:token}) => {
+  if (timer === 'task' && token === tickToken) tick();
+};
 function playingAudio() { return port && audioEnabled && audioState === 'running'; }
 function outstandingAudio() { return sentSamples - (sinkStats.audioEpoch === audioEpoch ? sinkStats.consumedSamples : 0); }
 const decoder = new TextDecoder();
@@ -93,8 +98,17 @@ async function flushAudio() {
   });
 }
 function schedule(delay = 10) {
-  if (!running || manual || transaction) { clearTimeout(timer); timer = null; return; }
-  if (!timer) timer = setTimeout(tick,delay);
+  if (!running || manual || transaction) {
+    if (timer !== 'task') clearTimeout(timer);
+    timer = null; ++tickToken; return;
+  }
+  if (timer) return;
+  // Nested timers clamp to >=4 ms in browsers. Paying that after every
+  // 10 ms guest slice starves audio when the slice itself needs >6 ms.
+  // MessageChannel yields between finite slices without imposing that floor.
+  // Keep an actual timer while ahead, so a full sink never spins tasks.
+  if (delay === 0) { timer = 'task'; tickTasks.port2.postMessage(++tickToken); }
+  else timer = setTimeout(tick,delay);
 }
 function tick() {
   timer = null;
@@ -122,7 +136,7 @@ function tick() {
       postMessage({event:'stopped', error:message()});
     }
   } catch (error) { running = false; postMessage({event:'fault', error:error.message}); }
-  schedule(playingAudio() ? (outstandingAudio() < 1920 && audioBuffers.length ? 1 : 5)
+  schedule(playingAudio() ? (outstandingAudio() < 1920 && audioBuffers.length ? 0 : 5)
     : Math.max(1,deadline-performance.now()));
 }
 const calls = new Set(['key','mouse','set_boot_source','set_profile','reset','eject',
