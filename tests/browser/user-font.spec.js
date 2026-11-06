@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 
 const pattern = Array.from({ length: 32 }, (_, i) => i % 2 === 0
@@ -6,8 +6,8 @@ const pattern = Array.from({ length: 32 }, (_, i) => i % 2 === 0
 async function until(page, predicate) {
   for (let i = 0; i < 180; i++) {
     if (await predicate()) return;
-    await page.evaluate(() => { pc98.core.step(100000); pc98.core.audio_clear(); });
-    expect(await page.evaluate(() => pc98.stats().error)).toBe('');
+    await inspect(page, () => { pc98.core.step(100000); pc98.core.audio_clear(); });
+    expect(await inspect(page, () => pc98.stats().error)).toBe('');
   }
   throw Error('font guest did not reach expected state');
 }
@@ -16,13 +16,13 @@ async function boot(page, name) {
   await expect(page.locator('#profile')).toBeEnabled();
   await page.locator('#profile').selectOption('1');
   const buffer = await fs.readFile(new URL(`../../fixtures/freedos/${name}.hdm`, import.meta.url));
-  await page.locator('#file').setInputFiles({ name: `${name}.hdm`, mimeType: 'application/octet-stream', buffer });
-  await page.evaluate(() => pc98.core.set_boot_source(0));
+  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: `${name}.hdm`, mimeType: 'application/octet-stream', buffer });
+  await inspect(page, () => pc98.core.set_boot_source(0));
   await page.locator('#reset').click();
-  expect(await page.evaluate(() => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
+  expect(await inspect(page, () => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
 }
 async function assertGlyph(page, expected) {
-  const result = await page.evaluate(() => {
+  const result = await inspect(page, () => {
     const p = pc98.core.frame();
     const pixels = new Uint8Array(pc98.core.memory.buffer, p, 640 * 400 * 4);
     return {
@@ -52,21 +52,22 @@ test('Ap BIOS user font: original FreeDOS control, readback, text/graphics pixel
   await page.clock.install({ time });
   await page.clock.pauseAt(time);
   await boot(page, 'fontload');
-  await until(page, () => page.evaluate(() => pc98.text().includes('FONTLOAD RETURNED')));
+  await until(page, () => inspect(page, () => pc98.text().includes('FONTLOAD RETURNED')));
   await boot(page, 'userfont');
-  await until(page, () => page.evaluate(() => pc98.read(0x90000) === 1));
+  await until(page, () => inspect(page, () => pc98.read(0x90000) === 1));
   await assertGlyph(page, pattern);
   await page.locator('#screen').focus();
   await page.keyboard.press('Enter');
-  await until(page, () => page.evaluate(() => pc98.read(0x90000) === 2));
+  await until(page, () => inspect(page, () => pc98.read(0x90000) === 2));
   await assertGlyph(page, pattern.map(v => v ^ 255));
   await page.keyboard.press('Enter');
-  await until(page, () => page.evaluate(() => pc98.text().includes('USERFONT RETURNED')));
-  expect(await page.evaluate(() => pc98.text())).not.toContain('USERFONT FAILED');
-  await page.evaluate(() => pc98.core.reset());
-  expect(await page.evaluate(() => pc98.read(0x90000))).toBe(0);
+  await until(page, () => inspect(page, () => pc98.text().includes('USERFONT RETURNED')));
+  expect(await inspect(page, () => pc98.text())).not.toContain('USERFONT FAILED');
+  await page.locator('#reset').click();
+  await expect(page.locator('#profile')).toBeEnabled();
+  expect(await inspect(page, () => pc98.read(0x90000))).toBe(0);
   // Reset drops the font RAM; reboot must load it again and restore first pixels.
-  await until(page, () => page.evaluate(() => pc98.read(0x90000) === 1));
+  await until(page, () => inspect(page, () => pc98.read(0x90000) === 1));
   await assertGlyph(page, pattern);
   await expect(page.locator('#error')).toBeHidden();
 });

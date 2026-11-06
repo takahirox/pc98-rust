@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 
 async function boot(page, name) {
@@ -6,20 +6,20 @@ async function boot(page, name) {
   await expect(page.locator('#profile')).toBeEnabled();
   await page.locator('#profile').selectOption('1');
   const buffer = await fs.readFile(new URL(`../../fixtures/freedos/${name}.hdm`, import.meta.url));
-  await page.locator('#file').setInputFiles({ name: `${name}.hdm`, mimeType: 'application/octet-stream', buffer });
-  await page.evaluate(() => pc98.core.set_boot_source(0));
+  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: `${name}.hdm`, mimeType: 'application/octet-stream', buffer });
+  await inspect(page, () => pc98.core.set_boot_source(0));
   await page.locator('#reset').click();
-  expect(await page.evaluate(() => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
+  expect(await inspect(page, () => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
 }
 async function until(page, predicate) {
   for (let i = 0; i < 160; i++) {
     if (await predicate()) return;
-    await page.evaluate(() => { pc98.core.step(100000); pc98.core.audio_clear(); });
-    expect(await page.evaluate(() => pc98.stats().error)).toBe('');
+    await inspect(page, () => { pc98.core.step(100000); pc98.core.audio_clear(); });
+    expect(await inspect(page, () => pc98.stats().error)).toBe('');
   }
-  throw Error(`drawing guest exceeded 16 million slots: ${await page.evaluate(() => pc98.text())}`);
+  throw Error(`drawing guest exceeded 16 million slots: ${await inspect(page, () => pc98.text())}`);
 }
-const shellReturned = page => page.evaluate(() =>
+const shellReturned = page => inspect(page, () =>
   pc98.text().includes('PROBE SHELL RETURN') && pc98.text().includes('A:\\>'));
 
 test('Ap drawing timing: exact control, registers, BIOS state, repeated switching and reset in actual Wasm/FreeDOS', async ({ page }) => {
@@ -29,26 +29,27 @@ test('Ap drawing timing: exact control, registers, BIOS state, repeated switchin
   await page.clock.pauseAt(time);
   await boot(page, 'drawmode');
   await until(page, () => shellReturned(page));
-  expect(await page.evaluate(() => pc98.text())).toContain('DRAWMODE RETURNED');
-  expect(await page.evaluate(() => pc98.read(0x54d) & 8)).toBe(8);
+  expect(await inspect(page, () => pc98.text())).toContain('DRAWMODE RETURNED');
+  expect(await inspect(page, () => pc98.read(0x54d) & 8)).toBe(8);
 
   await boot(page, 'drawtest');
   for (let stage = 1; stage <= 4; stage++) {
-    await until(page, () => page.evaluate(s => pc98.read(0x90000) === s, stage));
+    await until(page, () => inspect(page, s => pc98.read(0x90000) === s, stage));
     const expected = stage === 1 || stage === 4 ? 8 : 0;
-    expect(await page.evaluate(s => pc98.read(0x90000 + s) & 8, stage)).toBe(expected);
-    expect(await page.evaluate(() => pc98.read(0x54d) & 8)).toBe(expected);
+    expect(await inspect(page, s => pc98.read(0x90000 + s) & 8, stage)).toBe(expected);
+    expect(await inspect(page, () => pc98.read(0x54d) & 8)).toBe(expected);
     await page.locator('#screen').focus();
     await page.keyboard.press('Enter');
   }
   await until(page, () => shellReturned(page));
-  const text = await page.evaluate(() => pc98.text());
+  const text = await inspect(page, () => pc98.text());
   expect(text).toContain('DRAW TIMING PASS');
   expect(text).not.toContain('FAILED');
-  await page.evaluate(() => pc98.core.reset());
-  expect(await page.evaluate(() => pc98.read(0x90000))).toBe(0);
-  expect(await page.evaluate(() => pc98.read(0x54d) & 8)).toBe(0);
-  await until(page, () => page.evaluate(() => pc98.read(0x90000) === 1));
-  expect(await page.evaluate(() => pc98.read(0x54d) & 8)).toBe(8);
+  await page.locator('#reset').click();
+  await expect(page.locator('#profile')).toBeEnabled();
+  expect(await inspect(page, () => pc98.read(0x90000))).toBe(0);
+  expect(await inspect(page, () => pc98.read(0x54d) & 8)).toBe(0);
+  await until(page, () => inspect(page, () => pc98.read(0x90000) === 1));
+  expect(await inspect(page, () => pc98.read(0x54d) & 8)).toBe(8);
   await expect(page.locator('#error')).toBeHidden();
 });

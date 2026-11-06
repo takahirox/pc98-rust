@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 
@@ -15,18 +15,18 @@ for (const [profile, name] of [['0', 'VM'], ['1', 'Ap']]) {
     await page.goto('./');
     await expect(page.locator('#profile')).toBeEnabled();
     await page.locator('#profile').selectOption(profile);
-    expect(await page.evaluate(() => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
+    expect(await inspect(page, () => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
     const image = await fs.readFile(new URL('../../fixtures/fdc_pio/fdc_pio.hdm', import.meta.url));
     const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/fdc-pio-manifest.json', import.meta.url)));
     expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
     const expected = [...Buffer.from(manifest.result_hex, 'hex')];
-    await page.locator('#file').setInputFiles({ name: 'fdc_pio.hdm', mimeType: 'application/octet-stream', buffer: image });
-    await page.evaluate(() => pc98.core.set_boot_source(0));
+    await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'fdc_pio.hdm', mimeType: 'application/octet-stream', buffer: image });
+    await inspect(page, () => pc98.core.set_boot_source(0));
     await page.locator('#reset').click();
     for (let run = 0; run < 2; run++) {
       if (run) await page.locator('#reset').click();
       // The host only steps and reads: all requests and results originate in guest code.
-      const result = await page.evaluate(budget => {
+      const result = await inspect(page, budget => {
         let slots = 0;
         let text = '';
         while (slots < budget) {
@@ -52,7 +52,7 @@ for (const [profile, name] of [['0', 'VM'], ['1', 'Ap']]) {
       expect(result.guards).toEqual(Array(0xfd0).fill(0xa5));
       expect(result.writes).toBe(0);
       console.log(`${name} FDC PIO boot ${run}: ${result.slots} slots, 2048 data IRQs and 1 result IRQ`);
-      expect(Buffer.from(await page.evaluate(() => pc98.exportDisk())).equals(image)).toBe(true);
+      expect(Buffer.from(await inspect(page, () => pc98.exportDisk())).equals(image)).toBe(true);
       expect(errors).toEqual([]);
       await expect(page.locator('#error')).toBeHidden();
     }

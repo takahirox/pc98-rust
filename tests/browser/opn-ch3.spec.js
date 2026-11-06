@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 
@@ -14,16 +14,16 @@ test('Ap: guest channel-3 operator PCM pitches and keyed mode transitions before
   await page.goto('./');
   await expect(page.locator('#profile')).toBeEnabled();
   await page.locator('#profile').selectOption('1');
-  expect(await page.evaluate(() => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
+  expect(await inspect(page, () => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
   const image = await fs.readFile(new URL('../../fixtures/opn_ch3/opn_ch3.hdm', import.meta.url));
   const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/opn-ch3-manifest.json', import.meta.url)));
   expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
-  await page.locator('#file').setInputFiles({ name: 'opn_ch3.hdm', mimeType: 'application/octet-stream', buffer: image });
-  await page.evaluate(() => pc98.core.set_boot_source(0));
+  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'opn_ch3.hdm', mimeType: 'application/octet-stream', buffer: image });
+  await inspect(page, () => pc98.core.set_boot_source(0));
   await page.locator('#reset').click();
   for (let run = 0; run < 2; run++) {
     if (run) await page.locator('#reset').click();
-    const result = await page.evaluate(budget => {
+    const result = await inspect(page, budget => {
       const pcm = Array.from({ length: 16 }, () => []);
       let slots = 0;
       let text = '';
@@ -79,7 +79,7 @@ test('Ap: guest channel-3 operator PCM pitches and keyed mode transitions before
       expect(actual.keyEdges).toEqual([1 + 2 * (stage.operator - 1)]);
     }
     expect(result.results).toEqual([...Buffer.from(manifest.result_hex, 'hex')]);
-    expect(Buffer.from(await page.evaluate(() => pc98.exportDisk())).equals(image)).toBe(true);
+    expect(Buffer.from(await inspect(page, () => pc98.exportDisk())).equals(image)).toBe(true);
     expect(errors).toEqual([]);
     await expect(page.locator('#error')).toBeHidden();
     console.log(`OPN CH3 boot ${run}: ${result.slots} slots; samples ${result.stages.map(s => s.samples)}; Hz ${result.stages.map(s => s.hz.toFixed(3))}`);

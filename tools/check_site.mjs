@@ -7,7 +7,7 @@ const site = new URL('../web/', import.meta.url);
 const desktop = JSON.parse(await readFile(new URL('../fixtures/desktop-publication.json', import.meta.url)));
 const expected = [
   ...Object.keys(desktop).map(name => `freedos/${name}`),
-  'index.html', 'app.js', 'style.css', 'core.wasm',
+  'index.html', 'app.js', 'emulator-worker.js', 'audio-worklet.js', 'style.css', 'core.wasm',
   'licenses.html', 'LICENSE.txt', 'hello98-LICENSE.txt', 'shinonome-LICENSE.txt',
   'media/hello98.tfd', 'media/startrail.hdm',
 ].sort();
@@ -40,3 +40,12 @@ for (const name of ['memory', 'insert', 'step', 'frame', 'key', 'mouse', 'reset'
   assert(exported.includes(name), `Missing emulator export: ${name}`);
 }
 console.log(`Publication checked: ${expected.length} approved assets; valid emulator Wasm (${wasm.length} bytes)`);
+// Every execution entry point is a local, approved asset resolved relative to
+// its module, so the same artifact works at / and /pc98-rust/.
+const app = await readFile(new URL('app.js',site),'utf8');
+const worker = await readFile(new URL('emulator-worker.js',site),'utf8');
+for (const entry of ['emulator-worker.js','audio-worklet.js']) {
+  assert(app.includes(`new URL('${entry}',import.meta.url)`), `Missing relative entry point: ${entry}`);
+}
+assert(worker.includes("new URL('core.wasm', import.meta.url)"));
+assert(!/WebAssembly\.|core\.(step|frame|memory)|createBufferSource/.test(app), 'DOM must not execute Wasm or batch audio');

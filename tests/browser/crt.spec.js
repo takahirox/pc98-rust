@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 
@@ -6,7 +6,7 @@ const pattern = Array.from({ length: 32 }, (_, i) => i % 2 === 0
   ? 0x80 >> (Math.floor(i / 2) % 8) : (i * 7) ^ 0x53);
 const ank = { A: [14,17,17,31,17,17,17], B: [30,17,17,30,17,17,30] };
 async function stage(page, expected) {
-  const snapshot = await page.evaluate(expected => {
+  const snapshot = await inspect(page, expected => {
     let slots = 0;
     while (pc98.read(0x8001) !== expected && slots < 200000) {
       slots += pc98.core.step(1000);
@@ -23,7 +23,7 @@ async function enter(page) {
   await page.keyboard.press('Enter');
 }
 async function pixels(page, left, top, width, height) {
-  return page.evaluate(({ left, top, width, height }) => {
+  return inspect(page, ({ left, top, width, height }) => {
     const ptr = pc98.core.frame();
     const frame = new Uint8Array(pc98.core.memory.buffer, ptr, 640 * 400 * 4);
     return Array.from({ length: height }, (_, y) => Array.from({ length: width }, (_, x) => {
@@ -62,15 +62,15 @@ test('Ap CRT family: original guest, KCG/areas/pitch/cursor pixels, timed blink 
   await page.goto('./');
   await expect(page.locator('#profile')).toBeEnabled();
   await page.locator('#profile').selectOption('1');
-  expect(await page.evaluate(() => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
+  expect(await inspect(page, () => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
   const image = await fs.readFile(new URL('../../fixtures/crt/crt.hdm',import.meta.url));
   const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/crt-manifest.json',import.meta.url)));
   expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
-  await page.locator('#file').setInputFiles({name:'crt.hdm',mimeType:'application/octet-stream',buffer:image});
-  await page.evaluate(() => pc98.core.set_boot_source(0));
+  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({name:'crt.hdm',mimeType:'application/octet-stream',buffer:image});
+  await inspect(page, () => pc98.core.set_boot_source(0));
   for (let run = 0; run < 2; run++) {
     await page.locator('#reset').click();
-    expect(await page.evaluate(() => [pc98.read(0x8001),pc98.read(0x53c),pc98.read(0xa4001)])).toEqual([0,0,255]);
+    expect(await inspect(page, () => [pc98.read(0x8001),pc98.read(0x53c),pc98.read(0xa4001)])).toEqual([0,0,255]);
     await stage(page,1);
     await assertGlyph(page,1);
     await assertAreasAndCursor(page);
@@ -81,7 +81,7 @@ test('Ap CRT family: original guest, KCG/areas/pitch/cursor pixels, timed blink 
     await enter(page);
     await stage(page,3);
     await assertGlyph(page,3);
-    const samples = await page.evaluate(() => {
+    const samples = await inspect(page, () => {
       const samples = [];
       for (let i=0;i<40;i++) {
         const clocks = pc98.core.metric(5);
@@ -104,17 +104,17 @@ test('Ap CRT family: original guest, KCG/areas/pitch/cursor pixels, timed blink 
     await enter(page);
     await stage(page,4);
     await assertGlyph(page,4);
-    expect(await page.evaluate(() => pc98.read(0x53c))).toBe(3);
+    expect(await inspect(page, () => pc98.read(0x53c))).toBe(3);
     await enter(page);
     await stage(page,0x5a);
-    const result = await page.evaluate(() => Array.from({length:128},(_,i) => pc98.read(0x8000+i)));
+    const result = await inspect(page, () => Array.from({length:128},(_,i) => pc98.read(0x8000+i)));
     expect(result).toEqual([...Buffer.from(manifest.result_hex,'hex')]);
     expect(result.slice(34,66)).toEqual(pattern);
     expect(result.slice(68,100)).toEqual(pattern);
     for (const i of [0,2,3,5,6,7,8,9,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,66,67,100,127]) expect(result[i]).toBe(0xa5);
-    expect(await page.evaluate(() => pc98.read(0x53c))).toBe(0);
-    expect(await page.evaluate(() => pc98.text())).toContain('CRT FAMILY PASS');
-    expect(Buffer.from(await page.evaluate(() => pc98.exportDisk())).equals(image)).toBe(true);
+    expect(await inspect(page, () => pc98.read(0x53c))).toBe(0);
+    expect(await inspect(page, () => pc98.text())).toContain('CRT FAMILY PASS');
+    expect(Buffer.from(await inspect(page, () => pc98.exportDisk())).equals(image)).toBe(true);
     expect(errors).toEqual([]);
     await expect(page.locator('#error')).toBeHidden();
   }

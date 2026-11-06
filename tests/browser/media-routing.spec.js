@@ -1,5 +1,6 @@
+import { inspect } from './helpers/runtime.js';
 // Issue #120: production Wasm, original MIT guests only; no host guest results.
-import { test, expect } from '@playwright/test';
+import { test, expect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 
@@ -37,12 +38,12 @@ async function ready(page) {
   await page.clock.pauseAt(time);
   await page.goto('./');
   await expect(page.locator('#profile')).toBeEnabled();
-  expect(await page.evaluate(() => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
+  expect(await inspect(page, () => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
   return errors;
 }
 async function upload(page, path, name, buffer) {
   if (path === 'picker') {
-    await page.locator('#file').setInputFiles({ name, mimeType: 'application/octet-stream', buffer });
+    await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name, mimeType: 'application/octet-stream', buffer });
   } else {
     await page.locator('#drop').evaluate((drop, { name, base64 }) => {
       const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
@@ -60,7 +61,7 @@ async function mounted(page, name, drive) {
   await expect(page.locator('#error')).toBeHidden();
 }
 async function boot(page, marker, drive) {
-  const state = await page.evaluate(({ marker, budget }) => {
+  const state = await inspect(page, ({ marker, budget }) => {
     let slots = 0;
     while (slots < budget && !pc98.text().includes(marker) && !pc98.stats().error) {
       slots += pc98.core.step(1000);
@@ -75,7 +76,7 @@ async function boot(page, marker, drive) {
   if (drive === 2) {
     expect(state.stats.hddReads).toBe(17);
     expect(state.stats.reads).toBe(0);
-    expect(await page.evaluate(() => Array.from({ length: 1024 }, (_, i) => pc98.read(0x8000 + i))))
+    expect(await inspect(page, () => Array.from({ length: 1024 }, (_, i) => pc98.read(0x8000 + i))))
       .toEqual([...Buffer.from(manifest.result_hex, 'hex')]);
   } else expect(state.stats.reads).toBeGreaterThan(0);
 }
@@ -101,7 +102,7 @@ test('fresh page selects Ap in DOM and Rust, Auto, matching display and released
     await expect(page.locator('#media-name')).toHaveText('FreeDOS-128MiB.hdi');
     await expect(page.locator('#eject')).toBeEnabled();
     await expect(page.locator('#export')).toBeEnabled();
-    expect(await page.evaluate(() => ({ profile: pc98.core.metric(21), memory: pc98.read(0x401),
+    expect(await inspect(page, () => ({ profile: pc98.core.metric(21), memory: pc98.read(0x401),
       keyboard: Array.from({ length: 16 }, (_, i) => pc98.read(0x52a + i)) })))
       .toEqual({ profile: 1, memory: 24, keyboard: Array(16).fill(0) });
   }
@@ -134,9 +135,9 @@ for (const path of ['picker', 'drop']) {
       hello.copy(image, 0, 0, Math.min(size, hello.length));
       await upload(page, path, `geometry-${size}.img`, image);
       await mounted(page, `geometry-${size}.img`, 'Floppy 1');
-      expect(await page.evaluate(() => pc98.read(0x584))).toBe(0x90);
+      expect(await inspect(page, () => pc98.read(0x584))).toBe(0x90);
       await page.locator('#reset').click();
-      expect(await page.evaluate(() => pc98.stats().instructions)).toBe(0);
+      expect(await inspect(page, () => pc98.stats().instructions)).toBe(0);
       await exported(page, `geometry-${size}.img`, image);
       await page.locator('#reset').click();
       await exported(page, `geometry-${size}.img`, image);
@@ -145,7 +146,7 @@ for (const path of ['picker', 'drop']) {
     await expect(page.locator('#media-name')).toHaveText('No disk');
     await expect(page.locator('#media-drive')).toHaveText('Floppy 1');
     await expect(page.locator('#export')).toBeDisabled();
-    expect(await page.evaluate(() => pc98.exportDisk(0))).toEqual([]);
+    expect(await inspect(page, () => pc98.exportDisk(0))).toEqual([]);
     expect(errors).toEqual([]);
   });
 
@@ -163,7 +164,7 @@ for (const path of ['picker', 'drop']) {
     await expect(page.locator('#media-drive')).toHaveText('IDE HDD');
     await expect(page.locator('#media-name')).toHaveText('No disk');
     await expect(page.locator('#export')).toBeDisabled();
-    expect(await page.evaluate(() => pc98.exportDisk(2))).toEqual([]);
+    expect(await inspect(page, () => pc98.exportDisk(2))).toEqual([]);
     expect(errors).toEqual([]);
   });
 
@@ -182,11 +183,11 @@ for (const path of ['picker', 'drop']) {
     await page.locator('#boot').selectOption('1');
     await page.locator('#reset').click();
     await boot(page, 'IDE VERIFY PASS', 2);
-    const before = await page.evaluate(() => ({ stats: pc98.stats(), text: pc98.text() }));
+    const before = await inspect(page, () => ({ stats: pc98.stats(), text: pc98.text() }));
     await page.locator('#drive').selectOption('1');
     await upload(page, path, 'second.tfd', hello);
     await mounted(page, 'second.tfd', 'Floppy 2');
-    expect(await page.evaluate(() => ({ stats: pc98.stats(), text: pc98.text() }))).toEqual(before);
+    expect(await inspect(page, () => ({ stats: pc98.stats(), text: pc98.text() }))).toEqual(before);
     await expect(page.locator('#boot-source')).toHaveText('Reset boots: IDE HDD · boot.hdi');
     await exported(page, 'second.tfd', hello);
     await page.locator('#drive').selectOption('auto');
@@ -194,7 +195,7 @@ for (const path of ['picker', 'drop']) {
     await page.locator('#reset').click();
     await boot(page, 'IDE VERIFY PASS', 2);
     await page.locator('#eject').click();
-    expect(await page.evaluate(() => pc98.exportDisk(1))).toEqual([]);
+    expect(await inspect(page, () => pc98.exportDisk(1))).toEqual([]);
     await page.locator('#drive').selectOption('2');
     await exported(page, 'boot.hdi', hdi);
     await page.locator('#drive').selectOption('0');
@@ -222,12 +223,12 @@ for (const path of ['picker', 'drop']) {
     await expect(page.locator('#display-mode')).toContainText('8 colors');
     await expect(page.locator('#mouse')).toBeDisabled();
     await expect(page.locator('#mouse')).not.toBeChecked();
-    expect(await page.evaluate(() => pc98.core.metric(21))).toBe(0);
+    expect(await inspect(page, () => pc98.core.metric(21))).toBe(0);
     await expect(page.locator('#media-drive')).toHaveText('IDE HDD (requires Ap)');
     await expect(page.locator('#boot-source')).toHaveText('Reset boots: Floppy 1 · floppy-boot.tfd');
     await exported(page, 'boot.hdi', hdi); // Switching profile never deletes IDE.
     await boot(page, 'Hello world!!', 0);
-    expect(await page.evaluate(() => Array.from({ length: 16 }, (_, i) => pc98.read(0x52a + i))))
+    expect(await inspect(page, () => Array.from({ length: 16 }, (_, i) => pc98.read(0x52a + i))))
       .toEqual(Array(16).fill(0));
     await page.keyboard.up('ArrowRight');
     await page.locator('#profile').selectOption('1');
@@ -240,8 +241,8 @@ for (const path of ['picker', 'drop']) {
     await expect(page.locator('#boot-source')).toHaveText('Reset boots: IDE HDD · No disk');
     await page.locator('#reset').click();
     // No implicit fallback to the mounted floppy.
-    await page.evaluate(() => pc98.core.step(10000));
-    expect(await page.evaluate(() => pc98.stats().reads)).toBe(0);
+    await inspect(page, () => pc98.core.step(10000));
+    expect(await inspect(page, () => pc98.stats().reads)).toBe(0);
     await page.locator('#boot').selectOption('0');
     await page.locator('#reset').click();
     await boot(page, 'Hello world!!', 0);
@@ -282,7 +283,7 @@ for (const path of ['picker', 'drop']) {
       await upload(page, path, 'ap-only.HDI', hdi);
       await expect(page.locator('#error')).toContainText('IDE requires PC-9821Ap DOS');
       await expect(page.locator('#profile')).toHaveValue('0');
-      expect(await page.evaluate(() => pc98.core.metric(21))).toBe(0);
+      expect(await inspect(page, () => pc98.core.metric(21))).toBe(0);
     }
     expect(errors).toEqual([]);
   });

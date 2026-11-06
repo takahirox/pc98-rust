@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 
@@ -15,13 +15,13 @@ for (const [profile, name] of [['0', 'VM']]) {
     await page.goto('./');
     await expect(page.locator('#profile')).toBeEnabled();
     await page.locator('#profile').selectOption(profile);
-    expect(await page.evaluate(() => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
+    expect(await inspect(page, () => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
     const image = await fs.readFile(new URL('../../fixtures/v30_segment_irq/v30_segment_irq.hdm', import.meta.url));
     const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/v30-segment-irq-manifest.json', import.meta.url)));
     expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
     const expected = [...Buffer.from(manifest.result_hex, 'hex')];
-    await page.locator('#file').setInputFiles({ name: 'v30_segment_irq.hdm', mimeType: 'application/octet-stream', buffer: image });
-    await page.evaluate(() => pc98.core.set_boot_source(0));
+    await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'v30_segment_irq.hdm', mimeType: 'application/octet-stream', buffer: image });
+    await inspect(page, () => pc98.core.set_boot_source(0));
     await page.locator('#reset').click();
     for (let run = 0; run < 2; run++) {
       if (run) await page.locator('#reset').click();
@@ -30,7 +30,7 @@ for (const [profile, name] of [['0', 'VM']]) {
       // Guest checks IRQ ordering, frames, results and guards.
       // Host only steps the production core and reads its outputs.
       while (slots < manifest.slot_budget) {
-        const snapshot = await page.evaluate(remaining => {
+        const snapshot = await inspect(page, remaining => {
           let slots = 0;
           let text = '';
           while (slots < Math.min(100000, remaining)) {
@@ -51,10 +51,10 @@ for (const [profile, name] of [['0', 'VM']]) {
       }
       expect(slots).toBeLessThanOrEqual(manifest.slot_budget);
       expect(text).toContain('V30 SEGMENT IRQ PASS');
-      expect(await page.evaluate(() => Array.from({ length: 48 }, (_, i) => pc98.read(0x8000 + i)))).toEqual(expected);
+      expect(await inspect(page, () => Array.from({ length: 48 }, (_, i) => pc98.read(0x8000 + i)))).toEqual(expected);
       const destination = [...Buffer.from(manifest.destination_hex, 'hex')];
-      expect(await page.evaluate(() => Array.from({ length: 4 }, (_, i) => pc98.read(0x9000 + i)))).toEqual(destination);
-      expect(Buffer.from(await page.evaluate(() => pc98.exportDisk())).equals(image)).toBe(true);
+      expect(await inspect(page, () => Array.from({ length: 4 }, (_, i) => pc98.read(0x9000 + i)))).toEqual(destination);
+      expect(Buffer.from(await inspect(page, () => pc98.exportDisk())).equals(image)).toBe(true);
       expect(errors).toEqual([]);
       await expect(page.locator('#error')).toBeHidden();
       console.log(`${name} boot ${run}: ${slots} slots`);

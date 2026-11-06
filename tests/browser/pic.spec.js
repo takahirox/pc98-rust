@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 
@@ -12,13 +12,13 @@ for (const [profile, name] of [['0', 'VM'], ['1', 'Ap']]) {
     await page.goto('./');
     await expect(page.locator('#profile')).toBeEnabled();
     await page.locator('#profile').selectOption(profile);
-    expect(await page.evaluate(() => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
+    expect(await inspect(page, () => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
     const image = await fs.readFile(new URL('../../fixtures/pic/pic.hdm', import.meta.url));
     const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/pic-manifest.json', import.meta.url)));
     expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
     const expected = [...Buffer.from(manifest.result_hex, 'hex')];
-    await page.locator('#file').setInputFiles({ name: 'pic.hdm', mimeType: 'application/octet-stream', buffer: image });
-    await page.evaluate(() => pc98.core.set_boot_source(0));
+    await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'pic.hdm', mimeType: 'application/octet-stream', buffer: image });
+    await inspect(page, () => pc98.core.set_boot_source(0));
     await page.locator('#reset').click();
     for (let run = 0; run < 2; run++) {
       if (run) await page.locator('#reset').click();
@@ -29,7 +29,7 @@ for (const [profile, name] of [['0', 'VM'], ['1', 'Ap']]) {
       // Only guest execution writes the handshake, trace and result bytes.
       // Batch bounded stepping until an input handshake or terminal marker.
       while (slots < manifest.slot_budget) {
-        const snapshot = await page.evaluate(({ nextPhase, remaining }) => {
+        const snapshot = await inspect(page, ({ nextPhase, remaining }) => {
           let slots = 0;
           while (slots < Math.min(100000, remaining)) {
             slots += pc98.core.step(1000);
@@ -57,8 +57,8 @@ for (const [profile, name] of [['0', 'VM'], ['1', 'Ap']]) {
       expect(nextPhase).toBe(4);
       expect(slots).toBeLessThanOrEqual(manifest.slot_budget);
       expect(text).toContain('PIC PASS');
-      expect(await page.evaluate(() => Array.from({ length: 32 }, (_, i) => pc98.read(0x8000 + i)))).toEqual(expected);
-      expect(Buffer.from(await page.evaluate(() => pc98.exportDisk())).equals(image)).toBe(true);
+      expect(await inspect(page, () => Array.from({ length: 32 }, (_, i) => pc98.read(0x8000 + i)))).toEqual(expected);
+      expect(Buffer.from(await inspect(page, () => pc98.exportDisk())).equals(image)).toBe(true);
       expect(errors).toEqual([]);
       await expect(page.locator('#error')).toBeHidden();
       await page.keyboard.up('Enter');

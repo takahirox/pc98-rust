@@ -1,59 +1,92 @@
 const $ = (id) => document.getElementById(id);
 const screen = $('screen'), context = screen.getContext('2d', { alpha: false });
-const decoder = new TextDecoder();
-let core, running = false, audio, outputGain, nextAudio = 0, muted = true, loading = false;
-let audioEnergy = 0, scheduledSamples = 0;
+let core, worker, running = false, audio, outputGain, audioNode, audioSetup, muted = true, loading = false;
+let generation = 0, pendingFrame, presenting = false, workerFailed = false;
+const pending = new Map(); let requestId = 0;
+const metrics = new Map(); let bootByte = 0;
 const mounted = [null, null, null], held = new Set();
 let pointerPosition;
 let lastDrive = null;
 const driveNames = ['Floppy 1', 'Floppy 2', 'IDE HDD'];
 const controls = ['game', 'hello', 'pause', 'reset', 'sound', 'eject', 'export', 'profile', 'boot', 'default-hdd'];
-function message(kind = 0) {
-  const ptr = (core.message(kind) >>> 0), len = core.message_len();
-  return decoder.decode(new Uint8Array(core.memory.buffer, ptr, len));
-}
 function fail(error) {
   $('error').textContent = String(error.message ?? error); $('error').hidden = false;
 }
 function status(text) { $('status').textContent = text; $('lamp').classList.toggle('active', running); }
 function clearError() { $('error').hidden = true; $('error').textContent = ''; }
+function acceptState(state) {
+  if (!state || state.generation < generation) return;
+  generation = state.generation; bootByte = state.boot;
+  for (const [id,value] of state.metrics) metrics.set(id,value);
+}
+function rpc(type, data, transfer = []) {
+  if (workerFailed) return Promise.reject(Error('Emulation Worker stopped. Reload to restart.'));
+  return new Promise((resolve,reject) => {
+    const id = ++requestId;
+    pending.set(id,{resolve,reject});
+    try { worker.postMessage({id,type,data},transfer); }
+    catch (error) { pending.delete(id); reject(error); }
+  });
+}
+function workerFault(error) {
+  workerFailed = true; running = false;
+  if (outputGain) outputGain.gain.value = 0;
+  worker?.terminate();
+  for (const waiter of pending.values()) waiter.reject(error);
+  pending.clear(); mediaBusy(true); status('Worker stopped · reload to restart'); fail(error);
+}
+function recycleFrame(frame) {
+  worker.postMessage({type:'frameAck',data:frame.buffer},[frame.buffer]);
+}
 function render() {
-  const ptr = (core.frame() >>> 0);
-  // frame() can grow Wasm memory: obtain views only after each exported call.
-  const pixels = new Uint8ClampedArray(core.memory.buffer, ptr, 640 * 400 * 4);
-  context.putImageData(new ImageData(pixels, 640, 400), 0, 0);
-  if ($('profile').value === '1') $('display-mode').textContent = core.metric(13)
-    ? '640 × 400 · 256 colors · PEGC'
-    : '640 × 400 · 16 colors · Shinonome Japanese CG · approximate OPN';
+  presenting = false;
+  if (!pendingFrame) return;
+  const frame = pendingFrame; pendingFrame = null;
+  if (frame.generation === generation) {
+    context.putImageData(new ImageData(new Uint8ClampedArray(frame.buffer),640,400),0,0);
+    if ($('profile').value === '1') $('display-mode').textContent = core.metric(13)
+      ? '640 × 400 · 256 colors · PEGC'
+      : '640 × 400 · 16 colors · Shinonome Japanese CG · approximate OPN';
+  }
+  recycleFrame(frame);
+}
+async function soundState() {
+  if (outputGain) outputGain.gain.value = 0;
+  await rpc('sound',{enabled:!muted, state:audio?.state});
+  if (outputGain) outputGain.gain.value = running && !muted && audio?.state === 'running' ? 1 : 0;
 }
 async function enableAudio() {
-  if (!audio) { audio = new AudioContext({ sampleRate: 48000 }); outputGain = audio.createGain(); outputGain.connect(audio.destination); }
-  await audio.resume(); muted = false; outputGain.gain.value = running ? 1 : 0;
-  $('sound').textContent = 'Mute'; $('sound').setAttribute('aria-pressed', 'true');
-}
-function playAudio() {
-  const count = core.audio_len();
-  if (count && audio?.state === 'running' && !muted) {
-    const ptr = (core.audio_ptr() >>> 0);
-    const samples = new Float32Array(core.memory.buffer, ptr, count).slice();
-    const buffer = audio.createBuffer(1, count, 48000);
-    buffer.copyToChannel(samples, 0);
-    audioEnergy += samples.reduce((sum, n) => sum + n * n, 0);
-    scheduledSamples += count;
-    const source = audio.createBufferSource(); source.buffer = buffer; source.connect(outputGain);
-    nextAudio = Math.max(audio.currentTime + 0.025, Math.min(nextAudio, audio.currentTime + 0.12));
-    source.start(nextAudio); nextAudio += count / 48000;
+  if (!audio) {
+    audio = new AudioContext({sampleRate:48000});
+    outputGain = audio.createGain(); outputGain.gain.value = 0; outputGain.connect(audio.destination);
+    audioSetup = (async () => {
+      await audio.audioWorklet.addModule(new URL('audio-worklet.js',import.meta.url));
+      audioNode = new AudioWorkletNode(audio,'pc98-audio',{outputChannelCount:[1]});
+      audioNode.onprocessorerror = () => { muted = true; soundState().catch(fail); fail('AudioWorklet stopped. Reload to enable sound again.'); };
+      const channel = new MessageChannel();
+      audioNode.port.postMessage({type:'connect',port:channel.port1},[channel.port1]);
+      audioNode.connect(outputGain);
+      await rpc('audioPort',channel.port2,[channel.port2]);
+      audio.onstatechange = () => soundState().catch(fail);
+    })();
   }
-  core.audio_clear();
+  // resume is invoked before awaiting module loading to retain gesture permission.
+  const resumed = audio.resume();
+  try { await Promise.all([audioSetup,resumed]); }
+  catch (error) { muted = true; await audio.close(); audio = null; throw error; }
+  muted = false; await soundState();
+  $('sound').textContent = 'Mute'; $('sound').setAttribute('aria-pressed','true');
 }
 function releaseKeys() {
-  for (const scan of held) core?.key(scan, 0);
+  for (const scan of held) core?.key(scan, 0).catch(fail);
   held.clear(); document.querySelectorAll('.held').forEach((el) => el.classList.remove('held'));
-  core?.mouse(0, 0, 0); pointerPosition = undefined;
+  core?.mouse(0, 0, 0).catch(fail); pointerPosition = undefined;
 }
-function setRunning(value) {
-  running = value; if (outputGain) outputGain.gain.value = running && !muted ? 1 : 0; $('pause').textContent = value ? 'Pause' : 'Resume';
-  if (!value) { releaseKeys(); core.audio_clear(); }
+async function setRunning(value) {
+  running = value; $('pause').textContent = value ? 'Pause' : 'Resume';
+  if (outputGain) outputGain.gain.value = running && !muted ? 1 : 0;
+  if (!value) releaseKeys();
+  await rpc('running',value);
   status(value ? 'Running · click screen to type' : 'Paused');
 }
 function showMedia() {
@@ -62,7 +95,7 @@ function showMedia() {
     + (drive === 2 && core.metric(21) === 0 ? ' (requires Ap)' : '');
   $('media-name').textContent = mounted[drive]?.name ?? 'No disk';
   $('media-origin').textContent = mounted[drive] ? (mounted[drive].source === 'bundled' ? 'Bundled' : 'Local file') : '';
-  $('eject').disabled = !mounted[drive]; $('export').disabled = !mounted[drive];
+  $('eject').disabled = loading || !mounted[drive]; $('export').disabled = loading || !mounted[drive];
   // Rust owns the preference. VM always boots its floppy, retaining Ap's choice.
   const boot = core.metric(21) === 1 && core.metric(22) ? 2 : 0;
   $('boot').value = String(core.metric(22));
@@ -85,18 +118,15 @@ function checkSize(size, drive) {
     ? 'HDI file extent must be below 4 GiB (32-bit container/browser addressing).'
     : 'Floppy image exceeds 4 MiB.');
 }
-function insert(bytes, name, drive) {
-  checkSize(bytes.length, drive);
-  const ptr = (core.input_buffer(bytes.length) >>> 0);
-  if (!ptr) throw Error('Unable to allocate media buffer.');
-  new Uint8Array(core.memory.buffer, ptr, bytes.length).set(bytes);
-  if (!core.insert(drive, /\.(d88|d98)$/i.test(name) ? 1 : 0)) throw Error(message(2));
-  mounted[drive] = { name, format: /\.(d88|d98)$/i.test(name) ? 'd88' : 'hdm' };
-  lastDrive = drive;
-  showMedia();
+async function insert(bytes, name, drive) {
+  checkSize(bytes.length,drive);
+  await rpc('input',bytes.buffer,[bytes.buffer]);
+  await rpc('insert',{drive,format:/\.(d88|d98)$/i.test(name) ? 1 : 0});
+  mounted[drive] = {name,format:/\.(d88|d98)$/i.test(name) ? 'd88' : 'hdm'};
+  lastDrive = drive; showMedia();
 }
 async function loadBytes(bytes, name, drive) {
-  clearError(); insert(bytes, name, drive);
+  clearError(); await insert(bytes, name, drive);
   // Floppy insertion is live media access, independent of the next boot.
 }
 async function bundled(name) {
@@ -104,48 +134,52 @@ async function bundled(name) {
   loading = true; mediaBusy(true);
   try {
     // Audio is initialized inside the user gesture, before waiting for assets.
-    const enable = enableAudio().catch((error) => fail(error));
+    const enable = enableAudio().then(() => null,error => error);
     const response = await fetch(`media/${name}`);
     if (!response.ok) throw Error(`Cannot load demo: HTTP ${response.status}`);
     $('drive').value = '0';
     await loadBytes(new Uint8Array(await response.arrayBuffer()), name, 0);
     mounted[0].source = 'bundled';
-    core.set_boot_source(0); resetMachine();
-    await enable;
+    await core.set_boot_source(0); await resetMachine();
+    const audioError = await enable;
+    if (audioError) fail(audioError);
   } catch (error) { fail(error); } finally { loading = false; mediaBusy(false); }
-}
-function exportBytes(drive) {
-  if (drive === 2) {
-    const len = (core.hdi_len() >>> 0);
-    if (len > 16 * 1024 * 1024) throw Error('Use exportBlob for large HDI inspection.');
-    const bytes = new Uint8Array(len);
-    for (let at = 0; at < len; at += chunkBytes) {
-      const n = Math.min(chunkBytes, len - at), ptr = (core.hdi_read_chunk(at, n) >>> 0);
-      if (!ptr) throw Error(message(2) || 'Unable to read disk export.');
-      bytes.set(new Uint8Array(core.memory.buffer, ptr, n), at);
-    }
-    return bytes;
-  }
-  const ptr = (core.export_disk(drive) >>> 0), len = core.export_len();
-  return new Uint8Array(core.memory.buffer, ptr, len).slice();
 }
 $('game').onclick = () => bundled('startrail.hdm');
 $('hello').onclick = () => bundled('hello98.tfd');
-$('pause').onclick = () => { if (core) setRunning(!running); };
+$('pause').onclick = () => exclusive(() => setRunning(!running));
 function showActiveBoot() {
-  const drive = core.peek(0x584) === 0x80 ? 2 : 0;
+  const drive = bootByte === 0x80 ? 2 : 0;
   $('active-boot').textContent = `Booted: ${driveNames[drive]} · ${mounted[drive]?.name ?? 'No disk'}`;
 }
-function resetMachine() { releaseKeys(); core.reset(); showActiveBoot(); nextAudio = 0; clearError(); showMedia(); setRunning(true); render(); screen.focus(); }
-$('reset').onclick = resetMachine;
-$('boot').onchange = () => { core.set_boot_source(Number($('boot').value)); showMedia(); };
-$('sound').onclick = async () => {
-  try { if (muted) await enableAudio(); else { muted = true; outputGain.gain.value = 0; $('sound').textContent = 'Enable sound'; $('sound').setAttribute('aria-pressed', 'false'); } }
-  catch (error) { fail(error); }
-};
-function selectProfile() {
+async function resetMachine() {
   releaseKeys();
-  if (!core.set_profile(Number($('profile').value))) throw Error('Unsupported machine profile');
+  if (outputGain) outputGain.gain.value = 0;
+  if (pendingFrame) { recycleFrame(pendingFrame); pendingFrame = null; }
+  await core.reset(); showActiveBoot(); clearError(); showMedia();
+  await setRunning(!document.hidden); screen.focus();
+}
+async function exclusive(operation) {
+  if (!core || loading || workerFailed) return;
+  loading = true; mediaBusy(true);
+  try { await operation(); } catch (error) { fail(error); }
+  finally { loading = false; mediaBusy(false); }
+}
+$('reset').onclick = () => exclusive(resetMachine);
+$('boot').onchange = () => {
+  const source = Number($('boot').value);
+  exclusive(async () => { await core.set_boot_source(source); showMedia(); });
+};
+$('sound').onclick = () => exclusive(async () => {
+  clearError();
+  if (muted) await enableAudio();
+  else { muted = true; await soundState(); $('sound').textContent = 'Enable sound'; $('sound').setAttribute('aria-pressed','false'); }
+});
+async function selectProfile() {
+  releaseKeys();
+  const profile = $('profile').value;
+  if (!await core.set_profile(Number(profile))) throw Error('Unsupported machine profile');
+  $('profile').value = profile;
   document.title = `pc98-rust · ${$('profile').value === '1' ? 'PC-9821Ap DOS' : 'PC-9801VM'}`;
   $('profile-label').textContent = $('profile').value === '1' ? 'PC-9821Ap DOS · experimental' : 'PC-9801VM · experimental';
   $('display-mode').textContent = $('profile').value === '1'
@@ -153,46 +187,52 @@ function selectProfile() {
     : '640 × 400 · 8 colors · replacement Latin font';
   $('mouse').disabled = $('profile').value !== '1';
   if ($('mouse').disabled) $('mouse').checked = false;
-  clearError(); nextAudio = 0; core.audio_clear(); render(); showMedia(); showActiveBoot();
-  setRunning(Boolean(mounted[0] || (mounted[2] && $('profile').value === '1')));
+  clearError(); showMedia(); showActiveBoot();
+  await setRunning(!document.hidden && Boolean(mounted[0] || (mounted[2] && $('profile').value === '1')));
 }
-$('profile').onchange = () => { try { selectProfile(); } catch (error) { fail(error); } };
+$('profile').onchange = () => exclusive(selectProfile);
 $('drive').onchange = showMedia;
-function mayReplace(drive) {
-  return drive !== 2 || !mounted[2] || (core.hdi_dirty_page(0) >>> 0) === 0xffffffff ||
+async function mayReplace(drive) {
+  return drive !== 2 || !mounted[2] || ((await core.hdi_dirty_page(0)) >>> 0) === 0xffffffff ||
     confirm(`${mounted[2].name} has guest writes. Discard them? Cancel to keep the disk and use Export disk first.`);
 }
-$('eject').onclick = () => { const drive = mediaDrive(); if (!mounted[drive] || !mayReplace(drive)) return; core.eject(drive); mounted[drive] = null; showMedia(); };
+$('eject').onclick = () => exclusive(async () => {
+  const drive = mediaDrive(), resume = running;
+  if (!mounted[drive]) return;
+  if (drive === 2) await setRunning(false);
+  try {
+    if (!await mayReplace(drive)) return;
+    await core.eject(drive); mounted[drive] = null; showMedia();
+  } finally { if (drive === 2 && !workerFailed) await setRunning(resume && !document.hidden); }
+});
 const chunkBytes = 1024 * 1024;
-const yieldUI = () => globalThis.scheduler?.yield() ?? new Promise(resolve => setTimeout(resolve, 0));
 function mediaBusy(value) {
+  value ||= loading || workerFailed;
   for (const id of [...controls, 'file', 'drive']) $(id).disabled = value;
-  if (!value) showMedia();
+  if (!value && !workerFailed) showMedia();
 }
 async function exportBlob(drive) {
-  if (drive !== 2) return new Blob([exportBytes(drive)]);
+  if (drive !== 2) return new Blob([await rpc('export',drive)]);
   // Snapshot the mounted bytes while paused. Local File slices can become
   // unreadable after saving over the input file, even after Blob construction
   // succeeds. Blob snapshots own each bounded chunk independently of that file
   // and of the reusable Wasm transfer buffer.
   const resume = running;
-  setRunning(false); mediaBusy(true);
+  await setRunning(false); mediaBusy(true);
   try {
-    const len = (core.hdi_len() >>> 0), parts = [];
+    const len = await rpc('snapshot',true), parts = [];
     if (!len) throw Error('No HDI mounted.');
     for (let at = 0; at < len; at += chunkBytes) {
-      const n = Math.min(chunkBytes, len - at), ptr = (core.hdi_read_chunk(at, n) >>> 0);
-      if (!ptr) throw Error(message(2) || 'Unable to read disk export chunk.');
-      parts.push(new Blob([new Uint8Array(core.memory.buffer, ptr, n)]));
+      const n = Math.min(chunkBytes,len-at);
+      parts.push(new Blob([await rpc('readChunk',[at,n])]));
       status(`Exporting HDI · ${Math.min(100, Math.floor((at + n) * 100 / len))}%`);
-      await yieldUI();
     }
     const blob = new Blob(parts, { type: 'application/octet-stream' });
     if (blob.size !== len) throw Error('Incomplete HDI export; please retry.');
     return blob;
   } catch (error) {
     throw Error(`Cannot export HDI: ${error.message}. Disk remains mounted; free browser resources and retry.`);
-  } finally { mediaBusy(false); setRunning(resume); }
+  } finally { await rpc('snapshot',false); mediaBusy(false); await setRunning(resume && !document.hidden); }
 }
 $('export').onclick = async () => {
   const drive = mediaDrive();
@@ -215,38 +255,36 @@ async function loadFile(file) {
     clearError();
     const drive = resolveDrive(file.name);
     checkSize(file.size, drive);
-    if (!mayReplace(drive)) return;
     mediaBusy(true);
     if (drive === 2) {
-      setRunning(false); suspended = true;
-      const transfer = bytes => {
-        const ptr = (core.input_buffer(bytes.length) >>> 0);
-        if (!ptr) throw Error('Browser memory cannot allocate the HDI transfer chunk; mounted disk retained.');
-        new Uint8Array(core.memory.buffer, ptr, bytes.length).set(bytes);
-      };
-      transfer(new Uint8Array(await file.slice(0, 32).arrayBuffer()));
-      if (!core.hdi_begin(file.size)) throw Error(message(2));
+      await setRunning(false); suspended = true;
+      if (!await mayReplace(drive)) { await setRunning(resume && !document.hidden); return; }
+      const transfer = bytes => rpc('input',bytes.buffer,[bytes.buffer]);
+      await transfer(new Uint8Array(await file.slice(0,32).arrayBuffer()));
+      await core.hdi_begin(file.size);
       for (let at = 0; at < file.size; at += chunkBytes) {
-        transfer(new Uint8Array(await file.slice(at, at + chunkBytes).arrayBuffer()));
-        if (!core.hdi_append()) throw Error(message(2));
+        await transfer(new Uint8Array(await file.slice(at, at + chunkBytes).arrayBuffer()));
+        await core.hdi_append();
         status(`Importing HDI · ${Math.min(100, Math.floor((at + chunkBytes) * 100 / file.size))}%`);
       }
-      if (!core.hdi_commit()) throw Error(message(2));
+      await core.hdi_commit();
       mounted[2] = { name: file.name, format: 'hdi' };
       lastDrive = 2;
-      resetMachine();
+      await resetMachine();
     } else {
       await loadBytes(new Uint8Array(await file.arrayBuffer()), file.name, drive);
     }
-  } catch (error) { core.hdi_cancel(); fail(error); if (suspended) setRunning(resume); }
+  } catch (error) { await core.hdi_cancel().catch(() => {}); fail(error); if (suspended && !workerFailed) await setRunning(resume && !document.hidden); }
   finally { loading = false; mediaBusy(false); }
 }
 async function defaultHdd() {
-  if (!core || loading || core.metric(21) !== 1 || !mayReplace(2)) return;
+  if (!core || loading || core.metric(21) !== 1) return;
   loading = true; mediaBusy(true);
   const resume = running;
-  setRunning(false); clearError(); status('Loading FreeDOS HDD…');
   try {
+    await setRunning(false);
+    if (!await mayReplace(2)) { await setRunning(resume && !document.hidden); return; }
+    clearError(); status('Loading FreeDOS HDD…');
     const response = await fetch('freedos/manifest.json');
     if (!response.ok) throw Error(`Cannot load FreeDOS manifest: HTTP ${response.status}`);
     const manifest = await response.json();
@@ -276,27 +314,22 @@ async function defaultHdd() {
     const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', prefix)),
       byte => byte.toString(16).padStart(2, '0')).join('');
     if (digest !== manifest.prefix_sha256) throw Error('FreeDOS template checksum mismatch');
-    const transfer = bytes => {
-      const ptr = core.input_buffer(bytes.length) >>> 0;
-      if (!ptr) throw Error('Browser memory cannot allocate FreeDOS transfer buffer');
-      new Uint8Array(core.memory.buffer, ptr, bytes.length).set(bytes);
-    };
-    transfer(prefix.subarray(0, 32));
-    if (!core.hdi_begin(manifest.bytes)) throw Error(message(2));
-    transfer(prefix);
-    if (!core.hdi_append()) throw Error(message(2));
+    const transfer = bytes => rpc('input',bytes.buffer,[bytes.buffer]);
+    await transfer(prefix.slice(0,32));
+    await core.hdi_begin(manifest.bytes);
+    await transfer(prefix);
+    await core.hdi_append();
     const zero = new Uint8Array(chunkBytes);
     for (let at = received; at < manifest.bytes; at += chunkBytes) {
-      transfer(zero.subarray(0, Math.min(chunkBytes, manifest.bytes-at)));
-      if (!core.hdi_append()) throw Error(message(2));
-      if (at % (8*chunkBytes) === received % (8*chunkBytes)) await yieldUI();
+      await transfer(zero.slice(0, Math.min(chunkBytes, manifest.bytes-at)));
+      await core.hdi_append();
     }
-    if (!core.hdi_commit()) throw Error(message(2));
+    await core.hdi_commit();
     mounted[2] = {name: 'FreeDOS-128MiB.hdi', format: 'hdi', source: 'bundled'};
     lastDrive = 2;
-    resetMachine();
+    await resetMachine();
   } catch (error) {
-    core.hdi_cancel(); setRunning(resume);
+    await core.hdi_cancel().catch(() => {}); if (!workerFailed) await setRunning(resume && !document.hidden);
     fail(`${error.message}. Disk retained. Use Restore FreeDOS HDD to retry, or insert local media.`);
   } finally { loading = false; mediaBusy(false); }
 }
@@ -317,7 +350,7 @@ const rows = [
 function key(scan, down) {
   if (!core || !running) return;
   if (down) held.add(scan); else held.delete(scan);
-  core.key(scan, down ? 1 : 0);
+  core.key(scan, down ? 1 : 0).catch(fail);
 }
 for (const row of rows) {
   const element = document.createElement('div'); element.className = 'keyrow';
@@ -344,38 +377,50 @@ for (const name of ['pointermove', 'pointerdown', 'pointerup', 'pointercancel'])
   const delta = pointerPosition ? point.map((n, i) => Math.max(-127, Math.min(127, Math.round(n - pointerPosition[i])))) : [0, 0];
   pointerPosition = point;
   if (name === 'pointerdown') { screen.focus(); screen.setPointerCapture(event.pointerId); }
-  core.mouse(delta[0], delta[1], name === 'pointercancel' ? 0 : event.buttons);
+  core.mouse(delta[0], delta[1], name === 'pointercancel' ? 0 : event.buttons).catch(fail);
   event.preventDefault();
 });
 screen.addEventListener('pointerleave', () => { pointerPosition = undefined; });
 screen.addEventListener('contextmenu', event => { if ($('mouse').checked) event.preventDefault(); });
-$('mouse').onchange = () => { core?.mouse(0, 0, 0); pointerPosition = undefined; };
+$('mouse').onchange = () => { core?.mouse(0, 0, 0).catch(fail); pointerPosition = undefined; };
 screen.addEventListener('blur',releaseKeys); window.addEventListener('blur',releaseKeys);
-document.addEventListener('visibilitychange',()=>{if(document.hidden && core && running)setRunning(false);});
-let previous = 0;
-function animate(now) {
-  if (core && running) {
-    // Fixed bounded slices; never catch up an unbounded backlog after tab sleep.
-    const slices = Math.max(1, Math.min(2, Math.round((now-previous)/16.667)));
-    for(let i=0;i<slices;i++) { core.step(16667); playAudio(); }
-    if (core.metric(4)) { setRunning(false); fail(message()); status('Guest stopped · unsupported instruction or BIOS request'); }
-    render();
-  }
-  previous = now; requestAnimationFrame(animate);
-}
+document.addEventListener('visibilitychange',()=>{if(document.hidden && core && running)setRunning(false).catch(fail);});
 try {
-  const response = await fetch('core.wasm');
-  if (!response.ok) throw Error(`Missing Wasm bundle (HTTP ${response.status}). Run npm run build.`);
-  const result = await WebAssembly.instantiate(await response.arrayBuffer(), {});
-  core = result.instance.exports;
-  core.set_boot_source(1);
-  selectProfile();
-  // Machine-readable inspection of the actual Wasm core for deterministic tests.
-  window.pc98 = { core, text: () => message(1), read: (addr) => core.peek(addr),
-    stats: () => ({instructions:core.metric(0),reads:core.metric(1),writes:core.metric(2),hddReads:core.metric(9),hddWrites:core.metric(10),mouseEvents:core.metric(11),mouseLatches:core.metric(12),pegc:core.metric(13),pcmWrites:core.metric(14),pcmSamples:core.metric(15),beepEdges:core.metric(3),fmWrites:core.metric(6),fmKeyEdges:core.metric(7),error:message(),beep:core.beep(),running,audioState:audio?.state,audioGain:outputGain?.gain.value,audioEnergy,scheduledSamples}),
-    exportDisk: (drive=0) => Array.from(exportBytes(drive)),
-    exportBlob: (drive=2) => exportBlob(drive),
+  worker = new Worker(new URL('emulator-worker.js',import.meta.url),{type:'module'});
+  worker.onerror = event => { event.preventDefault(); workerFault(Error(event.message || 'Emulation Worker failed')); };
+  worker.onmessageerror = () => workerFault(Error('Invalid Emulation Worker message'));
+  worker.onmessage = ({data:m}) => {
+    if (m.event === 'fault') { workerFault(Error(m.error)); return; }
+    if (m.event === 'stopped') {
+      setRunning(false).catch(fail); fail(m.error); status('Guest stopped · unsupported instruction or BIOS request'); return;
+    }
+    acceptState(m.state ?? (m.event === 'frame' ? m : null));
+    if (m.event === 'frame') {
+      pendingFrame = m;
+      if (!presenting) { presenting = true; requestAnimationFrame(render); }
+      return;
+    }
+    const waiter = pending.get(m.id);
+    if (!waiter) return;
+    pending.delete(m.id);
+    if (m.error) waiter.reject(Error(m.error)); else waiter.resolve(m.value);
   };
-  mediaBusy(true); render(); requestAnimationFrame(animate);
+  const params = new URLSearchParams(location.search);
+  await rpc('init',{diagnostics:params.has('diagnostics'),manual:params.has('manual')});
+  // This client posts commands and caches metrics; Wasm exports stay in the Worker.
+  core = new Proxy({}, {get:(_,name) => name === 'metric' ? id => metrics.get(id) :
+    (...args) => rpc('call',{name,args})});
+  await selectProfile();
+  window.pc98 = {text:() => rpc('text'), read:addr => rpc('read',addr), stats:() => rpc('stats'),
+    exportBlob:async (drive=2) => {
+      if (loading) throw Error('Media operation already in progress');
+      loading = true; mediaBusy(true);
+      try { return await exportBlob(drive); } finally { loading = false; mediaBusy(false); }
+    },
+  };
+  if (params.has('diagnostics')) window.pc98.audio = {
+    suspend:async () => { await audio.suspend(); await soundState(); },
+    resume:async () => { await audio.resume(); await soundState(); },
+  };
   await defaultHdd();
-} catch (error) { status('Unable to start'); fail(error); }
+} catch (error) { mediaBusy(true); status('Unable to start'); fail(error); }
