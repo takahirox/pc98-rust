@@ -8,7 +8,7 @@ const source = readFileSync(new URL('../web/emulator-worker.js',import.meta.url)
 // Exercise the production scheduler with a 7 ms cost per 10 ms guest slice.
 // This host can produce PCM in real time, but cannot also pay a nested timer's
 // 4 ms minimum on every slice. No wall-clock sleeps or platform speed thresholds.
-function worker(code=source) {
+function worker(code=source, {prebuffer=2400, stalls=[]}={}) {
   let now=0, nextId=0, samples=0, started=false, missed=0, slices=0;
   const events=[], blocks=[], recycled=[];
   const sink={audioEpoch:0,consumedSamples:0};
@@ -38,9 +38,10 @@ function worker(code=source) {
       }
     },
     testSink:sink, recycled,
-    testPort:{postMessage:m=>{
+    testPort:{start(){},postMessage:m=>{
+      if (m.type !== 'pcm') return;
       blocks.push({count:m.count,buffer:m.buffer});
-      if(blocks.reduce((sum,b)=>sum+b.count,0)>=1440) started=true;
+      if(blocks.reduce((sum,b)=>sum+b.count,0)>=prebuffer) started=true;
     }},
     testCore:{memory:{buffer:new ArrayBuffer(4096)},audio_ptr:()=>0,
       audio_len:()=>samples,audio_clear:()=>{samples=0;},metric:()=>0,
@@ -49,6 +50,7 @@ function worker(code=source) {
   vm.runInContext(code.replace('import.meta.url', "'file:///emulator-worker.js'"),context);
   const run=code=>vm.runInContext(code,context);
   run("core=testCore;port=testPort;sinkStats=testSink;running=true;audioEnabled=true;audioState='running';frameDue=Infinity;");
+  for (const [at,duration] of stalls) post(()=>advance(now+duration),at);
   function next() {
     events.sort((a,b)=>a.at-b.at || a.id-b.id);
     const event=events.shift(); if(!event) return false;
@@ -70,13 +72,26 @@ test('audio catch-up yields finite tasks without the nested timer producer defic
   const current=worker(); current.run('schedule(0)'); current.until(5000);
   assert.equal(current.result().missed,0);
   assert(current.result().produced>=48000*4.95);
-  assert(current.result().outstanding<2400);
+  assert(current.result().outstanding<3360);
   // Negative control keeps the same credits, watermark, sink and guest cost;
   // only restore the previous timer yield. Prefilling cannot hide its deficit.
   const old=worker(source.replace('? 0 : 5)', '? 1 : 5)'));
   old.run('schedule(0)'); old.until(5000);
   assert(old.result().missed>48000*0.3);
   assert(old.result().produced<48000*4.6);
+});
+
+test('the finite reserve survives isolated 35 ms scheduling stalls without hiding a producer deficit',()=>{
+  const stalls=[[1000,35],[3000,35]];
+  const current=worker(source,{stalls}); current.run('schedule(0)'); current.until(5000);
+  assert.equal(current.result().missed,0);
+  assert(current.result().produced>=48000*4.95);
+  assert(current.result().outstanding<3360);
+  // Same slice cost and stalls, but the former 40 ms target/30 ms prefill.
+  // This isolates a reserve shortfall from the sustained timer deficit above.
+  const small=worker(source.replaceAll('2880','1920'),{prebuffer:1440,stalls});
+  small.run('schedule(0)'); small.until(5000);
+  assert(small.result().missed>0);
 });
 
 test('pause cancels a queued task, resume ignores stale tasks, and a full sink waits',()=>{
@@ -86,9 +101,30 @@ test('pause cancels a queued task, resume ignores stale tasks, and a full sink w
   w.run('running=true;schedule(0);running=false;schedule();running=true;schedule(0);');
   w.next(); assert.equal(w.result().slices,0); // Stale task cannot run the resumed schedule.
   w.next(); assert.equal(w.result().slices,1);
-  const full=worker(); full.run('sentSamples=1920;schedule(0)'); full.next();
+  const full=worker(); full.run('sentSamples=2880;schedule(0)'); full.next();
   assert.equal(full.result().slices,0);
   full.next();
   assert(full.result().now>=5); // No immediate spin once the watermark is full.
   assert.equal(full.result().slices,0);
+});
+
+test('a current sink credit preempts polling, while stale and full cursors do not',async()=>{
+  const w=worker();
+  w.run('running=false');
+  const connected=w.run("command('audioPort',testPort)");
+  w.run("testPort.onmessage({data:{type:'flushed',epoch:audioEpoch,stats:{audioEpoch,consumedSamples:0}}})");
+  await connected;
+  w.run('running=true;sentSamples=2880;schedule(5)');
+  w.run("testPort.onmessage({data:{type:'recycle',epoch:audioEpoch-1,stats:{audioEpoch:audioEpoch-1,consumedSamples:480}}})");
+  w.run("testPort.onmessage({data:{type:'stats',epoch:audioEpoch,stats:{audioEpoch,consumedSamples:0}}})");
+  assert.equal(w.run("timer === 'task'"),false);
+  w.run("testPort.onmessage({data:{type:'recycle',epoch:audioEpoch,stats:{audioEpoch,consumedSamples:480}}})");
+  w.next();
+  assert.equal(w.result().slices,1);
+  assert.equal(w.result().now,7); // Execute immediately, without the 5 ms polling wait.
+  w.next();
+  assert.equal(w.result().slices,1); // The preempted timer cannot execute another slice.
+  w.run('running=false;schedule()');
+  w.run("testPort.onmessage({data:{type:'recycle',epoch:audioEpoch,stats:{audioEpoch,consumedSamples:960}}})");
+  assert.equal(w.run('timer'),null); // Credits cannot restart paused execution.
 });

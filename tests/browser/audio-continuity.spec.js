@@ -72,7 +72,7 @@ test('ADV98 production playback remains continuous through scene changes', async
     expect(current.sentSamples).toBe(current.producedSamples);
     expect(current.queuedBlocks).toBeLessThanOrEqual(6);
     expect(current.outstandingSamples).toBeGreaterThanOrEqual(0);
-    expect(current.outstandingSamples).toBeLessThan(2400); // Target 40 ms + one finite slice.
+    expect(current.outstandingSamples).toBeLessThan(3360); // Target 60 ms + one finite slice.
     expect(rendered,evidence).toBeGreaterThan(45000);
     // Permit isolated host scheduling noise (<0.5%), reject the baseline's
     // ~6% sustained silence. No persistent dropout may exceed 100 ms.
@@ -81,7 +81,7 @@ test('ADV98 production playback remains continuous through scene changes', async
     expect(current.audioEnergy).toBeGreaterThan(previous.audioEnergy+0.1);
     const guest=(current.cycles-previous.cycles)*48000/8000000;
     expect(Math.abs(source-guest)).toBeLessThan(2); // No guest-time/sample loss.
-    expect(Math.abs(source-rendered)).toBeLessThan(2400);
+    expect(Math.abs(source-rendered)).toBeLessThan(3360);
     observations.push({source,rendered,missed,queued:current.queuedSamples,edges:current.fmKeyEdges-previous.fmKeyEdges,
       soundIrqs:current.soundIrqEdges-previous.soundIrqEdges,fmPitch:current.fmPitch,ssgPeriod:current.ssgPeriod});
     previous=current;

@@ -102,6 +102,9 @@ function schedule(delay = 10) {
     if (timer !== 'task') clearTimeout(timer);
     timer = null; ++tickToken; return;
   }
+  // A returned credit is a fresh sink cursor. Do not leave its refill behind
+  // the polling timer: that spends reserve precisely when the sink needs PCM.
+  if (delay === 0 && timer && timer !== 'task') { clearTimeout(timer); timer = null; }
   if (timer) return;
   // Nested timers clamp to >=4 ms in browsers. Paying that after every
   // 10 ms guest slice starves audio when the slice itself needs >6 ms.
@@ -115,12 +118,12 @@ function tick() {
   const started = performance.now();
   if (!running || busy || transaction) { schedule(); return; }
   try {
-    // The device consumes 48 kHz guest PCM. Target 40 ms ahead of its
+    // The device consumes 48 kHz guest PCM. Target 60 ms ahead of its
     // source cursor, including in-flight messages. Timer jitter cannot become
     // a permanent producer deficit, and a slow/suspended sink cannot lose PCM.
     // Each task still executes only one finite 10 ms slice before yielding.
     if (playingAudio()) {
-      if (outstandingAudio() < 1920 && audioBuffers.length) core.step(10000);
+      if (outstandingAudio() < 2880 && audioBuffers.length) core.step(10000);
     } else {
       if (!deadline) deadline = started;
       if (started >= deadline) {
@@ -136,7 +139,7 @@ function tick() {
       postMessage({event:'stopped', error:message()});
     }
   } catch (error) { running = false; postMessage({event:'fault', error:error.message}); }
-  schedule(playingAudio() ? (outstandingAudio() < 1920 && audioBuffers.length ? 0 : 5)
+  schedule(playingAudio() ? (outstandingAudio() < 2880 && audioBuffers.length ? 0 : 5)
     : Math.max(1,deadline-performance.now()));
 }
 const calls = new Set(['key','mouse','set_boot_source','set_profile','reset','eject',
@@ -175,6 +178,7 @@ async function command(type, data) {
       if (m.buffer) audioBuffers.push(m.buffer);
       if (m.stats && m.epoch === audioEpoch) sinkStats = m.stats;
       if (m.type === 'flushed' && m.epoch === audioEpoch) { flushWaiter?.(); flushWaiter = null; }
+      if (m.epoch === audioEpoch && playingAudio() && outstandingAudio() < 2880 && audioBuffers.length) schedule(0);
     };
     port.start(); await flushAudio(); return;
   }

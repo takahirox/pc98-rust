@@ -70,15 +70,15 @@ missing frames in a window allowing fewer than 361. The test therefore detects
 the pacing defect independently of protocol/diagnostic availability; prefill
 alone cannot hide the permanent producer deficit.
 
-The Worker now uses the sink's consumed **source sample** count to target 1,920
-outstanding samples (40 ms), counting messages in transit. It executes one finite
+The Worker now uses the sink's consumed **source sample** count to target 2,880
+outstanding samples (60 ms), counting messages in transit. It executes one finite
 slice per task, yields, and stops producing when sufficiently ahead or out of
 credits. A late timer can be followed by another short task without accumulating
 unbounded wall-clock debt. Muted execution uses absolute 10 ms deadlines with
 catch-up bounded to 30 ms and cleared on control barriers. The guest's 8 MHz
 clock, instructions, sound synthesis, timer and IRQ order are unchanged.
 
-The sink prefills 1,440 source samples (30 ms) at startup/recovery. Its integer
+The sink prefills 2,400 source samples (50 ms) at startup/recovery. Its integer
 phase accumulator avoids floating-point drift in sample selection at 44.1 kHz,
 retains phase across blocks and preserves source cadence at 96 kHz. It does not
 stretch tempo or fabricate source PCM to conceal starvation. Six 1,024-sample
@@ -111,7 +111,8 @@ A DOM event is handled during the transition. The test permits isolated host
 noise below 0.5% plus one quantum per window, and no dropout of 100 ms or longer.
 The baseline exceeds this by a large margin.
 
-The final full-suite observations, including the scene change, were:
+The initial full-suite observations (40 ms target/30 ms prefill), including the
+scene change, were:
 
 | Device rate | Observation windows | Produced source samples | Missing output frames | FM key edges | Sound IRQ12 edges |
 | --- | --- | --- | --- | --- | --- |
@@ -169,7 +170,7 @@ On 2026-11-06, macOS arm64, release Wasm, Playwright 1.56.1 Chromium:
   the observation, both focused cases passed (48.4 s), including all control
   barriers, with zero underflows/drops/overflows/order/checksum errors.
 
-The final `npx playwright test --workers=4` run at `/` and `/pc98-rust/` passed:
+The initial `npx playwright test --workers=4` run at `/` and `/pc98-rust/` passed:
 **245 passed, 3 skipped, 0 failed (4.2 minutes)**. Both continuity/control cases
 passed with their final device-rate and 100 ms dropout assertions. The three
 existing Pages skips avoid duplicating the 1 GiB capacity, large DOS and
@@ -199,8 +200,8 @@ Catch-up now posts a MessageChannel task, retaining one finite 10,000-slot slice
 per task and yielding to input/control/credit messages between slices. When
 sufficiently ahead, the Worker still waits on a 5 ms timer; it never spins a
 full queue. Tokens invalidate pending tasks across pause/manual/media barriers.
-The 40 ms target, six credits, guest clock, PCM synthesis and every existing
-browser cadence/dropout threshold remain unchanged. Failure messages now include
+That revision retained the 40 ms target, six credits, guest clock, PCM synthesis
+and every existing browser cadence/dropout threshold. Failure messages now include
 bounded source, rendered, missing and queued counters.
 
 `tests/audio-worker.test.js` runs the actual scheduler against a deterministic
@@ -245,3 +246,72 @@ this revision node does not push.
 
 The complete Linux `npx playwright test --workers=2` run at `/` and
 `/pc98-rust/` passed: **245 passed, 3 existing skips, 0 failed (13.8 minutes)**.
+
+## Residual underrun revision
+
+The [next Actions run](https://github.com/takahirox/pc98-rust/actions/runs/42174845458)
+still failed the unchanged silence limits: 448 missing frames at 48 kHz and
+922 at 44.1 kHz in the failing observation windows. Its retained traces show
+recovery after the gaps, zero producer drops/overflow/order/checksum errors, and
+maximum starvation runs of 958 and 1,225 frames respectively (20 and 28 ms).
+The sink snapshots commonly contained only 960 source samples (20 ms), despite
+the nominal 40 ms production target: the target also includes in-flight PCM and
+consumption since the last block report. These observations indicate insufficient
+reserve for intermittent scheduling delays, distinct from the earlier sustained
+timer-clamping deficit.
+
+Returned credits now request an immediate finite Worker task when below the
+target, preempting any pending polling timer. Previously a fresh consumed cursor
+could wait another 5 ms before production resumed. Stale epochs, paused/manual
+execution and media barriers cannot restart playback through that path. An
+initial two-CPU Linux run with this change alone still recorded a 670-frame
+(14 ms) gap, so removing polling delay alone was insufficient; that full-suite
+attempt was stopped after the continuity failure.
+
+The fixed target is now 2,880 source samples (60 ms), with 2,400 samples (50 ms)
+of startup/recovery prefill. This adds 20 ms of reserve and retains the six
+existing credits and hard 128 ms transport capacity. The target plus one finite
+slice stays below 3,360 samples (70 ms); it never grows with playback duration.
+The Worker waits at the target or when no credits remain. No samples are
+duplicated, guest time stretched or synthesis changed. The browser regression's
+queue/source-distance bounds reflect this new finite target; its silence,
+cadence, pitch/tempo, sample-integrity and control assertions are unchanged.
+
+Two deterministic scheduler regressions cover the remaining failure mechanisms:
+current credits must preempt polling without stale/paused credits doing so, and
+two isolated 35 ms scheduling stalls must preserve continuity with a 7 ms cost
+per 10 ms guest slice. Restoring the former reserve fails the latter comparison.
+The existing negative control still exposes sustained timer-clamping starvation
+even with the larger reserve. Rational sample-order and recovery tests now also
+exercise the new prefill at 44.1/48/96 kHz within six credits.
+
+Revision validation on 2026-11-06:
+
+- All 56 Python fixture/build checks from the acceptance workflow passed,
+  including unchanged music-image hashes; the fixture-fetch unit tests also
+  passed (10 tests).
+- macOS arm64: `cargo test --locked` (568 passed),
+  `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`,
+  release Wasm build and the 26-asset publication audit passed.
+- All 12 Node audio tests passed. Focused production-Wasm Chromium playback in
+  Ubuntu 24.04 arm64 (Playwright 1.56.1, Node 22.20.0, two CPUs/two browser
+  workers) passed both serving paths and every pause/mute/suspension/visibility/
+  reset assertion. Each case covered 16 observation windows and a scene change,
+  with zero missing frames, drops, overflow, sequence or checksum errors. Queue
+  snapshots ranged from 1,920 to 2,407 source frames.
+
+The continuity cases also passed within the full two-CPU/two-worker Linux suite
+with the same zero-error results, including all stream-control assertions:
+
+| Device rate | Produced source frames | Missing output frames | FM key edges | Sound IRQ12 edges |
+| --- | --- | --- | --- | --- |
+| 48 kHz | 792,624 | 0 | 464 | 2,386 |
+| 44.1 kHz | 791,664 | 0 | 464 | 2,382 |
+
+The complete Linux `npx playwright test --workers=2` run at `/` and
+`/pc98-rust/` passed: **245 passed, 3 existing skips, 0 failed (15.1 minutes)**.
+The skips retain the existing avoidance of duplicate large-media scenarios;
+their root-path cases passed. These results use the production release Wasm
+and unmodified production Worker/AudioWorklet. They are local container results,
+not a new GitHub Actions result; this revision does not push. No media, recordings,
+build outputs or trace artifacts are committed.

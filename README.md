@@ -771,10 +771,11 @@ unmapped ports return an open bus and are recorded for headless diagnostics.
 release Wasm and exclusively owns the Machine, memory views, CPU, devices,
 synthesis and media. The DOM thread sends ordered asynchronous commands; it
 never executes Wasm. Rust's deterministic 8 MHz virtual clock and eight clocks
-per instruction slot are unchanged. One Worker timer runs finite 10,000-slot
+per instruction slot are unchanged. One Worker scheduler runs finite 10,000-slot
 slices, yielding between slices. With sound active, the sink's consumed source
-sample count paces production toward a 40 ms watermark, including in-flight PCM.
-Timer overhead cannot accumulate into a permanent audio production deficit.
+sample count paces production toward a 60 ms watermark, including in-flight PCM.
+Returned credits trigger immediate refill tasks instead of waiting for a polling
+timer. Timer overhead cannot accumulate into a permanent audio production deficit.
 Muted execution uses absolute deadlines with at most 30 ms of catch-up debt;
 pause, reset and audio-state barriers discard that debt.
 
@@ -788,9 +789,9 @@ Rendering delays do not stop guest progress or audio transport.
 After **Enable sound**, a direct Worker-to-[AudioWorklet](web/audio-worklet.js)
 MessagePort carries guest-generated 48 kHz mono PCM. Six reusable 1,024-sample
 buffers bound all queued/in-flight audio to 128 ms; the normal slices produce
-480 samples each. The sink prefills 30 ms at startup or after starvation,
+480 samples each. The sink prefills 50 ms at startup or after starvation,
 consumes blocks in order and outputs accounted silence on underflow. Production
-stops at the watermark before normal credit exhaustion; exceptional producer
+waits at the watermark or until a credit returns; exceptional producer
 drops and sink overflow remain counted. Integer sample-rate conversion phase
 preserves 48 kHz source cadence at 44.1/48/96 kHz device rates.
 Mute, pause, reset, profile changes and AudioContext state changes flush the

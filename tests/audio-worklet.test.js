@@ -43,10 +43,10 @@ test('device sample rates preserve source cadence and phase across render quanta
   assert.deepEqual(lower.read(4),[1,3,5,0]);
 });
 for (const rate of [44100,48000,96000]) test(`${rate} Hz: sustained PCM matches an independent rational source cursor`,()=>{
-  const {processor,send,read}=sink(rate,1440);
+  const {processor,send,read}=sink(rate,2400);
   let sent=0, rendered=0;
   for(let quantum=0;quantum<Math.ceil(rate*3/128);quantum++) {
-    while(processor.queuedSamples<1920) {
+    while(processor.queuedSamples<2880 && processor.queue.length<6) {
       send(Array.from({length:480},(_,i)=>sent+i+1)); sent+=480;
     }
     const output=read(128);
@@ -54,25 +54,27 @@ for (const rate of [44100,48000,96000]) test(`${rate} Hz: sustained PCM matches 
     rendered+=128;
     assert.equal(processor.consumedSamples,Math.floor(rendered*48000/rate));
     assert.equal(processor.receivedSamples-processor.consumedSamples,processor.queuedSamples);
-    assert(processor.queuedSamples<2400);
+    assert(processor.queuedSamples<3360);
   }
   assert.equal(processor.underflows,0); assert.equal(processor.overflows,0);
   assert.equal(processor.sequenceErrors,0);
 });
 test('bounded prefill and underrun recovery preserve every queued sample and report prolonged starvation',()=>{
-  const {processor,reports,send,read}=sink(48000,1440);
+  const {processor,reports,send,read}=sink(48000,2400);
   send(Array(480).fill(1)); assert(read(128).every(n=>n===0));
   send(Array(480).fill(2)); assert(read(128).every(n=>n===0));
-  send(Array(480).fill(3));
-  assert.deepEqual(read(1440),[...Array(480).fill(1),...Array(480).fill(2),...Array(480).fill(3)]);
+  send(Array(480).fill(3)); send(Array(480).fill(4));
+  assert(read(128).every(n=>n===0));
+  send(Array(480).fill(5));
+  assert.deepEqual(read(2400),Array.from({length:2400},(_,i)=>Math.floor(i/480)+1));
   assert.equal(processor.underflows,0); // Startup silence is separate from starvation.
   assert(read(13000).every(n=>n===0));
   assert.equal(reports.at(-1).stats.underflows,13000); // Reports even with no credits to return.
   assert.equal(processor.maxUnderflowRun,13000);
-  send(Array(480).fill(4)); assert(read(128).every(n=>n===0));
-  send(Array(480).fill(5)); send(Array(480).fill(6));
-  assert.deepEqual(read(1440),[...Array(480).fill(4),...Array(480).fill(5),...Array(480).fill(6)]);
-  assert.equal(processor.consumedSamples,2880);
+  send(Array(480).fill(6)); assert(read(128).every(n=>n===0));
+  send(Array(480).fill(7)); send(Array(480).fill(8)); send(Array(480).fill(9)); send(Array(480).fill(10));
+  assert.deepEqual(read(2400),Array.from({length:2400},(_,i)=>Math.floor(i/480)+6));
+  assert.equal(processor.consumedSamples,4800);
   processor.receive({type:'flush',epoch:2});
   assert.equal(processor.consumedSamples,0); assert.equal(processor.queuedSamples,0);
   const missed=processor.underflows;
