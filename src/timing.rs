@@ -445,8 +445,10 @@ impl TimingState {
             }
             0x9a => 21,
             0x9b => {
+                // NEC p.12-171: 2 + 5n. Assume POLL is ready on the first
+                // sample (n = 1); external pin changes are not modeled.
                 approximate = true;
-                10
+                2 + 5
             }
             0x9e => 3,
             0x9f => 2,
