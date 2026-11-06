@@ -175,3 +175,73 @@ passed with their final device-rate and 100 ms dropout assertions. The three
 existing Pages skips avoid duplicating the 1 GiB capacity, large DOS and
 occupied-media resource scenarios; their local-root cases passed. Build output,
 disk images, recordings and local probe logs are not committed or published.
+
+## Linux continuity follow-up
+
+The [first Actions acceptance run](https://github.com/takahirox/pc98-rust/actions/runs/42168491863)
+failed both continuity cases. Its retained counter traces establish actual
+producer starvation, rather than an output-clock measurement error: in the
+48 kHz failure window, production and playback each advanced only 43,200 source
+frames, while the sink inserted 10,240 silent device frames. Playback plus
+silence accounted for approximately the elapsed 1.12 seconds. At 44.1 kHz,
+the failing window contained 1,212 silent frames. Neither run dropped producer
+samples, overflowed the sink, or reported sequence/checksum errors.
+
+The first sink-paced implementation still used a nested `setTimeout(...,1)`
+between catch-up slices. Chromium clamps nested timers to at least 4 ms. A host
+needing more than 6 ms to execute a 10 ms guest slice therefore cannot keep up,
+even though guest execution itself is faster than real time. A watermark and
+startup reserve cannot correct this permanent deficit. Focused Linux playback
+on a faster host passed even before this follow-up, so an isolated passing run
+alone did not explain the Actions failure.
+
+Catch-up now posts a MessageChannel task, retaining one finite 10,000-slot slice
+per task and yielding to input/control/credit messages between slices. When
+sufficiently ahead, the Worker still waits on a 5 ms timer; it never spins a
+full queue. Tokens invalidate pending tasks across pause/manual/media barriers.
+The 40 ms target, six credits, guest clock, PCM synthesis and every existing
+browser cadence/dropout threshold remain unchanged. Failure messages now include
+bounded source, rendered, missing and queued counters.
+
+`tests/audio-worker.test.js` runs the actual scheduler against a deterministic
+7 ms slice cost and a 48 kHz sink, with a 4 ms timer floor. The corrected scheduler
+has no starvation over five seconds and stays below 2,400 outstanding samples.
+Its negative control restores only the previous timer yield and must exhibit
+both a production deficit and sustained silence with the same guest/sink model.
+It also checks cancellation of stale tasks and that a full sink waits. These
+cheap scheduler tests complement the actual release-Wasm/browser guest tests;
+they do not substitute for guest playback. A local-only Linux browser probe
+that imposed a minimum 7 ms slice cost also reproduced the timer defect in the
+real ADV98 scenario: restoring the previous timer yield produced 14,496 missing
+frames in its first observation window. Task yielding maintained 49,440–50,880
+rendered source frames per window in that probe, but its fourth window inserted
+430 silent frames, exceeding the unchanged 382.4-frame allowance under the
+artificial CPU load. This optional stress run is not a passing acceptance result;
+it illustrates that task yielding cannot guarantee physical host scheduling.
+The mandatory suite below uses the unmodified production Worker. No probe media
+or recordings are saved as repository/publication artifacts.
+
+Revision checks on 2026-11-06:
+
+- All 56 Python fixture/build commands from the acceptance workflow passed,
+  including unchanged music-image checksums. Fixture-fetch unit tests: 10 passed.
+- macOS arm64: `cargo test --locked` (568 passed), Clippy with warnings denied,
+  formatting, release Wasm build and the 26-asset publication audit passed.
+- Ubuntu 24.04 arm64, Docker limited to four CPUs, Node 22.20.0 and Playwright
+  1.56.1 Chromium: all 10 Node audio tests passed. Both actual production-Wasm
+  continuity/control cases passed with two browser workers and the original
+  thresholds. Each played through 16 observation windows and a scene change:
+
+| Device rate | Produced source frames | Missing output frames | FM key edges | Sound IRQ12 edges |
+| --- | --- | --- | --- | --- |
+| 48 kHz | 795,984 | 0 | 464 | 2,395 |
+| 44.1 kHz | 793,584 | 0 | 464 | 2,388 |
+
+Both cases had zero drops, overflow, sequence errors and checksum errors. Queue
+snapshots stayed between 960 and 1,446 source frames. Every stream-control and
+reset assertion also passed. These Linux container results do not claim that
+GitHub Actions has tested the new commit: that requires downstream publication;
+this revision node does not push.
+
+The complete Linux `npx playwright test --workers=2` run at `/` and
+`/pc98-rust/` passed: **245 passed, 3 existing skips, 0 failed (13.8 minutes)**.
