@@ -504,7 +504,8 @@ impl TimingState {
                     5
                 }
             }
-            0xe4..=0xe7 | 0xec..=0xef => 8,
+            0xe4 | 0xe5 => 9,
+            0xe6 | 0xe7 | 0xec..=0xef => 8,
             0xe8 => 16,
             0xe9 | 0xeb => 12,
             0xea => 15,

@@ -70,7 +70,7 @@ fn nec_documented_register_memory_immediate_stack_and_control_forms() {
         (&[0xf7, 0xf3], 25),
         (&[0xf7, 0x37], 31),
         (&[0xf7, 0xfb], 43),
-        (&[0xe4, 0x40], 8),
+        (&[0xe4, 0x40], 9),
         (&[0xec], 8),
         (&[0xee], 8),
         (&[0xf4], 2),
@@ -86,6 +86,24 @@ fn nec_documented_register_memory_immediate_stack_and_control_forms() {
     ];
     for &(code, expected) in cases {
         assert_eq!(clocks(Profile::Pc9801Vm, code), expected, "{code:02x?}");
+    }
+}
+#[test]
+fn nec_immediate_port_input_includes_odd_word_bus_penalty() {
+    // NEC section 12-25: immediate-port IN takes 9 clocks, or 13 for
+    // an odd-address word. The extra bus beat is accounted separately.
+    for (code, bus, total) in [
+        ([0xe4, 0x40], 0, 9),
+        ([0xe4, 0x41], 0, 9),
+        ([0xe5, 0x40], 0, 9),
+        ([0xe5, 0x41], 4, 13),
+    ] {
+        let mut m = machine(Profile::Pc9801Vm, &code);
+        let (timing, result) = m.cpu.step_timed(&mut m.bus);
+        result.unwrap();
+        assert_eq!(timing.execution, 9, "{code:02x?}");
+        assert_eq!(timing.bus, bus, "{code:02x?}");
+        assert_eq!(timing.cpu_cycles(), total, "{code:02x?}");
     }
 }
 #[test]
