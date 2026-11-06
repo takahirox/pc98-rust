@@ -187,3 +187,25 @@ per 10 ms guest slice: audio stays continuous and preview intervals stay bounded
 Removing only the priority check reproduces underruns. All 13 Node audio tests
 and both actual Chromium audio cases passed locally, with zero missed samples
 in every observation window at 48/44.1 kHz. Current-head CI remains required.
+
+The [run on `d182500`](https://github.com/takahirox/pc98-rust/actions/runs/42255144788)
+passed native validation but failed audio again (about 36,000–38,000 source
+samples/second). Rendering priority alone did not resolve the CI host deficit.
+Worker sampling still placed rollback cloning among the largest costs.
+
+The next host change copies Copy state directly in the rollback checkpoint,
+inlines fetch/timed-step boundaries, and avoids PIC arbitration without requests
+and PIT counter updates without an input clock. A sampled five-guest-second
+release-Wasm PMD workload took 2.28 seconds before and 1.97 after locally. Both
+consumed 20,812,019 units/330,000,015 core clocks, advanced 5.00000025 guest
+seconds and ended with 172 FM key edges. This host measurement does not predict
+Linux runner performance. Address-helper and additional Machine inlining trials
+showed no benefit and were discarded.
+
+All 240 focused native tests across library/timing, protected mode, paging, VM86,
+PIC and PIT passed, along with Clippy, format/whitespace, 13 Node audio tests,
+the release Wasm build and 26-asset site packaging checks. An initial PIC attempt
+lacked local fixture files; strict preparation from checked-in sources resolved
+that setup failure before the successful run. No fixture contract was changed.
+Both final local Chromium audio cases passed again, with zero missed samples in
+all observation windows. Complete acceptance still depends on current-head CI.

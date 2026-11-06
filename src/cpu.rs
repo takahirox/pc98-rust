@@ -55,7 +55,7 @@ impl Default for Fpu {
         }
     }
 }
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Cpu {
     /// Low words stay public for the firmware and existing native callers.
     pub r: [u16; 8],
@@ -132,6 +132,59 @@ pub struct Cpu {
     pub timing_writes: u8,
     pub extended_retired: u64,
     pub inhibit: u8,
+}
+// Most state is Copy. Copying it directly avoids Clone's per-Option payload
+// reconstruction in the per-instruction rollback checkpoint. Paging alone owns
+// shared storage and must retain its independent copy-on-write clone semantics.
+impl Clone for Cpu {
+    #[inline(always)]
+    fn clone(&self) -> Self {
+        Self {
+            r: self.r,
+            s: self.s,
+            upper: self.upper,
+            extra_segments: self.extra_segments,
+            cr0: self.cr0,
+            segment_caches: self.segment_caches,
+            cpl: self.cpl,
+            ldtr: self.ldtr,
+            ldtr_cache: self.ldtr_cache,
+            tr: self.tr,
+            tr_cache: self.tr_cache,
+            last_fault: self.last_fault,
+            fault_count: self.fault_count,
+            irq_acks: self.irq_acks,
+            last_vm86_gate: self.last_vm86_gate,
+            cr2: self.cr2,
+            cr3: self.cr3,
+            paging: self.paging.clone(),
+            fpu: self.fpu,
+            gdtr_limit: self.gdtr_limit,
+            gdtr_base: self.gdtr_base,
+            idtr_limit: self.idtr_limit,
+            idtr_base: self.idtr_base,
+            shutdown: self.shutdown,
+            ip: self.ip,
+            flags_upper: self.flags_upper,
+            operand32: self.operand32,
+            address32: self.address32,
+            lock_prefix: self.lock_prefix,
+            trap_suppressed: self.trap_suppressed,
+            instruction_bytes: self.instruction_bytes,
+            flags: self.flags,
+            halted: self.halted,
+            retired: self.retired,
+            cycles: self.cycles,
+            completed_instructions: self.completed_instructions,
+            rep_elements: self.rep_elements,
+            approximated_units: self.approximated_units,
+            last_timing: self.last_timing,
+            rep_resume: self.rep_resume,
+            timing_writes: self.timing_writes,
+            extended_retired: self.extended_retired,
+            inhibit: self.inhibit,
+        }
+    }
 }
 #[derive(Clone, Copy)]
 enum Operand {
@@ -266,6 +319,7 @@ impl Cpu {
             _ => u32::MAX,
         }
     }
+    #[inline(always)]
     fn fetch(&mut self, b: &mut Bus) -> ExecResult<u8> {
         if b.profile == crate::Profile::Pc9821ApDos && self.instruction_bytes >= 15 {
             return Err(ExecError::Fault(13));
@@ -796,6 +850,7 @@ impl Cpu {
     pub fn step_timed(&mut self, b: &mut Bus) -> (crate::timing::StepTiming, Result<(), String>) {
         self.step_timed_with_observer(b, |_, _| {})
     }
+    #[inline(always)]
     pub fn step_timed_with_observer(
         &mut self,
         b: &mut Bus,

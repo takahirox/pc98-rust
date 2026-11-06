@@ -45,6 +45,9 @@ impl Pic {
     }
     pub fn pending(&self) -> Option<u8> {
         let available = self.irr & !self.mask;
+        if available == 0 {
+            return None;
+        }
         let blocking = self.eligible_isr();
         for n in self.priority_order() {
             if blocking & (1 << n) != 0 {
@@ -486,6 +489,9 @@ impl Pit {
         self.fraction += cycles as u64 * 1_996_800;
         let ticks = (self.fraction / 8_000_000) as u32;
         self.fraction %= 8_000_000;
+        if ticks == 0 {
+            return false;
+        }
         let irq = self.c[0].tick(ticks);
         self.c[1].tick(ticks);
         self.c[2].tick(ticks);

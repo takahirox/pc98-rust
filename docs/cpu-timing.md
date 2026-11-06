@@ -161,6 +161,12 @@ retaining independent fault/retry state. Register-dependence tracking compares
 the low and upper words directly; segmentation and paging fast paths retain all
 bounds, access and permission checks. These reduce host interpreter overhead;
 they do not alter instruction clocks, bus policies, audio reserves or work caps.
+Rollback checkpoints copy scalar/optional architectural state directly and clone
+only the owning paging storage. Fetch/timed-step call boundaries are inlined.
+PIC arbitration returns immediately without an unmasked request, and PIT counter
+updates wait for an actual input clock while retaining the fractional remainder.
+Scheduled host rendering refills audio first, with a maximum 100 ms deferral
+beyond its normal due time; guest GDC/vsync clocks continue independently.
 
 Wasm metrics retain existing IDs: 0 is execution units, 5 device clocks. New IDs
 26–31 expose core clocks, completed instructions, REP elements, guest seconds,
