@@ -1224,54 +1224,28 @@ impl Bus {
         let graphics = self.gdcs[1].enabled;
         let text = self.text_enabled && self.gdcs[0].enabled;
         let page = self.display_page as usize * self.page_bytes();
+        let gdc = &self.gdcs[0];
+        let height = gdc.character_lines.max(1) as usize;
+        let frame = self.cycles / 133_333;
+        let blink_off =
+            frame % (8 * u64::from(gdc.blink_rate.max(1))) >= 6 * u64::from(gdc.blink_rate.max(1));
+        let cursor_on = gdc.cursor_on(frame);
+        let cell_pixels = if self.text_40 { 16 } else { 8 };
         for y in 0..400 {
-            for x in 0..640 {
-                let mut color = 0;
-                let mut text_rgb = None;
-                if graphics && self.pegc {
-                    let start =
-                        self.display_page as usize * 0x40000 + self.gdcs[1].start as usize * 8;
-                    let a = (start + y * self.gdcs[1].pitch as usize * 8 + x) & 0x7ffff;
-                    color = self.graphics[a];
-                } else if graphics {
-                    let line = if self.graphics_200 { y / 2 } else { y };
-                    let a = ((self.gdcs[1].start as usize * 2 + line * 80 + x / 8) & 0x7fff) + page;
-                    let mask = 0x80 >> (x & 7);
-                    for plane in 0..if self.analog {
-                        self.profile.planes()
-                    } else {
-                        3
-                    } {
-                        if self.graphics[a + plane * 0x8000] & mask != 0 {
-                            color |= 1 << plane
-                        }
-                    }
-                }
-                if text {
-                    let gdc = &self.gdcs[0];
-                    let height = gdc.character_lines.max(1) as usize;
-                    let dot = if self.text_40 { x / 2 } else { x };
-                    // Forty-column mode doubles the pixel clock and skips the
-                    // odd VRAM words; PITCH remains a physical word stride.
-                    let column = if self.text_40 { dot / 8 * 2 } else { dot / 8 };
-                    let Some((cell, glyph_y)) = gdc.text_address(y, column) else {
-                        let idx = (y * 640 + x) * 4;
-                        let rgb = if self.pegc {
-                            &self.pegc_palette[color as usize]
-                        } else {
-                            &self.palette[color as usize]
-                        };
-                        out[idx..idx + 3].copy_from_slice(rgb);
-                        out[idx + 3] = 255;
-                        continue;
-                    };
+            for left in (0..640).step_by(cell_pixels) {
+                // Address, glyph and attributes are shared by a character row.
+                // Decode once, then composite its dots over the current bitmap.
+                // In 40-column mode each span doubles its dots and skips the
+                // odd VRAM word, so its physical column is still left / 8.
+                let mut ink = 0;
+                let mut text_color = 0;
+                if let Some((cell, glyph_y)) = text.then(|| gdc.text_address(y, left / 8)).flatten()
+                {
                     let ch = self.mem[0xa0000 + cell * 2];
                     let attr = self.mem[0xa2000 + cell * 2];
                     let high = self.mem[0xa0000 + cell * 2 + 1];
-                    let glyph = if self.profile == Profile::Pc9821ApDos && high != 0 {
-                        // In dot access the shared KCG cannot supply text Kanji.
-                        // Real hardware's garbage pixels are unspecified; blank
-                        // them deterministically, retaining VRAM and glyph RAM.
+                    ink = if self.profile == Profile::Pc9821ApDos && high != 0 {
+                        // Dot access blanks text Kanji while preserving glyph RAM.
                         if self.cg_dot || glyph_y >= 16 {
                             0
                         } else {
@@ -1282,9 +1256,10 @@ impl Bus {
                             )
                         }
                     } else if self.text_graph && attr & 16 != 0 {
-                        // Eight 4-by-4 blocks selected by the character byte.
-                        if glyph_y < 16 && ch & (1 << (glyph_y / 4 * 2 + dot % 8 / 4)) != 0 {
-                            255
+                        if glyph_y < 16 {
+                            let blocks = ch >> (glyph_y / 4 * 2);
+                            (if blocks & 1 != 0 { 0xf0 } else { 0 })
+                                | (if blocks & 2 != 0 { 0x0f } else { 0 })
                         } else {
                             0
                         }
@@ -1293,48 +1268,74 @@ impl Bus {
                     } else {
                         0
                     };
-                    let mut ink = glyph & (128 >> (dot % 8)) != 0;
                     if attr & 4 != 0 {
-                        ink = !ink
+                        ink = !ink;
                     }
                     if attr & 8 != 0 && glyph_y == height - 1 {
-                        ink = true
+                        ink = 255;
                     }
-                    if !self.text_graph && attr & 16 != 0 && dot % 8 == 7 {
-                        ink = true;
+                    if !self.text_graph && attr & 16 != 0 {
+                        ink |= 1;
                     }
-                    if attr & 2 != 0
-                        && (self.cycles / 133_333) % (8 * u64::from(gdc.blink_rate.max(1)))
-                            >= 6 * u64::from(gdc.blink_rate.max(1))
+                    if attr & 2 != 0 && blink_off {
+                        ink = 0;
+                    }
+                    if cursor_on
+                        && cell == gdc.cursor as usize
+                        && (gdc.cursor_top..=gdc.cursor_bottom).contains(&(glyph_y as u8))
                     {
-                        ink = false;
+                        ink = !ink;
                     }
-                    if self.gdcs[0].cursor_on(self.cycles / 133_333)
-                        && cell == self.gdcs[0].cursor as usize
-                        && (self.gdcs[0].cursor_top..=self.gdcs[0].cursor_bottom)
-                            .contains(&(glyph_y as u8))
-                    {
-                        ink = !ink
+                    if attr & 1 == 0 {
+                        ink = 0;
                     }
-                    if attr & 1 != 0 && ink {
-                        color = (attr >> 5) & 7;
-                        if self.profile == Profile::Pc9821ApDos {
-                            text_rgb = Some([
-                                if color & 2 != 0 { 255 } else { 0 },
-                                if color & 4 != 0 { 255 } else { 0 },
-                                if color & 1 != 0 { 255 } else { 0 },
-                            ]);
+                    text_color = (attr >> 5) & 7;
+                }
+                let text_rgb = [
+                    if text_color & 2 != 0 { 255 } else { 0 },
+                    if text_color & 4 != 0 { 255 } else { 0 },
+                    if text_color & 1 != 0 { 255 } else { 0 },
+                ];
+                for x in left..left + cell_pixels {
+                    let mut color = 0;
+                    if graphics && self.pegc {
+                        let start =
+                            self.display_page as usize * 0x40000 + self.gdcs[1].start as usize * 8;
+                        let a = (start + y * self.gdcs[1].pitch as usize * 8 + x) & 0x7ffff;
+                        color = self.graphics[a];
+                    } else if graphics {
+                        let line = if self.graphics_200 { y / 2 } else { y };
+                        let a =
+                            ((self.gdcs[1].start as usize * 2 + line * 80 + x / 8) & 0x7fff) + page;
+                        let mask = 0x80 >> (x & 7);
+                        for plane in 0..if self.analog {
+                            self.profile.planes()
+                        } else {
+                            3
+                        } {
+                            if self.graphics[a + plane * 0x8000] & mask != 0 {
+                                color |= 1 << plane
+                            }
                         }
                     }
+                    let dot = if self.text_40 { x / 2 } else { x };
+                    let text_ink = ink & (128 >> (dot % 8)) != 0;
+                    let rgb = if text_ink && self.profile == Profile::Pc9821ApDos {
+                        &text_rgb
+                    } else {
+                        if text_ink {
+                            color = text_color;
+                        }
+                        if self.pegc {
+                            &self.pegc_palette[color as usize]
+                        } else {
+                            &self.palette[color as usize]
+                        }
+                    };
+                    let idx = (y * 640 + x) * 4;
+                    out[idx..idx + 3].copy_from_slice(rgb);
+                    out[idx + 3] = 255;
                 }
-                let idx = (y * 640 + x) * 4;
-                let rgb = if self.pegc {
-                    &self.pegc_palette[color as usize]
-                } else {
-                    &self.palette[color as usize]
-                };
-                out[idx..idx + 3].copy_from_slice(text_rgb.as_ref().unwrap_or(rgb));
-                out[idx + 3] = 255;
             }
         }
     }
