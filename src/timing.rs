@@ -580,6 +580,9 @@ impl TimingState {
         )
     }
     fn i486(&self, i: Instruction) -> (u32, bool) {
+        // RV/P table entries group virtual-8086 with real mode. Interrupt
+        // entry and I/O retain their separate virtual-mode cases below.
+        let protected = i.protected && !i.vm86;
         let mem = i.modrm < 0xc0;
         let group = (i.modrm >> 3) & 7;
         let rm = |reg, memory| if mem { memory } else { reg };
@@ -600,7 +603,7 @@ impl TimingState {
             }
             0x06 | 0x0e | 0x16 | 0x1e => 3,
             0x07 | 0x17 | 0x1f => {
-                if i.protected {
+                if protected {
                     9
                 } else {
                     3
@@ -635,7 +638,7 @@ impl TimingState {
             0x88..=0x8b | 0xa0..=0xa3 | 0xb0..=0xbf | 0xc6 | 0xc7 => 1,
             0x8c => 3,
             0x8e => {
-                if i.protected {
+                if protected {
                     rm(9, 9)
                 } else {
                     3
@@ -647,7 +650,7 @@ impl TimingState {
             0x91..=0x97 => 3,
             0x98 | 0x99 => 3,
             0x9a => {
-                if i.protected {
+                if protected {
                     20
                 } else {
                     18
@@ -655,14 +658,14 @@ impl TimingState {
             }
             0x9b => 1,
             0x9c => {
-                if i.protected {
+                if protected {
                     3
                 } else {
                     4
                 }
             }
             0x9d => {
-                if i.protected {
+                if protected {
                     6
                 } else {
                     9
@@ -686,7 +689,7 @@ impl TimingState {
             }
             0xc2 | 0xc3 => 5,
             0xc4 | 0xc5 => {
-                if i.protected {
+                if protected {
                     12
                 } else {
                     6
@@ -702,14 +705,14 @@ impl TimingState {
             }
             0xc9 => 5,
             0xca => {
-                if i.protected {
+                if protected {
                     18
                 } else {
                     14
                 }
             }
             0xcb => {
-                if i.protected {
+                if protected {
                     17
                 } else {
                     13
@@ -718,7 +721,7 @@ impl TimingState {
             0xcc | 0xcd => {
                 if i.vm86 {
                     82 + if i.op == 0xcd { 4 } else { 0 }
-                } else if i.protected {
+                } else if protected {
                     44
                 } else {
                     26 + if i.op == 0xcd { 4 } else { 0 }
@@ -726,7 +729,9 @@ impl TimingState {
             }
             0xce => {
                 if i.flags & crate::cpu::OF != 0 {
-                    if i.protected {
+                    if i.vm86 {
+                        84
+                    } else if protected {
                         46
                     } else {
                         28
@@ -736,7 +741,7 @@ impl TimingState {
                 }
             }
             0xcf => {
-                if i.protected && !i.vm86 {
+                if protected {
                     20
                 } else {
                     15
@@ -784,7 +789,7 @@ impl TimingState {
                     } else {
                         30
                     }
-                } else if i.protected {
+                } else if protected {
                     11 + u32::from(output) * 2
                         + u32::from(i.op < 0xe8)
                         + if i.io_checked { 20 } else { 0 }
@@ -796,7 +801,7 @@ impl TimingState {
             }
             0xe8 | 0xe9 | 0xeb => 3,
             0xea => {
-                if i.protected {
+                if protected {
                     19
                 } else {
                     17
@@ -849,7 +854,7 @@ impl TimingState {
                 0 | 1 => rm(1, 3),
                 2 => 5,
                 3 => {
-                    if i.protected {
+                    if protected {
                         20
                     } else {
                         17
@@ -857,7 +862,7 @@ impl TimingState {
                 }
                 4 => 5,
                 5 => {
-                    if i.protected {
+                    if protected {
                         18
                     } else {
                         13
@@ -906,7 +911,7 @@ impl TimingState {
                 }
                 0xa0 | 0xa8 => 3,
                 0xa1 | 0xa9 => {
-                    if i.protected {
+                    if protected {
                         9
                     } else {
                         3
@@ -933,7 +938,7 @@ impl TimingState {
                 }
                 0xb0 | 0xb1 => rm(6, if self.taken { 7 } else { 10 }),
                 0xb2 | 0xb4 | 0xb5 => {
-                    if i.protected {
+                    if protected {
                         12
                     } else {
                         6

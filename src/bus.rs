@@ -421,8 +421,8 @@ impl Bus {
         fetch: bool,
     ) {
         let a = self.address(physical as usize);
-        let ram = self.is_plain_ram(physical) || (0xf0000..=0xfffff).contains(&a);
         let video = (0xa0000..=0xbffff).contains(&a) || (0xe0000..=0xe7fff).contains(&a);
+        let ram = !video && (self.is_plain_ram(physical) || (0xf0000..=0xfffff).contains(&a));
         self.timing
             .memory(self.profile, a, byte, bytes, write, fetch, ram, video);
     }
