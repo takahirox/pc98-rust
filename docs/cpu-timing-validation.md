@@ -146,3 +146,26 @@ sequentially before the functional browser probes, reusing the release Wasm buil
 and fixtures. Both serving roots/sample rates and every continuity, pitch, tempo,
 scene-change and transport assertion remain required. The application, its clock
 rates, audio reserve and work caps are unchanged by this scheduling adjustment.
+
+The [isolated-audio run](https://github.com/takahirox/pc98-rust/actions/runs/42240559688)
+also failed both audio cases, producing about 40,000 source samples/second.
+Isolation alone was insufficient. Trace counters show 3.2–3.4 million execution
+units/second, while the steady PMD workload requires about 4.16 million at the
+selected CPU rate. A Node/V8 profile of the actual release Wasm core identified
+CPU rollback cloning and repeated address checks as major host costs.
+
+The host execution changes keep empty TLB storage absent, copy populated storage
+on mutation, compare register words without repacking, and inline ordinary
+address/timing paths while keeping page walks separate. A sampled run of five
+guest seconds of the same PMD workload took 3.04 host seconds before and 2.30
+after on the macOS host. Both executions consumed exactly 20,812,019 units and
+330,000,015 core clocks, advanced 5.00000025 guest seconds and ended at 172 FM key
+edges. These are host-throughput observations, not target-hardware measurements.
+
+Local validation of this change passed 127 native tests across the library,
+timing, protected-mode, paging and VM86 targets, Clippy, formatting, whitespace,
+strict preparation of four relevant native fixtures and release Wasm/site
+packaging checks. Both actual Chromium production-audio cases passed at 48 kHz
+and 44.1 kHz, with zero missed samples in all observation windows and the existing
+pitch/tempo, scene, IRQ, resampling and transport assertions retained. These local
+checks do not turn either failed GitHub run into passing acceptance evidence.

@@ -805,7 +805,7 @@ impl Cpu {
         let faults_before = self.fault_count;
         b.timing.begin(self.cr0);
         b.timing.previous_writes = self.timing_writes;
-        let registers_before = std::array::from_fn::<_, 8, _>(|i| self.reg32(i));
+        let registers_before = (self.r, self.upper);
         let mut result = self.execute_step(b, before_instruction);
         let fault = result.is_err() || self.fault_count != faults_before;
         let timing = b.timing.finish(b.profile, fault, b.cycles - clocks_before);
@@ -813,17 +813,20 @@ impl Cpu {
             result = Err(format!("missing CPU timing for {op:02x}/{ext:02x}"));
         }
         // CPU state rollback must not roll back elapsed clocks or bus activity.
-        self.timing_writes = if fault {
-            0
-        } else {
-            (0..8).fold(0, |mask, i| {
-                mask | if registers_before[i] != self.reg32(i) {
-                    1 << i
-                } else {
-                    0
-                }
-            })
-        };
+        self.timing_writes =
+            if fault || (registers_before.0 == self.r && registers_before.1 == self.upper) {
+                0
+            } else {
+                (0..8).fold(0, |mask, i| {
+                    mask | if registers_before.0[i] != self.r[i]
+                        || registers_before.1[i] != self.upper[i]
+                    {
+                        1 << i
+                    } else {
+                        0
+                    }
+                })
+            };
         self.last_timing = timing;
         self.cycles += u64::from(timing.cpu_cycles());
         self.completed_instructions += u64::from(timing.instructions);

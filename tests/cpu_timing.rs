@@ -532,6 +532,12 @@ fn external_entry_and_address_dependencies_are_separate_from_handler_retirement(
     m.step(1);
     m.step(1);
     assert_eq!(m.cpu.last_timing.execution, 2); // base written immediately before MOV
+
+    // Low BX remains 2002h. An upper-word change still changes the base register.
+    let mut m = machine(Profile::Pc9821ApDos, &[0x66, 0xbb, 2, 0x20, 1, 0, 0x8b, 7]);
+    m.step(1);
+    m.step(1);
+    assert_eq!(m.cpu.last_timing.execution, 2);
     for (code, expected) in [(&[0x0f, 0xbc, 0xc0][..], 6), (&[0x0f, 0xbd, 0xc0][..], 6)] {
         assert_eq!(clocks(Profile::Pc9821ApDos, code), expected);
     }

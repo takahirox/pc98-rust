@@ -86,6 +86,7 @@ impl Cpu {
     pub(super) fn linear(&self, s: usize, off: u32) -> usize {
         self.segment_cache(s).base.wrapping_add(off) as usize
     }
+    #[inline(always)]
     pub(crate) fn check_access(
         &self,
         b: &mut Bus,
@@ -114,7 +115,9 @@ impl Cpu {
         {
             return Err(ExecError::Fault(fault));
         }
-        self.check_pages(b, self.linear(s, off) as u32, bytes, write, self.cpl == 3)?;
+        if self.paging_enabled() {
+            self.check_pages(b, d.base.wrapping_add(off), bytes, write, self.cpl == 3)?;
+        }
         Ok(())
     }
     /// Resolve a complete descriptor span before fetching any bus bytes.

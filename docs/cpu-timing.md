@@ -155,6 +155,13 @@ slice's guest deadline and yields before continuing. Audio still targets a bound
 pause/reset/flush drop the deadline. The CPU instruction count no longer decides
 how much audio or guest time a slice produces.
 
+Host execution avoids copying an empty TLB into every instruction rollback
+snapshot. Populated TLB snapshots share immutable storage and copy on mutation,
+retaining independent fault/retry state. Register-dependence tracking compares
+the low and upper words directly; segmentation and paging fast paths retain all
+bounds, access and permission checks. These reduce host interpreter overhead;
+they do not alter instruction clocks, bus policies, audio reserves or work caps.
+
 Wasm metrics retain existing IDs: 0 is execution units, 5 device clocks. New IDs
 26–31 expose core clocks, completed instructions, REP elements, guest seconds,
 approximated units and core frequency. Worker statistics add these counters and

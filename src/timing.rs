@@ -154,6 +154,7 @@ impl TimingState {
     /// Account once per physical beat, not once per Rust byte read. Nominal
     /// V30 aligned bus clocks are included in the NEC instruction tables.
     #[allow(clippy::too_many_arguments)] // One actual physical access, with its decoding facts.
+    #[inline(always)] // Specialize fetch/read/write facts at the CPU access site.
     pub fn memory(
         &mut self,
         profile: Profile,

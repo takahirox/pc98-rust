@@ -412,6 +412,7 @@ impl Bus {
             self.write(Cpu::phys(s, o.wrapping_add(1)), (v >> 8) as u8)
         }
     }
+    #[inline(always)]
     pub(crate) fn cpu_access(
         &mut self,
         physical: u32,
