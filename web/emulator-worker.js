@@ -79,6 +79,15 @@ function present() {
   postMessage({event:'frame', buffer:frameBuffer, ...state()}, [frameBuffer]);
   frameBuffer = null;
 }
+function presentDue() {
+  const now = performance.now();
+  if (now < frameDue) return;
+  // Refill PCM before optional host rendering. Rendering shares this Worker
+  // with the interpreter and can otherwise repeatedly spend a depleted reserve.
+  // Still refresh within 100 ms of the due time on an underspeed host.
+  if (playingAudio() && outstandingAudio() < 2880 && now < frameDue+100) return;
+  present(); frameDue = performance.now()+33;
+}
 function deliverAudio() {
   const count = core.audio_len();
   if (playingAudio()) {
@@ -149,7 +158,7 @@ function tick() {
       }
     }
     deliverAudio();
-    if (performance.now() >= frameDue) { present(); frameDue = performance.now()+33; }
+    presentDue();
     if (core.metric(4)) {
       running = false;
       postMessage({event:'stopped', error:message()});
@@ -265,7 +274,10 @@ onmessage = ({data:m}) => {
   if (m.type === 'frameAck') {
     if (m.data.byteLength === 640*400*4 && !frameBuffer) {
       frameBuffer = m.data;
-      if (frameRequested) present();
+      if (frameRequested) {
+        if (running && playingAudio()) schedule(0);
+        else present();
+      }
     }
     return;
   }

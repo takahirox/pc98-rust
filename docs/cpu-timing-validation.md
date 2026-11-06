@@ -112,7 +112,8 @@ oscillators are documented in the timing contract. Board waits, oscillator
 coupling, V30 prefetch, detailed cache/pipeline/write-buffer behavior and synthetic
 BIOS/LIO execution latency remain approximations or unmodeled effects. Hardware
 comparison and diagnosis of a particular game's slow transition remain unverified.
-No post-merge-only check is required, and nothing was pushed or published.
+No post-merge-only check is required. The initial checks above preceded publication;
+the continuation results below record subsequent publication and CI evidence.
 
 ## Continuation validation
 
@@ -169,3 +170,20 @@ packaging checks. Both actual Chromium production-audio cases passed at 48 kHz
 and 44.1 kHz, with zero missed samples in all observation windows and the existing
 pitch/tempo, scene, IRQ, resampling and transport assertions retained. These local
 checks do not turn either failed GitHub run into passing acceptance evidence.
+
+The Linux [Worker-profile run](https://github.com/takahirox/pc98-rust/actions/runs/42253767204)
+passed native validation but still failed audio continuity. Its first windows
+produced about 47,000–49,000 samples with 2,326/4,379 missed device frames.
+Failure-only sampling found substantial frame-rendering work alongside CPU
+execution and idle time. These samples are diagnostic observations after failure,
+not a hardware comparison or proof of sustained playback.
+
+Scheduled host presentation now lets the existing PCM reserve refill first;
+an overdue preview is still attempted after at most 100 ms of deferral, plus
+one bounded task. Frame-buffer acknowledgments cannot bypass this audio priority.
+Guest display clocks, PCM reserve, execution caps and acceptance assertions are
+unchanged. A deterministic scheduling test includes a 22 ms renderer and 7 ms
+per 10 ms guest slice: audio stays continuous and preview intervals stay bounded.
+Removing only the priority check reproduces underruns. All 13 Node audio tests
+and both actual Chromium audio cases passed locally, with zero missed samples
+in every observation window at 48/44.1 kHz. Current-head CI remains required.
