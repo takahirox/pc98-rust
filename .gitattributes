@@ -1,7 +1,0 @@
-# Preserve audited upstream source/notices byte-for-byte, including whitespace.
-fixtures/hello98/LICENSE -whitespace
-fixtures/hello98/hello98.nas -whitespace
-web/hello98-LICENSE.txt -whitespace
-fixtures/fonts/AUTHORS -whitespace
-fixtures/fonts/LICENSE -whitespace
-web/shinonome-LICENSE.txt -whitespace
