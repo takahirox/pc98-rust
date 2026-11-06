@@ -2088,12 +2088,7 @@ impl Cpu {
                     encoded_radix
                 };
                 if op == 0xd4 && radix == 0 {
-                    if self.protected_mode() {
-                        return Err(ExecError::Fault(0));
-                    }
-                    self.ip = start;
-                    self.deliver_interrupt(b, 0)?;
-                    return Ok(());
+                    return Err(ExecError::Fault(0));
                 }
                 if op == 0xd4 {
                     let a = self.byte(0);

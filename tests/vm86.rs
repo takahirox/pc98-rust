@@ -83,6 +83,66 @@ fn enter(c: &mut Cpu, b: &mut Bus) {
     assert_eq!(c.cpl, 3);
     assert_eq!(c.cr0 & 1, 1);
 }
+#[test]
+fn dx2_successful_vm86_instructions_use_real_virtual_timing_tables() {
+    // Intel486 DX2 data book (July 1992), pp.10-7..10-9, RV/P entries.
+    let cases: &[(&[u8], u32)] = &[
+        (&[0x8e, 0xd8], 3),              // MOV DS,AX
+        (&[0x8e, 0x1f], 3),              // MOV DS,[BX]
+        (&[0x07], 3),                    // POP ES
+        (&[0x17], 3),                    // POP SS
+        (&[0x1f], 3),                    // POP DS
+        (&[0x0f, 0xa1], 3),              // POP FS
+        (&[0x0f, 0xa9], 3),              // POP GS
+        (&[0xc4, 0x07], 6),              // LES AX,[BX]
+        (&[0xc5, 0x07], 6),              // LDS AX,[BX]
+        (&[0x0f, 0xb2, 0x07], 6),        // LSS AX,[BX]
+        (&[0x0f, 0xb4, 0x07], 6),        // LFS AX,[BX]
+        (&[0x0f, 0xb5, 0x07], 6),        // LGS AX,[BX]
+        (&[0x9c], 4),                    // PUSHF, IOPL=3
+        (&[0x9d], 9),                    // POPF, IOPL=3
+        (&[0x9a, 0x20, 0, 0, 0x20], 18), // direct far CALL
+        (&[0xff, 0x1f], 17),             // indirect far CALL
+        (&[0xea, 0x20, 0, 0, 0x20], 17), // direct far JMP
+        (&[0xff, 0x2f], 13),             // indirect far JMP
+        (&[0xcb], 13),                   // far RET
+        (&[0xca, 2, 0], 14),             // far RET imm
+        (&[0xcf], 15),                   // IRET within VM86
+        (&[0xec], 30),                   // IN AL,DX keeps its VM86 cost
+        (&[0xee], 32),                   // OUT DX,AL
+        (&[0x6c], 33),                   // INSB
+        (&[0x6e], 33),                   // OUTSB
+    ];
+    for &(code, expected) in cases {
+        let (mut c, mut b) = setup(code, false, 0x23002);
+        enter(&mut c, &mut b);
+        c.r[BX] = 0x10;
+        b.mem[0x50010..0x50014].copy_from_slice(&[0x20, 0, 0, 0x20]);
+        b.mem[0x37000..0x37006].copy_from_slice(&[0x20, 0, 0, 0x20, 2, 0x30]);
+        let completed = c.completed_instructions;
+        let (timing, result) = c.step_timed(&mut b);
+        result.unwrap();
+        assert_eq!(c.fault_count, 0, "{code:02x?}");
+        assert!(c.vm86(), "{code:02x?}");
+        assert_eq!(timing.execution, expected, "{code:02x?}");
+        assert_eq!(timing.instructions, 1, "{code:02x?}");
+        assert_eq!(c.completed_instructions, completed + 1);
+    }
+}
+#[test]
+fn dx2_vm86_software_interrupts_keep_virtual_entry_timing() {
+    // DX2 pp.10-12..10-13: virtual-mode INT=82, plus opcode overhead.
+    for (code, expected) in [(&[0xcc][..], 82), (&[0xcd, 3][..], 86), (&[0xce][..], 84)] {
+        let (mut c, mut b) = setup(code, false, 0x23002 | u32::from(OF));
+        enter(&mut c, &mut b);
+        let (timing, result) = c.step_timed(&mut b);
+        result.unwrap();
+        assert_eq!(c.fault_count, 0, "{code:02x?}");
+        assert!(!c.vm86(), "{code:02x?}");
+        assert_eq!(timing.execution, expected, "{code:02x?}");
+        assert_eq!(timing.instructions, 1);
+    }
+}
 fn frame(c: &Cpu, b: &Bus, n: u8, error: Option<u32>, ip: u32, flags: u32) {
     assert!(!c.vm86());
     assert_eq!(c.cpl, 0);

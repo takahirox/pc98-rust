@@ -266,6 +266,53 @@ fn bus_policy_distinguishes_alignment_vram_io_and_cache_misses() {
     assert_eq!(m.cpu.step_timed(&mut m.bus).0.bus, 8);
 }
 #[test]
+fn dx2_text_and_graphics_vram_stay_uncached_for_reads_and_writes() {
+    for segment in [0xa000, 0xa200, 0xa3ff, 0xa800, 0xb000, 0xe000] {
+        for code in [[0x8b, 0x07], [0x89, 0x07]] {
+            let mut m = machine(Profile::Pc9821ApDos, &code);
+            m.cpu.cr0 &= !0x40000000;
+            m.cpu.s[DS] = segment;
+            m.cpu.r[BX] = 0;
+            let (cold, result) = m.cpu.step_timed(&mut m.bus);
+            result.unwrap();
+            m.cpu.ip = 0x100;
+            let (warm, result) = m.cpu.step_timed(&mut m.bus);
+            result.unwrap();
+            // One cold code line fill, then an uncached 16-bit video beat
+            // on every access, including writes with the cache enabled.
+            assert_eq!((cold.bus, warm.bus), (18, 8), "{segment:04x} {code:02x?}");
+        }
+    }
+}
+
+#[test]
+fn real_mode_aam_zero_charges_fault_entry_without_retiring() {
+    let mut m = machine(Profile::Pc9821ApDos, &[0xd4, 0]);
+    m.bus.mem[..4].copy_from_slice(&[0, 4, 0, 0]);
+    m.cpu.r[AX] = 0x1234;
+    m.step(1);
+    assert!(m.error.is_none(), "{:?}", m.error);
+    assert_eq!((m.cpu.s[CS], m.cpu.ip), (0, 0x400));
+    assert_eq!(m.cpu.r[AX], 0x1234);
+    assert_eq!(m.cpu.r[SP], 0x7ffa);
+    assert_eq!(m.bus.read_seg(0, 0x7ffa, true), 0x100);
+    assert_eq!(m.cpu.fault_count, 1);
+    assert_eq!(m.cpu.last_fault, Some((0, 0)));
+    assert_eq!(m.cpu.last_timing.execution, 41); // AAM 15 + real-mode entry 26.
+    assert_eq!(m.cpu.last_timing.instructions, 0);
+    assert_eq!(m.cpu.completed_instructions, 0);
+    assert!(m.cpu.last_timing.approximated);
+    assert_eq!(m.bus.cycles, m.cpu.cycles * 8 / 66);
+    // V30 ignores the encoded radix and always uses ten, so D4 00 succeeds.
+    let mut m = machine(Profile::Pc9801Vm, &[0xd4, 0]);
+    m.cpu.r[AX] = 42;
+    m.step(1);
+    assert_eq!(m.cpu.r[AX], 0x0402);
+    assert_eq!(m.cpu.fault_count, 0);
+    assert_eq!(m.cpu.completed_instructions, 1);
+    assert_eq!(m.cpu.last_timing.execution, 15);
+}
+#[test]
 fn clock_domains_fractional_batches_halt_and_device_time() {
     for profile in [Profile::Pc9801Vm, Profile::Pc9821ApDos] {
         let mut small = ClockConverter::default();
