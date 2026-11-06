@@ -113,3 +113,25 @@ coupling, V30 prefetch, detailed cache/pipeline/write-buffer behavior and synthe
 BIOS/LIO execution latency remain approximations or unmodeled effects. Hardware
 comparison and diagnosis of a particular game's slow transition remain unverified.
 No post-merge-only check is required, and nothing was pushed or published.
+
+## Continuation validation
+
+The continuation published the preserved INT/POLL corrections, then corrected
+V30 divide-error timing against NEC table 6-1. Unsigned errors use 45 clocks;
+signed errors use the documented 45–55 range's upper bound. Successful division
+and external INT costs are not added to these complete exception totals.
+All 16 timing tests and 15 library tests passed with test optimization level 1,
+as did Clippy, formatting, whitespace and strict FDC BIOS fixture preparation.
+
+The [GitHub run for `70e8f95`](https://github.com/takahirox/pc98-rust/actions/runs/42228222454)
+completed all 590 native tests across 41 targets with no failures or ignored tests
+in the default unoptimized profile. That native step took 42 minutes 24 seconds.
+Release Wasm/build/packaging and 12 Node audio tests also passed, but the job hit
+its 45-minute limit during Chromium tests. That cancelled run is not a complete
+acceptance pass.
+
+CI and the README reproduction commands now use test optimization level 1 to
+reduce host interpreter cost for guest-time workloads. Debug assertions and
+overflow checks are explicitly enabled; test selection, guest-time budgets,
+assertions, browser checks and the job timeout are retained. This changes host
+validation throughput, not emulated clock rates or guest behavior.

@@ -80,6 +80,12 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --locked
+        env:
+          # Guest-time probes execute more CPU units with instruction timing.
+          # Optimize the interpreter while retaining every debug-time check.
+          CARGO_PROFILE_TEST_OPT_LEVEL: "1"
+          CARGO_PROFILE_TEST_DEBUG_ASSERTIONS: "true"
+          CARGO_PROFILE_TEST_OVERFLOW_CHECKS: "true"
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm test

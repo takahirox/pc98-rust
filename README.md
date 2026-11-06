@@ -208,6 +208,10 @@ python3 tools/prepare_hdd_fixture.py
 python3 tools/prepare_music_fixture.py
 python3 tools/prepare_device_fixture.py
 python3 tools/build_font.py --check
+# Match CI: guest-time probes run the optimized interpreter with debug checks.
+export CARGO_PROFILE_TEST_OPT_LEVEL=1
+export CARGO_PROFILE_TEST_DEBUG_ASSERTIONS=true
+export CARGO_PROFILE_TEST_OVERFLOW_CHECKS=true
 cargo test --locked --test sound86 opna_irq_
 cargo test --locked --test sound86 --test ap --test music --test pic
 cargo test --locked --test ap opn_ch3_
