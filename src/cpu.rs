@@ -410,18 +410,24 @@ impl Cpu {
     // Events outside instruction execution keep their current resume IP. Software
     // INT uses deliver_interrupt directly so step restores the faulting prefix IP
     // before attempting #DF. This is a bounded IDT-limit path, not nested-fault emulation.
-    fn deliver_event(&mut self, b: &mut Bus, n: u8) -> ExecResult<()> {
+    fn deliver_event(&mut self, b: &mut Bus, n: u8, source: GateSource) -> ExecResult<()> {
         self.rep_resume = None;
         if !self.protected_mode() && b.timing.active {
             b.timing.extra_execution += if b.profile == crate::Profile::Pc9801Vm {
-                49 // NEC table 6-1: µPD70116 external INT entry.
+                // NEC table 6-1 gives complete divide-error totals, selected
+                // by the instruction timing table instead of adding INT entry.
+                if source == GateSource::Fault && n == 0 {
+                    0
+                } else {
+                    49 // NEC table 6-1: µPD70116 external INT entry.
+                }
             } else {
                 26
             };
             b.timing.approximated = true;
         }
         if self.protected_mode() {
-            return self.protected_event(b, n, None, GateSource::External);
+            return self.protected_event(b, n, None, source);
         }
         match self.deliver_interrupt(b, n) {
             Err(ExecError::Fault(8)) => match self.deliver_interrupt(b, 8) {
@@ -450,7 +456,7 @@ impl Cpu {
             b.timing.extra_execution += 11;
         }
         let result = self
-            .deliver_event(b, n)
+            .deliver_event(b, n, GateSource::External)
             .map_err(|e| format!("interrupt delivery failed: {e:?}"));
         let timing = b.timing.finish(b.profile, result.is_err(), 0);
         self.cycles += u64::from(timing.cpu_cycles());
@@ -853,7 +859,7 @@ impl Cpu {
                     b.timing.extra_execution += 11;
                 }
                 self.rep_resume = None;
-                self.deliver_event(b, n)
+                self.deliver_event(b, n, GateSource::External)
                     .map_err(|e| format!("interrupt delivery failed: {e:?}"))?;
             }
         }
@@ -893,7 +899,7 @@ impl Cpu {
                         self.protected_event(b, 1, None, GateSource::Trap)
                             .map_err(|e| format!("protected single-step delivery failed: {e:?}"))?;
                     } else {
-                        self.deliver_event(b, 1)
+                        self.deliver_event(b, 1, GateSource::Trap)
                             .map_err(|_| "invalid single-step interrupt stack".to_string())?;
                     }
                 }
@@ -939,7 +945,7 @@ impl Cpu {
                         .map_err(|e| format!("protected fault delivery failed vector={vector} error={error:?}: {e:?}"));
                 }
                 self.last_fault = Some((vector, 0));
-                self.deliver_event(b, vector)
+                self.deliver_event(b, vector, GateSource::Fault)
                     .map_err(|_| "fault while delivering real-mode exception".to_string())
             }
         }

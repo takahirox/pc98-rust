@@ -113,6 +113,13 @@ sample (`n = 1`, seven core clocks), assuming the POLL pin is ready at the
 first sample. It remains marked approximate: external POLL pin state and
 additional sampling while a coprocessor is busy are not modeled.
 
+V30 divide errors use NEC table 6-1's complete exception totals: 45 core
+clocks for unsigned DIVU, and the 55-clock upper bound of signed DIV's
+45–55 range. They replace successful division timing and include exception
+entry; the external INT cost is not added. Actual operand/vector/stack bus
+penalties and prefixes remain separate. Signed data dependence and fault
+detection details remain approximate.
+
 ## Physical bus assumptions and remaining limits
 
 | Effect | Implemented policy | Accuracy boundary |
@@ -127,7 +134,7 @@ additional sampling while a coprocessor is busy are not modeled.
 | DX2 misalignment | Three additional core clocks per unaligned operand | Plus actual split physical beats |
 | Port I/O | CPU table cost; V30 odd word +4; DX2 extra bytes +4 core clocks each | Devices expose byte handshakes, no board-ready waveform |
 | Page walks/system descriptors | Physical memory accesses contribute bus cost | TLB replacement remains existing policy; A/D update and protection microcode are approximate |
-| Interrupts/faults | Entry charged in addition to interrupted/faulting work; each protected retry charged; software INT has its own table entry | Fault detection point and double-fault pipeline costs are conservative, not measured |
+| Interrupts/faults | V30 divide uses complete exception totals; other entry charged in addition to interrupted/faulting work; each protected retry charged; software INT has its own table entry | Fault detection point and double-fault pipeline costs are conservative, not measured |
 | HLT/shutdown | One microsecond idle quantum; clocks/events continue, retirement stops | IRQ wake-up quantized to one microsecond |
 | Synthetic firmware | Existing explicit FDC waits plus actual guest thunk instructions; flush timing tags after host services | BIOS/LIO host work has no fictitious instruction count; ROM execution latency is not reproduced |
 

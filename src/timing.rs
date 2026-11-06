@@ -289,7 +289,7 @@ impl TimingState {
         };
         if let Some(i) = self.instruction {
             let (clocks, approximate) = if profile == Profile::Pc9801Vm {
-                self.v30(i)
+                self.v30(i, fault)
             } else {
                 self.i486(i)
             };
@@ -378,12 +378,23 @@ impl TimingState {
         }
         iteration + if i.continuation { 0 } else { setup }
     }
-    fn v30(&self, i: Instruction) -> (u32, bool) {
+    fn v30(&self, i: Instruction, fault: bool) -> (u32, bool) {
         let mem = i.modrm < 0xc0;
         let group = (i.modrm >> 3) & 7;
         let rm = |reg, memory| if mem { memory } else { reg };
         let mut approximate = false;
         let clocks = match i.op {
+            // NEC table 6-1: DIVU error = 45; signed DIV error = 45..55.
+            // These replace successful division clocks, including interrupt
+            // entry. Keep the upper bound for the signed data-dependent range.
+            0xf6 | 0xf7 if fault && group >= 6 => {
+                approximate = true;
+                if group == 6 {
+                    45
+                } else {
+                    55
+                }
+            }
             op if i.string() => {
                 let _ = op;
                 self.string_clocks(i, true)

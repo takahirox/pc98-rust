@@ -316,6 +316,54 @@ fn dx2_text_and_graphics_vram_stay_uncached_for_reads_and_writes() {
 }
 
 #[test]
+fn nec_divide_errors_use_exception_totals_without_external_int_or_success_costs() {
+    // NEC table 6-1: unsigned DIVU error 45; signed DIV error 45..55.
+    // Test both widths, register/memory, zero divisor and quotient overflow.
+    for op in [0xf6, 0xf7] {
+        for (group, expected) in [(6, 45), (7, 55)] {
+            for memory in [false, true] {
+                for overflow in [false, true] {
+                    let modrm = group << 3 | if memory { 7 } else { 0xc1 };
+                    let mut m = machine(Profile::Pc9801Vm, &[op, modrm]);
+                    m.bus.mem[..4].copy_from_slice(&[0, 4, 0, 0]);
+                    m.cpu.r[AX] = if overflow { 0x8000 } else { 1 };
+                    m.cpu.r[DX] = if overflow { 0x8000 } else { 0 };
+                    m.cpu.r[CX] = u16::from(overflow);
+                    m.bus.mem[0x2002..0x2004].copy_from_slice(&u16::from(overflow).to_le_bytes());
+                    let before = m.cpu.r;
+                    m.step(1);
+                    assert!(m.error.is_none(), "{:?}", m.error);
+                    assert_eq!((m.cpu.s[CS], m.cpu.ip), (0, 0x400));
+                    assert_eq!(m.cpu.fault_count, 1);
+                    assert_eq!(m.cpu.r[AX], before[AX]);
+                    assert_eq!(m.cpu.r[DX], before[DX]);
+                    assert_eq!(m.cpu.last_timing.execution, expected);
+                    assert_eq!(m.cpu.last_timing.bus, 0);
+                    assert_eq!(m.cpu.completed_instructions, 0);
+                    assert_eq!(m.bus.cycles, expected as u64 * 8 / 10);
+                    assert_eq!(m.bus.read_seg(0, 0x7ffa, true), 0x100);
+                }
+            }
+        }
+    }
+    // Prefixes and actual odd operand/stack beats remain additional costs.
+    let mut m = machine(Profile::Pc9801Vm, &[0x26, 0xf7, 0x37]);
+    m.bus.mem[..4].copy_from_slice(&[0, 4, 0, 0]);
+    m.cpu.r[BX] = 0x2003;
+    m.cpu.r[SP] = 0x8001;
+    m.step(1);
+    assert!(m.error.is_none(), "{:?}", m.error);
+    assert_eq!(m.cpu.last_timing.execution, 47); // 45 + segment prefix
+    assert_eq!(m.cpu.last_timing.bus, 16); // operand + three odd stack writes
+    assert_eq!(m.cpu.completed_instructions, 0);
+    assert_eq!(m.bus.cycles, 50); // floor((47 + 16) * 8/10)
+
+    // A real external event with vector zero still pays external INT timing.
+    let mut m = machine(Profile::Pc9801Vm, &[0x90]);
+    m.bus.mem[..4].copy_from_slice(&[0, 4, 0, 0]);
+    assert_eq!(m.cpu.interrupt_timed(&mut m.bus, 0).0.execution, 49);
+}
+#[test]
 fn real_mode_aam_zero_charges_fault_entry_without_retiring() {
     let mut m = machine(Profile::Pc9821ApDos, &[0xd4, 0]);
     m.bus.mem[..4].copy_from_slice(&[0, 4, 0, 0]);
