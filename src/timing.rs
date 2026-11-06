@@ -86,6 +86,7 @@ pub(crate) struct TimingState {
     pub untimed: Option<(u8, u8)>,
     pub instruction: Option<Instruction>,
     pub taken: bool,
+    pub invlpg_hit: bool,
     pub element: bool,
     pub extra_execution: u32,
     pub penalty: u32,
@@ -106,6 +107,7 @@ impl Default for TimingState {
             untimed: None,
             instruction: None,
             taken: false,
+            invlpg_hit: false,
             element: false,
             extra_execution: 0,
             penalty: 0,
@@ -127,6 +129,7 @@ impl TimingState {
         self.untimed = None;
         self.instruction = None;
         self.taken = false;
+        self.invlpg_hit = false;
         self.element = false;
         self.extra_execution = 0;
         self.penalty = 0;
@@ -884,7 +887,8 @@ impl TimingState {
                     2 | 3 => 12,
                     4 => rm(2, 3),
                     6 => 13,
-                    7 => 12,
+                    // Intel486 DX2 table 10.1: TLB hit / no hit = 12 / 11.
+                    7 => 11 + u32::from(self.invlpg_hit),
                     _ => 0,
                 },
                 0x06 => 7,

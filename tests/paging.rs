@@ -407,6 +407,37 @@ fn benign_contributory_page_fault_chain_reaches_double_fault_delivery() {
 }
 
 #[test]
+fn invlpg_tlb_hit_and_miss_have_distinct_dx2_execution_clocks() {
+    // Intel486 DX2 data book table 10.1, p.10-10: 12/11 clocks for
+    // TLB hit/no hit, independent of instruction fetch and bus penalties.
+    for cache_enabled in [false, true] {
+        let (mut c, mut b) = setup(&[
+            // Load page 801000h into a different TLB slot from code.
+            0xa1, 0, 0x10, 0x80, 0, // MOV EAX,[801000h]
+            0x0f, 0x01, 0x3d, 0, 0x10, 0x80, 0, // INVLPG [801000h]
+        ]);
+        if cache_enabled {
+            c.cr0 &= !0x60000000;
+        }
+        c.step_timed(&mut b).1.unwrap();
+        let invlpg_ip = c.ip;
+        // Repeat the identical instruction without reloading the invalidated page.
+        for execution in [12, 11] {
+            c.ip = invlpg_ip;
+            let (timing, result) = c.step_timed(&mut b);
+            result.unwrap();
+            assert_eq!(c.last_fault, None);
+            assert_eq!(c.ip, invlpg_ip + 7);
+            assert_eq!(timing.execution, execution);
+            // Both fetches are within the line warmed by MOV; disabled cache
+            // instead charges two physical 32-bit instruction fetch beats.
+            assert_eq!(timing.bus, if cache_enabled { 0 } else { 8 });
+            assert_eq!(timing.cpu_cycles(), execution + timing.bus);
+        }
+    }
+}
+
+#[test]
 fn invlpg_encoding_privilege_nonpresent_address_and_no_operand_access() {
     for (code, vector) in [
         (vec![0x0f, 0x01, 0xf8], 6),
