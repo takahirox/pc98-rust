@@ -168,7 +168,12 @@ impl Rtc {
     pub fn tick(&mut self, clocks: u32) {
         self.fraction += u64::from(clocks);
         if self.mode == 2 {
-            self.fraction %= LOWER_DIVIDER_CLOCKS;
+            if self.fraction >= LOWER_DIVIDER_CLOCKS {
+                self.fraction %= LOWER_DIVIDER_CLOCKS;
+            }
+            return;
+        }
+        if self.fraction < CLOCK_HZ {
             return;
         }
         let seconds = self.fraction / CLOCK_HZ;

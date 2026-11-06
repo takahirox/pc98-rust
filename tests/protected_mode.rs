@@ -1,3 +1,4 @@
+mod common;
 // Wholly original machine-code/descriptor probes. SPDX-License-Identifier: MIT
 use pc98_rust::{bus::Bus, cpu::*, Machine, Profile};
 
@@ -86,6 +87,101 @@ fn fault_frame(c: &Cpu, b: &Bus, vector: u8, error: u32) {
     assert_eq!(&b.mem[sp + 4..sp + 8], &0x1000u32.to_le_bytes());
     assert_eq!(&b.mem[sp + 8..sp + 12], &8u32.to_le_bytes());
     assert_eq!(b.mem[sp + 14] & 1, 1); // RF saved for restartable fault
+}
+
+#[test]
+fn dx2_unaccessed_data_descriptor_loads_add_core_clocks_separately_from_bus_writes() {
+    // Intel486 DX2 data book, table 10.1 note 9: +11 clocks per
+    // unaccessed descriptor load, in addition to physical bus costs.
+    let cases: &[(&[u8], usize, u32)] = &[
+        (&[0x8e, 0xd8], DS, 9), // MOV DS,AX
+        (&[0x8e, 0x1f], DS, 9), // MOV DS,[BX]
+        (&[0x8e, 0xd0], SS, 9), // MOV SS,AX
+        (&[0x07], ES, 9),
+        (&[0x17], SS, 9),
+        (&[0x1f], DS, 9),
+        (&[0x0f, 0xa1], 4, 9),
+        (&[0x0f, 0xa9], 5, 9),
+        (&[0xc4, 0x07], ES, 12),
+        (&[0xc5, 0x07], DS, 12),
+        (&[0x0f, 0xb2, 0x07], SS, 12),
+        (&[0x0f, 0xb4, 0x07], 4, 12),
+        (&[0x0f, 0xb5, 0x07], 5, 12),
+    ];
+    for &(code, segment, base_clocks) in cases {
+        let mut bus_clocks = [0; 2];
+        for accessed in [0, 1] {
+            let (mut c, mut b) = protected(code, false, false);
+            c.r[AX] = 24;
+            c.r[BX] = 0x10;
+            // MOV's selector, or a far pointer's offset followed by selector.
+            b.mem[0x20010..0x20014].copy_from_slice(&[24, 0, 24, 0]);
+            b.mem[0x8000..0x8002].copy_from_slice(&24u16.to_le_bytes());
+            b.mem[0x501d] = 0x92 | accessed;
+            let (timing, result) = c.step_timed(&mut b);
+            result.unwrap();
+            assert_eq!(c.fault_count, 0, "{code:02x?}");
+            assert_eq!(
+                if segment < 4 {
+                    c.s[segment]
+                } else {
+                    c.extra_segments[segment - 4]
+                },
+                24
+            );
+            assert_eq!(c.segment_cache(segment).access, 0x93);
+            assert_eq!(b.mem[0x501d], 0x93);
+            assert_eq!(
+                timing.execution,
+                base_clocks + 11 * u32::from(accessed == 0),
+                "{code:02x?}"
+            );
+            bus_clocks[accessed as usize] = timing.bus;
+        }
+        assert_eq!(bus_clocks[0], bus_clocks[1] + 4, "{code:02x?}");
+    }
+}
+
+#[test]
+fn dx2_unaccessed_code_descriptor_loads_add_core_clocks_on_transfers_and_entry() {
+    let cases: &[(&[u8], u32)] = &[
+        (&[0x9a, 0x20, 0, 32, 0], 20), // far CALL
+        (&[0xff, 0x1f], 20),
+        (&[0xea, 0x20, 0, 32, 0], 19), // far JMP
+        (&[0xff, 0x2f], 18),
+        (&[0xcb], 17), // far RET
+        (&[0xca, 2, 0], 18),
+        (&[0xcf], 20),       // IRET
+        (&[0xcd, 0x30], 44), // software INT
+        (&[], 55),           // external interrupt: 44 entry + 11 recognition
+    ];
+    for &(code, base_clocks) in cases {
+        let mut bus_clocks = [0; 2];
+        for accessed in [0, 1] {
+            let (mut c, mut b) = protected(code, false, false);
+            descriptor(&mut b, 32, 0x10000, 0xffff, 0x9a | accessed, 0);
+            c.r[BX] = 0x10;
+            b.mem[0x20010..0x20014].copy_from_slice(&[0x20, 0, 32, 0]);
+            b.mem[0x8000..0x8006].copy_from_slice(&[0x20, 0, 32, 0, 2, 0]);
+            gate(&mut b, 0x30, 32, 0x20, 0x86);
+            let (timing, result) = if code.is_empty() {
+                c.interrupt_timed(&mut b, 0x30)
+            } else {
+                c.step_timed(&mut b)
+            };
+            result.unwrap();
+            assert_eq!(c.fault_count, 0, "{code:02x?}");
+            assert_eq!((c.s[CS], c.ip), (32, 0x20));
+            assert_eq!(b.mem[0x5025], 0x9b);
+            assert_eq!(
+                timing.execution,
+                base_clocks + 11 * u32::from(accessed == 0),
+                "{code:02x?}"
+            );
+            bus_clocks[accessed as usize] = timing.bus;
+        }
+        assert_eq!(bus_clocks[0], bus_clocks[1] + 4, "{code:02x?}");
+    }
 }
 
 #[test]
@@ -718,7 +814,7 @@ fn synthetic_bios_timer_after_protected_return_reloads_real_cs_cache() {
     let image = std::fs::read("fixtures/protected_mode/protected_mode.hdm").unwrap();
     let mut m = Machine::new(Profile::Pc9821ApDos);
     m.insert(0, image, "protected_mode.hdm").unwrap();
-    m.step(10000);
+    common::advance(&mut m, 10000);
     assert!(m.error.is_none());
     assert!(m.bus.text().contains("PROTECTED MODE PASS"));
     // Execute a new original real-mode BIOS caller with the retained post-PE caches.
@@ -733,7 +829,7 @@ fn synthetic_bios_timer_after_protected_return_reloads_real_cs_cache() {
     m.bus.mem[0x21c10] = 0;
     m.bus.pics[0].mask = 0xfe;
     for _ in 0..4 {
-        m.step(10000);
+        common::advance(&mut m, 10000);
         assert!(m.error.is_none(), "{:?}", m.error);
     }
     assert_eq!(m.bus.mem[0x21c10], 1);
@@ -1575,7 +1671,7 @@ fn ltr_non_ram_tables_and_sources_stop_before_device_reads_or_busy_writes() {
         let (mut c, mut b) = protected(&[0x0f, 0x00, 0xd8], true, true);
         c.r[AX] = 0x23;
         c.gdtr_base = base;
-        let saved = format!("{c:?}");
+        let saved = common::cpu_state(&c);
         let mem = b.mem.clone();
         seed_stack_operand_egc(&mut b);
         let graphics = b.graphics.clone();
@@ -1583,7 +1679,7 @@ fn ltr_non_ram_tables_and_sources_stop_before_device_reads_or_busy_writes() {
         assert!(error.contains("LTR descriptor bus access"), "{error}");
         assert!(error.contains("opcode=0f 00 modrm=d8"));
         assert!(error.contains("TR=0000 TSS=None"));
-        assert_eq!(format!("{c:?}"), saved);
+        assert_eq!(common::cpu_state(&c), saved);
         assert_eq!(b.mem, mem);
         // Seeded graphics are unchanged and no EGC read latch was consumed.
         assert_eq!(b.graphics, graphics);
@@ -1593,12 +1689,12 @@ fn ltr_non_ram_tables_and_sources_stop_before_device_reads_or_busy_writes() {
     c.segment_caches[DS].as_mut().unwrap().base = 0xa8000;
     seed_stack_operand_egc(&mut b);
     let memory = b.mem.clone();
-    let saved = format!("{c:?}");
+    let saved = common::cpu_state(&c);
     assert!(c
         .step(&mut b)
         .unwrap_err()
         .contains("LTR source bus access"));
-    assert_eq!(format!("{c:?}"), saved);
+    assert_eq!(common::cpu_state(&c), saved);
     assert_eq!(b.mem, memory);
     assert_stack_operand_egc_latches_unchanged(&mut b);
 }
@@ -1675,12 +1771,12 @@ fn loaded_tr_does_not_enable_hardware_tasks_privilege_switches_or_nt_return() {
             c.flags |= 0x4000;
             c.set_reg32(SP, 0xffff_ffff); // NT must stop before reading any normal return frame.
         }
-        let saved = format!("{c:?}");
+        let saved = common::cpu_state(&c);
         let memory = b.mem.clone();
         let error = c.step(&mut b).unwrap_err();
         assert!(error.contains(name), "{error}");
         assert!(error.contains("TR=0028 TSS=Some"), "{error}");
-        assert_eq!(format!("{c:?}"), saved);
+        assert_eq!(common::cpu_state(&c), saved);
         assert_eq!(b.mem, memory);
     }
 }
@@ -1793,10 +1889,10 @@ fn tss_stack_switch_interrupt_boundary_precedes_memory() {
     gate(&mut b, 0x30, 32, 0x2000, 0xee);
     c.cpl = 3;
     c.tr = 0x28;
-    let saved = format!("{c:?}");
+    let saved = common::cpu_state(&c);
     let memory = b.mem.clone();
     let error = c.interrupt(&mut b, 0x30).unwrap_err();
     assert!(error.contains("privilege/TSS stack switch"), "{error}");
-    assert_eq!(format!("{c:?}"), saved);
+    assert_eq!(common::cpu_state(&c), saved);
     assert_eq!(b.mem, memory);
 }

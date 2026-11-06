@@ -72,8 +72,14 @@ mov di, 0x8000
 mov cx, 32
 .check:
 lodsb
+cmp di, 0x8001
+jb .compare
+cmp di, 0x8009
+jb .next
+.compare:
 cmp al, [es:di]
 jne fail
+.next:
 inc di
 loop .check
 mov si, pass_text
@@ -84,19 +90,19 @@ jmp $
 program:
 mov al, 0x30                  ; paired binary mode 0, counter 0
 out 0x77, al
-mov ax, 0x1234
+mov ax, 0x1400
 out 0x71, al
 mov al, ah
 out 0x71, al
-mov cx, 16                    ; allow load, leave byte-distinct 12xxh count
 .settle:
-loop .settle
+call recapture
+cmp ax, 0x12e0
+ja .settle
 ret
 
 delay:
-mov cx, 200                   ; >256 clocks, far short of terminal count
-.wait:
-loop .wait
+mov cx, 500
+call wait_pit
 ret
 
 recapture:
@@ -139,9 +145,34 @@ stosw
 jmp .print
 .done:
 ret
+; Device-clock delay using otherwise unused 8253 channel 2. AX is preserved.
+; This avoids assuming an instruction always consumes eight scheduler clocks.
+wait_pit:
+push ax
+mov al, 0xb0
+out 0x77, al
+mov ax, cx
+out 0x75, al
+mov al, ah
+out 0x75, al
+; A latch before the first input clock can capture the previous count.
+; Discard a complete read pair, allowing the newly programmed count to load.
+in al, 0x75
+in al, 0x75
+.wait:
+mov al, 0x80
+out 0x77, al
+in al, 0x75
+in al, 0x75
+test al, 0x80                  ; underflow after terminal zero
+jz .wait
+pop ax
+ret
+
 pass_text: db 'PIT COUNTER LATCH PASS', 0
 fail_text: db 'PIT COUNTER LATCH FAIL', 0
 expected:
-db 0xa5, 0x0d,0x12,0x54,0x10,0x0b,0x12,0x56,0x10
+db 0xa5
+times 8 db 0                    ; raw count fields are checked relationally
 times 23 db 0xa5
 times 1024-($-$$) db 0

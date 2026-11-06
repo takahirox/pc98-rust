@@ -2,10 +2,10 @@
   "source": "guest/opn_ch3.asm",
   "license": "MIT; LICENSE and original assembly copied alongside image",
   "assembly": "nasm -f bin guest/opn_ch3.asm -o opn_ch3.bin",
-  "source_sha256": "fc5ad69f15b8df6d685b09221c5cc8834a5e466990cee8bae942d5c171d59916",
-  "boot_sha256": "3342ece1224d0a38fff7155c44df75b02205185c30a7f743711c6e85233bba6b",
+  "source_sha256": "91feb6771254f37017e3eb53d2e1b43a829a730e6f0573a493f0bf1e2da756ee",
+  "boot_sha256": "cb5c4c3c5228f396da2adebf9fe1b9b1ecaf0686f51248debb55998542486dd2",
   "image": "fixtures/opn_ch3/opn_ch3.hdm",
-  "image_sha256": "dca9f5a4b464fee7d81ccb054a4dce7d9bfc92cd93e097f6af2654b7ca8573c8",
+  "image_sha256": "dc7dd95d70f98f4651a9e9bfef7bd3f0dc2e4e1c51460280d866ffbb687be393",
   "geometry": "77 cylinders, 2 heads, 8 sectors, 1024 bytes per sector",
   "profiles": [
     "Ap real mode; shared OPN/OPNA core; VM sound remains absent"
@@ -128,7 +128,7 @@
       "block": 5
     }
   ],
-  "stage_duration": "80000 LOOP instructions, about 3840 samples at 48 kHz",
+  "stage_duration": "Six vertical periods (83-100 ms), independent of CPU throughput",
   "pcm_assertions": "At least 3500 samples/stage; finite and bounded; interpolated rising crossings >=3; pitch within max(0.03 Hz, 0.02 percent); chunk 1000 slots / 48 samples prevents 4096-sample queue overflow; discard chunks crossing markers",
   "result_address": "0x8000",
   "result_length": 64,
@@ -138,7 +138,7 @@
     "OPN CH3 PASS",
     "OPN CH3 FAIL"
   ],
-  "slot_budget": 2000000,
+  "slot_budget": 12000000,
   "reset": "Same image, PCM assertions, results and budget before and after Machine reset",
   "unverified": "Combined mode 11, CSM automatic timer keying, write latch timing, prescalers, key scaling, fuller envelopes/SSG-EG, LFO/stereo/rhythm/ADPCM; neither named special mode is fully implemented",
   "distribution": "Test only; excluded from web/"

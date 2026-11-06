@@ -1,4 +1,5 @@
 //! GPL FreeDOS(98) HDD boot control; original MIT test/helper, Issue #111.
+mod common;
 use pc98_rust::{Machine, Profile};
 
 fn image() -> Vec<u8> {
@@ -13,7 +14,7 @@ fn until(m: &mut Machine, condition: impl Fn(&Machine) -> bool) {
         if condition(m) {
             return;
         }
-        m.step(100_000);
+        common::advance(m, 100_000);
         m.bus.audio.clear();
         assert!(m.error.is_none(), "{:?}", m.error);
     }
@@ -26,9 +27,9 @@ fn until(m: &mut Machine, condition: impl Fn(&Machine) -> bool) {
 fn type_keys(m: &mut Machine, scans: &[u8]) {
     for &scan in scans {
         m.bus.key(scan, true);
-        m.step(50_000);
+        common::advance(m, 50_000);
         m.bus.key(scan, false);
-        m.step(10_000);
+        common::advance(m, 10_000);
         assert!(m.error.is_none(), "{:?}", m.error);
     }
 }
@@ -106,7 +107,7 @@ fn cleared_hdd_loads_exact_kernel_then_runs_shell_commands_cold_and_reset() {
         });
         until(&mut m, |m| m.bus.text().matches("A:\\>").count() >= 3);
         assert!(
-            m.cpu.retired <= 8_000_000,
+            m.bus.cycles <= 8_000_000 * 8,
             "boot/input exceeded the fixture budget"
         );
         assert_eq!(m.cpu.fault_count, 0);

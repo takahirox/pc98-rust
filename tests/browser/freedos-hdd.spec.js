@@ -50,7 +50,7 @@ test('Ap Auto: cleared FreeDOS HDD kernel handoff and responsive shell cold/rese
         for (let slots = 0; slots < budget; slots += 10000) {
           const text = pc98.text();
           if (text.includes(expected) || pc98.stats().error) return text;
-          pc98.core.step(10000);
+          pc98.advance(10000);
           pc98.core.audio_clear();
         }
         return pc98.text();
@@ -64,8 +64,8 @@ test('Ap Auto: cleared FreeDOS HDD kernel handoff and responsive shell cold/rese
     async function type(scans) {
       await inspect(page, scans => {
         for (const scan of scans) {
-          pc98.core.key(scan, 1); pc98.core.step(50000);
-          pc98.core.key(scan, 0); pc98.core.step(10000);
+          pc98.core.key(scan, 1); pc98.advance(50000);
+          pc98.core.key(scan, 0); pc98.advance(10000);
         }
       }, scans);
     }
@@ -73,14 +73,14 @@ test('Ap Auto: cleared FreeDOS HDD kernel handoff and responsive shell cold/rese
     await until('PC98 DOS PROBE OK');
     await type([0x12, 0x2b, 0x22, 0x18, 0x34, 0x18, 0x24, 0x1c]);
     await until('\nok');
-    await inspect(page, () => pc98.core.step(100000));
+    await inspect(page, () => pc98.advance(100000));
     const text = await inspect(page, () => pc98.text());
     expect(text.split('\n').some(line => line.trim() === 'ok')).toBe(true);
     expect(text.split('A:\\>').length - 1).toBeGreaterThanOrEqual(3);
     expect(await inspect(page, () => pc98.core.metric(19))).toBe(0);
     expect(await inspect(page, () => pc98.core.metric(20))).toBeGreaterThan(0);
     const stats = await inspect(page, () => pc98.stats());
-    expect(stats.instructions).toBeLessThanOrEqual(manifest.slot_budget);
+    expect(stats.cycles).toBeLessThanOrEqual(manifest.slot_budget*8);
     expect(stats.reads).toBe(0); expect(stats.hddReads).toBeGreaterThan(122);
     expect(stats.hddWrites).toBe(0);
     expect((await exportHdd(page)).equals(image)).toBe(true);

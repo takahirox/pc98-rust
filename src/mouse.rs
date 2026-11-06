@@ -39,9 +39,11 @@ impl Mouse {
     }
     pub fn tick(&mut self, cycles: u32) -> bool {
         self.fraction += cycles as u64 * (120 >> (self.rate & 3));
-        let interrupt = self.fraction >= 8_000_000;
+        if self.fraction < 8_000_000 {
+            return false;
+        }
         self.fraction %= 8_000_000;
-        interrupt && self.control & 0x10 == 0
+        self.control & 0x10 == 0
     }
     pub fn input(&self, port: u16, ap: bool) -> u8 {
         match port {

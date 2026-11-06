@@ -1,3 +1,4 @@
+mod common;
 // Original byte-level and boot probes. SPDX-License-Identifier: MIT
 use pc98_rust::{bus::Bus, cpu::*, Machine, Profile};
 
@@ -96,7 +97,7 @@ fn clears_only_ts_full_state_prefixes_sizes_modes_and_boundary() {
                 let graphics = b.graphics.clone();
                 let registers = b.egc.registers;
                 c.step(&mut b).unwrap();
-                assert_eq!(format!("{c:?}"), format!("{expected:?}"));
+                assert_eq!(common::cpu_state(&c), common::cpu_state(&expected));
                 assert_eq!(b.mem, memory);
                 assert_eq!(b.graphics, graphics);
                 assert_eq!(b.egc.registers, registers);
@@ -343,9 +344,9 @@ fn nonzero_cpl_clts_delivers_guest_gp_or_lock_ud_without_enabling_user_execution
                 assert_eq!(c.tr_cache, saved.tr_cache);
                 assert_eq!(c.tr, saved.tr);
                 assert_eq!(c.retired, saved.retired);
-                let snapshot = format!("{c:?}");
+                let snapshot = common::cpu_state(&c);
                 assert!(c.step(&mut b).unwrap_err().contains("only ring 0"));
-                assert_eq!(format!("{c:?}"), snapshot);
+                assert_eq!(common::cpu_state(&c), snapshot);
                 assert_eq!(b.mem, memory);
             }
         }

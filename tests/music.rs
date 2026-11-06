@@ -1,3 +1,4 @@
+mod common;
 use pc98_rust::{Machine, Profile};
 
 #[test]
@@ -11,7 +12,7 @@ fn unchanged_adv98_starts_pmd_game_music_from_compiled_original_score() {
     m.insert(0, bytes, "music.hdm").unwrap();
     m.reset();
     for _ in 0..180 {
-        m.step(100_000);
+        common::advance(&mut m, 100_000);
         m.bus.audio.clear();
         assert!(m.error.is_none(), "{:?}", m.error);
     }
@@ -22,12 +23,12 @@ fn unchanged_adv98_starts_pmd_game_music_from_compiled_original_score() {
         "PMD must wait for the game's music-start command"
     );
     m.bus.key(0x1c, true);
-    m.step(100_000);
+    common::advance(&mut m, 100_000);
     m.bus.key(0x1c, false);
     let mut energy = 0.0;
     let mut pitches = std::collections::BTreeSet::new();
     for _ in 0..180 {
-        m.step(100_000);
+        common::advance(&mut m, 100_000);
         assert!(m.error.is_none(), "{:?}", m.error);
         energy += m
             .bus

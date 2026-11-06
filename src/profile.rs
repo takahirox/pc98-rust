@@ -7,6 +7,13 @@ pub enum Profile {
 }
 
 impl Profile {
+    /// Selected clocks: VM V30-10; Ap Intel486DX2-66 (33 MHz external bus).
+    pub fn cpu_hz(self) -> u64 {
+        match self {
+            Self::Pc9801Vm => 10_000_000,
+            Self::Pc9821ApDos => 66_000_000,
+        }
+    }
     pub fn planes(self) -> usize {
         match self {
             Self::Pc9801Vm => 3,

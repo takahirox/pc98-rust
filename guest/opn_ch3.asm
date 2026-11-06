@@ -4,7 +4,7 @@
 ; One 1024-byte IPL sector at 1FC0:0000. No DOS, ROM or sample dependencies.
 ; 8001h identifies stable PCM stages 1..16; 0=between, FF=done.
 ; For each logical operator: normal, 40h, 80h, normal WHILE KEYED.
-; Each stage runs 80000 LOOP instructions. Entire boot <2000000 slots.
+; Each stage spans six vertical periods. Device time is independent of CPU speed.
 bits 16
 cpu 8086
 org 0
@@ -49,12 +49,16 @@ mov al, 0x27
 call fm_write                    ; timers remain stopped, no key writes here
 mov ax, bp
 mov [es:0x8001], al
-mov cx, 40000
-.delay1:
-loop .delay1
-mov cx, 40000
-.delay2:
-loop .delay2
+mov cx, 6
+.frame:
+in al, 0xa0
+test al, 0x20
+jnz .frame
+.vsync:
+in al, 0xa0
+test al, 0x20
+jz .vsync
+loop .frame
 mov byte [es:0x8001], 0
 mov di, bp
 mov byte [es:di+0x800f], 1       ; stage completion, 8010h..801Fh

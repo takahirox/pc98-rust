@@ -185,6 +185,7 @@ fn main() {
             );
         }
     }
+    let started = std::time::Instant::now();
     for i in 0..steps {
         let previous_retired = m.cpu.retired;
         let mut observed_control = false;
@@ -281,6 +282,15 @@ fn main() {
     }
     if !progress {
         println!("instructions={} cycles={} fdc_reads={} fdc_writes={} beep={} edges={} pc={:04x}:{:04x} ports={:x?}",m.cpu.retired,m.bus.cycles,m.bus.fdc.reads,m.bus.fdc.writes,m.bus.beep,m.bus.beep_edges,m.cpu.s[1],m.cpu.ip,m.bus.unknown_ports);
+    }
+    let timing_report = format!("completed_instructions={} rep_elements={} cpu_cycles={} device_clocks={} guest_seconds={:.6} approximated_units={} host_seconds={:.6} instructions_per_second={:.0}",
+        m.cpu.completed_instructions, m.cpu.rep_elements, m.cpu.cycles, m.bus.cycles,
+        m.bus.cycles as f64 / 8_000_000.0, m.cpu.approximated_units,
+        started.elapsed().as_secs_f64(), m.cpu.completed_instructions as f64 / started.elapsed().as_secs_f64());
+    if progress {
+        eprintln!("{timing_report}");
+    } else {
+        println!("{timing_report}");
     }
     if let Some(e) = m.error {
         eprintln!("{e}");

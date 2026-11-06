@@ -110,13 +110,9 @@ jne fail
 inc di
 loop guards
 ret
-; Tight byte handler: arrival cadence 16 scheduler slots. No host assistance.
-; The two ISR snapshots aggregate actual cascaded CPU acknowledgements.
+; Service each byte at the 500-kbit/s device cadence. No host assistance.
+; Snapshot cascaded ISR on the separate result IRQ to keep the byte ISR short.
 handler:
-in al, 8
-or [es:0x8004], al
-in al, 0
-or [es:0x8005], al
 in al, 0x90
 test al, 0x20
 jz .result
@@ -129,6 +125,10 @@ out 0, al
 iret
 .result:
 mov [es:0x8018], al              ; EXM clear; seven results available
+in al, 8
+or [es:0x8004], al
+in al, 0
+or [es:0x8005], al
 mov [es:0x8002], bx              ; count of data IRQs
 mov [es:0x8006], di              ; exact end of payload
 inc byte [es:0x8008]             ; count of separate result IRQs

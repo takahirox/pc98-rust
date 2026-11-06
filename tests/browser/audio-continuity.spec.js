@@ -1,5 +1,19 @@
 import {test, expect, inspect} from './helpers/runtime.js';
 import fs from 'node:fs/promises';
+import {workerProfile} from './helpers/worker-profile.js';
+
+test.afterEach(async ({browser}, info) => {
+  if (info.status === info.expectedStatus && !process.env.PC98_AUDIO_PROFILE_ALWAYS) return;
+  try {
+    const profile = await workerProfile(browser);
+    await fs.mkdir(info.outputDir, {recursive:true});
+    await fs.writeFile(info.outputPath('emulator.cpuprofile'), JSON.stringify(profile));
+    const nodes = new Map(profile.nodes.map(n => [n.id,n.callFrame.functionName]));
+    const counts = new Map();
+    for (const id of profile.samples ?? []) counts.set(nodes.get(id), (counts.get(nodes.get(id)) ?? 0)+1);
+    console.log('Worker CPU profile', JSON.stringify([...counts].sort((a,b)=>b[1]-a[1]).slice(0,12)));
+  } catch (error) { console.log('Worker CPU profile unavailable:', error.message); }
+});
 
 const stats = page => page.evaluate(()=>pc98.stats());
 const picture = page => page.locator('#screen').evaluate(canvas=>{
@@ -33,7 +47,7 @@ test('ADV98 production playback remains continuous through scene changes', async
   // Accelerate only silent DOS/compiler/title setup. Playback below uses the
   // production timer exclusively, with no inspection calls that step the core.
   for (let n=0;n<2;n++) await inspect(page,()=>{
-    for(let i=0;i<90;i++) {pc98.core.step(100000);pc98.core.audio_clear();}
+    for(let i=0;i<90;i++) {pc98.advance(100000);pc98.core.audio_clear();}
   });
   expect((await stats(page)).fmKeyEdges).toBe(0);
   await page.locator('#sound').click(); await page.locator('#pause').click();

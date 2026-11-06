@@ -1,3 +1,4 @@
+mod common;
 use pc98_rust::{cpu::*, Machine, Profile};
 
 fn run(m: &mut Machine, slots: u32) {
@@ -15,11 +16,13 @@ fn request(m: &mut Machine, count: u16, target: u16) -> u64 {
     m.cpu.halted = false;
     m.bus.mem[0x100..0x103].copy_from_slice(&[0xcd, 0x1c, 0xf4]);
     let regs = m.cpu.r;
-    run(m, 3); // INT, ROM OUT, IRET
+    run(m, 1); // INT
+    let start = m.bus.cycles;
+    run(m, 2); // ROM OUT services the request, then IRET
     assert_eq!(m.cpu.r, regs);
     assert_eq!(m.cpu.flags & 0x0fff, IF | DF | CF | 2);
     assert_eq!(m.cpu.ip, 0x102);
-    m.bus.cycles - 16 // OUT services the request before that slot's tick
+    start
 }
 
 fn machine(profile: Profile) -> Machine {
@@ -178,7 +181,7 @@ fn original_timer_guest_boots_through_freedos_and_checks_its_irq_frame() {
         m.reset();
         let mut passed = false;
         for _ in 0..160 {
-            run(&mut m, 100_000);
+            common::advance(&mut m, 100_000);
             if m.bus.text().contains("TIMER CALLBACK PASS") {
                 passed = true;
                 break;
@@ -259,7 +262,7 @@ fn periodic_pit_irqs_cannot_expire_early_and_step_slices_are_deterministic() {
         m.bus.pit.write(3, 0x36);
         m.bus.pit.write(0, 0xe8); // PIT divisor 1000, much shorter than 10 ms
         m.bus.pit.write(0, 3);
-        let mut left = 9997; // cycles=80000, eight cycles before expiry
+        let mut left = 5000; // below 10 ms, even with periodic interrupt entry costs
         while left > 0 {
             let n = left.min(slice);
             run(&mut m, n);

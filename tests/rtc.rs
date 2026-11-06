@@ -1,4 +1,5 @@
 //! Original RTC read-path regressions (MIT); expectations from NEC IC-1755.
+mod common;
 use pc98_rust::{bus::Bus, Machine, Profile};
 
 fn command(b: &mut Bus, command: u8) {
@@ -316,12 +317,12 @@ fn guest_scheduler_advances_with_if_clear_and_halted() {
     m.cpu.ip = 0x100;
     m.bus.mem[0x100..0x102].copy_from_slice(&[0xeb, 0xfe]); // JMP, IF clear
     for _ in 0..5 {
-        assert_eq!(m.step(100_000), 100_000);
+        common::advance(&mut m, 100_000);
     }
     assert_eq!(m.bus.rtc.snapshot()[5], 0);
     m.cpu.halted = true;
     for _ in 0..5 {
-        assert_eq!(m.step(100_000), 100_000);
+        common::advance(&mut m, 100_000);
     }
     assert!(m.error.is_none());
     assert_eq!(m.bus.rtc.snapshot()[5], 1);
@@ -341,7 +342,8 @@ fn original_rtc_boot_probe_before_and_after_reset() {
         }
         let mut slots = 0;
         while slots < 2_000_000 {
-            slots += m.step(1000);
+            common::advance(&mut m, 1000);
+            slots += 1000;
             assert!(m.error.is_none(), "{:?}", m.error);
             let text = m.bus.text();
             assert!(
@@ -708,7 +710,8 @@ fn original_rtc_set_boot_probe_before_and_after_reset() {
         }
         let mut slots = 0;
         while slots < 8_000_000 {
-            slots += m.step(1000);
+            common::advance(&mut m, 1000);
+            slots += 1000;
             assert!(m.error.is_none(), "{:?}", m.error);
             let text = m.bus.text();
             assert!(

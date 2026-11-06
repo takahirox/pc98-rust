@@ -9,6 +9,7 @@
     "test": "npm run build && node --test tests/audio-worker.test.js tests/audio-worklet.test.js && playwright test"
   },
   "devDependencies": {
-    "@playwright/test": "1.56.1"
+    "@playwright/test": "1.56.1",
+    "binaryen": "132.0.0"
   }
 }

@@ -2,6 +2,7 @@
 //! PRM (1992), 5.3, 6.8, 9.9.8/14, 26 INVLPG. No PSE/PAE/NX or data cache.
 use super::*;
 use std::cell::RefCell;
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug)]
 struct Entry {
@@ -17,18 +18,39 @@ struct Entry {
 /// Kept public for Cpu's existing struct-update construction API.
 #[derive(Clone, Debug, Default)]
 pub struct Paging {
-    entries: RefCell<[Option<Entry>; 32]>,
+    // Empty TLBs need no storage or reference-count work in real-mode rollback
+    // snapshots. Once populated, copy on mutation preserves snapshot values.
+    // Arc retains Cpu's native Send contract.
+    entries: RefCell<Option<Arc<[Option<Entry>; 32]>>>,
 }
 impl Paging {
-    pub(super) fn flush(&self) {
-        self.entries.replace([None; 32]);
+    fn get(&self, page: u32) -> Option<Entry> {
+        self.entries
+            .borrow()
+            .as_ref()
+            .and_then(|entries| entries[page as usize & 31])
+            .filter(|e| e.page == page)
     }
-    pub(super) fn invalidate(&self, linear: u32) {
-        let page = linear >> 12;
+    fn store(&self, index: usize, entry: Entry) {
         let mut entries = self.entries.borrow_mut();
-        let slot = &mut entries[page as usize & 31];
-        if slot.is_some_and(|e| e.page == page) {
-            *slot = None;
+        let table = entries.get_or_insert_with(|| Arc::new([None; 32]));
+        Arc::make_mut(table)[index] = Some(entry);
+    }
+    pub(super) fn flush(&self) {
+        self.entries.take();
+    }
+    pub(super) fn invalidate(&self, linear: u32) -> bool {
+        let page = linear >> 12;
+        let mut storage = self.entries.borrow_mut();
+        let Some(entries) = storage.as_mut() else {
+            return false;
+        };
+        let index = page as usize & 31;
+        if entries[index].is_some_and(|e| e.page == page) {
+            Arc::make_mut(entries)[index] = None;
+            true
+        } else {
+            false
         }
     }
 }
@@ -83,6 +105,7 @@ impl Cpu {
     /// Segmentation has already checked the complete operand. Walk physical
     /// tables only; apply PC-98 A20/bus decoding after translation at every level.
     /// A preflight may set A, but D is set only for the actual write operation.
+    #[inline(always)]
     pub(crate) fn translate(
         &self,
         b: &mut Bus,
@@ -94,13 +117,24 @@ impl Cpu {
         if !self.paging_enabled() || b.profile == crate::Profile::Pc9801Vm {
             return Ok(linear);
         }
+        self.translate_paged(b, linear, write, user, dirty)
+    }
+    fn translate_paged(
+        &self,
+        b: &mut Bus,
+        linear: u32,
+        write: bool,
+        user: bool,
+        dirty: bool,
+    ) -> ExecResult<u32> {
         let page = linear >> 12;
         let index = page as usize & 31;
-        let cached = self.paging.entries.borrow()[index].filter(|e| e.page == page);
+        let cached = self.paging.get(page);
         let mut entry = if let Some(entry) = cached {
             entry
         } else {
             let pde_address = (self.cr3 & 0xfffff000).wrapping_add((linear >> 22) * 4);
+            b.cpu_access(pde_address, 0, 4, false, false);
             let pde = Self::page_word(b, pde_address)?;
             if pde & 1 == 0 {
                 return Err(Self::page_fault(linear, write, user, false));
@@ -108,6 +142,7 @@ impl Cpu {
             Self::page_flags(pde, pde_address, true)?;
             b.page_accessed(pde_address);
             let pte_address = (pde & 0xfffff000).wrapping_add(((linear >> 12) & 1023) * 4);
+            b.cpu_access(pte_address, 0, 4, false, false);
             let pte = Self::page_word(b, pte_address)?;
             if pte & 1 == 0 {
                 return Err(Self::page_fault(linear, write, user, false));
@@ -127,7 +162,7 @@ impl Cpu {
             if !self.page_permission(entry, write, user) {
                 return Err(Self::page_fault(linear, write, user, true));
             }
-            self.paging.entries.borrow_mut()[index] = Some(entry);
+            self.paging.store(index, entry);
             entry
         };
         if !self.page_permission(entry, write, user) {
@@ -143,7 +178,7 @@ impl Cpu {
             let value = Self::page_word(b, entry.pte)? as u8 | 0x40;
             b.write(entry.pte as usize, value);
             entry.dirty = true;
-            self.paging.entries.borrow_mut()[index] = Some(entry);
+            self.paging.store(index, entry);
         }
         Ok(entry.frame | (linear & 4095))
     }
@@ -175,12 +210,14 @@ impl Cpu {
         for (i, byte) in raw.iter_mut().enumerate() {
             let physical =
                 self.translate(b, address.wrapping_add(i as u32), false, false, false)?;
+            b.cpu_access(physical, i as u32, N as u32, false, false);
             *byte = b.read(physical as usize);
         }
         Ok(raw)
     }
     pub(super) fn write_system_byte(&self, b: &mut Bus, address: u32, value: u8) -> ExecResult<()> {
         let physical = self.translate(b, address, true, false, true)?;
+        b.cpu_access(physical, 0, 1, true, false);
         b.write(physical as usize, value);
         Ok(())
     }
@@ -190,8 +227,7 @@ impl Cpu {
             return Some(linear);
         }
         let page = linear >> 12;
-        if let Some(e) = self.paging.entries.borrow()[page as usize & 31].filter(|e| e.page == page)
-        {
+        if let Some(e) = self.paging.get(page) {
             return Some(e.frame | (linear & 4095));
         }
         let pde_address = (self.cr3 & 0xfffff000).wrapping_add((linear >> 22) * 4);
@@ -233,6 +269,61 @@ mod tests {
         );
         put32(&mut b, pte, 0x30000 | table);
         (c, b, pte)
+    }
+    #[test]
+    fn cpu_clone_keeps_independent_tlb_snapshots() {
+        fn assert_send<T: Send>() {}
+        assert_send::<Cpu>();
+        let linear = 0x12345000;
+        let (c, mut b, pte) = setup(linear, 3, 3);
+        assert_eq!(
+            c.translate(&mut b, linear, false, false, false).unwrap(),
+            0x30000
+        );
+        let saved = c.clone();
+        put32(&mut b, pte, 0x40003);
+        assert!(c.paging.invalidate(linear));
+        assert_eq!(
+            c.translate(&mut b, linear, false, false, false).unwrap(),
+            0x40000
+        );
+        assert_eq!(
+            saved
+                .translate(&mut b, linear, false, false, false)
+                .unwrap(),
+            0x30000
+        );
+        c.paging.flush();
+        assert_eq!(
+            saved
+                .translate(&mut b, linear, false, false, false)
+                .unwrap(),
+            0x30000
+        );
+
+        // A dirty-bit update in one snapshot must not suppress another one's
+        // required physical update after software clears the backing PTE bit.
+        let clean = saved.clone();
+        saved.translate(&mut b, linear, true, false, true).unwrap();
+        put32(&mut b, pte, 0x40003);
+        clean.translate(&mut b, linear, true, false, true).unwrap();
+        assert_ne!(get32(&b, pte) & 0x40, 0);
+
+        // A new fill must not populate the pre-instruction snapshot's TLB.
+        let before_fill = c.clone();
+        put32(&mut b, pte + 4, 0x50003);
+        assert_eq!(
+            c.translate(&mut b, linear + 4096, false, false, false)
+                .unwrap(),
+            0x50000
+        );
+        put32(&mut b, pte + 4, 0x60003);
+        assert_eq!(
+            before_fill
+                .translate(&mut b, linear + 4096, false, false, false)
+                .unwrap(),
+            0x60000
+        );
     }
     #[test]
     fn both_levels_permissions_present_cpl_and_wp_matrix() {

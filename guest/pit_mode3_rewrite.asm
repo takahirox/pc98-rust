@@ -30,9 +30,8 @@ mov ax, 60000
 out 0x71, al
 mov al, ah
 out 0x71, al
-mov cx, 500                    ; well inside the first long period
-.delay:
-loop .delay
+mov cx, 950
+call wait_pit
 call read_count
 cmp ax, 55000
 jb fail
@@ -41,9 +40,8 @@ jae fail
 test ax, 1                     ; even divisor exposes only even counts
 jnz fail
 mov bx, ax
-mov cx, 500                    ; about 1000 PIT clocks, still in high half
-.count_delay:
-loop .count_delay
+mov cx, 950
+call wait_pit
 call read_count
 cmp ax, 55000
 jb fail
@@ -60,9 +58,8 @@ mov ax, 2000
 out 0x71, al
 mov al, ah
 out 0x71, al
-mov cx, 500                    ; still inside the old high half
-.rewrite_delay:
-loop .rewrite_delay
+mov cx, 950
+call wait_pit
 call read_count
 cmp ax, 52000                  ; deferred: old count keeps subtracting two
 jb fail
@@ -83,7 +80,7 @@ mov al, 1                      ; normal EOI, no AEOI
 out 2, al
 mov al, 0xfe
 out 2, al
-mov cx, 20000                  ; bounded wait, IRQs return via IRET
+mov cx, 0xffff                  ; bounded wait, IRQs return via IRET
 sti
 .wait_irq:
 cmp byte [es:0x8002], 2
@@ -172,6 +169,30 @@ stosw
 jmp .print
 .done:
 ret
+; Device-clock delay using otherwise unused 8253 channel 2. AX is preserved.
+; This avoids assuming an instruction always consumes eight scheduler clocks.
+wait_pit:
+push ax
+mov al, 0xb0
+out 0x77, al
+mov ax, cx
+out 0x75, al
+mov al, ah
+out 0x75, al
+; A latch before the first input clock can capture the previous count.
+; Discard a complete read pair, allowing the newly programmed count to load.
+in al, 0x75
+in al, 0x75
+.wait:
+mov al, 0x80
+out 0x77, al
+in al, 0x75
+in al, 0x75
+test al, 0x80                  ; underflow after terminal zero
+jz .wait
+pop ax
+ret
+
 pass_text: db 'PIT MODE3 REWRITE PASS', 0
 fail_text: db 'PIT MODE3 REWRITE FAIL', 0
 expected:

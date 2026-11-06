@@ -10,6 +10,14 @@ let sinkStats = {}, transaction = null;
 let producedSamples = 0, sentSamples = 0, droppedSamples = 0;
 let deadline = 0, diagnostics = false;
 let tickToken = 0;
+let guestDeadline = 0, throughputSample = null, instructionThroughput = 0;
+// A task targets 10 ms of device time, independently capped at 100,000 units.
+// Retain the deadline if the work cap is reached; no recursive catch-up loop.
+function guestSlice() {
+  const now = core.metric(5);
+  if (guestDeadline <= now) guestDeadline = now + 80000;
+  core.step_scheduler(Math.ceil(guestDeadline-now), 100000);
+}
 const tickTasks = new MessageChannel();
 tickTasks.port1.onmessage = ({data:token}) => {
   if (timer === 'task' && token === tickToken) tick();
@@ -28,9 +36,16 @@ function stats() {
   const fields = {instructions:0, reads:1, writes:2, hddReads:9, hddWrites:10,
     mouseEvents:11, mouseLatches:12, pegc:13, pcmWrites:14, pcmSamples:15,
     beepEdges:3, fmWrites:6, fmKeyEdges:7, cycles:5, irqAcks:20,
-    soundIrqEdges:23, fmPitch:24, ssgPeriod:25};
+    soundIrqEdges:23, fmPitch:24, ssgPeriod:25, cpuCycles:26,
+    completedInstructions:27, repElements:28, guestSeconds:29, approximatedUnits:30, cpuHz:31};
+  const now = performance.now(), instructions = core.metric(27);
+  if (throughputSample && instructions < throughputSample.instructions) instructionThroughput = 0;
+  else if (throughputSample && now > throughputSample.time) {
+    instructionThroughput = (instructions-throughputSample.instructions)*1000/(now-throughputSample.time);
+  }
+  throughputSample = {time:now, instructions};
   return {...Object.fromEntries(Object.entries(fields).map(([key,id]) => [key, core.metric(id)])),
-    error:message(), beep:core.beep(), running, audioState, audioGain:running && audioEnabled && audioState === 'running' ? 1 : 0,
+    instructionThroughput, error:message(), beep:core.beep(), running, audioState, audioGain:running && audioEnabled && audioState === 'running' ? 1 : 0,
     audioEnergy:0, scheduledSamples:0, ...sinkStats, generation,
     frameInFlight:!frameBuffer, audioBuffers:audioBuffers.length, transaction,
     producedSamples, sentSamples, droppedSamples, outstandingSamples:outstandingAudio()};
@@ -64,6 +79,15 @@ function present() {
   postMessage({event:'frame', buffer:frameBuffer, ...state()}, [frameBuffer]);
   frameBuffer = null;
 }
+function presentDue() {
+  const now = performance.now();
+  if (now < frameDue) return;
+  // Refill PCM before optional host rendering. Rendering shares this Worker
+  // with the interpreter and can otherwise repeatedly spend a depleted reserve.
+  // Still refresh within 100 ms of the due time on an underspeed host.
+  if (playingAudio() && outstandingAudio() < 2880 && now < frameDue+100) return;
+  present(); frameDue = performance.now()+33;
+}
 function deliverAudio() {
   const count = core.audio_len();
   if (playingAudio()) {
@@ -89,7 +113,8 @@ function deliverAudio() {
 }
 async function flushAudio() {
   core.audio_clear(); ++audioEpoch;
-  producedSamples = sentSamples = droppedSamples = 0; deadline = 0;
+  producedSamples = sentSamples = droppedSamples = 0; deadline = 0; guestDeadline = 0;
+  throughputSample = null; instructionThroughput = 0;
   if (!port) return;
   await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => { flushWaiter = null; reject(Error('AudioWorklet did not acknowledge flush')); }, 2000);
@@ -123,24 +148,24 @@ function tick() {
     // a permanent producer deficit, and a slow/suspended sink cannot lose PCM.
     // Each task still executes only one finite 10 ms slice before yielding.
     if (playingAudio()) {
-      if (outstandingAudio() < 2880 && audioBuffers.length) core.step(10000);
+      if (outstandingAudio() < 2880 && audioBuffers.length) guestSlice();
     } else {
       if (!deadline) deadline = started;
       if (started >= deadline) {
-        core.step(10000);
+        guestSlice();
         // Bounded wall-clock catch-up when muted; no debt after suspension.
-        deadline = Math.max(deadline+10, performance.now()-30);
+        if (core.metric(5) >= guestDeadline) deadline = Math.max(deadline+10, performance.now()-30);
       }
     }
     deliverAudio();
-    if (performance.now() >= frameDue) { present(); frameDue = performance.now()+33; }
+    presentDue();
     if (core.metric(4)) {
       running = false;
       postMessage({event:'stopped', error:message()});
     }
   } catch (error) { running = false; postMessage({event:'fault', error:error.message}); }
   schedule(playingAudio() ? (outstandingAudio() < 2880 && audioBuffers.length ? 0 : 5)
-    : Math.max(1,deadline-performance.now()));
+    : (core.metric(5) < guestDeadline ? 0 : Math.max(1,deadline-performance.now())));
 }
 const calls = new Set(['key','mouse','set_boot_source','set_profile','reset','eject',
   'hdi_begin','hdi_append','hdi_commit','hdi_cancel','hdi_len','hdi_dirty_page']);
@@ -155,15 +180,37 @@ async function command(type, data) {
     // No eval/RPC source execution endpoint is installed in the production UI.
     if (data.diagnostics) {
       let allowance = 0;
-      const diagnosticCore = new Proxy({...core},{get:(target,name) => name === 'step' ? budget => {
+      function timedInspection(clocks, cap) {
         if (transaction || busy) throw Error('Inspection overlaps a media/control operation');
-        if (!Number.isInteger(budget) || budget < 0) throw Error('Invalid inspection budget');
-        allowance -= Math.min(budget,100000);
-        if (allowance < 0) throw Error('Inspection exceeded 16 million slots');
-        return core.step(budget);
-      } : target[name]});
+        if (!Number.isInteger(clocks) || clocks < 0 || !Number.isInteger(cap) || cap < 0) throw Error('Invalid inspection budget');
+        if (cap && allowance <= 0) throw Error('Inspection exceeded profile work budget');
+        const done = core.step_scheduler(clocks, Math.min(cap,allowance));
+        allowance -= done;
+        return done;
+      }
+      const diagnosticCore = new Proxy({...core},{get:(target,name) => {
+        if (name === 'step_scheduler') return timedInspection;
+        if (name === 'step') return budget => {
+          if (transaction || busy) throw Error('Inspection overlaps a media/control operation');
+          if (!Number.isInteger(budget) || budget < 0) throw Error('Invalid inspection budget');
+          allowance -= Math.min(budget,100000);
+          if (allowance < 0) throw Error('Inspection exceeded profile work budget');
+          return core.step(budget);
+        };
+        return target[name];
+      }});
       globalThis.pc98 = {core:diagnosticCore, text:() => message(1), read:addr => core.peek(addr), stats, exportDisk,
-        beginInspection:() => { allowance = 16000000; },
+        advance:microseconds => {
+          if (!Number.isInteger(microseconds) || microseconds < 0 || microseconds > 100000) throw Error('Invalid guest-time budget');
+          const end = core.metric(5) + microseconds*8;
+          while (core.metric(5) < end && !core.metric(4)) {
+            timedInspection(Math.min(80000,end-core.metric(5)),100000);
+          }
+          return microseconds;
+        },
+        transitionStart:() => ({guest:core.metric(29), wall:performance.now()}),
+        transitionDuration:start => ({guestSeconds:core.metric(29)-start.guest, wallMs:performance.now()-start.wall}),
+        beginInspection:() => { allowance = Math.ceil(16000000 * core.metric(31) / 8000000); },
         endInspection:() => { if (running && !manual) deliverAudio(); present(); },
       };
     }
@@ -227,7 +274,10 @@ onmessage = ({data:m}) => {
   if (m.type === 'frameAck') {
     if (m.data.byteLength === 640*400*4 && !frameBuffer) {
       frameBuffer = m.data;
-      if (frameRequested) present();
+      if (frameRequested) {
+        if (running && playingAudio()) schedule(0);
+        else present();
+      }
     }
     return;
   }

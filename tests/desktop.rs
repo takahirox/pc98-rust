@@ -1,9 +1,10 @@
 //! Original MIT guest allocator/XMS controls at the real FreeCOM prompt (#132).
+mod common;
 use pc98_rust::{Machine, Profile};
 
 fn until(m: &mut Machine, expected: &str) -> bool {
     let mut hma_executed = false;
-    for _ in 0..100 {
+    for _ in 0..1000 {
         if m.bus.text().contains(expected) {
             return hma_executed;
         }
@@ -13,7 +14,7 @@ fn until(m: &mut Machine, expected: &str) -> bool {
             m.bus.text()
         );
         assert!(!m.bus.text().contains("MEMSIZE FAILED"), "{}", m.bus.text());
-        m.step_with_observer(100_000, |cpu, bus| {
+        m.step_scheduler_with_observer(80_000, 100_000, |cpu, bus| {
             let linear = usize::from(cpu.s[1]) * 16 + cpu.ip as usize;
             if !cpu.protected_mode() && (0x100000..0x10fff0).contains(&linear) {
                 assert!(bus.a20);
@@ -36,9 +37,9 @@ fn command(m: &mut Machine, text: &str) {
                 .expect("supported command letter")
         };
         m.bus.key(scan, true);
-        m.step(50_000);
+        common::advance(m, 50_000);
         m.bus.key(scan, false);
-        m.step(10_000);
+        common::advance(m, 10_000);
         m.bus.audio.clear();
         assert!(m.error.is_none(), "{:?}", m.error);
     }

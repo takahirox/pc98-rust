@@ -31,7 +31,7 @@ test('Ap: VM86 BIOS paging faults, mapped flags, callback and Enter, cold/reset'
     let text = '';
     for (let slots = 0; slots < manifest.slot_budget; slots += 10000) {
       const snapshot = await inspect(page, () => {
-        pc98.core.step(10000);
+        pc98.advance(10000);
         pc98.core.audio_clear();
         return { ready: pc98.read(0x8000), text: pc98.text(), error: pc98.stats().error };
       });

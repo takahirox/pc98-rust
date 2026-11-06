@@ -83,6 +83,140 @@ fn enter(c: &mut Cpu, b: &mut Bus) {
     assert_eq!(c.cpl, 3);
     assert_eq!(c.cr0 & 1, 1);
 }
+#[test]
+fn dx2_vm86_entry_charges_each_unaccessed_code_and_stack_descriptor() {
+    // Table 10.1 note 9 applies once per loaded descriptor, including both
+    // CS and SS when an interrupt leaves VM86 for the CPL0 monitor.
+    let mut bus_clocks = [[0; 2]; 2];
+    for code_accessed in [0, 1] {
+        for stack_accessed in [0, 1] {
+            let (mut c, mut b) = setup(&[0xcd, 0x30], false, 0x23002);
+            enter(&mut c, &mut b);
+            b.mem[0x500d] = 0x9a | code_accessed;
+            b.mem[0x5015] = 0x92 | stack_accessed;
+            let (timing, result) = c.step_timed(&mut b);
+            result.unwrap();
+            assert_eq!(c.fault_count, 0);
+            assert!(!c.vm86());
+            assert_eq!((c.s[CS], c.s[SS]), (8, 16));
+            assert_eq!(b.mem[0x500d], 0x9b);
+            assert_eq!(b.mem[0x5015], 0x93);
+            let loads = u32::from(code_accessed == 0) + u32::from(stack_accessed == 0);
+            assert_eq!(timing.execution, 86 + 11 * loads);
+            bus_clocks[code_accessed as usize][stack_accessed as usize] = timing.bus;
+        }
+    }
+    assert_eq!(bus_clocks[0][1], bus_clocks[1][1] + 4);
+    assert_eq!(bus_clocks[1][0], bus_clocks[1][1] + 4);
+    assert_eq!(bus_clocks[0][0], bus_clocks[1][1] + 8);
+}
+#[test]
+fn dx2_successful_vm86_instructions_use_real_virtual_timing_tables() {
+    // Intel486 DX2 data book (July 1992), pp.10-7..10-9, RV/P entries.
+    let cases: &[(&[u8], u32)] = &[
+        (&[0x8e, 0xd8], 3),              // MOV DS,AX
+        (&[0x8e, 0x1f], 3),              // MOV DS,[BX]
+        (&[0x07], 3),                    // POP ES
+        (&[0x17], 3),                    // POP SS
+        (&[0x1f], 3),                    // POP DS
+        (&[0x0f, 0xa1], 3),              // POP FS
+        (&[0x0f, 0xa9], 3),              // POP GS
+        (&[0xc4, 0x07], 6),              // LES AX,[BX]
+        (&[0xc5, 0x07], 6),              // LDS AX,[BX]
+        (&[0x0f, 0xb2, 0x07], 6),        // LSS AX,[BX]
+        (&[0x0f, 0xb4, 0x07], 6),        // LFS AX,[BX]
+        (&[0x0f, 0xb5, 0x07], 6),        // LGS AX,[BX]
+        (&[0x9c], 4),                    // PUSHF, IOPL=3
+        (&[0x9d], 9),                    // POPF, IOPL=3
+        (&[0x9a, 0x20, 0, 0, 0x20], 18), // direct far CALL
+        (&[0xff, 0x1f], 17),             // indirect far CALL
+        (&[0xea, 0x20, 0, 0, 0x20], 17), // direct far JMP
+        (&[0xff, 0x2f], 13),             // indirect far JMP
+        (&[0xcb], 13),                   // far RET
+        (&[0xca, 2, 0], 14),             // far RET imm
+        (&[0xcf], 15),                   // IRET within VM86
+        (&[0xec], 30),                   // IN AL,DX keeps its VM86 cost
+        (&[0xee], 32),                   // OUT DX,AL
+        (&[0x6c], 33),                   // INSB
+        (&[0x6e], 33),                   // OUTSB
+    ];
+    for &(code, expected) in cases {
+        let (mut c, mut b) = setup(code, false, 0x23002);
+        enter(&mut c, &mut b);
+        c.r[BX] = 0x10;
+        b.mem[0x50010..0x50014].copy_from_slice(&[0x20, 0, 0, 0x20]);
+        b.mem[0x37000..0x37006].copy_from_slice(&[0x20, 0, 0, 0x20, 2, 0x30]);
+        let completed = c.completed_instructions;
+        let (timing, result) = c.step_timed(&mut b);
+        result.unwrap();
+        assert_eq!(c.fault_count, 0, "{code:02x?}");
+        assert!(c.vm86(), "{code:02x?}");
+        assert_eq!(timing.execution, expected, "{code:02x?}");
+        assert_eq!(timing.instructions, 1, "{code:02x?}");
+        assert_eq!(c.completed_instructions, completed + 1);
+    }
+}
+#[test]
+fn dx2_vm86_software_interrupts_keep_virtual_entry_timing() {
+    // DX2 pp.10-12..10-13: virtual-mode INT=82, plus opcode overhead.
+    for (code, expected) in [(&[0xcc][..], 82), (&[0xcd, 3][..], 86), (&[0xce][..], 84)] {
+        let (mut c, mut b) = setup(code, false, 0x23002 | u32::from(OF));
+        enter(&mut c, &mut b);
+        let (timing, result) = c.step_timed(&mut b);
+        result.unwrap();
+        assert_eq!(c.fault_count, 0, "{code:02x?}");
+        assert!(!c.vm86(), "{code:02x?}");
+        assert_eq!(timing.execution, expected, "{code:02x?}");
+        assert_eq!(timing.instructions, 1);
+    }
+}
+#[test]
+fn dx2_vm86_exceptions_use_fault_overhead_and_preserve_descriptor_costs() {
+    // DX2 pp.10-12/13: VM86 entry INT=82 plus opcode-specific fault
+    // overhead, replacing successful latency. Descriptor loads add 11 each.
+    let cases: &[(&[u8], u32)] = &[
+        (&[0xfa], 90),
+        (&[0xfb], 90),
+        (&[0x9c], 91),
+        (&[0x9d], 90),
+        (&[0xcd, 0x30], 91),
+        (&[0xcf], 91),
+        (&[0xe4, 0x40], 132),
+        (&[0xe6, 0x40], 132),
+        (&[0xec], 133),
+        (&[0xee], 133),
+        (&[0x6c], 132),
+        (&[0x6e], 132),
+        (&[0xf3, 0x6c], 133),
+        (&[0xf3, 0x6e], 133),
+    ];
+    for &(code, expected) in cases {
+        let mut bus_clocks = [0; 2];
+        for accessed in [0, 1] {
+            let (mut c, mut b) = setup(code, false, 0x20002);
+            enter(&mut c, &mut b);
+            b.mem[0x500d] = 0x9a | accessed;
+            b.mem[0x5015] = 0x92 | accessed;
+            b.mem[0x8088] = 255; // Deny port 40h in the TSS I/O bitmap.
+            c.r[DX] = 0x40;
+            c.r[CX] = 1;
+            let completed = c.completed_instructions;
+            let (timing, result) = c.step_timed(&mut b);
+            result.unwrap();
+            frame(&c, &b, 13, Some(0), 0, 0x30002);
+            assert_eq!(c.fault_count, 1, "{code:02x?}");
+            assert_eq!(
+                timing.execution,
+                expected + if accessed == 0 { 22 } else { 0 },
+                "{code:02x?}"
+            );
+            assert_eq!((timing.instructions, timing.rep_elements), (0, 0));
+            assert_eq!(c.completed_instructions, completed);
+            bus_clocks[accessed as usize] = timing.bus;
+        }
+        assert_eq!(bus_clocks[0], bus_clocks[1] + 8, "{code:02x?}");
+    }
+}
 fn frame(c: &Cpu, b: &Bus, n: u8, error: Option<u32>, ip: u32, flags: u32) {
     assert!(!c.vm86());
     assert_eq!(c.cpl, 0);

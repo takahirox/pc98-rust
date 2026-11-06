@@ -1,3 +1,4 @@
+mod common;
 use pc98_rust::{bus::Bus, cpu::*, Machine, Profile};
 
 fn cpu(code: &[u8]) -> (Cpu, Bus) {
@@ -578,7 +579,7 @@ fn independent_cpulevel_runs_386_code_and_detects_486_flags_through_guest_dos() 
     m.insert(0, image, "cpu386.hdm").unwrap();
     m.reset();
     for _ in 0..100 {
-        m.step(100_000);
+        common::advance(&mut m, 100_000);
         assert!(m.error.is_none(), "{:?}", m.error);
         if m.bus.text().contains("CPULEVEL 486 VERIFIED") {
             break;

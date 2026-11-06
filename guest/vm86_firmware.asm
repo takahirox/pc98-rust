@@ -229,8 +229,8 @@ push cs
 pop es
 pushf
 call 0xf000:0x1070
-mov cx, 12000
-.delay: loop .delay
+mov cx, 24000               ; >10 ms in the peripheral clock domain
+call wait_pit
 pushf
 call 0xf000:0x1020 ; tail callback reuses return frame, remains CPL3/VM86
 cmp byte [fs:RESULT-0x8000+4], 1
@@ -264,6 +264,30 @@ jmp $
 callback:
 inc byte [fs:4]
 iret
+; Device-clock delay using otherwise unused 8253 channel 2. AX is preserved.
+; This avoids assuming an instruction always consumes eight scheduler clocks.
+wait_pit:
+push ax
+mov al, 0xb0
+out 0x77, al
+mov ax, cx
+out 0x75, al
+mov al, ah
+out 0x75, al
+; A latch before the first input clock can capture the previous count.
+; Discard a complete read pair, allowing the newly programmed count to load.
+in al, 0x75
+in al, 0x75
+.wait:
+mov al, 0x80
+out 0x77, al
+in al, 0x75
+in al, 0x75
+test al, 0x80                  ; underflow after terminal zero
+jz .wait
+pop ax
+ret
+
 v86_end:
 align 8
 gdt:

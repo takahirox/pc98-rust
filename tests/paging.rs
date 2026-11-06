@@ -1,3 +1,4 @@
+mod common;
 // Original byte-level paging and exception probes. SPDX-License-Identifier: MIT
 use pc98_rust::{bus::Bus, cpu::*, Machine, Profile};
 
@@ -142,7 +143,10 @@ fn guest_handler_repairs_mapping_and_iretd_retries_first_prefix_once() {
     c.segment_caches[DS].as_mut().unwrap().base = 0x800000;
     put32(&mut b, 0x5000, 0);
     c.set_reg32(AX, 0x1234ffff);
-    c.step(&mut b).unwrap();
+    let (fault, result) = c.step_timed(&mut b);
+    result.unwrap();
+    assert_eq!(fault.execution, 68); // #PF replaces MOV and both prefixes
+    assert_eq!(fault.instructions, 0);
     frame(&c, &b, 14, 0, 0x400000);
     assert_eq!(c.cr2, 0x800000);
     assert_eq!(c.reg32(AX), 0x1234ffff);
@@ -157,7 +161,10 @@ fn guest_handler_repairs_mapping_and_iretd_retries_first_prefix_once() {
         c.step(&mut b).unwrap();
     }
     assert_eq!((c.ip, c.reg32(SP)), (0x400000, 0xc00ff0));
-    c.step(&mut b).unwrap();
+    let (retry, result) = c.step_timed(&mut b);
+    result.unwrap();
+    assert_eq!(retry.execution, 3); // successful MOV + two prefixes
+    assert_eq!(retry.instructions, 1);
     assert_eq!((c.reg32(AX), c.ip), (0x12345678, 0x400005));
     assert_eq!(get32(&b, 0x5000) & 0x60, 0x20);
 }
@@ -241,6 +248,109 @@ fn wp_permission_fault_retry_invlpg_and_no_read_side_effects() {
             assert_eq!(c.ip, 0x400007);
             assert_ne!(get32(&b, 0x5000) & 0x40, 0);
         }
+    }
+}
+
+#[test]
+fn dx2_data_page_fault_uses_int_plus_24_and_retry_retires_once() {
+    // DX2 data book pp.10-12..13: #PF = INT + 24, same-level INT = 44;
+    // note 9 adds 11 for an unaccessed descriptor, apart from its bus write.
+    for accessed in [true, false] {
+        for (code, retry_execution, retry_bus) in [
+            (vec![0xa1, 0, 0, 0x80, 0], 1, 28),          // MOV EAX,[800000h]
+            (vec![0xa3, 0, 0, 0x80, 0], 1, 28),          // MOV [800000h],EAX
+            (vec![0x83, 0x05, 0, 0, 0x80, 0, 1], 4, 32), // ADD [800000h],1
+        ] {
+            let (mut c, mut b) = setup(&code);
+            if !accessed {
+                b.mem[0x1000d] &= !1;
+            }
+            put32(&mut b, 0x5000, 0);
+            c.set_reg32(AX, 0x12345678);
+            let (timing, result) = c.step_timed(&mut b);
+            result.unwrap();
+            frame(&c, &b, 14, if code[0] == 0xa1 { 0 } else { 2 }, 0x400000);
+            assert_eq!(c.cr2, 0x800000);
+            assert_eq!(c.reg32(AX), 0x12345678);
+            assert_eq!(timing.execution, if accessed { 68 } else { 79 });
+            // Five two-read page walks (40), two fetch beats (8), gate and
+            // descriptor reads (16), four frame writes (16). Accessed adds
+            // one write beat (4). No transfer to the missing data page.
+            assert_eq!(timing.bus, if accessed { 80 } else { 84 });
+            assert_eq!(timing.cpu_cycles(), timing.execution + timing.bus);
+            assert_eq!(
+                (timing.instructions, timing.rep_elements, timing.idle),
+                (0, 0, 0)
+            );
+            assert_eq!(c.completed_instructions, 0);
+            assert_eq!(c.fault_count, 1);
+            assert_eq!(b.cycles, 0);
+
+            // The guest handler repairs the PTE, drops the error and IRETDs.
+            let handler = [
+                0xc7, 0x05, 0, 0x50, 0, 0, 0x03, 0, 0x05, 0, 0x83, 0xc4, 4, 0xcf,
+            ];
+            b.mem[0x31000..0x31000 + handler.len()].copy_from_slice(&handler);
+            put32(&mut b, 0x50000, 0x11223344);
+            for _ in 0..3 {
+                c.step_timed(&mut b).1.unwrap();
+            }
+            assert_eq!((c.ip, c.reg32(SP)), (0x400000, 0xc00ff0));
+            let (retry, result) = c.step_timed(&mut b);
+            result.unwrap();
+            assert_eq!(retry.execution, retry_execution);
+            assert_eq!(retry.bus, retry_bus);
+            assert_eq!(retry.instructions, 1);
+            assert_eq!(c.completed_instructions, 4); // three handler instructions + retry
+            assert_eq!(c.fault_count, 1);
+            assert_eq!(c.ip, 0x400000 + code.len() as u32);
+            assert_eq!(
+                c.reg32(AX),
+                if code[0] == 0xa1 {
+                    0x11223344
+                } else {
+                    0x12345678
+                }
+            );
+            assert_eq!(
+                get32(&b, 0x50000),
+                match code[0] {
+                    0xa1 => 0x11223344,
+                    0xa3 => 0x12345678,
+                    _ => 0x11223345,
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn dx2_fetch_page_fault_uses_int_plus_24_before_or_after_decoding() {
+    // Missing first opcode, prefix-only fetch, and partially fetched immediate.
+    // Successful instruction/prefix latency must not replace #PF's overhead.
+    for fetched in 0..4 {
+        let (mut c, mut b) = setup(&[]);
+        let start = 0x401000 - fetched;
+        c.ip = start;
+        let instruction = [0x66, 0xb8, 0x34, 0x12];
+        let offset = 0x30000 + (start as usize & 4095);
+        b.mem[offset..offset + fetched as usize].copy_from_slice(&instruction[..fetched as usize]);
+        put32(&mut b, 0x4004, 0);
+        let (timing, result) = c.step_timed(&mut b);
+        result.unwrap();
+        frame(&c, &b, 14, 0, start);
+        assert_eq!(c.cr2, 0x401000);
+        assert_eq!(timing.execution, 68);
+        // Four two-read page walks + gate/descriptor reads + four frame writes.
+        // Fetched bytes add one code page walk (8) and one fetch beat (4).
+        assert_eq!(timing.bus, if fetched == 0 { 64 } else { 76 });
+        assert_eq!(
+            (timing.instructions, timing.rep_elements, timing.idle),
+            (0, 0, 0)
+        );
+        assert_eq!(c.completed_instructions, 0);
+        assert_eq!(c.fault_count, 1);
+        assert_eq!(b.cycles, 0);
     }
 }
 
@@ -369,9 +479,9 @@ fn idt_stack_and_nested_faults_follow_486_double_fault_matrix_and_are_bounded() 
     assert!(c.shutdown);
     assert_eq!(c.cr2, 0xc00fec);
     assert_eq!(&b.mem[0x70000..0x71000], stack);
-    let state = format!("{c:?}");
+    let state = common::cpu_state(&c);
     c.step(&mut b).unwrap();
-    assert_eq!(format!("{c:?}"), state);
+    assert_eq!(common::cpu_state(&c), state);
 }
 
 #[test]
@@ -401,6 +511,37 @@ fn benign_contributory_page_fault_chain_reaches_double_fault_delivery() {
             assert!(c.shutdown);
             assert_eq!(c.reg32(SP), 0xc00ff0);
             assert_eq!(&b.mem[0x70000..0x71000], stack);
+        }
+    }
+}
+
+#[test]
+fn invlpg_tlb_hit_and_miss_have_distinct_dx2_execution_clocks() {
+    // Intel486 DX2 data book table 10.1, p.10-10: 12/11 clocks for
+    // TLB hit/no hit, independent of instruction fetch and bus penalties.
+    for cache_enabled in [false, true] {
+        let (mut c, mut b) = setup(&[
+            // Load page 801000h into a different TLB slot from code.
+            0xa1, 0, 0x10, 0x80, 0, // MOV EAX,[801000h]
+            0x0f, 0x01, 0x3d, 0, 0x10, 0x80, 0, // INVLPG [801000h]
+        ]);
+        if cache_enabled {
+            c.cr0 &= !0x60000000;
+        }
+        c.step_timed(&mut b).1.unwrap();
+        let invlpg_ip = c.ip;
+        // Repeat the identical instruction without reloading the invalidated page.
+        for execution in [12, 11] {
+            c.ip = invlpg_ip;
+            let (timing, result) = c.step_timed(&mut b);
+            result.unwrap();
+            assert_eq!(c.last_fault, None);
+            assert_eq!(c.ip, invlpg_ip + 7);
+            assert_eq!(timing.execution, execution);
+            // Both fetches are within the line warmed by MOV; disabled cache
+            // instead charges two physical 32-bit instruction fetch beats.
+            assert_eq!(timing.bus, if cache_enabled { 0 } else { 8 });
+            assert_eq!(timing.cpu_cycles(), execution + timing.bus);
         }
     }
 }

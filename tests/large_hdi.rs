@@ -1,4 +1,5 @@
 //! Original MIT sparse-fixture tests for #127. No large files in Git/CI artifacts.
+mod common;
 use pc98_rust::{
     hdd::{HardDisk, HdiImport, Ide, PAGE_BYTES, TRANSFER_BYTES},
     Machine, Profile,
@@ -51,7 +52,7 @@ fn address(ide: &mut Ide, lba: usize, count: u8, command: u8) {
 }
 fn probe(m: &mut Machine, persisted: bool) {
     for _ in 0..50 {
-        m.step(10_000);
+        common::advance(m, 10_000);
         m.bus.audio.clear();
         assert!(m.error.is_none(), "{:?}", m.error);
         let text = m.bus.text();
@@ -202,7 +203,7 @@ fn large_fat16_freedos_reads_and_creates_file_above_128mib() {
     for _ in 0..2 {
         m.reset();
         for _ in 0..800 {
-            m.step(10_000);
+            common::advance(&mut m, 10_000);
             m.bus.audio.clear();
             assert!(m.error.is_none(), "{:?}", m.error);
             if m.bus.text().contains("LARGE DOS READY") && m.bus.text().contains("A:\\>") {

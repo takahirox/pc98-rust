@@ -1,3 +1,4 @@
+mod common;
 // Original instruction probes for Issue #99. SPDX-License-Identifier: MIT
 use pc98_rust::{bus::Bus, cpu::*, Machine, Profile};
 
@@ -22,7 +23,7 @@ fn preserved(c: &Cpu, mut expected: Cpu) {
     expected.trap_suppressed = c.trap_suppressed;
     expected.retired = c.retired;
     expected.extended_retired = c.extended_retired;
-    assert_eq!(format!("{c:?}"), format!("{expected:?}"));
+    assert_eq!(common::cpu_state(c), common::cpu_state(&expected));
 }
 
 #[test]
@@ -190,7 +191,7 @@ fn reserved_bits_and_modes_are_precise_atomic_diagnostics() {
         let (mut c, mut b) = cpu(&[0x66, 0x67, 0x65, 0x0f, 0x22, 0xc3 | selector << 3]);
         c.set_reg32(BX, value);
         c.flags = 2 | CF | TF | IF | DF | OF;
-        let saved = format!("{c:?}");
+        let saved = common::cpu_state(&c);
         let memory = b.mem.clone();
         for _ in 0..2 {
             // repeating step cannot partially advance or retire
@@ -206,7 +207,7 @@ fn reserved_bits_and_modes_are_precise_atomic_diagnostics() {
                 error.contains("next-ip=00001006; write not committed"),
                 "{error}"
             );
-            assert_eq!(format!("{c:?}"), saved);
+            assert_eq!(common::cpu_state(&c), saved);
             assert_eq!(b.mem, memory);
         }
         assert_eq!(b.cycles, 0);

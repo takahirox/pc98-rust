@@ -1,3 +1,4 @@
+mod common;
 use pc98_rust::{bus::Bus, font::jis_byte, sound::Opn, Machine, Profile};
 
 fn machine(name: &str) -> Machine {
@@ -18,7 +19,7 @@ fn machine(name: &str) -> Machine {
 fn advance(m: &mut Machine, slices: usize) -> f64 {
     let mut energy = 0.0;
     for _ in 0..slices {
-        m.step(100_000);
+        common::advance(m, 100_000);
         assert!(m.error.is_none(), "{:?}", m.error);
         energy += m
             .bus
@@ -692,7 +693,7 @@ fn opn_ch3_guest_pcm_stages_before_and_after_reset() {
         assert_eq!(m.bus.opn.registers[0x27], 0);
         let mut pcm: [Vec<f32>; 16] = std::array::from_fn(|_| Vec::new());
         let mut slots = 0;
-        while slots < 2_000_000 {
+        while slots < 12_000_000 {
             let before = m.bus.read(0x8001);
             slots += m.step(1000);
             assert!(m.error.is_none(), "{:?}", m.error);
@@ -714,7 +715,7 @@ fn opn_ch3_guest_pcm_stages_before_and_after_reset() {
                 break;
             }
         }
-        assert!(slots <= 2_000_000);
+        assert!(slots <= 12_000_000);
         assert!(m.bus.text().contains("OPN CH3 PASS"), "{}", m.bus.text());
         let pairs = [(0x123, 3), (0x456, 4), (0x789, 2), (0x5ab, 5)];
         for (stage, data) in pcm.iter().enumerate() {

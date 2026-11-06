@@ -84,14 +84,16 @@ Ap also provides the [real-mode GDTR](#ap-real-mode-gdtr) and
 [SMSW status readback](#ap-real-mode-smsw) and
 [bounded x87 initialization/readback](#ap-x87-environment-initialization) below.
 
-An instruction or one REP element consumes one 8-clock scheduling slot. This is a
-deterministic work/cycle model, **not instruction-cycle accuracy**. Firmware FDC
-transactions additionally advance the same device scheduler. HLT stops instruction
-retirement while clocks and IRQs continue. STI and MOV/POP SS inhibit delivery for
-the next instruction on both profiles; VM also inhibits after the other documented
-[segment MOV/POP forms](#v30-segment-interrupt-inhibition). A frame runs at most
-two slices of 16,667 slots; the core caps each call at 100,000 slots. There is no unbounded catch-up after a suspended
-tab. This bounds UI work even for infinite loops and maximum-length REP strings.
+CPU execution now reports instruction-dependent core clocks and separate physical
+bus penalties. `Machine` converts the VM's 10 MHz V30 and Ap's 66 MHz DX2 core
+to the shared 8 MHz device scheduler with a retained fractional remainder. REP
+still executes one bounded element per unit, with setup charged once per
+uninterrupted instruction. HLT idles without retiring instructions. See the
+[CPU timing model, authoritative tables, bus assumptions and limitations](cpu-timing.md).
+This is an instruction-table model with explicit approximations, not full machine
+cycle accuracy. The browser targets 10 ms device-time slices with an independent
+100,000-unit cap, and retains a partial slice's deadline before yielding.
+STI and segment-load interrupt shadows retain their architectural boundaries.
 
 ## V30 segment interrupt inhibition
 
@@ -169,8 +171,9 @@ See the [actual validation record](validation.md#issue-95-v30-add4s-2026-10-24).
 
 CL=0/255, nondecimal nibbles, partially overlapping buffers, new REP/LOCK semantics,
 interruption within ADD4S and exact instruction timing remain outside this verified
-subset and remain future inventory work. The operation currently completes in one
-scheduler slot; this is not an instruction timing guarantee. V30 remains **partial**:
+subset and remain future inventory work. The operation completes in one bounded
+CPU unit; elapsed clocks now scale with the BCD byte count as described in
+[CPU timing](cpu-timing.md). V30 remains **partial**:
 SUB4S/CMP4S, bit-field extensions, register nibble rotations, TF traps, NMI and
 broader flags/prefix/interrupt/fault acceptance remain outstanding. All 26 category
 scopes/statuses remain unchanged; protected execution, paging and basic numerical

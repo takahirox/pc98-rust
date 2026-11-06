@@ -1,4 +1,5 @@
 //! Original MIT firmware guest, never private DOS/game media.
+mod common;
 use pc98_rust::{Machine, Profile};
 #[test]
 fn paged_vm86_bios_guest_recovers_faults_and_accepts_enter_cold_reset() {
@@ -10,7 +11,7 @@ fn paged_vm86_bios_guest_recovers_faults_and_accepts_enter_cold_reset() {
         m.reset();
         let mut input = false;
         for _ in 0..200 {
-            m.step(10_000);
+            common::advance(&mut m, 10_000);
             m.bus.audio.clear();
             assert!(m.error.is_none(), "{:?}", m.error);
             if m.bus.mem[0x8000] == 1 && !input {

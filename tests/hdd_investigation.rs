@@ -12,15 +12,27 @@ struct Experiment {
 }
 impl Experiment {
     fn step(&mut self, slots: u32) {
-        assert_eq!(
+        let retired_before = self.m.cpu.retired;
+        if slots == 1 {
             self.m
-                .step_with_observer(slots, |c, b| self.progress.observe(c, b)),
-            slots
-        );
-        self.slots += u64::from(slots);
+                .step_with_observer(1, |c, b| self.progress.observe(c, b));
+        } else {
+            let end = self.m.bus.cycles + u64::from(slots) * 8;
+            while self.m.bus.cycles < end && self.m.error.is_none() {
+                self.m.step_scheduler_with_observer(
+                    (end - self.m.bus.cycles).min(80_000) as u32,
+                    100_000,
+                    |c, b| self.progress.observe(c, b),
+                );
+            }
+        }
+        self.slots += self.m.cpu.retired - retired_before;
         self.m.bus.audio.clear();
         assert!(self.m.error.is_none(), "{:?}", self.m.error);
-        assert!(self.slots <= 8_000_000, "experiment budget exceeded");
+        assert!(
+            self.m.bus.cycles <= 8_000_000 * 8,
+            "experiment guest-time budget exceeded"
+        );
     }
     fn until(&mut self, condition: impl Fn(&Machine) -> bool) {
         for _ in 0..6000 {
@@ -161,7 +173,7 @@ fn persistent_nul_display_distinguishes_live_keyboard_from_masked_irq_then_recov
             println!("{name} run {run}");
             handoff(&mut e, name == "fragmented16");
             // Find the actual executing COM, never host-write its state/PC/IRQ.
-            for _ in 0..6_000_000 {
+            for _ in 0..48_000_000 {
                 let base = usize::from(e.m.cpu.s[1]) * 16;
                 if e.m.cpu.ip == 0x200 && &e.m.bus.mem[base + 0x300..base + 0x308] == b"H98STATE" {
                     break;

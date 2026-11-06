@@ -143,6 +143,9 @@ modifiers and host key repeat reach the guest. Focus loss releases held keys;
 hiding the tab pauses execution. The Ap DOS profile supplies licensed replacement
 Japanese CG glyphs. FEP input is not implemented.
 
+Instruction-dependent [V30/DX2 timing](docs/cpu-timing.md) separates core clocks
+from the 8 MHz device scheduler and documents cache, bus and firmware approximations.
+
 ## Reproduce the checks
 
 ```sh
@@ -205,6 +208,10 @@ python3 tools/prepare_hdd_fixture.py
 python3 tools/prepare_music_fixture.py
 python3 tools/prepare_device_fixture.py
 python3 tools/build_font.py --check
+# Match CI: guest-time probes run the optimized interpreter with debug checks.
+export CARGO_PROFILE_TEST_OPT_LEVEL=1
+export CARGO_PROFILE_TEST_DEBUG_ASSERTIONS=true
+export CARGO_PROFILE_TEST_OVERFLOW_CHECKS=true
 cargo test --locked --test sound86 opna_irq_
 cargo test --locked --test sound86 --test ap --test music --test pic
 cargo test --locked --test ap opn_ch3_
@@ -225,6 +232,11 @@ npm ci
 npx playwright install chromium
 npm test
 ```
+
+CI runs the two ADV98 production-audio cases one at a time, then functional
+browser probes using the same release Wasm and fixtures. This separates
+wall-clock playback from accelerated guest probes while retaining every audio
+assertion and both serving paths; see the [acceptance workflow](.github/workflows/emulator.yml).
 
 CPULEVEL and DEBUG preparation automatically try the pinned FreeDOS mirrors when
 the primary download fails. Every source uses the original SHA-256 and size
@@ -672,8 +684,11 @@ assembly command, hashes and independent expected results. Generated media stays
 outside `web/`. See the [handoff contract](docs/hardware.md#bios-floppy-dma-handoff)
 and [Issue #81 validation](docs/validation.md#issue-81-bios-floppy-dma-handoff).
 
-`npm run build` checks reproducible media, compiles the real Rust/Wasm core and
-runs `npm run check:site`. The latter verifies a nonempty, compilable Wasm module
+`npm run build` checks reproducible media, compiles the real Rust/Wasm core,
+optimizes the linked module with the lockfile-pinned Binaryen tool installed by
+`npm ci`, and runs `npm run check:site`. The optimization reduces host execution
+cost without changing guest instruction clocks or audio pacing. The latter check
+verifies a nonempty, compilable Wasm module
 with the emulator exports and exactly nineteen distributable assets: the original
 ten assets plus the nine intentionally published desktop template, manifest,
 GPL notices and complete matching source downloads. All nine guest/source hashes
@@ -821,7 +836,7 @@ memory. Browser guest probes use the opt-in `?diagnostics=1` Worker adapter in
 [`tests/browser/helpers/runtime.js`](tests/browser/helpers/runtime.js), ordered
 after pending UI operations. `&manual=1` explicitly disables the timer for
 bounded deterministic stepping of that same production Worker core; freezing
-rAF alone does not pause emulation. Inspection is capped at 16 million slots per
+rAF alone does not pause emulation. Inspection has a finite per-profile CPU work cap per
 probe. Native/headless synchronous APIs remain unchanged. Both scripts are
 first-party static assets, resolved relative to their modules at `/` and
 `/pc98-rust/`; no SharedArrayBuffer, isolation headers or service is needed.

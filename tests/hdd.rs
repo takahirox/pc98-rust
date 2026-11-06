@@ -1,3 +1,4 @@
+mod common;
 use pc98_rust::{hdd::HardDisk, Machine, Profile};
 
 fn fixture() -> Vec<u8> {
@@ -38,7 +39,7 @@ fn file(image: &[u8], name: &[u8; 11]) -> Vec<u8> {
 
 fn advance(m: &mut Machine, count: usize) {
     for _ in 0..count {
-        m.step(100_000);
+        common::advance(m, 100_000);
         m.bus.audio.clear();
         assert!(m.error.is_none(), "{:?}", m.error);
     }

@@ -86,6 +86,7 @@ impl Cpu {
     pub(super) fn linear(&self, s: usize, off: u32) -> usize {
         self.segment_cache(s).base.wrapping_add(off) as usize
     }
+    #[inline(always)]
     pub(crate) fn check_access(
         &self,
         b: &mut Bus,
@@ -114,7 +115,9 @@ impl Cpu {
         {
             return Err(ExecError::Fault(fault));
         }
-        self.check_pages(b, self.linear(s, off) as u32, bytes, write, self.cpl == 3)?;
+        if self.paging_enabled() {
+            self.check_pages(b, d.base.wrapping_add(off), bytes, write, self.cpl == 3)?;
+        }
         Ok(())
     }
     /// Resolve a complete descriptor span before fetching any bus bytes.
@@ -148,6 +151,11 @@ impl Cpu {
     ) -> ExecResult<SegmentCache> {
         if d.access & 1 == 0 {
             self.write_system_byte(b, address.wrapping_add(5), d.access | 1)?;
+            // Intel486 DX2 data book, table 10.1 note 9: each unaccessed
+            // descriptor load adds 11 core clocks, separate from bus writes.
+            if b.timing.active && b.profile == crate::Profile::Pc9821ApDos {
+                b.timing.extra_execution += 11;
+            }
         }
         Ok(SegmentCache {
             access: d.access | 1,
@@ -428,6 +436,7 @@ impl Cpu {
         error: Option<u32>,
         source: GateSource,
     ) -> ExecResult<()> {
+        self.rep_resume = None;
         let contributory = |n| matches!(n, 0 | 10..=13);
         let mut vector = n;
         let mut code = error;
@@ -437,6 +446,10 @@ impl Cpu {
         // Delivery only raises contributory faults or #PF in this subset;
         // a fault during #DF still shuts down immediately below.
         for _ in 0..4 {
+            if b.timing.active {
+                b.timing.extra_execution += if self.vm86() { 82 } else { 44 };
+                b.timing.approximated = true;
+            }
             let saved = self.clone();
             if self.protected_mode() || self.paging_enabled() {
                 b.begin_cpu_memory();
