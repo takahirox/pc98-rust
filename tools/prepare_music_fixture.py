@@ -83,6 +83,12 @@ def build():
         b'AUTOEXECBAT': b'@echo off\r\nMC /V PLAY.MML\r\nPMD\r\nADV98\r\n'})
     image = image_with_files(base[:1024], files)
     (DEST / 'music.hdm').write_bytes(image)
+    # A second scenario keeps the same BGM running across repeated bitmap and
+    # sprite reads. Preserve every byte/hash of the original music.hdm above.
+    scenes = {**files, b'SCRIPT  TXT': (ROOT / 'guest/music-scenes.txt').read_bytes().replace(b'\n', b'\r\n'),
+        b'NEXT    G98': files[b'CLASS   G98'][:13] + bytes(b ^ 255 for b in files[b'CLASS   G98'][13:])}
+    scene_image = image_with_files(base[:1024], scenes)
+    (DEST / 'music-scenes.hdm').write_bytes(scene_image)
     manifest = {'image_sha256': sha(image),
         'assets': {n: {'url': a[0], 'sha256': a[1]} for n, a in ASSETS.items()},
         'programs': provenance,
@@ -97,7 +103,39 @@ def build():
         'requirements': ['Guest FreeDOS/FreeCOM', 'YM2203 FM/SSG', 'SSG port A interrupt-selection bits',
                          'FM timers and IRQ12', 'DOS TSR', 'Unmodified ADV98 #bgm PLAY.M'],
         'redistribution': 'Retain complete fixtures/freedos and dos-apps outputs, including PMD/MC sources, permission, compiler notices and original MIT score; outside Pages.',
-        'os_and_game_provenance': ['freedos/manifest.json', 'dos-apps-manifest.json']}
+        'os_and_game_provenance': ['freedos/manifest.json', 'dos-apps-manifest.json'],
+        'scene_workload': {
+            'image': 'dos-apps/music-scenes.hdm', 'image_sha256': sha(scene_image),
+            'scenario': 'guest/music-scenes.txt',
+            'scenario_sha256': sha((ROOT / 'guest/music-scenes.txt').read_bytes()),
+            'files': {n.decode(): {'sha256': sha(v), 'rights': manifest_rights(n)} for n, v in scenes.items()},
+            'changes': ['Original MIT looping scenario replaces SCRIPT.TXT',
+                        'Original MIT NEXT.G98 inverts the generated CLASS.G98 planes'],
+            'expected': 'Real FreeDOS compiles PLAY.MML, loads PMD, then unmodified ADV98 plays FM/SSG while Enter reloads backgrounds/sprites; no host music'},
+        'rights_evidence': {
+            'engine_and_palette': {'archive': 'adv98-engine-source.tar.gz',
+                'palette_archive': 'adv98-scenario-source.tar.gz', 'notice': 'LICENSE',
+                'notice_sha256': sha(source_file((DEST / 'adv98-engine-source.tar.gz').read_bytes(), 'LICENSE')),
+                'applies_to': ['ADV98.EXE', 'ADV.PAL'], 'license': 'MIT; retain APP.LIC'},
+            'original_assets': {'sources': ['guest/play.mml', 'guest/music-scenes.txt', 'tools/prepare_dos_apps.py', 'tools/prepare_music_fixture.py'],
+                'applies_to': ['PLAY.MML', 'SCRIPT.TXT (scene workload)', 'CLASS.G98', 'NEXT.G98', 'C01_N.SPR', 'AUTOEXEC.BAT'],
+                'license': 'Repository MIT; retain RUST.LIC; release art/music excluded'},
+            'pmd_and_mc': {'archive': 'pmd-source.tar.gz', 'notice': 'readme.txt', 'notice_sha256': sha(permission),
+                'applies_to': ['PMD.COM', 'MC.EXE'],
+                'license': 'Author M.Kajihara grants free use of published sources, retains copyright; not MIT',
+                'requirements': 'Retain complete source archive, adapted sources/build recipe and PMD.TXT with redistribution'},
+            'dos': {'manifest': 'freedos/manifest.json', 'applies_to': ['boot sector', 'KERNEL.SYS', 'COMMAND.COM'],
+                'license': 'GPL-2.0-or-later; retain COPYING and complete matching kernel/FreeCOM source archives'},
+            'font': {'audit': 'fonts/README.md', 'notices': ['fonts/LICENSE', 'fonts/AUTHORS'],
+                'license': 'Shinonome redistribution/conversion grant; preserve author and source-design notices; embedded in the core, not a NEC ROM'},
+            'compiler': {'archive': 'jwasm-source.tar.gz', 'notice': 'License.txt',
+                'notice_sha256': sha(source_file(blobs['jwasm-source.tar.gz'], 'License.txt')),
+                'license': 'JWasm Sybase Open Watcom Public License; build tool only, not on guest disk'},
+            'publication': 'Local and CI use/redistribution with the listed notices and complete corresponding sources. No music disks or new assets added to Pages.',
+            'selection': 'ADV98 v0.1 is sufficient: actual interactive DOS game sample, FM plus SSG score and repeated graphical scene I/O. No second guest needed to reproduce measured scheduler starvation.',
+            'alternative': {'url': 'https://delacannon.itch.io/advs98', 'version': 'v0.9.0 beta (page inspected 2026-11-06)',
+                'status': 'Not acquired or redistributed; no claim of a full bundled-media audit',
+                'reason': 'Author describes MIT engine but separate DOS/PMD/font/art terms and OPNA rhythm requiring sound ROM. ADV98 already reproduces starvation without those requirements.'}}}
     text = json.dumps(manifest, indent=2) + '\n'
     expected = ROOT / 'fixtures/music-manifest.json'
     if '--update-manifest' in sys.argv:
@@ -106,6 +144,14 @@ def build():
         raise ValueError('music fixture differs from fixtures/music-manifest.json')
     (DEST / 'music-manifest.json').write_text(text)
     print('Music fixture verified:', sha(image))
+
+
+def manifest_rights(name):
+    if name in [b'MC      EXE', b'PMD     COM', b'PMD     TXT']:
+        return 'PMD-permission.txt'
+    if name in [b'KERNEL  SYS', b'COMMAND COM', b'COPYING    ']:
+        return 'GPL-2.0-or-later'
+    return 'MIT'
 
 
 if __name__ == '__main__':

@@ -771,10 +771,13 @@ unmapped ports return an open bus and are recorded for headless diagnostics.
 release Wasm and exclusively owns the Machine, memory views, CPU, devices,
 synthesis and media. The DOM thread sends ordered asynchronous commands; it
 never executes Wasm. Rust's deterministic 8 MHz virtual clock and eight clocks
-per instruction slot are unchanged. One Worker timer runs finite 10,000-slot
-slices, yielding between slices. It paces toward 10 ms without accumulating
-catch-up work after suspension. Slow emulation can underflow audio; this change
-makes no game speed or hardware fidelity claim.
+per instruction slot are unchanged. One Worker scheduler runs finite 10,000-slot
+slices, yielding between slices. With sound active, the sink's consumed source
+sample count paces production toward a 60 ms watermark, including in-flight PCM.
+Returned credits trigger immediate refill tasks instead of waiting for a polling
+timer. Timer overhead cannot accumulate into a permanent audio production deficit.
+Muted execution uses absolute deadlines with at most 30 ms of catch-up debt;
+pause, reset and audio-state barriers discard that debt.
 
 Canvas receives one transferable 640×400 RGBA snapshot at a time, at most about
 every 33 ms. The DOM presents it in rAF and returns its buffer. While that buffer
@@ -786,15 +789,21 @@ Rendering delays do not stop guest progress or audio transport.
 After **Enable sound**, a direct Worker-to-[AudioWorklet](web/audio-worklet.js)
 MessagePort carries guest-generated 48 kHz mono PCM. Six reusable 1,024-sample
 buffers bound all queued/in-flight audio to 128 ms; the normal slices produce
-480 samples each. The sink consumes blocks in order, outputs silence on
-underflow and drops new overflow instead of accumulating latency. It retains
-fractional sample-rate conversion phase for devices running at another rate.
+480 samples each. The sink prefills 50 ms at startup or after starvation,
+consumes blocks in order and outputs accounted silence on underflow. Production
+waits at the watermark or until a credit returns; exceptional producer
+drops and sink overflow remain counted. Integer sample-rate conversion phase
+preserves 48 kHz source cadence at 44.1/48/96 kHz device rates.
 Mute, pause, reset, profile changes and AudioContext state changes flush the
 queue through an acknowledged epoch barrier. Reset awaits that barrier before
 resetting the core, so old PCM cannot play after reset. Playback resumes with
 fresh samples; no per-frame AudioBufferSourceNodes or guest clock run in the
 worklet. A worklet load failure leaves the emulator usable and sound activation
 retryable; a fatal Worker fault disables controls and offers reload.
+
+The [ADV98 continuity regression and rights audit](docs/audio-continuity.md)
+records the measured scheduler starvation, same-guest before/after comparison,
+bounded diagnostics and the remaining synthesis/hardware limits.
 
 HDD replacement/eject first pauses at a Worker boundary, then checks dirty pages
 and retains the discard confirmation. Import stages acknowledged transferable
