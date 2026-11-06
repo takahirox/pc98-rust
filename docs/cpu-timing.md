@@ -108,6 +108,11 @@ the count/operand-length formula. CMPXCHG distinguishes equal and unequal memory
 full microarchitectural model are marked approximate. No claim of exact data-dependent
 multiply latency or calibrated game speed is made.
 
+V30 POLL/WAIT (9Bh) uses NEC p.12-171's `2 + 5n` formula with one pin
+sample (`n = 1`, seven core clocks), assuming the POLL pin is ready at the
+first sample. It remains marked approximate: external POLL pin state and
+additional sampling while a coprocessor is busy are not modeled.
+
 ## Physical bus assumptions and remaining limits
 
 | Effect | Implemented policy | Accuracy boundary |
