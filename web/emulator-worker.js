@@ -7,6 +7,10 @@ let generation = 0, frameBuffer = new ArrayBuffer(640 * 400 * 4), frameDue = 0, 
 let port, audioEnabled = false, audioState, audioEpoch = 0, flushWaiter;
 const audioBuffers = Array.from({length: 6}, () => new ArrayBuffer(1024 * 4));
 let sinkStats = {}, transaction = null;
+let producedSamples = 0, sentSamples = 0, droppedSamples = 0;
+let deadline = 0, diagnostics = false;
+function playingAudio() { return port && audioEnabled && audioState === 'running'; }
+function outstandingAudio() { return sentSamples - (sinkStats.audioEpoch === audioEpoch ? sinkStats.consumedSamples : 0); }
 const decoder = new TextDecoder();
 function message(kind = 0) {
   const ptr = core.message(kind) >>> 0, len = core.message_len();
@@ -18,11 +22,13 @@ function state() {
 function stats() {
   const fields = {instructions:0, reads:1, writes:2, hddReads:9, hddWrites:10,
     mouseEvents:11, mouseLatches:12, pegc:13, pcmWrites:14, pcmSamples:15,
-    beepEdges:3, fmWrites:6, fmKeyEdges:7};
+    beepEdges:3, fmWrites:6, fmKeyEdges:7, cycles:5, irqAcks:20,
+    soundIrqEdges:23, fmPitch:24, ssgPeriod:25};
   return {...Object.fromEntries(Object.entries(fields).map(([key,id]) => [key, core.metric(id)])),
     error:message(), beep:core.beep(), running, audioState, audioGain:running && audioEnabled && audioState === 'running' ? 1 : 0,
     audioEnergy:0, scheduledSamples:0, ...sinkStats, generation,
-    frameInFlight:!frameBuffer, audioBuffers:audioBuffers.length, transaction};
+    frameInFlight:!frameBuffer, audioBuffers:audioBuffers.length, transaction,
+    producedSamples, sentSamples, droppedSamples, outstandingSamples:outstandingAudio()};
 }
 function input(bytes) {
   if (bytes.byteLength > 4 * 1024 * 1024) throw Error('Transfer exceeds 4 MiB');
@@ -55,20 +61,30 @@ function present() {
 }
 function deliverAudio() {
   const count = core.audio_len();
-  if (port && audioEnabled && audioState === 'running') {
+  if (playingAudio()) {
+    producedSamples += count;
+    let sent = 0;
     const ptr = core.audio_ptr() >>> 0, samples = new Float32Array(core.memory.buffer,ptr,count);
-    // Six credits bound both MessagePort traffic and the sink queue. Drop newest
-    // samples if the sink is suspended/slow; never accumulate delayed playback.
+    // Six credits bound both MessagePort traffic and the sink queue. Normal
+    // execution stops producing at the watermark, before exhausting credits.
     for (let at = 0; at < count && audioBuffers.length; at += 1024) {
       const buffer = audioBuffers.pop(), n = Math.min(1024,count-at);
       new Float32Array(buffer).set(samples.subarray(at,at+n));
-      port.postMessage({type:'pcm', epoch:audioEpoch, buffer, count:n}, [buffer]);
+      let checksum;
+      if (diagnostics) {
+        checksum = 2166136261;
+        for (const bits of new Uint32Array(buffer,0,n)) checksum = Math.imul(checksum ^ bits,16777619) >>> 0;
+      }
+      port.postMessage({type:'pcm', epoch:audioEpoch, buffer, count:n, start:producedSamples-count+at, checksum}, [buffer]);
+      sent += n;
     }
+    sentSamples += sent; droppedSamples += count-sent;
   }
   core.audio_clear();
 }
 async function flushAudio() {
   core.audio_clear(); ++audioEpoch;
+  producedSamples = sentSamples = droppedSamples = 0; deadline = 0;
   if (!port) return;
   await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => { flushWaiter = null; reject(Error('AudioWorklet did not acknowledge flush')); }, 2000);
@@ -85,7 +101,20 @@ function tick() {
   const started = performance.now();
   if (!running || busy || transaction) { schedule(); return; }
   try {
-    core.step(10000); // 10 ms at the unchanged deterministic 8 MHz / 8-clock slot.
+    // The device consumes 48 kHz guest PCM. Target 40 ms ahead of its
+    // source cursor, including in-flight messages. Timer jitter cannot become
+    // a permanent producer deficit, and a slow/suspended sink cannot lose PCM.
+    // Each task still executes only one finite 10 ms slice before yielding.
+    if (playingAudio()) {
+      if (outstandingAudio() < 1920 && audioBuffers.length) core.step(10000);
+    } else {
+      if (!deadline) deadline = started;
+      if (started >= deadline) {
+        core.step(10000);
+        // Bounded wall-clock catch-up when muted; no debt after suspension.
+        deadline = Math.max(deadline+10, performance.now()-30);
+      }
+    }
     deliverAudio();
     if (performance.now() >= frameDue) { present(); frameDue = performance.now()+33; }
     if (core.metric(4)) {
@@ -93,7 +122,8 @@ function tick() {
       postMessage({event:'stopped', error:message()});
     }
   } catch (error) { running = false; postMessage({event:'fault', error:error.message}); }
-  schedule(Math.max(1,10-(performance.now()-started))); // One timer, no catch-up.
+  schedule(playingAudio() ? (outstandingAudio() < 1920 && audioBuffers.length ? 1 : 5)
+    : Math.max(1,deadline-performance.now()));
 }
 const calls = new Set(['key','mouse','set_boot_source','set_profile','reset','eject',
   'hdi_begin','hdi_append','hdi_commit','hdi_cancel','hdi_len','hdi_dirty_page']);
@@ -102,7 +132,8 @@ async function command(type, data) {
     const response = await fetch(new URL('core.wasm', import.meta.url));
     if (!response.ok) throw Error(`Missing Wasm bundle (HTTP ${response.status}). Run npm run build.`);
     core = (await WebAssembly.instantiate(await response.arrayBuffer(), {})).instance.exports;
-    manual = data.diagnostics && data.manual; core.set_boot_source(1);
+    diagnostics = !!data.diagnostics;
+    manual = diagnostics && data.manual; core.set_boot_source(1);
     // Playwright evaluates bounded synchronous probes inside this same Worker.
     // No eval/RPC source execution endpoint is installed in the production UI.
     if (data.diagnostics) {
@@ -122,13 +153,13 @@ async function command(type, data) {
     return;
   }
   if (!core) throw Error('Emulator is not initialized');
-  if (type === 'running') { running = data; if (!data) await flushAudio(); schedule(); return; }
+  if (type === 'running') { running = data; deadline = 0; if (!data) await flushAudio(); schedule(); return; }
   if (type === 'sound') { audioEnabled = data.enabled; audioState = data.state; await flushAudio(); return; }
   if (type === 'audioPort') {
     port = data;
     port.onmessage = ({data:m}) => {
       if (m.buffer) audioBuffers.push(m.buffer);
-      if (m.stats) sinkStats = m.stats;
+      if (m.stats && m.epoch === audioEpoch) sinkStats = m.stats;
       if (m.type === 'flushed' && m.epoch === audioEpoch) { flushWaiter?.(); flushWaiter = null; }
     };
     port.start(); await flushAudio(); return;

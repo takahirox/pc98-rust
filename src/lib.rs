@@ -259,6 +259,10 @@ mod wasm {
                 // Actual profile and retained boot preference for browser controls.
                 21 => u8::from(m.bus.profile == Profile::Pc9821ApDos) as f64,
                 22 => u8::from(m.bus.boot_hdd) as f64,
+                23 => m.bus.sound_irq_edges as f64,
+                24 => u16::from_le_bytes([m.bus.opn.registers[0xa0], m.bus.opn.registers[0xa4]])
+                    as f64,
+                25 => u16::from_le_bytes([m.bus.opn.registers[0], m.bus.opn.registers[1]]) as f64,
                 _ => m.bus.cycles as f64,
             }
         })

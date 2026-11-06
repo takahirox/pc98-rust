@@ -31,6 +31,8 @@ pub struct Bus {
     pub cycles: u64,
     pub beep: bool,
     pub beep_edges: u64,
+    /// Rising edges on the combined OPN/86 sound IRQ12 wire.
+    pub sound_irq_edges: u64,
     pub audio: Vec<f32>,
     audio_fraction: u64,
     pub system_c: u8,
@@ -197,6 +199,7 @@ impl Bus {
             cycles: 0,
             beep: false,
             beep_edges: 0,
+            sound_irq_edges: 0,
             audio: Vec::with_capacity(4096),
             audio_fraction: 0,
             system_c: 8,
@@ -559,6 +562,7 @@ impl Bus {
     fn sync_sound_irq(&mut self) {
         let asserted = self.opn.irq() || (self.pcm.irq && self.pcm.control & 0x20 != 0);
         if asserted && !self.sound_irq {
+            self.sound_irq_edges += 1;
             self.pics[1].request(4);
         }
         self.sound_irq = asserted;
