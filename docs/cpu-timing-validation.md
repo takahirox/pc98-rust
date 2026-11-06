@@ -291,3 +291,74 @@ with their checked-in scripts and unchanged manifests. Only the affected tests
 were rerun after preparation. The failed published-head CI remains failed.
 Publication and fresh acceptance for the revised head are downstream work;
 this fix node does not push or merge.
+
+## CPU access overhead and audio continuity — 2026-11-07
+
+[Acceptance on `2c1177e`](https://github.com/takahirox/pc98-rust/actions/runs/42266954259)
+passed 595 native tests, 13 Node audio tests, fixture checks, Clippy, formatting,
+release Wasm and packaging, then failed both production-audio cases. The 48 kHz
+case rendered 41,760 source-equivalent samples with 10,271 missed device frames;
+the 44.1 kHz case rendered 41,761.09 with 8,481 missed frames. The functional
+browser suite did not run. Failure-only profiles placed instruction execution
+above frame rendering; those samples alone do not identify a single cause.
+
+The revised CPU memory path combines physical address decoding, timing and data
+access for ordinary RAM and firmware reads, and ordinary RAM writes. It retains
+every byte's timing call and protected-memory journal entry. Text/graphics VRAM,
+CG RAM and other apertures use the existing device decoder. Segment and paging
+checks still precede the physical access. Cache timing tags use a one-word
+invalid sentinel that cannot alias a physical line, preserving replacement,
+write-through/no-allocation and invalidation policies. Instruction errors use a
+cold helper without changing rollback or event delivery.
+
+A local Ubuntu 24.04 arm64 container (two-CPU limit, Node 22.20.0) ran the same
+release-Wasm PMD scene workload before and after. Three consecutive samples of
+five seconds of guest time took 2.325/2.322/2.328 host seconds before and
+2.064/2.059/2.058 after. Both versions consumed exactly the same respective
+20,812,436/20,812,223/20,812,112 units and
+330,000,006/329,999,999/330,000,008 core clocks, ending at the same guest times,
+172/316/452 FM key edges and complete framebuffer SHA-256
+`64777f801d2af4c0c90df1aa75eafe020712d7ebf9f02ba214b00aa722c713ec`.
+This measures local interpreter cost, not target-hardware accuracy or Actions
+runner performance. CPU tables, clock conversion, PCM reserve, guest synthesis,
+continuity thresholds and inherited scheduler negative controls are unchanged.
+
+Validation in this fix worktree:
+
+- All fixture/build preparation commands from `.github/workflows/emulator.yml`
+  passed with unchanged fixture manifests, including 10 fixture-fetch unit tests.
+- `CARGO_PROFILE_TEST_OPT_LEVEL=1 CARGO_PROFILE_TEST_DEBUG_ASSERTIONS=true
+  CARGO_PROFILE_TEST_OVERFLOW_CHECKS=true cargo test --locked`: 597 passed
+  across 41 targets, zero failed/ignored. The two new regressions compare combined
+  physical accesses with the existing decoder across A20 and device boundaries,
+  cache enable states, both profiles and 1/2/4-byte accesses, including memory/
+  EGC/PEGC rollback; literal cache costs cover cold/hit, zero/highest tags,
+  replacement, invalidation and no-write-allocation.
+- `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`,
+  `git diff --check`: passed.
+- `npm run build`: release Wasm/media/font checks and 26-asset packaging passed.
+- `node --test tests/audio-worker.test.js tests/audio-worklet.test.js`:
+  all 13 passed, including unchanged inherited-code negative controls.
+- Ubuntu 24.04 arm64, Node 22.20.0, Playwright 1.56.1 Chromium, two-CPU container:
+  `npx playwright test tests/browser/audio-continuity.spec.js --workers=1`
+  passed both production playback cases in 1.1 minutes. Every scene-change,
+  pitch/tempo, IRQ, resampling, transport and control-barrier assertion passed.
+
+| Device rate | Observation windows | Produced source samples | Missed device frames | FM key edges | Sound IRQ12 edges |
+| --- | --- | --- | --- | --- | --- |
+| 48 kHz | 16 | 795,853 | 0 | 472 | 2,395 |
+| 44.1 kHz | 16 | 794,893 | 0 | 472 | 2,392 |
+
+The remaining full Linux browser command,
+`npx playwright test --workers=2 --grep-invert 'ADV98 production playback remains continuous through scene changes'`,
+passed 243 cases with three existing skips in 14.0 minutes. Together with the
+separate production-audio run, this is **245 passed, 3 existing skips, 0 failed**.
+The skips are unchanged Pages duplicates of large-media scenarios; their local
+cases passed. After strengthening the new bus regression's successful-write
+assertion, its focused library rerun and Clippy also passed; production code did
+not change after the full native run or Wasm build.
+
+Native checks used Homebrew Rust 1.94.0 and Wasm used rustup Rust 1.99.0 via
+`tools/build_web.py`. The failed published-head acceptance remains failed;
+publication and fresh GitHub acceptance are downstream work. This fix node does
+not push or merge, and local playback is not evidence that Actions passed.
