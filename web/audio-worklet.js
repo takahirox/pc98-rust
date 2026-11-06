@@ -6,7 +6,7 @@ class PC98Audio extends AudioWorkletProcessor {
     this.energy = 0; this.samples = 0; this.underflows = 0; this.overflows = 0;
     this.receivedSamples = 0; this.consumedSamples = 0; this.queuedSamples = 0;
     this.sequenceErrors = 0; this.staleBlocks = 0; this.checksumErrors = 0; this.checkedBlocks = 0;
-    this.prebufferSamples = 1440; // 30 ms, inside the six transferable credits.
+    this.prebufferSamples = 2400; // 50 ms, inside the six transferable credits.
     this.waiting = true; this.started = false;
     this.underflowRun = 0; this.maxUnderflowRun = 0; this.reportFrames = 0;
     this.port.onmessage = ({data:m}) => {
