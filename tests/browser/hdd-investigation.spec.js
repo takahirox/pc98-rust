@@ -29,15 +29,15 @@ for (const name of ['fragmented12', 'fragmented16', 'wait', 'maskwait']) {
     await expect(page.locator('#media-name')).toHaveText(`${name}.hdi`);
     async function step(slots) {
       await inspect(page, slots => {
-        for (let left = slots; left > 0; left -= 100000) pc98.core.step(Math.min(left, 100000));
+        for (let left = slots; left > 0; left -= 100000) pc98.advance(Math.min(left, 100000));
         pc98.core.audio_clear();
       }, slots);
     }
     async function until(expected) {
       const text = await inspect(page, expected => {
         for (let slots = 0; slots < 6000000; slots += 1000) {
-          if (pc98.text().includes(expected) || pc98.stats().error || pc98.core.metric(0) >= 8000000) break;
-          pc98.core.step(1000); pc98.core.audio_clear();
+          if (pc98.text().includes(expected) || pc98.stats().error || pc98.core.metric(5) >= 64000000) break;
+          pc98.advance(1000); pc98.core.audio_clear();
         }
         return pc98.text();
       }, expected);
@@ -82,7 +82,7 @@ for (const name of ['fragmented12', 'fragmented16', 'wait', 'maskwait']) {
       expect(handoff.faults).toBe(0);
       if (name === 'wait' || name === 'maskwait') {
         const base = await inspect(page, () => {
-          for (let slots = 0; slots < 6000000; slots++) {
+          for (let slots = 0; slots < 48000000; slots++) {
             const base = pc98.core.metric(17) * 16 + 0x300;
             if (pc98.core.metric(18) === 0x200 &&
                 Array.from({ length: 8 }, (_, i) => String.fromCharCode(pc98.read(base + i))).join('') === 'H98STATE') return base;
@@ -127,10 +127,10 @@ for (const name of ['fragmented12', 'fragmented16', 'wait', 'maskwait']) {
       await until('PC98 DOS PROBE OK');
       await type([0x12, 0x2b, 0x22, 0x18, 0x34, 0x18, 0x24, 0x1c]);
       const text = await inspect(page, () => {
-        for (let slots = 0; slots < 8000000 && pc98.core.metric(0) < 8000000; slots += 1000) {
+        for (let slots = 0; slots < 8000000 && pc98.core.metric(5) < 64000000; slots += 1000) {
           const text = pc98.text();
           if ((text.split('A:\\>').length - 1 >= 3 && text.split('\n').some(s => s.trim() === 'ok')) || pc98.stats().error) return text;
-          pc98.core.step(1000); pc98.core.audio_clear();
+          pc98.advance(1000); pc98.core.audio_clear();
         }
         return pc98.text();
       });
@@ -139,7 +139,7 @@ for (const name of ['fragmented12', 'fragmented16', 'wait', 'maskwait']) {
       const final = await snapshot();
       expect(final.faults).toBe(0);
       expect(final.irq).toBeGreaterThan(beforeInput.irq);
-      expect(final.stats.instructions).toBeLessThanOrEqual(manifest.slot_budget);
+      expect(final.stats.cycles).toBeLessThanOrEqual(manifest.slot_budget*8);
       expect(final.stats.error).toBe('');
       expect(final.stats.hddWrites).toBe(0);
       expect(final.stats.reads).toBe(0);

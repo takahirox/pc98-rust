@@ -22,6 +22,7 @@ test('Worker progresses through DOS graphics and PCM with rAF stopped and DOM ev
   await expect(page.locator('#profile')).toBeEnabled();
   await page.evaluate(() => { window.requestAnimationFrame = () => 1; document.getElementById('reset').click(); });
   await expect(page.locator('#profile')).toBeEnabled();
+  const transition = await inspect(page, () => pc98.transitionStart());
   await expect.poll(()=>page.evaluate(()=>pc98.stats().then(s=>s.pcmWrites)),{timeout:30000}).toBeGreaterThan(100);
   const before=(await page.evaluate(()=>pc98.stats())).instructions;
   for(let i=1;i<=4;i++) {
@@ -32,6 +33,15 @@ test('Worker progresses through DOS graphics and PCM with rAF stopped and DOM ev
   await expect.poll(()=>page.evaluate(()=>pc98.text()),{timeout:30000}).toContain('VIDEO RETURNED');
   const state=await page.evaluate(()=>pc98.stats());
   expect(state.instructions).toBeGreaterThan(before);
+  expect(state.cpuHz).toBe(66000000);
+  expect(state.cpuCycles).toBeGreaterThan(state.cycles);
+  expect(state.completedInstructions).toBeGreaterThan(0);
+  expect(state.completedInstructions).toBeLessThanOrEqual(state.instructions);
+  expect(state.guestSeconds).toBe(state.cycles/8000000);
+  const duration = await inspect(page, start => pc98.transitionDuration(start), transition);
+  expect(duration.guestSeconds).toBeGreaterThan(0);
+  expect(duration.wallMs).toBeGreaterThan(0);
+  console.log('video decode/return duration', JSON.stringify(duration));
   expect(state.pcmWrites).toBeGreaterThan(100);
   expect(state.audioEnergy).toBeGreaterThan(0.01);
   expect(state.scheduledSamples).toBeGreaterThan(1000);

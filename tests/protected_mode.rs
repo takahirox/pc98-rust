@@ -1,3 +1,4 @@
+mod common;
 // Wholly original machine-code/descriptor probes. SPDX-License-Identifier: MIT
 use pc98_rust::{bus::Bus, cpu::*, Machine, Profile};
 
@@ -718,7 +719,7 @@ fn synthetic_bios_timer_after_protected_return_reloads_real_cs_cache() {
     let image = std::fs::read("fixtures/protected_mode/protected_mode.hdm").unwrap();
     let mut m = Machine::new(Profile::Pc9821ApDos);
     m.insert(0, image, "protected_mode.hdm").unwrap();
-    m.step(10000);
+    common::advance(&mut m, 10000);
     assert!(m.error.is_none());
     assert!(m.bus.text().contains("PROTECTED MODE PASS"));
     // Execute a new original real-mode BIOS caller with the retained post-PE caches.
@@ -733,7 +734,7 @@ fn synthetic_bios_timer_after_protected_return_reloads_real_cs_cache() {
     m.bus.mem[0x21c10] = 0;
     m.bus.pics[0].mask = 0xfe;
     for _ in 0..4 {
-        m.step(10000);
+        common::advance(&mut m, 10000);
         assert!(m.error.is_none(), "{:?}", m.error);
     }
     assert_eq!(m.bus.mem[0x21c10], 1);
@@ -1575,7 +1576,7 @@ fn ltr_non_ram_tables_and_sources_stop_before_device_reads_or_busy_writes() {
         let (mut c, mut b) = protected(&[0x0f, 0x00, 0xd8], true, true);
         c.r[AX] = 0x23;
         c.gdtr_base = base;
-        let saved = format!("{c:?}");
+        let saved = common::cpu_state(&c);
         let mem = b.mem.clone();
         seed_stack_operand_egc(&mut b);
         let graphics = b.graphics.clone();
@@ -1583,7 +1584,7 @@ fn ltr_non_ram_tables_and_sources_stop_before_device_reads_or_busy_writes() {
         assert!(error.contains("LTR descriptor bus access"), "{error}");
         assert!(error.contains("opcode=0f 00 modrm=d8"));
         assert!(error.contains("TR=0000 TSS=None"));
-        assert_eq!(format!("{c:?}"), saved);
+        assert_eq!(common::cpu_state(&c), saved);
         assert_eq!(b.mem, mem);
         // Seeded graphics are unchanged and no EGC read latch was consumed.
         assert_eq!(b.graphics, graphics);
@@ -1593,12 +1594,12 @@ fn ltr_non_ram_tables_and_sources_stop_before_device_reads_or_busy_writes() {
     c.segment_caches[DS].as_mut().unwrap().base = 0xa8000;
     seed_stack_operand_egc(&mut b);
     let memory = b.mem.clone();
-    let saved = format!("{c:?}");
+    let saved = common::cpu_state(&c);
     assert!(c
         .step(&mut b)
         .unwrap_err()
         .contains("LTR source bus access"));
-    assert_eq!(format!("{c:?}"), saved);
+    assert_eq!(common::cpu_state(&c), saved);
     assert_eq!(b.mem, memory);
     assert_stack_operand_egc_latches_unchanged(&mut b);
 }
@@ -1675,12 +1676,12 @@ fn loaded_tr_does_not_enable_hardware_tasks_privilege_switches_or_nt_return() {
             c.flags |= 0x4000;
             c.set_reg32(SP, 0xffff_ffff); // NT must stop before reading any normal return frame.
         }
-        let saved = format!("{c:?}");
+        let saved = common::cpu_state(&c);
         let memory = b.mem.clone();
         let error = c.step(&mut b).unwrap_err();
         assert!(error.contains(name), "{error}");
         assert!(error.contains("TR=0028 TSS=Some"), "{error}");
-        assert_eq!(format!("{c:?}"), saved);
+        assert_eq!(common::cpu_state(&c), saved);
         assert_eq!(b.mem, memory);
     }
 }
@@ -1793,10 +1794,10 @@ fn tss_stack_switch_interrupt_boundary_precedes_memory() {
     gate(&mut b, 0x30, 32, 0x2000, 0xee);
     c.cpl = 3;
     c.tr = 0x28;
-    let saved = format!("{c:?}");
+    let saved = common::cpu_state(&c);
     let memory = b.mem.clone();
     let error = c.interrupt(&mut b, 0x30).unwrap_err();
     assert!(error.contains("privilege/TSS stack switch"), "{error}");
-    assert_eq!(format!("{c:?}"), saved);
+    assert_eq!(common::cpu_state(&c), saved);
     assert_eq!(b.mem, memory);
 }

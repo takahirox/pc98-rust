@@ -1,3 +1,4 @@
+mod common;
 // Original byte-level paging and exception probes. SPDX-License-Identifier: MIT
 use pc98_rust::{bus::Bus, cpu::*, Machine, Profile};
 
@@ -369,9 +370,9 @@ fn idt_stack_and_nested_faults_follow_486_double_fault_matrix_and_are_bounded() 
     assert!(c.shutdown);
     assert_eq!(c.cr2, 0xc00fec);
     assert_eq!(&b.mem[0x70000..0x71000], stack);
-    let state = format!("{c:?}");
+    let state = common::cpu_state(&c);
     c.step(&mut b).unwrap();
-    assert_eq!(format!("{c:?}"), state);
+    assert_eq!(common::cpu_state(&c), state);
 }
 
 #[test]

@@ -124,13 +124,12 @@ loop write_bytes
 ret
 
 held_delay:
-; >1,100,000 LOOP slots (>one guest second) with IF clear. Held CLK activity
+; Channel 2 waits >one device second with IF clear. Held CLK activity
 ; must neither advance the date nor shift its seconds LSB (59h -> DATA OUT=1).
-mov dx, 17
+mov dx, 64
 .outer:
-mov cx, 0xffff
-.inner:
-loop .inner
+mov cx, 32000
+call wait_pit
 dec dx
 jnz .outer
 mov cx, 12
@@ -267,6 +266,30 @@ db 0x28,0x22,0x29,0,0,0          ; leap day BIOS
 db 0x99,0xc5,0x31,0x23,0x59,0x59 ; rollover BIOS
 db 0,0,0,1,0x16,0,1              ; year 00 serial + command
 db 0,0x16,1,0,0,0                ; year 00 BIOS
+; Device-clock delay using otherwise unused 8253 channel 2. AX is preserved.
+; This avoids assuming an instruction always consumes eight scheduler clocks.
+wait_pit:
+push ax
+mov al, 0xb0
+out 0x77, al
+mov ax, cx
+out 0x75, al
+mov al, ah
+out 0x75, al
+; A latch before the first input clock can capture the previous count.
+; Discard a complete read pair, allowing the newly programmed count to load.
+in al, 0x75
+in al, 0x75
+.wait:
+mov al, 0x80
+out 0x77, al
+in al, 0x75
+in al, 0x75
+test al, 0x80                  ; underflow after terminal zero
+jz .wait
+pop ax
+ret
+
 pass_text: db 'RTC SET PASS',0
 fail_text: db 'RTC SET FAIL',0
 times 1024-($-$$) db 0

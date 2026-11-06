@@ -1,5 +1,6 @@
 use crate::{cpu::Cpu, devices::*, disk::Disk, profile::Profile};
 pub struct Bus {
+    pub(crate) timing: crate::timing::TimingState,
     pub profile: Profile,
     pub boot_hdd: bool,
     pub a20: bool,
@@ -151,6 +152,7 @@ impl Bus {
         }
         Self {
             profile,
+            timing: crate::timing::TimingState::default(),
             boot_hdd: false,
             memory_transaction: None,
             a20: false,
@@ -334,6 +336,9 @@ impl Bus {
     }
     pub fn write(&mut self, a: usize, v: u8) {
         let a = self.address(a);
+        if !self.timing.active {
+            self.timing.invalidate(a);
+        }
         if self.pegc {
             match a {
                 0xa8000..=0xb7fff => {
@@ -406,6 +411,20 @@ impl Bus {
         if w {
             self.write(Cpu::phys(s, o.wrapping_add(1)), (v >> 8) as u8)
         }
+    }
+    pub(crate) fn cpu_access(
+        &mut self,
+        physical: u32,
+        byte: u32,
+        bytes: u32,
+        write: bool,
+        fetch: bool,
+    ) {
+        let a = self.address(physical as usize);
+        let ram = self.is_plain_ram(physical) || (0xf0000..=0xfffff).contains(&a);
+        let video = (0xa0000..=0xbffff).contains(&a) || (0xe0000..=0xe7fff).contains(&a);
+        self.timing
+            .memory(self.profile, a, byte, bytes, write, fetch, ram, video);
     }
     pub fn tick(&mut self, cycles: u32) {
         let old_frame = self.cycles / 133_333;

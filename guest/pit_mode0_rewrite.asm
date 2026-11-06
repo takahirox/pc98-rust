@@ -42,18 +42,20 @@ mov ax, 60000
 out 0x71, al
 mov al, ah
 out 0x71, al
-mov cx, 500                     ; old count is still active after this delay
-.active:
-loop .active
+mov cx, 950
+call wait_pit
 mov bp, 1
 .arm:
 cli
 mov ax, 2000
 out 0x71, al                    ; first byte must stop count and lower OUT
 sti
-mov cx, 40000                   ; >65536 PIT clocks, longer than old countdown
-.partial:
-loop .partial                   ; no timer reads between the two write bytes
+mov cx, 32000
+call wait_pit
+mov cx, 32000
+call wait_pit
+mov cx, 16000
+call wait_pit
 cli
 mov ax, bp
 dec ax
@@ -88,9 +90,8 @@ jb fail
 cmp ax, 65535
 jae fail
 mov bx, ax
-mov cx, 500
-.read_delay:
-loop .read_delay
+mov cx, 950
+call wait_pit
 call read_count
 cmp ax, 60000
 jb fail
@@ -101,9 +102,12 @@ cmp bx, 1100
 ja fail
 mov bx, bp
 mov byte [es:bx+0x8005], 1       ; per-arm post-terminal count proof
-mov cx, 40000                   ; >65536 PIT clocks: observe a further full wrap
-.quiet:
-loop .quiet
+mov cx, 32000
+call wait_pit
+mov cx, 32000
+call wait_pit
+mov cx, 16000
+call wait_pit
 cli
 mov ax, bp
 cmp [es:0x8001], al              ; exactly ONE hardware entry per arming
@@ -190,6 +194,30 @@ stosw
 jmp .print
 .done:
 ret
+; Device-clock delay using otherwise unused 8253 channel 2. AX is preserved.
+; This avoids assuming an instruction always consumes eight scheduler clocks.
+wait_pit:
+push ax
+mov al, 0xb0
+out 0x77, al
+mov ax, cx
+out 0x75, al
+mov al, ah
+out 0x75, al
+; A latch before the first input clock can capture the previous count.
+; Discard a complete read pair, allowing the newly programmed count to load.
+in al, 0x75
+in al, 0x75
+.wait:
+mov al, 0x80
+out 0x77, al
+in al, 0x75
+in al, 0x75
+test al, 0x80                  ; underflow after terminal zero
+jz .wait
+pop ax
+ret
+
 pass_text: db 'PIT MODE0 REWRITE PASS', 0
 fail_text: db 'PIT MODE0 REWRITE FAIL', 0
 expected:

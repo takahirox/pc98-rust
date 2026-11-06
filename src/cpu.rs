@@ -120,6 +120,16 @@ pub struct Cpu {
     pub flags: u16,
     pub halted: bool,
     pub retired: u64,
+    /// Core clocks and completed architectural instructions (REP counts once).
+    pub cycles: u64,
+    pub completed_instructions: u64,
+    pub rep_elements: u64,
+    pub approximated_units: u64,
+    pub last_timing: crate::timing::StepTiming,
+    #[doc(hidden)]
+    pub rep_resume: Option<(u16, u32)>,
+    #[doc(hidden)]
+    pub timing_writes: u8,
     pub extended_retired: u64,
     pub inhibit: u8,
 }
@@ -165,6 +175,13 @@ impl Default for Cpu {
             flags: 0xf002,
             halted: false,
             retired: 0,
+            cycles: 0,
+            completed_instructions: 0,
+            rep_elements: 0,
+            approximated_units: 0,
+            last_timing: crate::timing::StepTiming::default(),
+            rep_resume: None,
+            timing_writes: 0,
             extended_retired: 0,
             inhibit: 0,
         }
@@ -261,7 +278,9 @@ impl Cpu {
             self.cpl == 3,
             false,
         )?;
+        b.cpu_access(physical, 0, 1, false, true);
         let v = b.read(physical as usize);
+        b.timing.last_byte = v;
         self.ip = self.ip.wrapping_add(1);
         if b.profile == crate::Profile::Pc9801Vm {
             self.ip &= 0xffff;
@@ -298,6 +317,7 @@ impl Cpu {
             };
             let physical =
                 self.translate(b, self.linear(s, a) as u32, false, self.cpl == 3, false)?;
+            b.cpu_access(physical, i, bytes, false, false);
             v |= (b.read(physical as usize) as u32) << (i * 8);
         }
         Ok(v)
@@ -312,6 +332,7 @@ impl Cpu {
             };
             let physical =
                 self.translate(b, self.linear(s, a) as u32, true, self.cpl == 3, true)?;
+            b.cpu_access(physical, i, bytes, true, false);
             b.write(physical as usize, (v >> (i * 8)) as u8);
         }
         Ok(())
@@ -360,7 +381,9 @@ impl Cpu {
         // Wrap each linear byte address at 32 bits before Bus mapping, on both
         // native and Wasm hosts (usize has different widths on those targets).
         let vector: [u8; 4] = std::array::from_fn(|i| {
-            b.read(base.wrapping_add(entry).wrapping_add(i as u32) as usize)
+            let physical = base.wrapping_add(entry).wrapping_add(i as u32);
+            b.cpu_access(physical, (i % 2) as u32, 2, false, false);
+            b.read(physical as usize)
         });
         // Real-mode entry always saves FLAGS, CS and IP as words, even for 66 INT.
         let bytes = 2;
@@ -388,6 +411,15 @@ impl Cpu {
     // INT uses deliver_interrupt directly so step restores the faulting prefix IP
     // before attempting #DF. This is a bounded IDT-limit path, not nested-fault emulation.
     fn deliver_event(&mut self, b: &mut Bus, n: u8) -> ExecResult<()> {
+        self.rep_resume = None;
+        if !self.protected_mode() && b.timing.active {
+            b.timing.extra_execution += if b.profile == crate::Profile::Pc9801Vm {
+                50
+            } else {
+                26
+            };
+            b.timing.approximated = true;
+        }
         if self.protected_mode() {
             return self.protected_event(b, n, None, GateSource::External);
         }
@@ -405,8 +437,27 @@ impl Cpu {
     }
     /// Inject an external interrupt using the current real/protected table format.
     pub fn interrupt(&mut self, b: &mut Bus, n: u8) -> Result<(), String> {
-        self.deliver_event(b, n)
-            .map_err(|e| format!("interrupt delivery failed: {e:?}"))
+        self.interrupt_timed(b, n).1
+    }
+    /// Explicit event injection has the same timing contract as step_timed.
+    pub fn interrupt_timed(
+        &mut self,
+        b: &mut Bus,
+        n: u8,
+    ) -> (crate::timing::StepTiming, Result<(), String>) {
+        b.timing.begin(self.cr0);
+        if b.profile == crate::Profile::Pc9821ApDos {
+            b.timing.extra_execution += 11;
+        }
+        let result = self
+            .deliver_event(b, n)
+            .map_err(|e| format!("interrupt delivery failed: {e:?}"));
+        let timing = b.timing.finish(b.profile, result.is_err(), 0);
+        self.cycles += u64::from(timing.cpu_cycles());
+        self.approximated_units += u64::from(timing.approximated);
+        self.last_timing = timing;
+        self.timing_writes = 1 << SP;
+        (timing, result)
     }
     fn flag(&mut self, f: u16, on: bool) {
         if on {
@@ -463,6 +514,9 @@ impl Cpu {
         v as u32
     }
     fn decode(&mut self, b: &mut Bus, m: u8, ov: Option<usize>) -> ExecResult<Operand> {
+        if let Some(i) = &mut b.timing.instruction {
+            i.modrm = m;
+        }
         let mode = m >> 6;
         let rm = (m & 7) as usize;
         if mode == 3 {
@@ -471,9 +525,13 @@ impl Cpu {
             }
             return Ok(Operand::Reg(rm));
         }
+        if !self.address32 || rm != 4 {
+            b.timing.address(b.profile, self.address32, m, None);
+        }
         if self.address32 {
             let (base, stack) = if rm == 4 {
                 let sib = self.fetch(b)?;
+                b.timing.address(b.profile, true, m, Some(sib));
                 let index = ((sib >> 3) & 7) as usize;
                 let base = (sib & 7) as usize;
                 let index = if index == SP {
@@ -688,6 +746,7 @@ impl Cpu {
         }
     }
     fn input_width(&self, b: &mut Bus, port: u16, w: bool) -> u32 {
+        b.timing.io(b.profile, port, self.bytes(w));
         let mut v = 0;
         for i in 0..self.bytes(w) {
             v |= (b.input(port.wrapping_add(i as u16)) as u32) << (i * 8);
@@ -695,6 +754,7 @@ impl Cpu {
         v
     }
     fn output_width(&self, b: &mut Bus, port: u16, value: u32, w: bool) {
+        b.timing.io(b.profile, port, self.bytes(w));
         for i in 0..self.bytes(w) {
             b.output(port.wrapping_add(i as u16), (value >> (i * 8)) as u8);
         }
@@ -725,10 +785,60 @@ impl Cpu {
     pub fn step(&mut self, b: &mut Bus) -> Result<(), String> {
         self.step_with_observer(b, |_, _| {})
     }
+    /// Execute one bounded unit and report elapsed clocks, including faulting
+    /// work. Device clocks are advanced by Machine, not this CPU API.
+    pub fn step_timed(&mut self, b: &mut Bus) -> (crate::timing::StepTiming, Result<(), String>) {
+        self.step_timed_with_observer(b, |_, _| {})
+    }
+    pub fn step_timed_with_observer(
+        &mut self,
+        b: &mut Bus,
+        before_instruction: impl FnMut(&Cpu, &Bus),
+    ) -> (crate::timing::StepTiming, Result<(), String>) {
+        let clocks_before = b.cycles;
+        let faults_before = self.fault_count;
+        b.timing.begin(self.cr0);
+        b.timing.previous_writes = self.timing_writes;
+        let registers_before = std::array::from_fn::<_, 8, _>(|i| self.reg32(i));
+        let mut result = self.execute_step(b, before_instruction);
+        let fault = result.is_err() || self.fault_count != faults_before;
+        let timing = b.timing.finish(b.profile, fault, b.cycles - clocks_before);
+        if let Some((op, ext)) = b.timing.untimed {
+            result = Err(format!("missing CPU timing for {op:02x}/{ext:02x}"));
+        }
+        // CPU state rollback must not roll back elapsed clocks or bus activity.
+        self.timing_writes = if fault {
+            0
+        } else {
+            (0..8).fold(0, |mask, i| {
+                mask | if registers_before[i] != self.reg32(i) {
+                    1 << i
+                } else {
+                    0
+                }
+            })
+        };
+        self.last_timing = timing;
+        self.cycles += u64::from(timing.cpu_cycles());
+        self.completed_instructions += u64::from(timing.instructions);
+        self.rep_elements += u64::from(timing.rep_elements);
+        self.approximated_units += u64::from(timing.approximated);
+        if fault || result.is_err() {
+            self.rep_resume = None;
+        }
+        (timing, result)
+    }
+    pub fn step_with_observer(
+        &mut self,
+        b: &mut Bus,
+        before_instruction: impl FnMut(&Cpu, &Bus),
+    ) -> Result<(), String> {
+        self.step_timed_with_observer(b, before_instruction).1
+    }
     /// Observe the instruction about to execute, after pending IRQ delivery.
     /// Halted/shutdown slots and failed interrupt delivery do not fetch an
     /// instruction and therefore do not invoke the read-only observer.
-    pub fn step_with_observer(
+    fn execute_step(
         &mut self,
         b: &mut Bus,
         mut before_instruction: impl FnMut(&Cpu, &Bus),
@@ -739,6 +849,10 @@ impl Cpu {
         if self.flags & IF != 0 && self.inhibit == 0 {
             if let Some(n) = b.irq() {
                 self.irq_acks += 1;
+                if b.profile == crate::Profile::Pc9821ApDos {
+                    b.timing.extra_execution += 11;
+                }
+                self.rep_resume = None;
                 self.deliver_event(b, n)
                     .map_err(|e| format!("interrupt delivery failed: {e:?}"))?;
             }
@@ -759,7 +873,10 @@ impl Cpu {
         }
         let execution = self.execute(b).and_then(|()| {
             if std::mem::take(&mut b.firmware_request) {
-                crate::firmware::execute_service(self, b)?;
+                b.timing.approximated = true;
+                let service = crate::firmware::execute_service(self, b);
+                b.timing.flush();
+                service?;
             }
             Ok(())
         });
@@ -829,6 +946,9 @@ impl Cpu {
     }
     fn extended(&mut self, b: &mut Bus, ov: Option<usize>) -> ExecResult<()> {
         let op = self.fetch(b)?;
+        if let Some(i) = &mut b.timing.instruction {
+            i.ext = op;
+        }
         if self.protected_mode() && !self.vm86() && self.cpl != 0 && !matches!(op, 0x01 | 0x06) {
             return Err(ExecError::Unsupported(format!(
                 "unsupported protected execution CPL={}; only ring 0 is implemented",
@@ -861,6 +981,9 @@ impl Cpu {
             }
             0x20 | 0x22 => {
                 let m = self.fetch(b)?;
+                if let Some(i) = &mut b.timing.instruction {
+                    i.modrm = m;
+                }
                 if m >> 6 != 3 {
                     return Err(ExecError::Fault(6));
                 }
@@ -1013,11 +1136,13 @@ impl Cpu {
 
             0x80..=0x8f => {
                 let d = self.immediate(b, true)?;
-                if self.cond(op & 15) {
+                b.timing.taken = self.cond(op & 15);
+                if b.timing.taken {
                     self.branch(self.ip.wrapping_add(d))?;
                 }
             }
             0x90..=0x9f => {
+                b.timing.taken = self.cond(op & 15);
                 let m = self.fetch(b)?;
                 let o = self.decode(b, m, ov)?;
                 self.put(b, o, u32::from(self.cond(op & 15)), false)?;
@@ -1081,6 +1206,7 @@ impl Cpu {
                 let m = self.fetch(b)?;
                 let o = self.decode(b, m, ov)?;
                 let v = self.get(b, o, true)?;
+                b.timing.value = v;
                 self.flag(ZF, v == 0);
                 if v != 0 {
                     self.put_register(
@@ -1191,7 +1317,8 @@ impl Cpu {
                     self.put(b, o, result, w)?;
                 } else {
                     self.alu(7, self.get(b, Operand::Reg(AX), w)?, dst, w);
-                    if self.flags & ZF != 0 {
+                    b.timing.taken = self.flags & ZF != 0;
+                    if b.timing.taken {
                         self.put(b, o, src, w)?;
                     } else {
                         // CMPXCHG performs a destination write cycle on mismatch too.
@@ -1221,6 +1348,7 @@ impl Cpu {
             return Ok(());
         }
         let start = self.ip;
+        b.timing.rep_fetch = self.rep_resume == Some((self.s[CS], start));
         self.flags_upper &= !1; // RF suppresses one instruction, then clears (IRET can reload it).
         self.instruction_bytes = 0;
         let default32 = b.profile == crate::Profile::Pc9821ApDos && self.segment_cache(CS).big();
@@ -1264,6 +1392,10 @@ impl Cpu {
                 });
             }
         };
+        let mut timing = crate::timing::Instruction::new(self, op, prefixes, rep);
+        timing.continuation = self.rep_resume == Some((self.s[CS], start));
+        self.rep_resume = None;
+        b.timing.instruction = Some(timing);
         if matches!(rep, 0x64 | 0x65) && !matches!(op, 0xa6 | 0xa7 | 0xae | 0xaf) {
             return Err(
                 "unsupported V30 carry-repeat with non-compare opcode (emulator limitation)".into(),
@@ -1486,6 +1618,7 @@ impl Cpu {
                         if b.profile == crate::Profile::Pc9801Vm {
                             // NEC CHKIND conditionally performs BRK 5 after
                             // consuming the instruction. IRET resumes at next IP.
+                            b.timing.taken = true;
                             self.deliver_interrupt(b, 5)?;
                         } else {
                             return Err(ExecError::Fault(5));
@@ -1536,7 +1669,8 @@ impl Cpu {
             }
             0x70..=0x7f => {
                 let d = self.fetch(b)? as i8 as u32;
-                if self.cond(op & 15) {
+                b.timing.taken = self.cond(op & 15);
+                if b.timing.taken {
                     self.branch(self.ip.wrapping_add(d))?;
                 }
             }
@@ -1745,6 +1879,16 @@ impl Cpu {
                 if matches!(op, 0x6c..=0x6f) {
                     self.check_io(b, self.r[DX], self.bytes(w))?;
                 }
+                b.timing.element = true;
+                // NEC p.12-16: repeated MOVSW's mixed-alignment case uses
+                // the same 16-clock iteration as the odd/odd case.
+                if b.profile == crate::Profile::Pc9801Vm
+                    && op == 0xa5
+                    && rep != 0
+                    && (self.r[SI] ^ self.r[DI]) & 1 != 0
+                {
+                    b.timing.penalty += 4;
+                }
                 let src = Operand::Mem(ov.unwrap_or(DS), self.index(SI));
                 let dst = Operand::Mem(ES, self.index(DI));
                 let a = self.get(b, Operand::Reg(0), w)?;
@@ -1810,6 +1954,8 @@ impl Cpu {
                     };
                     if self.index(CX) != 0 && repeat {
                         self.ip = start;
+                        self.rep_resume = Some((self.s[CS], start));
+                        b.timing.taken = true;
                     }
                 }
             }
@@ -1976,6 +2122,7 @@ impl Cpu {
                     self.set_index(CX, self.index(CX).wrapping_sub(1));
                     self.index(CX) != 0 && (op == 0xe2 || (self.flags & ZF != 0) == (op == 0xe1))
                 };
+                b.timing.taken = take;
                 if take {
                     self.branch(self.ip.wrapping_add(d))?;
                 }
@@ -2186,6 +2333,9 @@ impl Cpu {
                     return self.extended(b, ov);
                 }
                 let ext = self.fetch(b)?;
+                if let Some(i) = &mut b.timing.instruction {
+                    i.ext = ext;
+                }
                 if (0x10..=0x1f).contains(&ext) {
                     let w = ext & 1 != 0;
                     let m = self.fetch(b)?;

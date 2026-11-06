@@ -143,6 +143,9 @@ modifiers and host key repeat reach the guest. Focus loss releases held keys;
 hiding the tab pauses execution. The Ap DOS profile supplies licensed replacement
 Japanese CG glyphs. FEP input is not implemented.
 
+Instruction-dependent [V30/DX2 timing](docs/cpu-timing.md) separates core clocks
+from the 8 MHz device scheduler and documents cache, bus and firmware approximations.
+
 ## Reproduce the checks
 
 ```sh
@@ -821,7 +824,7 @@ memory. Browser guest probes use the opt-in `?diagnostics=1` Worker adapter in
 [`tests/browser/helpers/runtime.js`](tests/browser/helpers/runtime.js), ordered
 after pending UI operations. `&manual=1` explicitly disables the timer for
 bounded deterministic stepping of that same production Worker core; freezing
-rAF alone does not pause emulation. Inspection is capped at 16 million slots per
+rAF alone does not pause emulation. Inspection has a finite per-profile CPU work cap per
 probe. Native/headless synchronous APIs remain unchanged. Both scripts are
 first-party static assets, resolved relative to their modules at `/` and
 `/pc98-rust/`; no SharedArrayBuffer, isolation headers or service is needed.

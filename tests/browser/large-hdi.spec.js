@@ -57,7 +57,7 @@ async function expectedDigest(file, cylinders) {
 async function runGuest(page, persisted, maxResident = 6*65536) {
   const result = await inspect(page, () => {
     for (let slots=0;slots<500000;slots+=1000) {
-      pc98.core.step(1000); pc98.core.audio_clear();
+      pc98.advance(1000); pc98.core.audio_clear();
       const text=pc98.text(), error=pc98.stats().error;
       if (text.includes('LARGE HDI PASS') || text.includes('FAIL') || error) return {text,error,slots};
     }
@@ -222,7 +222,7 @@ test('512 MiB FAT16: unmodified FreeDOS shell reads and writes files above 128 M
       }
       const result=await inspect(page, ()=>{
         for(let slots=0;slots<8000000;slots+=10000) {
-          pc98.core.step(10000); pc98.core.audio_clear();
+          pc98.advance(10000); pc98.core.audio_clear();
           const text=pc98.text(),error=pc98.stats().error;
           if(error || (text.includes('LARGE DOS READY') && text.includes('A:\\>'))) return {text,error,slots};
         }
@@ -254,10 +254,10 @@ test('512 MiB FAT16: unmodified FreeDOS shell reads and writes files above 128 M
       // Actual DOS application and input handling, not just AUTOEXEC output.
       await inspect(page, ()=>{
         for(const scan of [0x19,0x13,0x18,0x2d,0x12,0x1c]) {
-          pc98.core.key(scan,1); pc98.core.step(50000);
-          pc98.core.key(scan,0); pc98.core.step(10000);
+          pc98.core.key(scan,1); pc98.advance(50000);
+          pc98.core.key(scan,0); pc98.advance(10000);
         }
-        pc98.core.step(100000); pc98.core.audio_clear();
+        pc98.advance(100000); pc98.core.audio_clear();
       });
       expect(await inspect(page, ()=>pc98.text())).toContain('PC98 DOS PROBE OK');
       expect(await inspect(page, ()=>pc98.stats().error)).toBe('');

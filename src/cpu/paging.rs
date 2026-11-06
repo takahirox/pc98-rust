@@ -101,6 +101,7 @@ impl Cpu {
             entry
         } else {
             let pde_address = (self.cr3 & 0xfffff000).wrapping_add((linear >> 22) * 4);
+            b.cpu_access(pde_address, 0, 4, false, false);
             let pde = Self::page_word(b, pde_address)?;
             if pde & 1 == 0 {
                 return Err(Self::page_fault(linear, write, user, false));
@@ -108,6 +109,7 @@ impl Cpu {
             Self::page_flags(pde, pde_address, true)?;
             b.page_accessed(pde_address);
             let pte_address = (pde & 0xfffff000).wrapping_add(((linear >> 12) & 1023) * 4);
+            b.cpu_access(pte_address, 0, 4, false, false);
             let pte = Self::page_word(b, pte_address)?;
             if pte & 1 == 0 {
                 return Err(Self::page_fault(linear, write, user, false));
@@ -175,12 +177,14 @@ impl Cpu {
         for (i, byte) in raw.iter_mut().enumerate() {
             let physical =
                 self.translate(b, address.wrapping_add(i as u32), false, false, false)?;
+            b.cpu_access(physical, i as u32, N as u32, false, false);
             *byte = b.read(physical as usize);
         }
         Ok(raw)
     }
     pub(super) fn write_system_byte(&self, b: &mut Bus, address: u32, value: u8) -> ExecResult<()> {
         let physical = self.translate(b, address, true, false, true)?;
+        b.cpu_access(physical, 0, 1, true, false);
         b.write(physical as usize, value);
         Ok(())
     }

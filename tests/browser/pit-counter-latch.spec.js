@@ -51,7 +51,17 @@ for (const [profile, name] of [['0', 'VM'], ['1', 'Ap']]) {
       }
       expect(slots).toBeLessThanOrEqual(manifest.slot_budget);
       expect(text).toContain('PIT COUNTER LATCH PASS');
-      expect(await inspect(page, () => Array.from({ length: 32 }, (_, i) => pc98.read(0x8000 + i)))).toEqual(expected);
+      const data = await inspect(page, () => Array.from({ length: 32 }, (_, i) => pc98.read(0x8000 + i)));
+      expect(data[0]).toBe(expected[0]);
+      expect(data.slice(9)).toEqual(expected.slice(9));
+      for (const offset of [1,5]) {
+        const held = data[offset] | data[offset+1] << 8;
+        const fresh = data[offset+2] | data[offset+3] << 8;
+        expect(held >> 8).toBe(0x12);
+        expect(fresh).toBeGreaterThanOrEqual(0x0e00);
+        expect(fresh).toBeLessThan(0x1100);
+        expect(held-fresh).toBeGreaterThanOrEqual(0x100);
+      }
       expect(Buffer.from(await inspect(page, () => pc98.exportDisk())).equals(image)).toBe(true);
       expect(errors).toEqual([]);
       await expect(page.locator('#error')).toBeHidden();

@@ -13,6 +13,7 @@ pub mod pcm;
 pub mod profile;
 pub mod rtc;
 pub mod sound;
+pub mod timing;
 use bus::Bus;
 use cpu::Cpu;
 use disk::Disk;
@@ -22,6 +23,7 @@ pub struct Machine {
     pub bus: Bus,
     pub error: Option<String>,
     pub framebuffer: Vec<u8>,
+    pub clock_converter: timing::ClockConverter,
 }
 impl Default for Machine {
     fn default() -> Self {
@@ -35,6 +37,7 @@ impl Machine {
             bus: Bus::new(profile),
             error: None,
             framebuffer: vec![0; 640 * 400 * 4],
+            clock_converter: timing::ClockConverter::default(),
         };
         if profile == Profile::Pc9821ApDos {
             m.cpu.flags = 2;
@@ -81,6 +84,7 @@ impl Machine {
         self.bus.ide.disk = hdd;
         self.bus.boot_hdd = boot_hdd;
         self.error = None;
+        self.clock_converter = timing::ClockConverter::default();
         firmware::initialize(&mut self.bus);
     }
     pub fn step(&mut self, budget: u32) -> u32 {
@@ -97,15 +101,37 @@ impl Machine {
             if self.error.is_some() {
                 break;
             }
-            let result = self
+            let (elapsed, result) = self
                 .cpu
-                .step_with_observer(&mut self.bus, &mut before_instruction);
-            self.bus.tick(8);
+                .step_timed_with_observer(&mut self.bus, &mut before_instruction);
+            let clocks = self
+                .clock_converter
+                .advance(self.bus.profile, elapsed.cpu_cycles());
+            self.bus.tick(clocks);
             done += 1;
             if let Err(e) = result {
                 self.error = Some(e);
                 break;
             }
+        }
+        done
+    }
+    /// Advance toward a device-clock deadline, with an independent work cap.
+    /// Returns bounded units executed; callers retain any unfinished time debt.
+    /// One instruction/firmware transaction can overshoot the requested time.
+    pub fn step_scheduler(&mut self, clocks: u32, max_units: u32) -> u32 {
+        self.step_scheduler_with_observer(clocks, max_units, |_, _| {})
+    }
+    pub fn step_scheduler_with_observer(
+        &mut self,
+        clocks: u32,
+        max_units: u32,
+        mut observer: impl FnMut(&Cpu, &Bus),
+    ) -> u32 {
+        let deadline = self.bus.cycles + u64::from(clocks.min(80_000));
+        let mut done = 0;
+        while self.bus.cycles < deadline && done < max_units.min(100_000) && self.error.is_none() {
+            done += self.step_with_observer(1, &mut observer);
         }
         done
     }
@@ -193,6 +219,10 @@ mod wasm {
         MACHINE.with(|m| m.borrow_mut().step(budget))
     }
     #[no_mangle]
+    pub extern "C" fn step_scheduler(clocks: u32, max_units: u32) -> u32 {
+        MACHINE.with(|m| m.borrow_mut().step_scheduler(clocks, max_units))
+    }
+    #[no_mangle]
     pub extern "C" fn frame() -> *const u8 {
         MACHINE.with(|m| m.borrow_mut().render().as_ptr())
     }
@@ -263,6 +293,12 @@ mod wasm {
                 24 => u16::from_le_bytes([m.bus.opn.registers[0xa0], m.bus.opn.registers[0xa4]])
                     as f64,
                 25 => u16::from_le_bytes([m.bus.opn.registers[0], m.bus.opn.registers[1]]) as f64,
+                26 => m.cpu.cycles as f64,
+                27 => m.cpu.completed_instructions as f64,
+                28 => m.cpu.rep_elements as f64,
+                29 => m.bus.cycles as f64 / timing::SCHEDULER_HZ as f64,
+                30 => m.cpu.approximated_units as f64,
+                31 => m.bus.profile.cpu_hz() as f64,
                 _ => m.bus.cycles as f64,
             }
         })

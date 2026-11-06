@@ -3,9 +3,9 @@
   "license": "MIT; LICENSE; original pc98-rust contributors",
   "provenance": "Original source-built probe; no commercial ROM, DOS or guest software",
   "assembler": "nasm -f bin guest/rtc_set.asm -o rtc_set.bin",
-  "source_sha256": "2088a64be251c23807cab4aada26a4e7fff30c826006e00b042f59703acd9c36",
-  "boot_sha256": "4f4a03f47283966f9365a325f7c26c913d2b8c526bac143058ab5ff5bbc6c4c6",
-  "image_sha256": "4be346056f0c0f1bd1f1ce691decea3af853ec3ef246c84492ce6b214d018006",
+  "source_sha256": "d2a7febf5dda4610f9cd95b109bf9135f52b465ae32d79afe9d7062ad68ec866",
+  "boot_sha256": "0e8f8d855bfae75a961b2f37e1c4e9c45bf814fd9ba876f2b06e61862d168a47",
+  "image_sha256": "d1c92b6c3fcb315db61150694ad78eae8400f04c499f1bff1da7d2f50ebc1e38",
   "geometry": "77 cylinders, 2 heads, 8 sectors, 1024 bytes per sector",
   "profiles": [
     "Ap"

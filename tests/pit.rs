@@ -2868,7 +2868,16 @@ fn counter_latch_original_boot_probe_before_and_after_reset_in_both_profiles() {
                 "{}",
                 m.bus.text()
             );
-            assert_eq!(&m.bus.mem[0x8000..0x8020], expected.as_slice());
+            let data = &m.bus.mem[0x8000..0x8020];
+            assert_eq!(data[0], expected[0]);
+            assert_eq!(&data[9..], &expected[9..]);
+            for offset in [1, 5] {
+                let held = u16::from_le_bytes([data[offset], data[offset + 1]]);
+                let fresh = u16::from_le_bytes([data[offset + 2], data[offset + 3]]);
+                assert_eq!(held >> 8, 0x12);
+                assert!((0x0e00..0x1100).contains(&fresh));
+                assert!(held - fresh >= 0x100);
+            }
             assert_eq!(m.bus.disks[0].as_ref().unwrap().bytes, image);
             println!("{profile:?} boot {run}: {slots} slots");
         }

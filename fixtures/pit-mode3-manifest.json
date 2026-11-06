@@ -2,10 +2,10 @@
   "source": "guest/pit_mode3.asm",
   "license": "MIT; LICENSE and original assembly copied alongside image",
   "assembly": "nasm -f bin guest/pit_mode3.asm -o pit_mode3.bin",
-  "source_sha256": "2db96377924049700e7c1aac368ce5df8554d642a71a3bbbc82860eb65f3e9fa",
-  "boot_sha256": "5a39475db56279fa41c420a24e28d3b0f0e5a60896792da6308ddb5e1ac52b95",
+  "source_sha256": "4b587f36df6a105f5cc52c3539140d2c88956c76b0725d987be3989279d6b6ad",
+  "boot_sha256": "707df77c5696cc98155ec798bc7421a3d6d7258fb5f08e108622de29168da43a",
   "image": "fixtures/pit_mode3/pit_mode3.hdm",
-  "image_sha256": "7c373364f171b90e86123777f6d99b8c50bc65adab4f0f634d323603df300a44",
+  "image_sha256": "14d11fef5310d74f6316566b3dfa10a2bcfdf842c1e6b24ea9dea3a50206bafe",
   "geometry": "77 cylinders, 2 heads, 8 sectors, 1024 bytes per sector",
   "profiles": [
     "VM",

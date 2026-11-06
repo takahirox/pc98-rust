@@ -1,3 +1,4 @@
+mod common;
 use pc98_rust::{cpu::*, Machine, Profile};
 
 const PROFILES: [Profile; 2] = [Profile::Pc9801Vm, Profile::Pc9821ApDos];
@@ -319,12 +320,12 @@ fn original_keymap_control_passes_hold_release_through_real_dos() {
         m.insert(0, image.clone(), "keymap.hdm").unwrap();
         m.reset();
         for _ in 0..50 {
-            run(&mut m, 100_000);
+            common::advance(&mut m, 100_000);
         }
         assert!(m.bus.text().contains("KEYMAP READY"), "{}", m.bus.text());
         m.bus.key(0x1c, true);
         for _ in 0..10 {
-            run(&mut m, 100_000);
+            common::advance(&mut m, 100_000);
         }
         assert!(
             m.bus.text().contains("KEYMAP DOWN PASS"),
@@ -334,7 +335,7 @@ fn original_keymap_control_passes_hold_release_through_real_dos() {
         assert_eq!(m.bus.read(0x52d), 0x10);
         m.bus.key(0x1c, false);
         for _ in 0..10 {
-            run(&mut m, 100_000);
+            common::advance(&mut m, 100_000);
         }
         let text = m.bus.text();
         for expected in [

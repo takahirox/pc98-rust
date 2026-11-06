@@ -33,7 +33,7 @@ test('ADV98 production playback remains continuous through scene changes', async
   // Accelerate only silent DOS/compiler/title setup. Playback below uses the
   // production timer exclusively, with no inspection calls that step the core.
   for (let n=0;n<2;n++) await inspect(page,()=>{
-    for(let i=0;i<90;i++) {pc98.core.step(100000);pc98.core.audio_clear();}
+    for(let i=0;i<90;i++) {pc98.advance(100000);pc98.core.audio_clear();}
   });
   expect((await stats(page)).fmKeyEdges).toBe(0);
   await page.locator('#sound').click(); await page.locator('#pause').click();

@@ -151,13 +151,9 @@ inc di
 loop guards
 ret
 ; Separate direction handlers keep byte service below the 104-clock deadline.
-; Both record real PIC ISR bits and require normal EOIs on every request.
+; Record PIC ISR on the result IRQ; require normal EOIs on every byte.
 %macro byte_handler 2
 %1:
-in al, 8
-or [es:bp+4], al
-in al, 0
-or [es:bp+5], al
 in al, 0x90
 test al, 0x20
 jz %%result
@@ -186,6 +182,10 @@ byte_handler write_handler, 1
 byte_handler read_handler, 0
 result_handler:
 mov [es:bp+24], al
+in al, 8
+or [es:bp+4], al
+in al, 0
+or [es:bp+5], al
 mov [es:bp+2], bx
 inc byte [es:bp+8]
 mov di, bp

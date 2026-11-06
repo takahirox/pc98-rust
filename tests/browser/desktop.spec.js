@@ -12,7 +12,7 @@ async function until(page, expected) {
   const state = await inspect(page, expected => {
     for (let slots=0; slots<8000000; slots+=10000) {
       if (pc98.text().includes(expected) || pc98.stats().error) break;
-      pc98.core.step(10000); pc98.core.audio_clear();
+      pc98.advance(10000); pc98.core.audio_clear();
     }
     return {text: pc98.text(), stats: pc98.stats()};
   }, expected);
@@ -26,10 +26,10 @@ async function command(page, text) {
       char==='>' ? 'Period' : char==='\r' ? 'Enter' : `Key${char.toUpperCase()}`;
     if (char==='>') await page.keyboard.down('Shift');
     await page.keyboard.down(code);
-    await inspect(page, () => { pc98.core.step(50000); pc98.core.audio_clear(); });
+    await inspect(page, () => { pc98.advance(50000); pc98.core.audio_clear(); });
     await page.keyboard.up(code);
     if (char==='>') await page.keyboard.up('Shift');
-    await inspect(page, () => { pc98.core.step(10000); pc98.core.audio_clear(); });
+    await inspect(page, () => { pc98.advance(10000); pc98.core.audio_clear(); });
   }
 }
 async function checkMemory(page, high) {

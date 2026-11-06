@@ -19,7 +19,7 @@ for (const [profile, name] of [['0', 'VM'], ['1', 'Ap']]) {
     const advance = async slices => {
       const error = await inspect(page, count => {
         for (let i = 0; i < count; i++) {
-          pc98.core.step(100000);
+          pc98.advance(100000);
           if (pc98.stats().error) break;
         }
         return pc98.stats().error;

@@ -428,6 +428,7 @@ impl Cpu {
         error: Option<u32>,
         source: GateSource,
     ) -> ExecResult<()> {
+        self.rep_resume = None;
         let contributory = |n| matches!(n, 0 | 10..=13);
         let mut vector = n;
         let mut code = error;
@@ -437,6 +438,10 @@ impl Cpu {
         // Delivery only raises contributory faults or #PF in this subset;
         // a fault during #DF still shuts down immediately below.
         for _ in 0..4 {
+            if b.timing.active {
+                b.timing.extra_execution += if self.vm86() { 82 } else { 44 };
+                b.timing.approximated = true;
+            }
             let saved = self.clone();
             if self.protected_mode() || self.paging_enabled() {
                 b.begin_cpu_memory();

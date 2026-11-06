@@ -8,11 +8,14 @@ fn fixture(path: &str) -> Vec<u8> {
 // Observe actual BIOS reads of DA/UA 91h, without modifying guest state.
 fn step(m: &mut Machine, budget: u32) -> usize {
     let mut reads = 0;
-    m.step_with_observer(budget, |c, _| {
-        if c.s[1] == 0xf000 && c.ip == 0x106c && c.r[0] & 0x0fff == 0x0691 {
-            reads += 1;
-        }
-    });
+    let end = m.bus.cycles + u64::from(budget) * 8;
+    while m.bus.cycles < end && m.error.is_none() {
+        m.step_scheduler_with_observer((end - m.bus.cycles).min(80_000) as u32, 100_000, |c, _| {
+            if c.s[1] == 0xf000 && c.ip == 0x106c && c.r[0] & 0x0fff == 0x0691 {
+                reads += 1;
+            }
+        });
+    }
     m.bus.audio.clear();
     assert!(m.error.is_none(), "{:?}", m.error);
     reads
@@ -102,7 +105,7 @@ fn hot_insert(profile: Profile) {
         "{profile:?}: live insertion/swap/eject/reinsert {} slots",
         m.cpu.retired
     );
-    assert!(m.cpu.retired < 12_000_000);
+    assert!(m.bus.cycles < 12_000_000 * 8);
     // Same D88 mounted at reset is the reported working control.
     m.reset();
     until(&mut m, "A:\\>");
@@ -115,7 +118,7 @@ fn hot_insert(profile: Profile) {
     assert_eq!(m.bus.disks[1].as_ref().unwrap().bytes, data);
     assert_eq!(m.bus.fdc.writes, 0);
     println!("{profile:?}: reset control {} slots", m.cpu.retired);
-    assert!(m.cpu.retired < 8_000_000);
+    assert!(m.bus.cycles < 8_000_000 * 8);
     // No cached directory can turn an actually empty drive into a successful DIR.
     m.bus.mount_floppy(1, None);
     command(&mut m, "cls");

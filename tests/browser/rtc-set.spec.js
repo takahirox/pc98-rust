@@ -35,7 +35,7 @@ for (const [profile, name] of [['1', 'Ap']]) {
           let slots = 0;
           let text = '';
           while (slots < Math.min(100000, remaining)) {
-            slots += pc98.core.step(Math.min(1000, remaining - slots));
+            slots += pc98.advance(Math.min(1000, remaining - slots));
             text = pc98.text();
             const error = pc98.stats().error;
             if (text.includes('RTC SET PASS') || text.includes('FAIL') || error) {

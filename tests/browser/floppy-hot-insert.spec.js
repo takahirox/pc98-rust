@@ -17,7 +17,7 @@ async function until(page, expected) {
   const state = await inspect(page, expected => {
     for (let slots = 0; slots < 8_000_000; slots += 10000) {
       if (pc98.text().includes(expected) || pc98.stats().error) break;
-      pc98.core.step(10000);
+      pc98.advance(10000);
       pc98.core.audio_clear();
     }
     return { text: pc98.text(), stats: pc98.stats() };
@@ -33,9 +33,9 @@ async function keys(page, text) {
     const code = char === ':' ? 'Quote' : char === '.' ? 'Period' :
       char === ' ' ? 'Space' : char === '\r' ? 'Enter' : `Key${char.toUpperCase()}`;
     await page.keyboard.down(code);
-    await inspect(page, () => { pc98.core.step(50000); pc98.core.audio_clear(); });
+    await inspect(page, () => { pc98.advance(50000); pc98.core.audio_clear(); });
     await page.keyboard.up(code);
-    await inspect(page, () => { pc98.core.step(10000); pc98.core.audio_clear(); });
+    await inspect(page, () => { pc98.advance(10000); pc98.core.audio_clear(); });
   }
 }
 const command = (page, text) => keys(page, `${text}\r`);
@@ -109,7 +109,7 @@ test('Ap DOS enumerates empty FDD2, reads post-boot D88, swaps/ejects/reinserts 
   await readFile(page, 'second.txt', 'ORIGINAL FDD2 FILE CONTENTS');
   const stats = await inspect(page, () => pc98.stats());
   expect(stats.writes).toBe(0);
-  expect(stats.instructions).toBeLessThan(12_000_000);
+  expect(stats.cycles).toBeLessThan(12_000_000*8);
   console.log(`FDD2 live insert/swap/eject/reinsert: ${stats.instructions} slots`);
   // The same D88 mounted before reset is the user's working control.
   await page.locator('#reset').click();

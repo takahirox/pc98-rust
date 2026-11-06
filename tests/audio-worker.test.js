@@ -9,7 +9,7 @@ const source = readFileSync(new URL('../web/emulator-worker.js',import.meta.url)
 // This host can produce PCM in real time, but cannot also pay a nested timer's
 // 4 ms minimum on every slice. No wall-clock sleeps or platform speed thresholds.
 function worker(code=source, {prebuffer=2400, stalls=[]}={}) {
-  let now=0, nextId=0, samples=0, started=false, missed=0, slices=0;
+  let now=0, nextId=0, samples=0, started=false, missed=0, slices=0, clocks=0;
   const events=[], blocks=[], recycled=[];
   const sink={audioEpoch:0,consumedSamples:0};
   const post = (fn, delay=0) => {
@@ -44,8 +44,8 @@ function worker(code=source, {prebuffer=2400, stalls=[]}={}) {
       if(blocks.reduce((sum,b)=>sum+b.count,0)>=prebuffer) started=true;
     }},
     testCore:{memory:{buffer:new ArrayBuffer(4096)},audio_ptr:()=>0,
-      audio_len:()=>samples,audio_clear:()=>{samples=0;},metric:()=>0,
-      step:budget=>{assert.equal(budget,10000);slices++;advance(now+7);samples=480;}},
+      audio_len:()=>samples,audio_clear:()=>{samples=0;},metric:id=>id===5?clocks:0,
+      step_scheduler:(budget, cap)=>{assert.equal(budget,80000);assert.equal(cap,100000);slices++;advance(now+7);samples=480;clocks+=80000;}},
   });
   vm.runInContext(code.replace('import.meta.url', "'file:///emulator-worker.js'"),context);
   const run=code=>vm.runInContext(code,context);

@@ -38,7 +38,7 @@ async function pixels(page, x, y, width, height) {
 async function until(page, predicate, max = 220, budget = 100000, audio = false) {
   for (let i = 0; i < max; i++) {
     if (await predicate()) return;
-    await inspect(page, budget => pc98.core.step(budget), budget);
+    await inspect(page, budget => pc98.advance(budget), budget);
     if (audio) await page.waitForTimeout(16);
     else await page.waitForTimeout(1);
     expect((await inspect(page, () => pc98.stats())).error).toBe('');
@@ -50,7 +50,7 @@ async function press(page, key) {
   await page.keyboard.press(key);
   // Let the guest finish painting and return to its input loop.
   for (let i = 0; i < 20; i++) {
-    await inspect(page, () => pc98.core.step(100000));
+    await inspect(page, () => pc98.advance(100000));
     await page.waitForTimeout(1);
   }
   expect((await inspect(page, () => pc98.stats())).error).toBe('');
@@ -70,7 +70,7 @@ test('Ap DOS: independent Japanese ADV game choices and guest save survive expor
   });
   // The first glyph can finish before the rest of the title is painted.
   // Complete that bounded guest drawing work before recording the stable frame.
-  for (let i = 0; i < 20; i++) await inspect(page, () => pc98.core.step(100000));
+  for (let i = 0; i < 20; i++) await inspect(page, () => pc98.advance(100000));
   const title = await hash(page);
   await press(page, 'Enter');
   expect(await hash(page)).not.toBe(title);
@@ -155,7 +155,7 @@ async function waitTitle(page) {
     return data.every((row, y) => row.every((rgb, x) =>
       rgb.every(n => n === 255) === Boolean(font[at + y * 2 + (x >> 3)] & (128 >> (x & 7)))));
   }, 260);
-  for (let i = 0; i < 20; i++) await inspect(page, () => pc98.core.step(100000));
+  for (let i = 0; i < 20; i++) await inspect(page, () => pc98.advance(100000));
 }
 
 function hdiFile(image, name) {
@@ -305,7 +305,7 @@ for (const profile of ['0', '1']) {
     expect(values.ip).toBeGreaterThanOrEqual(values.start); expect(values.ip).toBeLessThan(values.end);
     expect(values.cs).toBe(values.segment); expect(values.flags & 0x200).toBe(0x200);
     expect(state).toBe(values.segment * 16 + 0x300);
-    for (let i = 0; i < 10; i++) await inspect(page, () => pc98.core.step(100000));
+    for (let i = 0; i < 10; i++) await inspect(page, () => pc98.advance(100000));
     expect(await inspect(page, p => pc98.read(p + 8), state)).toBe(1);
     expect((await inspect(page, () => pc98.stats())).error).toBe('');
   });

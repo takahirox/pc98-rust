@@ -16,7 +16,7 @@ export { expect };
 
 // Inspect the actual production Worker, with no second emulator, DOM memory
 // view, source-evaluation RPC or guest-result mocks. A barrier orders preceding
-// UI commands; each probe has a finite 16-million-slot instruction allowance.
+// UI commands; each probe has a finite work allowance scaled to the selected core clock.
 export async function inspect(page, fn, arg) {
   await expect(page.locator('#profile')).toBeEnabled();
   await page.evaluate(() => pc98.stats());
