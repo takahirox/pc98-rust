@@ -423,8 +423,10 @@ fn planar_transfer_workload_matches_table_plus_explicit_video_wait_policy() {
         assert_eq!(m.cpu.cycles, expected);
         assert_eq!(m.bus.cycles, expected * 8_000_000 / profile.cpu_hz());
         assert!(m.bus.graphics[..32768]
-            .chunks_exact(2)
-            .all(|w| w == [0xa5, 0x5a]));
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .all(|w| *w == [0xa5, 0x5a]));
         println!(
             "{profile:?} 32 KiB STOSW: {expected} core clocks, {:.4} ms guest",
             m.bus.cycles as f64 / 8000.0

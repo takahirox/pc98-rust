@@ -86,6 +86,12 @@ optional index/immediate penalties are conservative policies; dependence trackin
 observes changed register values and does not simulate pipeline forwarding.
 NEC effective-address costs are already in its tables and are not charged again.
 
+DX2 segment loads add 11 core clocks per previously unaccessed descriptor
+(table 10.1, note 9), separately from the physical write that sets its Accessed
+bit. This applies to data loads, far control transfers and interrupt entry;
+VM86-to-monitor entry can load both an unaccessed code and stack descriptor.
+Reloading an already accessed descriptor incurs no additional core clocks.
+
 REP still executes at most one element per unit. Setup is charged on the first
 unit, then only iteration cost on uninterrupted continuations. Zero-count REP
 charges setup without an operand access. Conditional repeats stop on the actual
