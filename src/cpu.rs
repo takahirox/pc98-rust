@@ -332,8 +332,7 @@ impl Cpu {
             self.cpl == 3,
             false,
         )?;
-        b.cpu_access(physical, 0, 1, false, true);
-        let v = b.read(physical as usize);
+        let v = b.cpu_read(physical, 0, 1, true);
         b.timing.last_byte = v;
         self.ip = self.ip.wrapping_add(1);
         if b.profile == crate::Profile::Pc9801Vm {
@@ -371,8 +370,7 @@ impl Cpu {
             };
             let physical =
                 self.translate(b, self.linear(s, a) as u32, false, self.cpl == 3, false)?;
-            b.cpu_access(physical, i, bytes, false, false);
-            v |= (b.read(physical as usize) as u32) << (i * 8);
+            v |= u32::from(b.cpu_read(physical, i, bytes, false)) << (i * 8);
         }
         Ok(v)
     }
@@ -386,8 +384,7 @@ impl Cpu {
             };
             let physical =
                 self.translate(b, self.linear(s, a) as u32, true, self.cpl == 3, true)?;
-            b.cpu_access(physical, i, bytes, true, false);
-            b.write(physical as usize, (v >> (i * 8)) as u8);
+            b.cpu_write(physical, i, bytes, (v >> (i * 8)) as u8);
         }
         Ok(())
     }
@@ -963,55 +960,72 @@ impl Cpu {
                 }
                 Ok(())
             }
-            Err(error) => {
-                b.timing.fault_vector = match &error {
-                    ExecError::Fault(n) | ExecError::ProtectedFault(n, _) => Some(*n),
-                    ExecError::PageFault { .. } => Some(14),
-                    _ => None,
-                };
-                let vector = match error {
-                    ExecError::Fault(6) if b.profile == crate::Profile::Pc9801Vm => {
-                        return Err("invalid V30 instruction".into())
-                    }
-                    ExecError::Fault(n) => n,
-                    ExecError::PageFault { linear, code } => {
-                        *self = saved;
-                        self.fault_count += 1;
-                        self.cr2 = linear;
-                        return self.protected_event(b, 14, Some(code), GateSource::Fault)
-                            .map_err(|e| format!("protected page fault delivery failed CR2={:08x} error={code:08x}: {e:?}", self.cr2));
-                    }
-                    ExecError::ProtectedFault(n, code) => {
-                        *self = saved;
-                        self.fault_count += 1;
-                        return self.protected_event(b, n, Some(code), GateSource::Fault)
-                            .map_err(|e| format!("protected fault delivery failed vector={n} error={code:08x}: {e:?}"));
-                    }
-                    ExecError::ControlWriteRejected(message) => {
-                        *self = saved;
-                        return Err(message);
-                    }
-                    ExecError::Unsupported(message) => {
-                        if saved.protected_mode() {
-                            *self = saved;
-                            return Err(format!("{message}; PE=1 PG={} CS:EIP={:04x}:{:08x} CPL={} CR0={:08x} GDT={:08x}/{:04x} IDT={:08x}/{:04x} TR={:04x} TSS={:?}", u8::from(self.paging_enabled()), self.s[CS], self.ip, self.cpl, self.cr0, self.gdtr_base, self.gdtr_limit, self.idtr_base, self.idtr_limit, self.tr, self.tr_cache));
-                        }
-                        return Err(message);
-                    }
-                };
+            Err(error) => self.instruction_error(b, saved, error),
+        }
+    }
+    #[cold]
+    fn instruction_error(
+        &mut self,
+        b: &mut Bus,
+        saved: Self,
+        error: ExecError,
+    ) -> Result<(), String> {
+        b.timing.fault_vector = match &error {
+            ExecError::Fault(n) | ExecError::ProtectedFault(n, _) => Some(*n),
+            ExecError::PageFault { .. } => Some(14),
+            _ => None,
+        };
+        let vector = match error {
+            ExecError::Fault(6) if b.profile == crate::Profile::Pc9801Vm => {
+                return Err("invalid V30 instruction".into())
+            }
+            ExecError::Fault(n) => n,
+            ExecError::PageFault { linear, code } => {
                 *self = saved;
                 self.fault_count += 1;
-                if self.protected_mode() {
-                    let error = matches!(vector, 8 | 10..=14 | 17).then_some(0);
-                    self.last_fault = Some((vector, error.unwrap_or(0)));
-                    return self.protected_event(b, vector, error, GateSource::Fault)
-                        .map_err(|e| format!("protected fault delivery failed vector={vector} error={error:?}: {e:?}"));
-                }
-                self.last_fault = Some((vector, 0));
-                self.deliver_event(b, vector, GateSource::Fault)
-                    .map_err(|_| "fault while delivering real-mode exception".to_string())
+                self.cr2 = linear;
+                return self.protected_event(b, 14, Some(code), GateSource::Fault)
+                    .map_err(|e| format!("protected page fault delivery failed CR2={:08x} error={code:08x}: {e:?}", self.cr2));
             }
+            ExecError::ProtectedFault(n, code) => {
+                *self = saved;
+                self.fault_count += 1;
+                return self
+                    .protected_event(b, n, Some(code), GateSource::Fault)
+                    .map_err(|e| {
+                        format!(
+                            "protected fault delivery failed vector={n} error={code:08x}: {e:?}"
+                        )
+                    });
+            }
+            ExecError::ControlWriteRejected(message) => {
+                *self = saved;
+                return Err(message);
+            }
+            ExecError::Unsupported(message) => {
+                if saved.protected_mode() {
+                    *self = saved;
+                    return Err(format!("{message}; PE=1 PG={} CS:EIP={:04x}:{:08x} CPL={} CR0={:08x} GDT={:08x}/{:04x} IDT={:08x}/{:04x} TR={:04x} TSS={:?}", u8::from(self.paging_enabled()), self.s[CS], self.ip, self.cpl, self.cr0, self.gdtr_base, self.gdtr_limit, self.idtr_base, self.idtr_limit, self.tr, self.tr_cache));
+                }
+                return Err(message);
+            }
+        };
+        *self = saved;
+        self.fault_count += 1;
+        if self.protected_mode() {
+            let error = matches!(vector, 8 | 10..=14 | 17).then_some(0);
+            self.last_fault = Some((vector, error.unwrap_or(0)));
+            return self
+                .protected_event(b, vector, error, GateSource::Fault)
+                .map_err(|e| {
+                    format!(
+                        "protected fault delivery failed vector={vector} error={error:?}: {e:?}"
+                    )
+                });
         }
+        self.last_fault = Some((vector, 0));
+        self.deliver_event(b, vector, GateSource::Fault)
+            .map_err(|_| "fault while delivering real-mode exception".to_string())
     }
     fn extended(&mut self, b: &mut Bus, ov: Option<usize>) -> ExecResult<()> {
         let op = self.fetch(b)?;

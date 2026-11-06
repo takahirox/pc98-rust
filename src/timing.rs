@@ -97,7 +97,9 @@ pub(crate) struct TimingState {
     pub value: u32,
     pub previous_writes: u8,
     pub rep_fetch: bool,
-    cache: [[Option<usize>; 4]; 128],
+    // A physical address divided by 16 can never equal usize::MAX. A sentinel
+    // keeps each tag to one word and each hot cache probe to one comparison.
+    cache: [[usize; 4]; 128],
     victim: [usize; 128],
     fetch_word: Option<usize>,
     cache_enabled: bool,
@@ -119,7 +121,7 @@ impl Default for TimingState {
             value: 0,
             previous_writes: 0,
             rep_fetch: false,
-            cache: [[None; 4]; 128],
+            cache: [[usize::MAX; 4]; 128],
             victim: [0; 128],
             fetch_word: None,
             cache_enabled: false,
@@ -147,13 +149,13 @@ impl TimingState {
     pub fn invalidate(&mut self, address: usize) {
         let line = address / 16;
         for tag in &mut self.cache[line % 128] {
-            if *tag == Some(line) {
-                *tag = None;
+            if *tag == line {
+                *tag = usize::MAX;
             }
         }
     }
     pub fn flush(&mut self) {
-        self.cache = [[None; 4]; 128];
+        self.cache = [[usize::MAX; 4]; 128];
     }
     /// Account once per physical beat, not once per Rust byte read. Nominal
     /// V30 aligned bus clocks are included in the NEC instruction tables.
@@ -203,10 +205,10 @@ impl TimingState {
         if ram && self.cache_enabled {
             let line = address / 16;
             let set = line % 128;
-            let hit = self.cache[set].contains(&Some(line));
+            let hit = self.cache[set].contains(&line);
             if !hit && !write {
                 let way = self.victim[set];
-                self.cache[set][way] = Some(line);
+                self.cache[set][way] = line;
                 self.victim[set] = (way + 1) % 4;
                 // DX2 external 2-1-1-1 fill, two core clocks per bus clock.
                 self.penalty += 10;
@@ -1009,5 +1011,50 @@ impl TimingState {
             clocks + if i.continuation { 0 } else { i.prefixes },
             approximate,
         )
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    #[test]
+    fn compact_cache_tags_preserve_cold_hits_replacement_and_invalidation() {
+        let mut state = TimingState::default();
+        let read = |state: &mut TimingState, address| {
+            state.begin(0);
+            state.memory(
+                Profile::Pc9821ApDos,
+                address,
+                0,
+                1,
+                false,
+                false,
+                true,
+                false,
+            );
+            state.penalty
+        };
+        // Zero and the highest possible line must both start invalid.
+        for address in [0, usize::MAX] {
+            assert_eq!(read(&mut state, address), 10);
+            assert_eq!(read(&mut state, address), 0);
+            state.invalidate(address);
+            assert_eq!(read(&mut state, address), 10);
+            state.flush();
+            assert_eq!(read(&mut state, address), 10);
+        }
+        state.flush();
+        // Five lines in the same four-way set evict the oldest line.
+        for line in 0..5 {
+            assert_eq!(read(&mut state, line * 2048), 10);
+        }
+        assert_eq!(read(&mut state, 2048), 0);
+        assert_eq!(read(&mut state, 0), 10);
+        state.flush();
+        state.begin(0);
+        state.memory(Profile::Pc9821ApDos, 0, 0, 1, true, false, true, false);
+        assert_eq!(state.penalty, 4); // Write-through, no allocation.
+        assert_eq!(read(&mut state, 0), 10);
     }
 }

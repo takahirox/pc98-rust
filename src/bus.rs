@@ -427,6 +427,41 @@ impl Bus {
         self.timing
             .memory(self.profile, a, byte, bytes, write, fetch, ram, video);
     }
+    /// Combine physical decoding with a CPU read on ordinary RAM/firmware.
+    /// Device apertures retain the full decoder and its read side effects.
+    #[inline(always)]
+    pub(crate) fn cpu_read(&mut self, physical: u32, byte: u32, bytes: u32, fetch: bool) -> u8 {
+        let a = self.address(physical as usize);
+        if a < 0xa0000
+            || (0xf0000..=0xfffff).contains(&a)
+            || ((0x100000..=0x3fffff).contains(&a) && self.profile == Profile::Pc9821ApDos)
+        {
+            self.timing
+                .memory(self.profile, a, byte, bytes, false, fetch, true, false);
+            self.mem[a]
+        } else {
+            self.cpu_access(physical, byte, bytes, false, fetch);
+            self.read(physical as usize)
+        }
+    }
+    #[inline(always)]
+    pub(crate) fn cpu_write(&mut self, physical: u32, byte: u32, bytes: u32, value: u8) {
+        let a = self.address(physical as usize);
+        if a < 0xa0000
+            || ((0x100000..=0x3fffff).contains(&a) && self.profile == Profile::Pc9821ApDos)
+        {
+            self.timing
+                .memory(self.profile, a, byte, bytes, true, false, true, false);
+            if !self.timing.active {
+                self.timing.invalidate(a);
+            }
+            self.remember_memory(false, a);
+            self.mem[a] = value;
+        } else {
+            self.cpu_access(physical, byte, bytes, true, false);
+            self.write(physical as usize, value);
+        }
+    }
     pub fn tick(&mut self, cycles: u32) {
         let old_frame = self.cycles / 133_333;
         let old_cycles = self.cycles;
@@ -1356,5 +1391,99 @@ impl Bus {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+}
+
+#[cfg(test)]
+mod cpu_access_tests {
+    use super::*;
+
+    #[test]
+    fn combined_cpu_accesses_preserve_decode_timing_and_fault_rollback() {
+        // Compare the combined path with the pre-existing separate timing and
+        // physical decoder at RAM, ROM, A20 and device-aperture boundaries.
+        for profile in [Profile::Pc9801Vm, Profile::Pc9821ApDos] {
+            for a20 in [false, true] {
+                for video_mode in 0..3 {
+                    let mut combined = Bus::new(profile);
+                    let mut separate = Bus::new(profile);
+                    for bus in [&mut combined, &mut separate] {
+                        bus.a20 = a20;
+                        bus.pegc = video_mode == 1;
+                        bus.egc.enabled = video_mode == 2;
+                        bus.grcg_mode = if video_mode == 2 { 0x80 } else { 0 };
+                        for (i, v) in bus.mem.iter_mut().enumerate() {
+                            *v = (i ^ (i >> 8)) as u8;
+                        }
+                        for (i, v) in bus.graphics.iter_mut().enumerate() {
+                            *v = (i ^ (i >> 15)) as u8;
+                        }
+                    }
+                    for cr0 in [0, 0x40000000] {
+                        for address in [
+                            0,
+                            0x9ffff,
+                            0xa0000,
+                            0xa3fff,
+                            0xa4000,
+                            0xa4fff,
+                            0xa8000,
+                            0xb7fff,
+                            0xb8000,
+                            0xbffff,
+                            0xe0000,
+                            0xe0004,
+                            0xe7fff,
+                            0xf0000,
+                            0xfffff,
+                            0x100000,
+                            0x10ffff,
+                            0x3fffff,
+                            0x400000,
+                            u32::MAX,
+                        ] {
+                            for bytes in [1, 2, 4] {
+                                for fetch in [false, true] {
+                                    combined.timing.begin(cr0);
+                                    separate.timing.begin(cr0);
+                                    combined.begin_cpu_memory();
+                                    separate.begin_cpu_memory();
+                                    for byte in 0..bytes {
+                                        let physical = address.wrapping_add(byte);
+                                        separate.cpu_access(physical, byte, bytes, false, fetch);
+                                        assert_eq!(
+                                            combined.cpu_read(physical, byte, bytes, fetch),
+                                            separate.read(physical as usize),
+                                            "{profile:?} A20={a20} address={physical:x}"
+                                        );
+                                        combined.cpu_write(physical, byte, bytes, 0x5a);
+                                        separate.cpu_access(physical, byte, bytes, true, false);
+                                        separate.write(physical as usize, 0x5a);
+                                        assert_eq!(
+                                            combined.read(physical as usize),
+                                            separate.read(physical as usize)
+                                        );
+                                    }
+                                    assert_eq!(combined.egc, separate.egc);
+                                    assert_eq!(combined.pegc_banks, separate.pegc_banks);
+                                    assert_eq!(
+                                        combined.timing.finish(profile, false, 0),
+                                        separate.timing.finish(profile, false, 0)
+                                    );
+                                    // A failed instruction must undo RAM, planar
+                                    // graphics, EGC latches and PEGC bank writes.
+                                    combined.finish_cpu_memory(false);
+                                    separate.finish_cpu_memory(false);
+                                }
+                            }
+                        }
+                    }
+                    assert_eq!(combined.mem, separate.mem);
+                    assert_eq!(combined.graphics, separate.graphics);
+                    assert_eq!(combined.egc, separate.egc);
+                    assert_eq!(combined.pegc_banks, separate.pegc_banks);
+                }
+            }
+        }
     }
 }
