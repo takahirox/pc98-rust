@@ -91,6 +91,8 @@ pub(crate) struct TimingState {
     pub invlpg_hit: bool,
     pub element: bool,
     pub extra_execution: u32,
+    /// Successful address-calculation latency, replaced by DX2 #PF timing.
+    pub address_execution: u32,
     pub penalty: u32,
     pub approximated: bool,
     pub last_byte: u8,
@@ -115,6 +117,7 @@ impl Default for TimingState {
             invlpg_hit: false,
             element: false,
             extra_execution: 0,
+            address_execution: 0,
             penalty: 0,
             approximated: false,
             last_byte: 0,
@@ -138,6 +141,7 @@ impl TimingState {
         self.invlpg_hit = false;
         self.element = false;
         self.extra_execution = 0;
+        self.address_execution = 0;
         self.penalty = 0;
         self.approximated = false;
         self.last_byte = 0;
@@ -270,11 +274,11 @@ impl TimingState {
             )
         };
         if index {
-            self.extra_execution += 1;
+            self.address_execution += 1;
             self.approximated = true;
         }
         if base.is_some_and(|reg| self.previous_writes & (1 << reg) != 0) {
-            self.extra_execution += 1;
+            self.address_execution += 1;
         }
         if let Some(i) = self.instruction {
             let displacement = mode != 0 || base.is_none();
@@ -282,7 +286,7 @@ impl TimingState {
                 || matches!(i.op, 0xf6 | 0xf7) && m & 0x38 == 0
                 || i.op == 0x0f && matches!(i.ext, 0xa4 | 0xac | 0xba);
             if displacement && immediate {
-                self.extra_execution += 1;
+                self.address_execution += 1;
                 self.approximated = true;
             }
         }
@@ -294,7 +298,13 @@ impl TimingState {
             approximated: self.approximated || fault || firmware != 0,
             ..StepTiming::default()
         };
-        if let Some(i) = self.instruction {
+        if profile == Profile::Pc9821ApDos && self.fault_vector == Some(14) {
+            // DX2 pp.10-12..13: #PF = INT + 24, including code-fetch
+            // faults before decoding. Replace successful opcode/prefix latency;
+            // event delivery and descriptor loads remain in extra_execution,
+            // and actual physical transfers remain in the separate bus field.
+            result.execution = 24 + self.extra_execution;
+        } else if let Some(i) = self.instruction {
             let (clocks, approximate) = if profile == Profile::Pc9801Vm {
                 self.v30(i, fault)
             } else {
@@ -303,7 +313,7 @@ impl TimingState {
             if !fault && clocks == 0 {
                 self.untimed = Some((i.op, i.ext));
             }
-            result.execution = clocks + self.extra_execution;
+            result.execution = clocks + self.address_execution + self.extra_execution;
             result.approximated |= approximate || (i.rep && !i.string());
             result.rep_elements = u32::from(!fault && i.string() && self.element);
             result.instructions = u32::from(!(fault || i.rep && i.string() && self.taken));
