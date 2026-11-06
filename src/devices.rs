@@ -487,11 +487,11 @@ impl Pit {
     }
     pub fn tick(&mut self, cycles: u32) -> bool {
         self.fraction += cycles as u64 * 1_996_800;
-        let ticks = (self.fraction / 8_000_000) as u32;
-        self.fraction %= 8_000_000;
-        if ticks == 0 {
+        if self.fraction < 8_000_000 {
             return false;
         }
+        let ticks = (self.fraction / 8_000_000) as u32;
+        self.fraction %= 8_000_000;
         let irq = self.c[0].tick(ticks);
         self.c[1].tick(ticks);
         self.c[2].tick(ticks);

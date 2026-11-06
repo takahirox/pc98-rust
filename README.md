@@ -684,8 +684,11 @@ assembly command, hashes and independent expected results. Generated media stays
 outside `web/`. See the [handoff contract](docs/hardware.md#bios-floppy-dma-handoff)
 and [Issue #81 validation](docs/validation.md#issue-81-bios-floppy-dma-handoff).
 
-`npm run build` checks reproducible media, compiles the real Rust/Wasm core and
-runs `npm run check:site`. The latter verifies a nonempty, compilable Wasm module
+`npm run build` checks reproducible media, compiles the real Rust/Wasm core,
+optimizes the linked module with the lockfile-pinned Binaryen tool installed by
+`npm ci`, and runs `npm run check:site`. The optimization reduces host execution
+cost without changing guest instruction clocks or audio pacing. The latter check
+verifies a nonempty, compilable Wasm module
 with the emulator exports and exactly nineteen distributable assets: the original
 ten assets plus the nine intentionally published desktop template, manifest,
 GPL notices and complete matching source downloads. All nine guest/source hashes
