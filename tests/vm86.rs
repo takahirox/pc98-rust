@@ -170,6 +170,53 @@ fn dx2_vm86_software_interrupts_keep_virtual_entry_timing() {
         assert_eq!(timing.instructions, 1);
     }
 }
+#[test]
+fn dx2_vm86_exceptions_use_fault_overhead_and_preserve_descriptor_costs() {
+    // DX2 pp.10-12/13: VM86 entry INT=82 plus opcode-specific fault
+    // overhead, replacing successful latency. Descriptor loads add 11 each.
+    let cases: &[(&[u8], u32)] = &[
+        (&[0xfa], 90),
+        (&[0xfb], 90),
+        (&[0x9c], 91),
+        (&[0x9d], 90),
+        (&[0xcd, 0x30], 91),
+        (&[0xcf], 91),
+        (&[0xe4, 0x40], 132),
+        (&[0xe6, 0x40], 132),
+        (&[0xec], 133),
+        (&[0xee], 133),
+        (&[0x6c], 132),
+        (&[0x6e], 132),
+        (&[0xf3, 0x6c], 133),
+        (&[0xf3, 0x6e], 133),
+    ];
+    for &(code, expected) in cases {
+        let mut bus_clocks = [0; 2];
+        for accessed in [0, 1] {
+            let (mut c, mut b) = setup(code, false, 0x20002);
+            enter(&mut c, &mut b);
+            b.mem[0x500d] = 0x9a | accessed;
+            b.mem[0x5015] = 0x92 | accessed;
+            b.mem[0x8088] = 255; // Deny port 40h in the TSS I/O bitmap.
+            c.r[DX] = 0x40;
+            c.r[CX] = 1;
+            let completed = c.completed_instructions;
+            let (timing, result) = c.step_timed(&mut b);
+            result.unwrap();
+            frame(&c, &b, 13, Some(0), 0, 0x30002);
+            assert_eq!(c.fault_count, 1, "{code:02x?}");
+            assert_eq!(
+                timing.execution,
+                expected + if accessed == 0 { 22 } else { 0 },
+                "{code:02x?}"
+            );
+            assert_eq!((timing.instructions, timing.rep_elements), (0, 0));
+            assert_eq!(c.completed_instructions, completed);
+            bus_clocks[accessed as usize] = timing.bus;
+        }
+        assert_eq!(bus_clocks[0], bus_clocks[1] + 8, "{code:02x?}");
+    }
+}
 fn frame(c: &Cpu, b: &Bus, n: u8, error: Option<u32>, ip: u32, flags: u32) {
     assert!(!c.vm86());
     assert_eq!(c.cpl, 0);

@@ -120,6 +120,14 @@ entry; the external INT cost is not added. Actual operand/vector/stack bus
 penalties and prefixes remain separate. Signed data dependence and fault
 detection details remain approximate.
 
+DX2 BOUND range faults use `INT + 24` rather than the seven-clock successful
+path. VM86 #GP paths for CLI/STI, PUSHF/POPF, INT/IRET and I/O use the
+opcode-specific exception overheads on p.10-12. The original instruction's
+fault vector selects these paths; unrelated operand faults do not select a
+BOUND range exception. Event entry, each unaccessed descriptor load, physical
+bus accesses and prefixes remain separate additions. Other fault detection
+paths retain their documented approximation boundary below.
+
 ## Physical bus assumptions and remaining limits
 
 | Effect | Implemented policy | Accuracy boundary |
@@ -134,7 +142,7 @@ detection details remain approximate.
 | DX2 misalignment | Three additional core clocks per unaligned operand | Plus actual split physical beats |
 | Port I/O | CPU table cost; V30 odd word +4; DX2 extra bytes +4 core clocks each | Devices expose byte handshakes, no board-ready waveform |
 | Page walks/system descriptors | Physical memory accesses contribute bus cost | TLB replacement remains existing policy; A/D update and protection microcode are approximate |
-| Interrupts/faults | V30 divide uses complete exception totals; other entry charged in addition to interrupted/faulting work; each protected retry charged; software INT has its own table entry | Fault detection point and double-fault pipeline costs are conservative, not measured |
+| Interrupts/faults | V30 divide uses complete exception totals; DX2 BOUND/VM86 exceptions use fault-specific overhead plus entry; other entry charged in addition to interrupted/faulting work; each protected retry charged; software INT has its own table entry | Fault detection point and double-fault pipeline costs are conservative, not measured |
 | HLT/shutdown | One microsecond idle quantum; clocks/events continue, retirement stops | IRQ wake-up quantized to one microsecond |
 | Synthetic firmware | Existing explicit FDC waits plus actual guest thunk instructions; flush timing tags after host services | BIOS/LIO host work has no fictitious instruction count; ROM execution latency is not reproduced |
 

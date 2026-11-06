@@ -85,6 +85,8 @@ pub(crate) struct TimingState {
     pub active: bool,
     pub untimed: Option<(u8, u8)>,
     pub instruction: Option<Instruction>,
+    /// Original instruction fault, before any fault raised by event delivery.
+    pub fault_vector: Option<u8>,
     pub taken: bool,
     pub invlpg_hit: bool,
     pub element: bool,
@@ -106,6 +108,7 @@ impl Default for TimingState {
             active: false,
             untimed: None,
             instruction: None,
+            fault_vector: None,
             taken: false,
             invlpg_hit: false,
             element: false,
@@ -128,6 +131,7 @@ impl TimingState {
         self.active = true;
         self.untimed = None;
         self.instruction = None;
+        self.fault_vector = None;
         self.taken = false;
         self.invlpg_hit = false;
         self.element = false;
@@ -606,6 +610,21 @@ impl TimingState {
         let rm = |reg, memory| if mem { memory } else { reg };
         let mut approximate = false;
         let clocks = match i.op {
+            // DX2 p.10-12: fault-specific overhead replaces successful
+            // instruction latency. INT entry and descriptor costs are already
+            // accumulated separately by event delivery.
+            0x62 if self.fault_vector == Some(5) => 24,
+            0xfa | 0xfb | 0x9d if i.vm86 && self.fault_vector == Some(13) => 8,
+            0x9c | 0xcd | 0xcf if i.vm86 && self.fault_vector == Some(13) => 9,
+            0xe4..=0xe7 if i.vm86 && self.fault_vector == Some(13) => 50,
+            0xec..=0xef if i.vm86 && self.fault_vector == Some(13) => 51,
+            0x6c..=0x6f if i.vm86 && self.fault_vector == Some(13) => {
+                if i.rep {
+                    51
+                } else {
+                    50
+                }
+            }
             op if i.string() => {
                 let _ = op;
                 self.string_clocks(i, false)
@@ -699,7 +718,7 @@ impl TimingState {
                     if u32::from(count) <= bits {
                         rm(8, 9)
                     } else {
-                        9 + u32::from(count) / bits * 7 + u32::from(mem)
+                        9 + u32::from(count) / bits * 7
                     }
                 } else {
                     rm(if i.op < 0xd0 { 2 } else { 3 }, 4)

@@ -197,6 +197,115 @@ fn branch_paths_and_shift_counts_use_execution_conditions() {
     }
 }
 #[test]
+fn dx2_carry_rotate_counts_use_the_same_formula_above_operand_width() {
+    // DX2 table 10.1, notes 4/5: above the width both forms use
+    // 9 + floor(masked_count / width) * 7; at/below it they use 8/9.
+    for (bits, counts) in [
+        (
+            8,
+            &[
+                (0, 8, 9),
+                (7, 8, 9),
+                (8, 8, 9),
+                (9, 16, 16),
+                (16, 23, 23),
+                (31, 30, 30),
+                (32, 8, 9),
+                (255, 30, 30),
+            ][..],
+        ),
+        (
+            16,
+            &[
+                (15, 8, 9),
+                (16, 8, 9),
+                (17, 16, 16),
+                (31, 16, 16),
+                (32, 8, 9),
+                (255, 16, 16),
+            ][..],
+        ),
+        (32, &[(31, 8, 9), (32, 8, 9), (33, 8, 9), (255, 8, 9)][..]),
+    ] {
+        for &(count, register, memory) in counts {
+            for group in [2, 3] {
+                // RCL/RCR
+                for immediate in [false, true] {
+                    for mem in [false, true] {
+                        let mut code = Vec::new();
+                        if bits == 32 {
+                            code.push(0x66);
+                        }
+                        code.push(if immediate { 0xc0 } else { 0xd2 } | u8::from(bits != 8));
+                        code.push(group << 3 | if mem { 7 } else { 0xc0 });
+                        if immediate {
+                            code.push(count);
+                        }
+                        let mut m = machine(Profile::Pc9821ApDos, &code);
+                        m.cpu.r[CX] = u16::from(count);
+                        m.cpu.r[BX] = 0x2000;
+                        let (timing, result) = m.cpu.step_timed(&mut m.bus);
+                        result.unwrap();
+                        assert_eq!(
+                            timing.execution,
+                            if mem { memory } else { register } + u32::from(bits == 32),
+                            "{code:02x?}, CL={count}"
+                        );
+                        assert_eq!(timing.instructions, 1);
+                    }
+                }
+            }
+        }
+    }
+}
+#[test]
+fn dx2_bound_range_fault_replaces_success_cost_and_keeps_bus_costs() {
+    // DX2 p.10-12: in-range 7, out-of-range INT+24; real-mode INT=26.
+    for width32 in [false, true] {
+        for (value, execution, fault) in
+            [(0, 50, true), (1, 7, false), (3, 7, false), (4, 50, true)]
+        {
+            let code: &[u8] = if width32 {
+                &[0x66, 0x62, 0x07]
+            } else {
+                &[0x62, 0x07]
+            };
+            let mut m = machine(Profile::Pc9821ApDos, code);
+            m.cpu.r[BX] = 0x2000;
+            m.cpu.r[AX] = value;
+            let bounds: &[u8] = if width32 {
+                &[1, 0, 0, 0, 3, 0, 0, 0]
+            } else {
+                &[1, 0, 3, 0]
+            };
+            m.bus.mem[0x2000..0x2000 + bounds.len()].copy_from_slice(bounds);
+            m.bus.mem[20..24].copy_from_slice(&[0, 4, 0, 0]);
+            m.step(1);
+            assert!(m.error.is_none(), "{:?}", m.error);
+            assert_eq!(m.cpu.last_timing.execution, execution + u32::from(width32));
+            // Cache disabled: code + two bounds reads (4 each); faults add
+            // two vector reads and three stack writes (4 each).
+            assert_eq!(m.cpu.last_timing.bus, 12 + if fault { 20 } else { 0 });
+            assert_eq!(m.cpu.last_timing.instructions, u32::from(!fault));
+            assert_eq!(m.cpu.completed_instructions, u64::from(!fault));
+            assert_eq!(m.cpu.fault_count, u64::from(fault));
+            if fault {
+                assert_eq!(m.cpu.last_fault, Some((5, 0)));
+                assert_eq!(m.cpu.ip, 0x400);
+                assert_eq!(m.bus.read_seg(0, 0x7ffa, true), 0x100);
+            }
+            assert_eq!(m.bus.cycles, m.cpu.cycles * 8 / 66);
+        }
+    }
+    // A malformed BOUND raises #UD, not the documented range exception.
+    let mut m = machine(Profile::Pc9821ApDos, &[0x62, 0xc0]);
+    m.bus.mem[24..28].copy_from_slice(&[0, 4, 0, 0]);
+    m.step(1);
+    assert!(m.error.is_none(), "{:?}", m.error);
+    assert_eq!(m.cpu.last_fault, Some((6, 0)));
+    assert_eq!(m.cpu.last_timing.execution, 33);
+}
+#[test]
 fn rep_setup_is_once_per_instruction_and_elements_remain_bounded() {
     for (profile, setup, iteration) in [(Profile::Pc9801Vm, 7, 4), (Profile::Pc9821ApDos, 7, 4)] {
         for count in [0, 1, 2, 17] {

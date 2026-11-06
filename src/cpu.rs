@@ -964,6 +964,11 @@ impl Cpu {
                 Ok(())
             }
             Err(error) => {
+                b.timing.fault_vector = match &error {
+                    ExecError::Fault(n) | ExecError::ProtectedFault(n, _) => Some(*n),
+                    ExecError::PageFault { .. } => Some(14),
+                    _ => None,
+                };
                 let vector = match error {
                     ExecError::Fault(6) if b.profile == crate::Profile::Pc9801Vm => {
                         return Err("invalid V30 instruction".into())

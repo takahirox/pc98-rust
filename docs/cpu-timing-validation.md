@@ -209,3 +209,43 @@ lacked local fixture files; strict preparation from checked-in sources resolved
 that setup failure before the successful run. No fixture contract was changed.
 Both final local Chromium audio cases passed again, with zero missed samples in
 all observation windows. Complete acceptance still depends on current-head CI.
+
+## DX2 review corrections — 2026-11-07
+
+The review regressions reproduced BOUND range faults at 33 execution clocks
+instead of 50, byte memory RCL by nine at 17 instead of 16, and VM86 CLI faults
+three clocks below the documented total. The DX2 data book, pp.10-12–13 and
+table 10.1 notes 4–5, supplies the literal expectations for these corrections.
+The original instruction fault now selects BOUND/VM86 exception overheads;
+entry, descriptor loads and physical bus costs remain separate. Carry rotates
+above operand width share the documented register/memory formula.
+
+Validation in this fix worktree:
+
+- `CARGO_PROFILE_TEST_OPT_LEVEL=1 cargo test --locked --test cpu_timing
+  --test vm86 --test protected_mode --test paging`: 114 passed. New cases cover
+  BOUND inside/outside its bounds, 16/32-bit operands, restart/retirement and
+  separate bus costs, VM86 flag/control/I/O exceptions with accessed/unaccessed
+  descriptors, and RCL/RCR register/memory forms with immediate/CL counts around
+  8/16/32-bit boundaries and count masking.
+- `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check` and
+  `git diff --check`: passed.
+- Release `wasm32-unknown-unknown` build, media/font checks and
+  `npm run check:site`: passed; 26 approved publication assets.
+- `node --test tests/audio-worker.test.js tests/audio-worklet.test.js`:
+  13 passed.
+- `npx playwright test tests/browser/vm86.spec.js tests/browser/paging.spec.js
+  tests/browser/protected-mode.spec.js tests/browser/v30-bound.spec.js
+  tests/browser/worker-runtime.spec.js --workers=2`: 16 passed initially;
+  the two DOS video worker cases lacked their local fixture. After strict
+  `tools/prepare_dos_apps.py` preparation, rerunning only those two cases with
+  `--grep 'Worker progresses through DOS graphics and PCM' --workers=1` passed
+  at both serving roots. All 18 selected cases therefore passed.
+
+Missing native fixture files were prepared from checked-in sources before the
+successful native run. Native tests used Homebrew Rust 1.94.0; the Wasm build
+used rustup Rust 1.99.0 as prescribed by `tools/build_web.py`, after the system
+compiler reported that its Wasm target was absent. No fixture contract or
+acceptance assertion changed. These are focused checks of the revised tree;
+the inherited full CI result belongs to upstream PR head `8c4ac87`, and
+publication/current-head CI remain downstream work.
