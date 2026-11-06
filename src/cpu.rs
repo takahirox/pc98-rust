@@ -414,7 +414,7 @@ impl Cpu {
         self.rep_resume = None;
         if !self.protected_mode() && b.timing.active {
             b.timing.extra_execution += if b.profile == crate::Profile::Pc9801Vm {
-                50
+                49 // NEC table 6-1: µPD70116 external INT entry.
             } else {
                 26
             };

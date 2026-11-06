@@ -89,6 +89,18 @@ fn nec_documented_register_memory_immediate_stack_and_control_forms() {
     }
 }
 #[test]
+fn nec_poll_assumes_ready_on_first_pin_sample() {
+    // NEC p.12-171: 2 + 5n clocks, with one POLL pin sample.
+    let mut m = machine(Profile::Pc9801Vm, &[0x9b]);
+    let (timing, result) = m.cpu.step_timed(&mut m.bus);
+    result.unwrap();
+    assert_eq!(timing.execution, 7);
+    assert_eq!(timing.bus, 0);
+    assert_eq!(timing.cpu_cycles(), 7);
+    assert!(timing.approximated);
+    assert_eq!(timing.instructions, 1);
+}
+#[test]
 fn nec_immediate_port_input_includes_odd_word_bus_penalty() {
     // NEC section 12-25: immediate-port IN takes 9 clocks, or 13 for
     // an odd-address word. The extra bus beat is accounted separately.
@@ -454,7 +466,8 @@ fn planar_transfer_workload_matches_table_plus_explicit_video_wait_policy() {
 
 #[test]
 fn external_entry_and_address_dependencies_are_separate_from_handler_retirement() {
-    for (profile, entry) in [(Profile::Pc9801Vm, 50), (Profile::Pc9821ApDos, 37)] {
+    // NEC table 6-1 gives 49 clocks for µPD70116 external INT entry.
+    for (profile, entry) in [(Profile::Pc9801Vm, 49), (Profile::Pc9821ApDos, 37)] {
         let mut m = machine(profile, &[0x90]);
         m.bus.mem[9 * 4..9 * 4 + 4].copy_from_slice(&[0, 4, 0, 0]);
         m.bus.mem[0x400] = 0x90;
