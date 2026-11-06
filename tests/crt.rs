@@ -17,6 +17,85 @@ fn cell(m: &mut Machine, n: usize, ch: u16) {
     m.bus.write(0xa2000 + n * 2, 0xe1);
 }
 #[test]
+fn text_row_masks_preserve_doubled_dots_attributes_and_bitmap_overlay() {
+    for profile in [Profile::Pc9801Vm, Profile::Pc9821ApDos] {
+        for wide in [false, true] {
+            let mut m = Machine::new(profile);
+            m.bus.output(0x68, if wide { 3 } else { 2 });
+            m.bus.output(0x68, 1); // Semigraphics: eight 4-by-4 blocks.
+            m.bus.gdcs[0].enabled = true;
+            m.bus.gdcs[0].pitch = 80;
+            m.bus.gdcs[1].enabled = true;
+            m.bus.graphics[..0x8000].fill(0xff); // Blue bitmap behind text.
+            m.bus.palette[1] = [0, 0, 255];
+            m.bus.palette[7] = [255; 3];
+            let stride = if wide { 2 } else { 1 };
+            let width = if wide { 16 } else { 8 };
+            // Normal, reverse, underline, blink, hidden, and blinking cursor.
+            for (i, attr) in [0xf1, 0xf5, 0xf9, 0xf3, 0xf0, 0xf3].into_iter().enumerate() {
+                cell(&mut m, i * stride, 0x69); // Left, right, right, left blocks.
+                m.bus.mem[0xa2000 + i * stride * 2] = attr;
+                if wide {
+                    // Odd VRAM words must never bleed into doubled characters.
+                    cell(&mut m, i * stride + 1, 0);
+                    m.bus.mem[0xa2000 + (i * stride + 1) * 2] = 0xe5;
+                }
+            }
+            m.bus.gdcs[0].cursor = (5 * stride) as u32;
+            m.bus.gdcs[0].cursor_visible = true;
+            m.bus.gdcs[0].cursor_blink = false;
+            m.bus.gdcs[0].cursor_top = 14;
+            m.bus.gdcs[0].cursor_bottom = 15;
+            m.bus.gdcs[0].blink_rate = 1;
+            for (frame, masks) in [
+                (
+                    0,
+                    [
+                        [0xf0, 0x0f, 0x0f, 0xf0],
+                        [0x0f, 0xf0, 0xf0, 0x0f],
+                        [0xf0, 0x0f, 0x0f, 0xff],
+                        [0xf0, 0x0f, 0x0f, 0xf0],
+                        [0; 4],
+                        [0xf0, 0x0f, 0x0f, 0x0f],
+                    ],
+                ),
+                (
+                    6,
+                    [
+                        [0xf0, 0x0f, 0x0f, 0xf0],
+                        [0x0f, 0xf0, 0xf0, 0x0f],
+                        [0xf0, 0x0f, 0x0f, 0xff],
+                        [0; 4],
+                        [0; 4],
+                        [0, 0, 0, 0xff],
+                    ],
+                ),
+            ] {
+                m.bus.cycles = frame * 133_333;
+                let pixels = m.render();
+                for (i, rows) in masks.into_iter().enumerate() {
+                    for (y, mask) in [0, 4, 8, 15].into_iter().zip(rows) {
+                        for x in 0..width {
+                            let dot = if wide { x / 2 } else { x };
+                            let expected = if mask & (0x80 >> dot) != 0 {
+                                [255, 255, 255, 255]
+                            } else {
+                                [0, 0, 255, 255]
+                            };
+                            let at = (y * 640 + i * width + x) * 4;
+                            assert_eq!(
+                                &pixels[at..at + 4],
+                                &expected,
+                                "{profile:?} wide={wide} frame={frame} cell={i} x={x} y={y}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+#[test]
 fn japanese_half_width_font_requests_are_rejected_without_touching_buffer_guards() {
     for profile in [Profile::Pc9801Vm, Profile::Pc9821ApDos] {
         let mut m = Machine::new(profile);

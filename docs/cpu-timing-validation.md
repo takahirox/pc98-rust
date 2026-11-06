@@ -249,3 +249,45 @@ compiler reported that its Wasm target was absent. No fixture contract or
 acceptance assertion changed. These are focused checks of the revised tree;
 the inherited full CI result belongs to upstream PR head `8c4ac87`, and
 publication/current-head CI remain downstream work.
+
+## Rendering overhead and audio continuity — 2026-11-07
+
+[Acceptance on `dc68c8c`](https://github.com/takahirox/pc98-rust/actions/runs/42262721422)
+passed 594 native tests and 13 Node audio tests, then failed both production
+playback cases: 4,375 missed device frames at 48 kHz and 3,507 at 44.1 kHz.
+The functional browser step did not run. Failure-only Worker samples again
+included substantial full-frame rendering cost alongside instruction execution.
+
+The renderer now resolves text addresses, glyph rows and attributes once per
+eight-dot character span, including doubled dots and skipped odd VRAM words in
+40-column mode. It composites that row mask over the bitmap without retaining
+cached guest display state. CPU tables, device clocks, rendering deadlines, PCM
+reserve and all continuity/transport assertions remain unchanged.
+
+A local Node/release-Wasm sample of 300 ADV98 frames averaged 2.57 ms per frame
+before and 1.06 ms after. A five-guest-second PMD execution sample used identical
+20,812,687 units and 330,000,011 core clocks, ending at 204 FM key edges and the
+same complete framebuffer SHA-256; execution alone took 1.91/1.92 host seconds.
+These are local host-cost observations, not hardware timing measurements or a
+prediction of Linux runner performance.
+
+Validation in this fix worktree:
+
+- 94 native tests passed across `ap`, `core`, `crt`, `gdc` and `user_font`, with
+  test optimization level 1. The new literal pixel regression checks both
+  profiles, normal/doubled dots, skipped odd words, semigraphics, reverse,
+  underline, blink, hidden text, cursor inversion and bitmap overlay.
+- Both production Chromium audio cases passed at 48/44.1 kHz, with zero missed
+  samples in all 32 observation windows, retaining scene, pitch/tempo, IRQ,
+  resampling and transport checks.
+- All 28 selected actual-Wasm browser cases passed across `crt`, `gdc`,
+  `dos-apps` and `user-font` at both serving roots. The two IDE cases passed
+  after preparing their missing image and rerunning only those cases.
+- All 13 Node audio tests, release Wasm/media/font/26-asset packaging checks,
+  Clippy, formatting and whitespace checks passed.
+
+Initially missing native fixtures and the IDE application image were prepared
+with their checked-in scripts and unchanged manifests. Only the affected tests
+were rerun after preparation. The failed published-head CI remains failed.
+Publication and fresh acceptance for the revised head are downstream work;
+this fix node does not push or merge.
