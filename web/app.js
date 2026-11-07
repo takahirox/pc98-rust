@@ -1,6 +1,10 @@
 const $ = (id) => document.getElementById(id);
 const screen = $('screen'), context = screen.getContext('2d', { alpha: false });
 let core, worker, running = false, audio, outputGain, audioNode, audioSetup, muted = true, loading = false;
+let contextLost = false;
+let renderWorker, videoEpoch = 0, presentedSequence = 0;
+let rendererStartupMs = 0, rendererFailure = null;
+let renderStats = {}, presentationStats = {frames:0, stale:0, putMs:0, latencyMs:0, maxLatencyMs:0};
 let generation = 0, pendingFrame, presenting = false, workerFailed = false;
 const pending = new Map(); let requestId = 0;
 const metrics = new Map(); let bootByte = 0;
@@ -29,27 +33,93 @@ function rpc(type, data, transfer = []) {
   });
 }
 function workerFault(error) {
-  workerFailed = true; running = false;
+  workerFailed = true; running = false; ++videoEpoch; pendingFrame = null;
   if (outputGain) outputGain.gain.value = 0;
-  worker?.terminate();
+  worker?.terminate(); renderWorker?.terminate(); renderWorker = null;
   for (const waiter of pending.values()) waiter.reject(error);
   pending.clear(); mediaBusy(true); status('Worker stopped · reload to restart'); fail(error);
 }
 function recycleFrame(frame) {
-  worker.postMessage({type:'frameAck',data:frame.buffer},[frame.buffer]);
+  if (frame.renderer) {
+    if (frame.renderer === renderWorker) renderWorker.postMessage({type:'frameAck',buffer:frame.buffer,sequence:frame.sequence},[frame.buffer]);
+  } else if (!workerFailed) worker.postMessage({type:'frameAck',data:frame.buffer},[frame.buffer]);
 }
 function render() {
   presenting = false;
   if (!pendingFrame) return;
   const frame = pendingFrame; pendingFrame = null;
-  if (frame.generation === generation) {
-    context.putImageData(new ImageData(new Uint8ClampedArray(frame.buffer),640,400),0,0);
-    if ($('profile').value === '1') $('display-mode').textContent = core.metric(13)
-      ? '640 × 400 · 256 colors · PEGC'
-      : '640 × 400 · 16 colors · Shinonome Japanese CG · approximate OPN';
-  }
-  recycleFrame(frame);
+  try {
+    if (frame.generation === generation && frame.videoEpoch === videoEpoch && frame.sequence > presentedSequence && !contextLost) {
+      presentedSequence = frame.sequence;
+      const began = performance.now();
+      context.putImageData(new ImageData(new Uint8ClampedArray(frame.buffer),640,400),0,0);
+      presentationStats.putMs += performance.now()-began;
+      const latency = performance.timeOrigin+performance.now()-frame.captured;
+      presentationStats.latencyMs += latency;
+      presentationStats.maxLatencyMs = Math.max(presentationStats.maxLatencyMs,latency);
+      presentationStats.frames++;
+      if ($('profile').value === '1') $('display-mode').textContent = core?.metric(13)
+        ? '640 × 400 · 256 colors · PEGC'
+        : '640 × 400 · 16 colors · Shinonome Japanese CG · approximate OPN';
+    }
+    else presentationStats.stale++;
+  } finally { recycleFrame(frame); }
 }
+function queueFrame(frame) {
+  if (frame.videoEpoch < videoEpoch || frame.generation < generation || frame.sequence <= presentedSequence
+      || pendingFrame && frame.sequence <= pendingFrame.sequence) {
+    presentationStats.stale++; recycleFrame(frame); return;
+  }
+  if (frame.videoEpoch >= videoEpoch) {
+    videoEpoch = frame.videoEpoch;
+    acceptState(frame);
+  }
+  if (pendingFrame) recycleFrame(pendingFrame);
+  pendingFrame = frame;
+  if (!presenting) { presenting = true; requestAnimationFrame(render); }
+}
+function rendererFault(candidate, reason = 'Render Worker stopped') {
+  if (!candidate || renderWorker !== candidate) return;
+  rendererFailure = String(reason);
+  renderWorker = null; candidate.terminate();
+  if (pendingFrame?.renderer === candidate) pendingFrame = null;
+  rpc('videoFallback').catch(fail);
+}
+async function startRenderer() {
+  const started = performance.now();
+  let candidate;
+  try {
+    candidate = new Worker(new URL('render-worker.js',import.meta.url),{type:'module'});
+    await new Promise((resolve,reject) => {
+      const timeout = setTimeout(()=>reject(Error('Render Worker startup timeout')),5000);
+      candidate.onerror = event => { event.preventDefault(); clearTimeout(timeout); reject(Error(event.message || 'Render Worker failed')); };
+      candidate.onmessageerror = () => { clearTimeout(timeout); reject(Error('Invalid Render Worker message')); };
+      candidate.onmessage = ({data:m}) => {
+        clearTimeout(timeout);
+        if (m.event === 'ready') resolve(); else reject(Error(m.error || 'Render Worker startup failed'));
+      };
+      candidate.postMessage({type:'init',diagnostics:new URLSearchParams(location.search).has('diagnostics')});
+    });
+    rendererStartupMs = performance.now()-started;
+    renderWorker = candidate;
+    candidate.onerror = event => { event.preventDefault(); rendererFault(candidate,event.message); };
+    candidate.onmessageerror = () => rendererFault(candidate,'Invalid Render Worker message');
+    candidate.onmessage = ({data:m}) => {
+      if (renderWorker !== candidate) return;
+      if (m.event === 'fault') { rendererFault(candidate,m.error); return; }
+      if (m.event === 'frame') { renderStats = m.renderStats; queueFrame({...m,renderer:candidate}); }
+    };
+    const channel = new MessageChannel();
+    candidate.postMessage({type:'connect',port:channel.port1},[channel.port1]);
+    await rpc('videoPort',channel.port2,[channel.port2]);
+  } catch (error) {
+    rendererFailure = error.message; rendererStartupMs = performance.now()-started;
+    candidate?.terminate(); renderWorker = null;
+    await rpc('videoFallback');
+  }
+}
+screen.addEventListener('contextlost',event => { event.preventDefault(); contextLost = true; });
+screen.addEventListener('contextrestored',() => { contextLost = false; rpc('videoRefresh').catch(fail); });
 async function soundState() {
   if (outputGain) outputGain.gain.value = 0;
   await rpc('sound',{enabled:!muted, state:audio?.state});
@@ -390,14 +460,20 @@ try {
   worker.onerror = event => { event.preventDefault(); workerFault(Error(event.message || 'Emulation Worker failed')); };
   worker.onmessageerror = () => workerFault(Error('Invalid Emulation Worker message'));
   worker.onmessage = ({data:m}) => {
+    if (workerFailed) return;
+    if (m.event === 'renderFault') { rendererFault(renderWorker,m.error); return; }
     if (m.event === 'fault') { workerFault(Error(m.error)); return; }
     if (m.event === 'stopped') {
       setRunning(false).catch(fail); fail(m.error); status('Guest stopped · unsupported instruction or BIOS request'); return;
     }
-    acceptState(m.state ?? (m.event === 'frame' ? m : null));
+    if (m.event === 'videoEpoch') {
+      videoEpoch = Math.max(videoEpoch,m.videoEpoch);
+      if (pendingFrame && pendingFrame.videoEpoch < videoEpoch) { recycleFrame(pendingFrame); pendingFrame = null; }
+      return;
+    }
+    acceptState(m.state);
     if (m.event === 'frame') {
-      pendingFrame = m;
-      if (!presenting) { presenting = true; requestAnimationFrame(render); }
+      queueFrame(m);
       return;
     }
     const waiter = pending.get(m.id);
@@ -407,11 +483,12 @@ try {
   };
   const params = new URLSearchParams(location.search);
   await rpc('init',{diagnostics:params.has('diagnostics'),manual:params.has('manual')});
+  if (!(params.has('diagnostics') && params.get('renderer') === 'inline')) await startRenderer();
   // This client posts commands and caches metrics; Wasm exports stay in the Worker.
   core = new Proxy({}, {get:(_,name) => name === 'metric' ? id => metrics.get(id) :
     (...args) => rpc('call',{name,args})});
   await selectProfile();
-  window.pc98 = {text:() => rpc('text'), read:addr => rpc('read',addr), stats:() => rpc('stats'),
+  window.pc98 = {text:() => rpc('text'), read:addr => rpc('read',addr), stats:async () => ({...await rpc('stats'),rendererStartupMs,rendererFailure,renderStats:{...renderStats},presentationStats:{...presentationStats}}),
     exportBlob:async (drive=2) => {
       if (loading) throw Error('Media operation already in progress');
       loading = true; mediaBusy(true);

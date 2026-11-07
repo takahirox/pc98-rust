@@ -14,6 +14,7 @@ pub mod profile;
 pub mod rtc;
 pub mod sound;
 pub mod timing;
+pub mod video;
 use bus::Bus;
 use cpu::Cpu;
 use disk::Disk;
@@ -229,6 +230,39 @@ mod wasm {
     #[no_mangle]
     pub extern "C" fn frame() -> *const u8 {
         MACHINE.with(|m| m.borrow_mut().render().as_ptr())
+    }
+    thread_local! {
+        static VIDEO: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+        static RENDERER: RefCell<video::SnapshotRenderer> = RefCell::new(video::SnapshotRenderer::default());
+        static PIXELS: RefCell<Vec<u8>> = RefCell::new(vec![0; 640*400*4]);
+    }
+    #[no_mangle]
+    pub extern "C" fn video_snapshot() -> *const u8 {
+        VIDEO.with(|v| {
+            let mut v = v.borrow_mut();
+            MACHINE.with(|m| m.borrow().bus.video().snapshot(&mut v));
+            v.as_ptr()
+        })
+    }
+    #[no_mangle]
+    pub extern "C" fn video_snapshot_len() -> usize {
+        VIDEO.with(|v| v.borrow().len())
+    }
+    // A render-only instance initializes neither Machine nor devices.
+    #[no_mangle]
+    pub extern "C" fn video_render(len: usize) -> *const u8 {
+        TRANSFER.with(|v| {
+            PIXELS.with(|pixels| {
+                RENDERER.with(|renderer| {
+                    let bytes = v.borrow();
+                    let mut pixels = pixels.borrow_mut();
+                    if len != bytes.len() || !renderer.borrow_mut().render(&bytes, &mut pixels) {
+                        return std::ptr::null();
+                    }
+                    pixels.as_ptr()
+                })
+            })
+        })
     }
     #[no_mangle]
     pub extern "C" fn key(scan: u8, down: u32) {

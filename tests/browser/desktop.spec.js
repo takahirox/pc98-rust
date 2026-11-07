@@ -1,4 +1,4 @@
-import { test, expect, inspect } from './helpers/runtime.js';
+import { test, expect, inspect, mediaGuestState } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { trackMemory } from './helpers/memory.js';
@@ -107,10 +107,10 @@ test('fresh installed desktop: exact kernel handoff, responsive DOS, live floppi
       .toEqual([0x80,0x90,0x91]);
     for (const [drive, letter] of [['0','b'],['1','c']]) {
       await page.locator('#drive').selectOption(drive);
-      const before=await inspect(page, ()=>({text:pc98.text(),stats:pc98.stats()}));
+      const before=await mediaGuestState(page);
       await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({name:'second.d88',mimeType:'application/octet-stream',buffer:data});
       await expect(page.locator('#media-name')).toHaveText('second.d88');
-      expect(await inspect(page, ()=>({text:pc98.text(),stats:pc98.stats()}))).toEqual(before);
+      expect(await mediaGuestState(page)).toEqual(before);
       await expect(page.locator('#boot')).toHaveValue('1');
       await command(page,letter+':'); await until(page,letter.toUpperCase()+':\\>');
       await command(page,'dir'); await until(page,'SECOND');

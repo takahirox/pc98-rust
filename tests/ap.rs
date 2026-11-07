@@ -348,6 +348,37 @@ fn opn_timers_irq_busy_fm_pitch_and_deterministic_pcm() {
     assert!(samples.iter().all(|s| s.is_finite() && s.abs() <= 1.0));
 }
 
+#[test]
+fn fm_total_level_changes_scale_live_pcm_without_restarting_phase() {
+    let mut reference = ch3_voice(0);
+    let mut attenuated = ch3_voice(0);
+    for fm in [&mut reference, &mut attenuated] {
+        ch3_pair(fm, 0xa0, 617, 4);
+        fm_write(fm, 0x28, 0xf0);
+    }
+    for tl in 0..128u8 {
+        for slot in [0, 4, 8, 12] {
+            // Both the public register array and guest port writes must use
+            // the current coefficient, including while a voice stays keyed.
+            if tl & 1 == 0 {
+                fm_write(&mut attenuated, 0x40 + slot, tl);
+            } else {
+                attenuated.registers[0x40 + slot as usize] = tl;
+            }
+        }
+        let gain = 10f64.powf(-f64::from(tl) * 0.75 / 20.0);
+        for _ in 0..64 {
+            let expected = f64::from(reference.sample()) * gain;
+            let actual = f64::from(attenuated.sample());
+            assert!(
+                (actual - expected).abs() < 0.0000001,
+                "TL={tl}: {actual} vs {expected}"
+            );
+        }
+    }
+    assert_eq!(reference.key_edges, attenuated.key_edges);
+}
+
 // Independent PCM oracle: default prescale /144, 20-bit phase accumulator,
 // 48 kHz output. Interpolated rising zero crossings avoid FFT bin rounding.
 fn ch3_hz(fnum: u16, block: u8) -> f64 {
