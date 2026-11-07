@@ -17,6 +17,8 @@ const audioBuffers = Array.from({length: 6}, () => new ArrayBuffer(1024 * 4));
 let sinkStats = {}, sinkStatsAt = 0, underflowsAtFlush = 0, transaction = null;
 let producedSamples = 0, sentSamples = 0, droppedSamples = 0;
 let deadline = 0, diagnostics = false;
+// Opt-in bounded host-cost histogram; no guest data or per-instruction logging.
+const sliceHistogram = new Uint32Array(501); // 0.1 ms buckets; last bucket >=50 ms.
 let tickToken = 0;
 let guestDeadline = 0, throughputSample = null, instructionThroughput = 0;
 // A task targets 10 ms of device time, independently capped at 100,000 units.
@@ -26,7 +28,9 @@ function guestSlice() {
   if (guestDeadline <= now) guestDeadline = now + 80000;
   const started = performance.now();
   core.step_scheduler(Math.ceil(guestDeadline-now), 100000);
-  videoStats.guestSliceMs += performance.now()-started; videoStats.guestSlices++;
+  const elapsed = performance.now()-started;
+  videoStats.guestSliceMs += elapsed; videoStats.guestSlices++;
+  if (diagnostics) sliceHistogram[Math.min(500,Math.floor(elapsed*10))]++;
 }
 const tickTasks = new MessageChannel();
 tickTasks.port1.onmessage = ({data:token}) => {
@@ -55,6 +59,7 @@ function stats() {
   }
   throughputSample = {time:now, instructions};
   return {...Object.fromEntries(Object.entries(fields).map(([key,id]) => [key, core.metric(id)])),
+    sliceHistogram:diagnostics ? Array.from(sliceHistogram) : undefined,
     instructionThroughput, error:message(), beep:core.beep(), running, audioState, audioGain:running && audioEnabled && audioState === 'running' ? 1 : 0,
     audioEnergy:0, scheduledSamples:0, ...sinkStats, generation,
     frameInFlight:videoPort ? !snapshotBuffer : !frameBuffer, videoEpoch, videoMode:videoPort ? 'worker' : 'inline', videoStats:{...videoStats}, audioBuffers:audioBuffers.length, transaction,

@@ -830,6 +830,11 @@ retryable; a fatal Worker fault disables controls and offers reload.
 The [ADV98 continuity regression and rights audit](docs/audio-continuity.md)
 records the measured scheduler starvation, same-guest before/after comparison,
 bounded diagnostics and the remaining synthesis/hardware limits.
+The [local game performance runbook](docs/runtime-performance.md) measures ADV98
+floppy/HDD scenes in production Chromium/Firefox, compares both render paths,
+and records execution headroom separately from real-time playback. Local media
+and working benchmark outputs stay outside the checkout; derived numeric
+observations are documented. This opt-in benchmark is not run by CI.
 
 HDD replacement/eject first pauses at a Worker boundary, then checks dirty pages
 and retains the discard confirmation. Import stages acknowledged transferable

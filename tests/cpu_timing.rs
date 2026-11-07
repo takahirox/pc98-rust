@@ -565,6 +565,40 @@ fn real_mode_aam_zero_charges_fault_entry_without_retiring() {
     assert_eq!(m.cpu.last_timing.execution, 15);
 }
 #[test]
+fn clock_conversion_matches_full_frequency_oracle_for_arbitrary_batches() {
+    // An independent full-frequency/u128 oracle checks that host optimizations
+    // preserve phase, including overflow-sized public API inputs.
+    for fixed_profile in [Some(Profile::Pc9801Vm), Some(Profile::Pc9821ApDos), None] {
+        let mut converter = ClockConverter::default();
+        let mut remainder = 0u128;
+        let mut seed = 0x98486u32;
+        for i in 0..4096 {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            let cycles = match i % 8 {
+                0 => 0,
+                1 => 1,
+                2 => i,
+                3 => u32::MAX,
+                _ => seed,
+            };
+            let profile = fixed_profile.unwrap_or(if seed & 1 == 0 {
+                Profile::Pc9801Vm
+            } else {
+                Profile::Pc9821ApDos
+            });
+            let hz = match profile {
+                Profile::Pc9801Vm => 10_000_000u128,
+                Profile::Pc9821ApDos => 66_000_000u128,
+            };
+            let scaled = remainder + u128::from(cycles) * 8_000_000;
+            let expected = (scaled / hz) as u32;
+            remainder = scaled % hz;
+            assert_eq!(converter.advance(profile, cycles), expected);
+        }
+    }
+}
+
+#[test]
 fn clock_domains_fractional_batches_halt_and_device_time() {
     for profile in [Profile::Pc9801Vm, Profile::Pc9821ApDos] {
         let mut small = ClockConverter::default();
