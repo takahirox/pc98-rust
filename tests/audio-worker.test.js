@@ -83,7 +83,7 @@ test('host rendering waits for PCM reserve while preview refresh stays bounded',
   const longestFrameGap=Math.max(...frames.slice(1).map((at,i)=>at-frames[i]));
   assert(longestFrameGap<=167,`frame gap ${longestFrameGap}`);
   assert(current.result().outstanding<3360);
-  const old=worker(source.replace('if (playingAudio() && outstandingAudio() < 2880 && now < frameDue+100) return;',''),{frameCost:22});
+  const old=worker(source.replace('if (!videoPort && playingAudio() && outstandingAudio() < 2880 && now < frameDue+100) return;',''),{frameCost:22});
   old.run('schedule(0)'); old.until(5000);
   assert(old.result().missed>48000*0.3);
 });

@@ -1,4 +1,4 @@
-import { inspect } from './helpers/runtime.js';
+import { inspect, mediaGuestState } from './helpers/runtime.js';
 // Issue #126: production Rust/Wasm + unchanged GPL DOS + independent MIT data.
 import { test, expect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
@@ -81,9 +81,9 @@ test('Ap DOS enumerates empty FDD2, reads post-boot D88, swaps/ejects/reinserts 
   expect(await inspect(page, () => [pc98.read(0x55c), pc98.read(0x66c), pc98.read(0x66d)]))
     .toEqual([3, 0x90, 0x91]);
   await page.locator('#drive').selectOption('1');
-  const before = await inspect(page, () => ({ stats: pc98.stats(), text: pc98.text() }));
+  const before = await mediaGuestState(page);
   await mount(page, 'second.d88', data);
-  expect(await inspect(page, () => ({ stats: pc98.stats(), text: pc98.text() }))).toEqual(before);
+  expect(await mediaGuestState(page)).toEqual(before);
   await expect(page.locator('#boot-source')).toHaveText('Reset boots: Floppy 1 · minimal.hdm');
   await command(page, 'b:');
   await until(page, 'B:\\>');
