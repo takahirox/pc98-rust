@@ -117,11 +117,11 @@ function present() {
 function presentDue() {
   const now = performance.now();
   if (now < frameDue) return;
-  // Expensive inline rasterization waits for PCM reserve. Measured full-state
-  // capture is cheap and already follows PCM delivery, so the independent
-  // renderer need not inherit that presentation delay. Keep inline preview
-  // refresh within 100 ms of the due time on an underspeed host.
-  if (!videoPort && playingAudio() && outstandingAudio() < 2880 && now < frameDue+100) return;
+  // Snapshot capture is cheap, but launching independent rasterization still
+  // competes for the host's CPU budget. Refill PCM before either rendering
+  // path, especially during guest scene changes. Keep preview refresh within
+  // 100 ms of the due time even when the producer cannot fill its reserve.
+  if (playingAudio() && outstandingAudio() < 2880 && now < frameDue+100) return;
   present(); frameDue = performance.now()+33;
 }
 function deliverAudio() {
