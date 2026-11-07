@@ -99,6 +99,28 @@ impl Cpu {
         if b.profile == crate::Profile::Pc9801Vm {
             return Ok(());
         }
+        // Conventional real-mode segments need only the complete-span bound.
+        // Keep descriptor/page validation out of every inlined fetch site;
+        // retained hidden caches (including unreal mode) use the full path.
+        if self.cr0 & 0x80000001 == 0 && self.segment_caches[s].is_none() {
+            return if off.checked_add(bytes - 1).is_some_and(|end| end <= 0xffff) {
+                Ok(())
+            } else {
+                Err(ExecError::Fault(if s == SS { 12 } else { 13 }))
+            };
+        }
+        self.check_segment_access(b, s, off, bytes, write, execute)
+    }
+    #[inline(never)]
+    fn check_segment_access(
+        &self,
+        b: &mut Bus,
+        s: usize,
+        off: u32,
+        bytes: u32,
+        write: bool,
+        execute: bool,
+    ) -> ExecResult<()> {
         let d = self.segment_cache(s);
         let fault = if s == SS { 12 } else { 13 };
         if !d.contains(off, bytes) {
@@ -644,6 +666,41 @@ impl Cpu {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn conventional_real_mode_access_keeps_complete_span_faults_and_hidden_limits() {
+        let mut b = Bus::new(crate::Profile::Pc9821ApDos);
+        let mut c = Cpu::default();
+        for s in 0..6 {
+            for bytes in [1, 2, 4, 28] {
+                for off in [0, 0xffff - (bytes - 1), 0x10000 - (bytes - 1), u32::MAX] {
+                    for (write, execute) in [(false, false), (true, false), (false, true)] {
+                        let result = c.check_access(&mut b, s, off, bytes, write, execute);
+                        if off <= 0xffff - (bytes - 1) {
+                            result.unwrap();
+                        } else {
+                            assert!(
+                                matches!(result, Err(ExecError::Fault(n)) if n == if s == SS { 12 } else { 13 })
+                            );
+                        }
+                    }
+                }
+            }
+            // Leaving PE retains hidden limits; this must not take the
+            // conventional-segment shortcut, even with paging disabled.
+            c.segment_caches[s] = Some(SegmentCache {
+                base: 0x100000,
+                limit: 0x1ffff,
+                access: 0x93,
+                attributes: 0,
+            });
+            c.check_access(&mut b, s, 0x10000, 4, true, false).unwrap();
+            c.segment_caches[s].as_mut().unwrap().limit = 0xff;
+            assert!(matches!(c.check_access(&mut b, s, 0xff, 2, false, false),
+                Err(ExecError::Fault(n)) if n == if s == SS { 12 } else { 13 }));
+            c.segment_caches[s] = None;
+        }
+    }
 
     #[test]
     fn clts_privilege_and_lock_faults_preserve_all_state() {

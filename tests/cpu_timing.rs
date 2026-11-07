@@ -565,6 +565,40 @@ fn real_mode_aam_zero_charges_fault_entry_without_retiring() {
     assert_eq!(m.cpu.last_timing.execution, 15);
 }
 #[test]
+fn clock_conversion_matches_full_frequency_oracle_for_arbitrary_batches() {
+    // An independent full-frequency/u128 oracle checks that host optimizations
+    // preserve phase, including overflow-sized public API inputs.
+    for fixed_profile in [Some(Profile::Pc9801Vm), Some(Profile::Pc9821ApDos), None] {
+        let mut converter = ClockConverter::default();
+        let mut remainder = 0u128;
+        let mut seed = 0x98486u32;
+        for i in 0..4096 {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            let cycles = match i % 8 {
+                0 => 0,
+                1 => 1,
+                2 => i,
+                3 => u32::MAX,
+                _ => seed,
+            };
+            let profile = fixed_profile.unwrap_or(if seed & 1 == 0 {
+                Profile::Pc9801Vm
+            } else {
+                Profile::Pc9821ApDos
+            });
+            let hz = match profile {
+                Profile::Pc9801Vm => 10_000_000u128,
+                Profile::Pc9821ApDos => 66_000_000u128,
+            };
+            let scaled = remainder + u128::from(cycles) * 8_000_000;
+            let expected = (scaled / hz) as u32;
+            remainder = scaled % hz;
+            assert_eq!(converter.advance(profile, cycles), expected);
+        }
+    }
+}
+
+#[test]
 fn clock_domains_fractional_batches_halt_and_device_time() {
     for profile in [Profile::Pc9801Vm, Profile::Pc9821ApDos] {
         let mut small = ClockConverter::default();
@@ -714,5 +748,25 @@ fn external_entry_and_address_dependencies_are_separate_from_handler_retirement(
     assert_eq!(m.cpu.last_timing.execution, 2);
     for (code, expected) in [(&[0x0f, 0xbc, 0xc0][..], 6), (&[0x0f, 0xbd, 0xc0][..], 6)] {
         assert_eq!(clocks(Profile::Pc9821ApDos, code), expected);
+    }
+}
+
+#[test]
+fn register_dependency_masks_include_upper_words_and_ignore_unchanged_values() {
+    for reg in 0..8 {
+        let mut m = machine(Profile::Pc9821ApDos, &[]);
+        let [lo, hi] = m.cpu.r[reg].to_le_bytes();
+        // Change only the upper word, repeat the same value, then change the
+        // low word. Every architectural register must keep its own mask bit.
+        let mov = [0x66, 0xb8 + reg as u8, lo, hi, 1, 0];
+        m.bus.mem[0x100..0x106].copy_from_slice(&mov);
+        m.bus.mem[0x106..0x10c].copy_from_slice(&mov);
+        m.bus.mem[0x10c] = 0x40 + reg as u8;
+        for expected in [1 << reg, 0, 1 << reg] {
+            let (_, result) = m.cpu.step_timed(&mut m.bus);
+            result.unwrap();
+            assert_eq!(m.cpu.timing_writes, expected, "register {reg}");
+        }
+        assert_eq!(m.cpu.upper[reg], 1);
     }
 }
