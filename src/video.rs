@@ -50,7 +50,7 @@ impl VideoView<'_> {
         }
         out[6] = self.display_page;
         out[8..16].copy_from_slice(&self.cycles.to_le_bytes());
-        for (gdc, bytes) in self.gdcs.iter().zip(out[16..80].chunks_exact_mut(32)) {
+        for (gdc, bytes) in self.gdcs.iter().zip(out[16..80].as_chunks_mut::<32>().0) {
             bytes[..8].copy_from_slice(&[
                 u8::from(gdc.enabled),
                 gdc.pitch,
@@ -69,7 +69,7 @@ impl VideoView<'_> {
             .palette
             .iter()
             .chain(self.pegc_palette.iter())
-            .zip(out[HEADER..GLYPHS].chunks_exact_mut(3))
+            .zip(out[HEADER..GLYPHS].as_chunks_mut::<3>().0)
         {
             bytes.copy_from_slice(rgb);
         }

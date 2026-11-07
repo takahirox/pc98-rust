@@ -54,6 +54,39 @@ test('a delayed old snapshot is discarded across profile/reset barriers and cred
   expect((await stats(page)).videoMode).toBe('worker');
 });
 
+test('switching to a paused profile replaces the screen after an invalidated snapshot returns',async({page})=>{
+  await page.goto('./'); await expect(page.locator('#profile')).toBeEnabled();
+  await expect.poll(()=>page.evaluate(()=>pc98.text())).toContain('A:\\>');
+  await page.locator('#pause').click(); await expect(page.locator('#profile')).toBeEnabled();
+  await expect.poll(()=>stats(page).then(s=>s.frameInFlight)).toBe(false);
+  const before=await screenHash(page), worker=renderer(page);
+  await worker.evaluate(()=>pc98Render.hold());
+  // With its credit available, set_profile captures a snapshot immediately.
+  // The following running(false) command must request the final paused epoch.
+  await page.locator('#profile').selectOption('0');
+  await expect(page.locator('#profile')).toBeEnabled();
+  const paused=await stats(page);
+  expect(paused.running).toBe(false);
+  await expect.poll(()=>worker.evaluate(()=>pc98Render.pending())).toBe(1);
+  // Read the authoritative framebuffer directly: inspect() ends by presenting
+  // a frame, which would mask a missing request in the production pause path.
+  const emu=page.workers().find(w=>w.url().includes('emulator-worker.js'));
+  const expected=await emu.evaluate(async()=>{
+    const core=pc98.core, pointer=core.frame()>>>0;
+    return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',
+      new Uint8Array(core.memory.buffer,pointer,640*400*4))));
+  });
+  expect(expected).not.toEqual(before);
+  await worker.evaluate(()=>pc98Render.release());
+  await expect.poll(()=>stats(page).then(s=>s.presentationStats.stale)).toBeGreaterThan(paused.presentationStats.stale);
+  await expect.poll(()=>screenHash(page)).toEqual(expected);
+  const after=await stats(page);
+  expect(after.running).toBe(false);
+  expect(after.instructions).toBe(paused.instructions);
+  expect(after.videoEpoch).toBe(paused.videoEpoch);
+  expect(after.videoMode).toBe('worker');
+});
+
 test('render startup, runtime and message failures recover through inline rendering without resetting the guest',async({page})=>{
   await page.route('**/render-worker.js',r=>r.fulfill({status:404,body:'missing'}));
   await page.goto('./'); await expect(page.locator('#game')).toBeEnabled();

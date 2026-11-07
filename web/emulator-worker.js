@@ -253,7 +253,16 @@ async function command(type, data) {
     return;
   }
   if (!core) throw Error('Emulator is not initialized');
-  if (type === 'running') { invalidateVideo(); running = data; deadline = 0; if (!data) await flushAudio(); schedule(); return; }
+  if (type === 'running') {
+    invalidateVideo(); running = data; deadline = 0;
+    if (!data) {
+      await flushAudio();
+      // Paused workers stop ticking. Request this epoch's full frame now, or
+      // coalesce it until the invalidated in-flight snapshot returns its credit.
+      present();
+    }
+    schedule(); return;
+  }
   if (type === 'sound') { audioEnabled = data.enabled; audioState = data.state; await flushAudio(); return; }
   if (type === 'audioPort') {
     port = data;
