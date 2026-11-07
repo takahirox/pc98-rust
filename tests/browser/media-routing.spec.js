@@ -1,4 +1,4 @@
-import { inspect } from './helpers/runtime.js';
+import { inspect, mediaGuestState } from './helpers/runtime.js';
 // Issue #120: production Wasm, original MIT guests only; no host guest results.
 import { test, expect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
@@ -183,11 +183,11 @@ for (const path of ['picker', 'drop']) {
     await page.locator('#boot').selectOption('1');
     await page.locator('#reset').click();
     await boot(page, 'IDE VERIFY PASS', 2);
-    const before = await inspect(page, () => ({ stats: pc98.stats(), text: pc98.text() }));
+    const before = await mediaGuestState(page);
     await page.locator('#drive').selectOption('1');
     await upload(page, path, 'second.tfd', hello);
     await mounted(page, 'second.tfd', 'Floppy 2');
-    expect(await inspect(page, () => ({ stats: pc98.stats(), text: pc98.text() }))).toEqual(before);
+    expect(await mediaGuestState(page)).toEqual(before);
     await expect(page.locator('#boot-source')).toHaveText('Reset boots: IDE HDD · boot.hdi');
     await exported(page, 'second.tfd', hello);
     await page.locator('#drive').selectOption('auto');

@@ -4,6 +4,14 @@
 // of the sole pixel buffer; audio uses its own credit-based MessagePort.
 let core, running = false, manual = false, busy = false, timer;
 let generation = 0, frameBuffer = new ArrayBuffer(640 * 400 * 4), frameDue = 0, frameRequested = false;
+let videoPort, snapshotBuffer = null, videoEpoch = 0, frameSequence = 0;
+let inFlightSequence = 0;
+const videoStats = {snapshots:0, coalesced:0, snapshotMs:0, copyMs:0, inlineRasterMs:0, guestSliceMs:0, guestSlices:0, maxPreparationMs:0};
+function invalidateVideo() {
+  ++videoEpoch;
+  postMessage({event:'videoEpoch',videoEpoch});
+  frameDue = 0;
+}
 let port, audioEnabled = false, audioState, audioEpoch = 0, flushWaiter;
 const audioBuffers = Array.from({length: 6}, () => new ArrayBuffer(1024 * 4));
 let sinkStats = {}, transaction = null;
@@ -16,7 +24,9 @@ let guestDeadline = 0, throughputSample = null, instructionThroughput = 0;
 function guestSlice() {
   const now = core.metric(5);
   if (guestDeadline <= now) guestDeadline = now + 80000;
+  const started = performance.now();
   core.step_scheduler(Math.ceil(guestDeadline-now), 100000);
+  videoStats.guestSliceMs += performance.now()-started; videoStats.guestSlices++;
 }
 const tickTasks = new MessageChannel();
 tickTasks.port1.onmessage = ({data:token}) => {
@@ -47,7 +57,7 @@ function stats() {
   return {...Object.fromEntries(Object.entries(fields).map(([key,id]) => [key, core.metric(id)])),
     instructionThroughput, error:message(), beep:core.beep(), running, audioState, audioGain:running && audioEnabled && audioState === 'running' ? 1 : 0,
     audioEnergy:0, scheduledSamples:0, ...sinkStats, generation,
-    frameInFlight:!frameBuffer, audioBuffers:audioBuffers.length, transaction,
+    frameInFlight:videoPort ? !snapshotBuffer : !frameBuffer, videoEpoch, videoMode:videoPort ? 'worker' : 'inline', videoStats:{...videoStats}, audioBuffers:audioBuffers.length, transaction,
     producedSamples, sentSamples, droppedSamples, outstandingSamples:outstandingAudio()};
 }
 function input(bytes) {
@@ -72,20 +82,46 @@ function exportDisk(drive = 0) {
   return Array.from(new Uint8Array(core.memory.buffer,ptr,len));
 }
 function present() {
-  if (!frameBuffer) { frameRequested = true; return; } // Coalesce into the next snapshot.
+  if (videoPort ? !snapshotBuffer : !frameBuffer) {
+    videoStats.coalesced++;
+    frameRequested = true; return;
+  }
   frameRequested = false;
-  const ptr = core.frame() >>> 0; // May grow memory: obtain the view afterwards.
-  new Uint8Array(frameBuffer).set(new Uint8Array(core.memory.buffer,ptr,640*400*4));
-  postMessage({event:'frame', buffer:frameBuffer, ...state()}, [frameBuffer]);
-  frameBuffer = null;
+  const started = performance.now(), captured = performance.timeOrigin+started, sequence = ++frameSequence;
+  if (videoPort) {
+    const ptr = core.video_snapshot() >>> 0, length = core.video_snapshot_len();
+    const copied = performance.now();
+    if (length > snapshotBuffer.byteLength) throw Error('Video snapshot exceeds transfer bound');
+    new Uint8Array(snapshotBuffer,0,length).set(new Uint8Array(core.memory.buffer,ptr,length));
+    videoStats.snapshotMs += copied-started;
+    videoStats.copyMs += performance.now()-copied;
+    videoStats.maxPreparationMs = Math.max(videoStats.maxPreparationMs,performance.now()-started);
+    videoStats.snapshots++;
+    inFlightSequence = sequence;
+    videoPort.postMessage({buffer:snapshotBuffer,length,sequence,videoEpoch,captured,
+      guestCycles:core.metric(5),...state()},[snapshotBuffer]);
+    snapshotBuffer = null;
+  } else {
+    const ptr = core.frame() >>> 0; // May grow memory: obtain the view afterwards.
+    const copied = performance.now();
+    new Uint8Array(frameBuffer).set(new Uint8Array(core.memory.buffer,ptr,640*400*4));
+    videoStats.inlineRasterMs += copied-started;
+    videoStats.copyMs += performance.now()-copied;
+    videoStats.maxPreparationMs = Math.max(videoStats.maxPreparationMs,performance.now()-started);
+    videoStats.snapshots++;
+    postMessage({event:'frame', buffer:frameBuffer,sequence,videoEpoch,captured,
+      guestCycles:core.metric(5),...state()}, [frameBuffer]);
+    frameBuffer = null;
+  }
 }
 function presentDue() {
   const now = performance.now();
   if (now < frameDue) return;
-  // Refill PCM before optional host rendering. Rendering shares this Worker
-  // with the interpreter and can otherwise repeatedly spend a depleted reserve.
-  // Still refresh within 100 ms of the due time on an underspeed host.
-  if (playingAudio() && outstandingAudio() < 2880 && now < frameDue+100) return;
+  // Expensive inline rasterization waits for PCM reserve. Measured full-state
+  // capture is cheap and already follows PCM delivery, so the independent
+  // renderer need not inherit that presentation delay. Keep inline preview
+  // refresh within 100 ms of the due time on an underspeed host.
+  if (!videoPort && playingAudio() && outstandingAudio() < 2880 && now < frameDue+100) return;
   present(); frameDue = performance.now()+33;
 }
 function deliverAudio() {
@@ -217,7 +253,7 @@ async function command(type, data) {
     return;
   }
   if (!core) throw Error('Emulator is not initialized');
-  if (type === 'running') { running = data; deadline = 0; if (!data) await flushAudio(); schedule(); return; }
+  if (type === 'running') { invalidateVideo(); running = data; deadline = 0; if (!data) await flushAudio(); schedule(); return; }
   if (type === 'sound') { audioEnabled = data.enabled; audioState = data.state; await flushAudio(); return; }
   if (type === 'audioPort') {
     port = data;
@@ -229,16 +265,47 @@ async function command(type, data) {
     };
     port.start(); await flushAudio(); return;
   }
+  if (type === 'videoPort') {
+    videoPort = data;
+    frameBuffer = null; snapshotBuffer = new ArrayBuffer(547632);
+    const connected = videoPort;
+    videoPort.onmessage = ({data:m}) => {
+      if (videoPort !== connected) return;
+      if (!snapshotBuffer && m.sequence === inFlightSequence && m.buffer?.byteLength === 547632) {
+        snapshotBuffer = m.buffer;
+        // A credit never runs rasterization or a guest slice synchronously.
+        if (frameRequested) {
+          if (running) schedule(0);
+          else present();
+        }
+      }
+    };
+    videoPort.onmessageerror = () => {
+      if (videoPort === connected) postMessage({event:'renderFault',error:'Invalid render credit message'});
+    };
+    videoPort.start(); invalidateVideo(); present(); return;
+  }
+  if (type === 'videoRefresh') { invalidateVideo(); present(); return; }
+  if (type === 'videoFallback') {
+    if (!videoPort) return; // Duplicate fault notifications cannot mint pixel credits.
+    videoPort.close(); videoPort = null;
+    // A failed renderer may own the old buffer. Only this fault path replaces it.
+    snapshotBuffer = null;
+    if (!frameBuffer) frameBuffer = new ArrayBuffer(640*400*4);
+    invalidateVideo(); present(); return;
+  }
   if (type === 'stats') return stats();
   if (type === 'text') return message(1);
   if (type === 'read') return core.peek(data);
   if (type === 'snapshot') {
     if (data && transaction) throw Error('Media operation already in progress');
+    invalidateVideo();
     transaction = data ? 'export' : null; schedule(); return core.hdi_len() >>> 0;
   }
   if (type === 'input') { if (transaction === 'export') throw Error('Disk snapshot in progress'); input(data); return; }
   if (type === 'insert') {
     if (transaction) throw Error('Media operation in progress');
+    invalidateVideo();
     if (!core.insert(data.drive,data.format)) throw Error(message(2)); return;
   }
   if (type === 'export') {
@@ -258,6 +325,7 @@ async function command(type, data) {
     const {name,args} = data;
     if (!calls.has(name)) throw Error('Unsupported core command');
     if (transaction && !['hdi_append','hdi_commit','hdi_cancel','hdi_len','hdi_dirty_page','key','mouse'].includes(name)) throw Error('Media operation in progress');
+    if (['reset','set_profile','set_boot_source','eject','hdi_begin','hdi_commit','hdi_cancel'].includes(name)) invalidateVideo();
     if (['reset','set_profile'].includes(name)) { await flushAudio(); generation++; }
     if (transaction && (name === 'key' && args[1] || name === 'mouse' && args.some(Boolean))) throw Error('Input is paused for media transfer');
     const value = core[name](...args);

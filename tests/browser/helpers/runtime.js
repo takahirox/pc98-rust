@@ -26,3 +26,12 @@ export async function inspect(page, fn, arg) {
   try { return await worker.evaluate(fn,arg); }
   finally { await worker.evaluate(() => pc98.endInspection()); }
 }
+
+// Media replacement must preserve every guest/audio observation. Host render
+// epochs, credits, timings and instruction throughput may change independently.
+export async function mediaGuestState(page) {
+  return inspect(page, () => {
+    const {videoStats, videoEpoch, videoMode, frameInFlight, instructionThroughput, ...stats} = pc98.stats();
+    return {text:pc98.text(), stats};
+  });
+}

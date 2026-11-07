@@ -12,7 +12,7 @@ test('Worker progresses through DOS graphics and PCM with rAF stopped and DOM ev
     window.addEventListener('runtime-probe',() => { document.body.dataset.responsive=String(++window.domEvents); });
   });
   await page.goto('./'); await expect(page.locator('#profile')).toBeEnabled();
-  expect(page.workers()).toHaveLength(1);
+  expect(page.workers()).toHaveLength(2);
   expect(await page.evaluate(() => 'core' in pc98)).toBe(false);
   await page.locator('#sound').click();
   const buffer=await fs.readFile('fixtures/dos-apps/98videop.hdm');
@@ -141,7 +141,7 @@ test('visibility, repeated reset/profile controls and runtime Worker failure can
   expect(await inspect(page,()=>pc98.core.metric(21))).toBe(0);
   await expect(page.locator('#profile')).toHaveValue('0');
   await page.locator('#profile').selectOption('1'); await expect(page.locator('#profile')).toBeEnabled();
-  const worker=page.workers()[0];
+  const worker=page.workers().find(w=>w.url().includes('emulator-worker.js'));
   await worker.evaluate(()=>{setTimeout(()=>{throw Error('Intentional runtime Worker failure');},0);});
   await expect(page.locator('#error')).toContainText('Intentional runtime Worker failure');
   await expect(page.locator('#status')).toContainText('reload to restart');

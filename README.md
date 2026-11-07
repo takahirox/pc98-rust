@@ -689,9 +689,10 @@ optimizes the linked module with the lockfile-pinned Binaryen tool installed by
 `npm ci`, and runs `npm run check:site`. The optimization reduces host execution
 cost without changing guest instruction clocks or audio pacing. The latter check
 verifies a nonempty, compilable Wasm module
-with the emulator exports and exactly nineteen distributable assets: the original
-ten assets plus the nine intentionally published desktop template, manifest,
-GPL notices and complete matching source downloads. All nine guest/source hashes
+with the emulator and snapshot exports and exactly 27 approved distributable
+assets, including both Workers, the AudioWorklet, and the intentionally published
+desktop template, manifest, GPL notices and complete matching source downloads.
+All guest/source hashes
 are pinned; neither test-only DOS disks nor arbitrary files are published.
 Unexpected files, directories or symlinks fail the check. `npm test` runs the same browser acceptance suite at the
 local root and at a simulated Pages project subpath whose root asset URLs fail.
@@ -785,21 +786,31 @@ unmapped ports return an open bus and are recorded for headless diagnostics.
 [`web/emulator-worker.js`](web/emulator-worker.js) instantiates the production
 release Wasm and exclusively owns the Machine, memory views, CPU, devices,
 synthesis and media. The DOM thread sends ordered asynchronous commands; it
-never executes Wasm. Rust's deterministic 8 MHz virtual clock and eight clocks
-per instruction slot are unchanged. One Worker scheduler runs finite 10,000-slot
-slices, yielding between slices. With sound active, the sink's consumed source
+never executes Wasm. Rust's deterministic 8 MHz device clock and profile-specific CPU-cycle timing
+are unchanged. One Worker scheduler targets 10 ms of guest time per finite task,
+with an independent 100,000-unit work cap, yielding between tasks. With sound active, the sink's consumed source
 sample count paces production toward a 60 ms watermark, including in-flight PCM.
 Returned credits trigger immediate refill tasks instead of waiting for a polling
 timer. Timer overhead cannot accumulate into a permanent audio production deficit.
 Muted execution uses absolute deadlines with at most 30 ms of catch-up debt;
 pause, reset and audio-state barriers discard that debt.
 
-Canvas receives one transferable 640×400 RGBA snapshot at a time, at most about
-every 33 ms. The DOM presents it in rAF and returns its buffer. While that buffer
-is in flight the Worker coalesces presentation requests, then renders the newest
-state. Reset/profile generations reject obsolete presentation state. Each Wasm
-memory view is obtained after its exported call, including after memory growth.
-Rendering delays do not stop guest progress or audio transport.
+[`web/render-worker.js`](web/render-worker.js) runs the same Rust rasterizer in
+an independent Wasm instance without constructing a Machine. Between guest slices,
+the emulation Worker captures a coherent full display snapshot: graphics/text
+VRAM, palettes, writable glyphs, GDC scanout settings, mode flags and guest cycles.
+One transferable snapshot and one RGBA buffer circulate through the renderer and
+DOM, at most about every 33 ms. Rendering never holds a CPU/audio credit. Slow
+presentation coalesces requests into the newest full snapshot, so no incremental
+state is lost. The DOM retains the inexpensive Canvas `putImageData` in rAF.
+Machine generations, video epochs and frame sequences reject stale outputs across
+reset, profile, pause, media and fault barriers. No shared memory or cross-origin
+isolation is required. Render startup/runtime failure falls back to inline Rust
+rendering without resetting the guest; emulation Worker failure still stops safely.
+See [render ownership, measurements and validation](docs/render-worker.md), including
+copy/memory overhead and measured regressions. `?diagnostics=1&renderer=inline`
+retains the former architecture for reproducible comparisons. Every Wasm memory
+view is obtained after its exported call, including after memory growth.
 
 After **Enable sound**, a direct Worker-to-[AudioWorklet](web/audio-worklet.js)
 MessagePort carries guest-generated 48 kHz mono PCM. Six reusable 1,024-sample

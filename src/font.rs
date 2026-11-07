@@ -103,6 +103,17 @@ impl Default for UserCharacters {
     }
 }
 impl UserCharacters {
+    pub(crate) fn snapshot(&self, out: &mut [u8]) {
+        for (pattern, bytes) in self.patterns.iter().zip(out.chunks_exact_mut(32)) {
+            bytes.copy_from_slice(pattern);
+        }
+    }
+    pub(crate) fn restore_snapshot(&mut self, bytes: &[u8]) {
+        for (pattern, bytes) in self.patterns.iter_mut().zip(bytes.chunks_exact(32)) {
+            pattern.copy_from_slice(bytes);
+        }
+    }
+
     pub fn index(code: u16) -> Option<usize> {
         let row = (code >> 8) as u8;
         let cell = code as u8;
