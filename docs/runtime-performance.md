@@ -321,6 +321,9 @@ separate investigation of presentation during persistent starvation.
 
 ## Validation
 
+This table records the original local validation. The subsequent Actions audio
+failure and revised artifact are covered in [Audio acceptance follow-up](#audio-acceptance-follow-up).
+
 Browser checks used the final SIMD artifact and unchanged licensed CI fixtures.
 Native checks used Homebrew Rust 1.94.0; release Wasm used rustup Rust 1.99.0
 as described above.
@@ -370,3 +373,114 @@ Only self-authored tooling/documentation, an original timing regression and the
 derived numeric report are committed. No game bytes, saves, captures, soundtrack
 or guest disassembly enter Git or `web/`. No new hosted-CI download/upload is
 introduced. Required post-merge verification: None.
+
+
+## Audio acceptance follow-up
+
+The [current-head Actions run](https://github.com/takahirox/pc98-rust/actions/runs/42391603042)
+failed the unchanged continuity assertions: 1,944 missing frames at 48 kHz and
+1,687 at 44.1 kHz. Earlier local passes above did not establish CI acceptance.
+The retained trace identifies an execution shortfall during bitmap/DOS work:
+27 slices advanced approximately 270 ms of device time while spending 309.7 ms
+(48 kHz) or 304.3 ms (44.1 kHz) inside guest slices. Their mean slice times were
+11.5/11.3 ms for a 10 ms target. The 48 kHz interval captured no video snapshots;
+the 44.1 kHz interval captured one, costing 0.1 ms. Neither had producer drops,
+overflow or sequence/checksum errors. CPU execution, operand access, timing and
+PIC arbitration also appear in the failure-only Worker profiles. A larger audio
+queue would only postpone this scene's producer deficit.
+
+This revision reduces that host work in three places:
+
+- Conventional real-mode segments check their complete span directly. Hidden
+  descriptor caches, protected mode and paging retain the full validation path,
+  outside the frequently inlined fetch sites.
+- Standard Wasm SIMD compares both words of the eight registers and extracts
+  the exact dependency mask, replacing repeated scalar comparisons. The native
+  fallback retains the same value-change semantics, including upper-word-only
+  changes and unchanged writes.
+- PIC arbitration rotates the request/service masks into priority order and
+  compares their first set bits. Exhaustive request/service combinations at all
+  eight priority origins retain blocking, tie and special-mask behavior.
+
+The 10/66 MHz CPU models, instruction and bus clocks, device scheduler, IRQ and
+synthesis semantics, six audio credits, 60 ms target and 70 ms outstanding bound
+are unchanged. The audio tests and their silence/cadence assertions are unchanged.
+No test workflow, media or publication allowlist changes are needed.
+
+### Revised fixed-work measurements
+
+Fresh three-repeat controls use the same local ADV98 floppy/HDD media, setup,
+four-guest-second scene sequence, Chromium 141.0.7390.37, Apple M4 Max (16 logical
+CPUs, 64 GiB), Darwin 27.2.0, Node 26.12.1 and Rust 1.99.0 release-Wasm build as
+above. Runs were sequential, with no concurrent builds or regression suites.
+The baseline is the reviewed SIMD artifact (`01168eb2544cf4c731ae9bd80bd5dd474184a505ed7004900fde422d20e5a1c6`).
+The revised artifact is 537,339 bytes, SHA-256
+`3f52117e7e89faa4ae2c53d2d60649c0664302ec12c160751482e35180e8d7fd`.
+
+| Medium | Reviewed artifact ms | Revised artifact ms | Median capacity gain |
+| --- | --- | --- | ---: |
+| Floppy | 1411.3 / 1315.5 / 1286.3 | 1168.8 / 1174.6 / 1170.2 | 12.4% |
+| HDD | 1436.7 / 1284.2 / 1289.2 | 1169.6 / 1175.1 / 1172.5 | 10.0% |
+
+All twelve controls match exactly on device seconds, CPU clocks, completed
+instructions, disk reads, PCM samples and hash, frame hash, FM key edges and
+sound IRQ edges (the literal per-medium values in the original fixed-work table).
+Reproduce with the existing harness's `--capacityOnly=1 --repeat=3`, retaining
+separate outputs outside the checkout for each artifact. These are active
+execution measurements, not proof of CI performance or adequate Firefox speed.
+Screening higher LLVM optimization, CPU layout changes, decoder outlining,
+timing-match rewrites and a word-fetch shortcut did not justify retaining them.
+
+A separate exploratory Linux probe multiplied each live Wasm slice's elapsed
+cost by 2.5 using a temporary local Worker wrapper (busy-wait until
+`start + 2.5 * elapsed`, with the unchanged guest result and audio assertions).
+It still fails on both artifacts: the first failing one-second windows contained
+2,329/4,820 missing frames before and 2,328/1,742 after (48/44.1 kHz). This probe
+is not part of normal acceptance and is not a passing result. The revision
+adds measured execution headroom; it cannot guarantee continuity under arbitrary
+host slowdown. No larger buffer or relaxed test threshold conceals that limit.
+
+### Revision validation
+
+On 2026-11-07 UTC, all 57 Python acceptance commands from the workflow passed,
+including fixture-fetch tests and unchanged license/media manifests. The native
+suite passed 608 tests with opt-level 1, debug assertions and overflow checks;
+the timing target then passed all 22 tests including the new per-register
+upper-word/unchanged-write regression. Native Clippy (all targets, warnings
+denied), SIMD Wasm Clippy with the matching rustup compiler, formatting, release
+build and the 27-asset publication audit passed. The native toolchain is Homebrew
+Rust 1.94.0; the Wasm toolchain is rustup Rust 1.99.0. An initial optional Wasm
+Clippy invocation selected Homebrew's driver and could not find its Wasm std;
+using the installed rustup toolchain consistently resolved that setup failure.
+
+Ubuntu 24.04 arm64 in the Playwright 1.56.1 container, limited to two CPUs,
+passed all 20 Node audio/render tests, then the unchanged production continuity
+tests serially at both serving roots. The same tests also passed with only the
+initial renderer URL changed to inline, using the existing reproduction above.
+All four cases include scene work and every pause/mute/suspend/visibility/reset
+assertion, zero drops/overflow/sequence/checksum errors, and bounded queues.
+
+| Renderer / device rate | Observation windows | Produced source samples | Missing output samples | FM key edges | Sound IRQ edges |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Worker / 48 kHz | 16 | 798733 | 0 | 472 | 2403 |
+| Worker / 44.1 kHz | 16 | 797774 | 0 | 472 | 2401 |
+| Inline / 48 kHz | 16 | 799693 | 0 | 472 | 2408 |
+| Inline / 44.1 kHz | 16 | 795853 | 0 | 472 | 2395 |
+
+The remaining Linux `npx playwright test --workers=4 --grep-invert
+'ADV98 production playback remains continuous through scene changes'` suite
+passed **255 cases, 3 existing skips, zero failures (7.4 minutes)**, with four
+CPUs/four workers and the same release artifact. The skips avoid duplicating
+large-media scenarios under Pages; their root-path cases passed. This retains
+both serving paths' CPU faults/timing, PIC/PIT/device/IRQ, graphics/disk,
+Worker ownership, render parity/fallback, packaging and security coverage.
+
+The 64 windows observed 1,920–2,401 queued source samples; the existing tests
+also enforce fewer than 3,360 outstanding samples and at most six queued
+blocks including the currently consumed block. No additional latency is introduced.
+These are local production-artifact passes, not a new GitHub Actions result.
+The revised head still needs its normal acceptance run after downstream
+publication; this revision does not push or merge. Firefox was not remeasured
+for this follow-up, and its earlier throughput/audio limitation is not claimed
+resolved. Benchmark media, profiles, traces and working reports stay outside Git;
+no new published assets, fixture downloads or hosted uploads are introduced.

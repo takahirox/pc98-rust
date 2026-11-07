@@ -186,6 +186,40 @@ impl Clone for Cpu {
         }
     }
 }
+// Compare both words of all eight architectural registers. SIMD avoids a
+// second equality scan and eight scalar dependency checks on every Wasm step.
+#[inline(always)]
+fn changed_registers(
+    low: &[u16; 8],
+    high: &[u16; 8],
+    next_low: &[u16; 8],
+    next_high: &[u16; 8],
+) -> u8 {
+    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+    {
+        use std::arch::wasm32::*;
+        // Each initialized array occupies exactly 16 readable bytes. Wasm
+        // v128_load accepts unaligned addresses and never writes through them.
+        unsafe {
+            let low_changes = i16x8_ne(
+                v128_load(low.as_ptr().cast()),
+                v128_load(next_low.as_ptr().cast()),
+            );
+            let high_changes = i16x8_ne(
+                v128_load(high.as_ptr().cast()),
+                v128_load(next_high.as_ptr().cast()),
+            );
+            i16x8_bitmask(v128_or(low_changes, high_changes)) as u8
+        }
+    }
+    #[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
+    {
+        (0..8).fold(0, |mask, i| {
+            mask | (u8::from(low[i] != next_low[i] || high[i] != next_high[i]) << i)
+        })
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Operand {
     Reg(usize),
@@ -865,20 +899,16 @@ impl Cpu {
             result = Err(format!("missing CPU timing for {op:02x}/{ext:02x}"));
         }
         // CPU state rollback must not roll back elapsed clocks or bus activity.
-        self.timing_writes =
-            if fault || (registers_before.0 == self.r && registers_before.1 == self.upper) {
-                0
-            } else {
-                (0..8).fold(0, |mask, i| {
-                    mask | if registers_before.0[i] != self.r[i]
-                        || registers_before.1[i] != self.upper[i]
-                    {
-                        1 << i
-                    } else {
-                        0
-                    }
-                })
-            };
+        self.timing_writes = if fault {
+            0
+        } else {
+            changed_registers(
+                &registers_before.0,
+                &registers_before.1,
+                &self.r,
+                &self.upper,
+            )
+        };
         self.last_timing = timing;
         self.cycles += u64::from(timing.cpu_cycles());
         self.completed_instructions += u64::from(timing.instructions);
