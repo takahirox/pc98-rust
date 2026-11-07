@@ -464,6 +464,32 @@ fn dx2_text_and_graphics_vram_stay_uncached_for_reads_and_writes() {
 }
 
 #[test]
+fn repeated_firmware_flushes_preserve_cold_misses_after_cache_enable() {
+    let mut m = machine(Profile::Pc9821ApDos, &[0x8b, 0x07]);
+    for enabled in [false, false, true, true, false, false, true] {
+        if enabled {
+            m.cpu.cr0 &= !0x40000000;
+        } else {
+            m.cpu.cr0 |= 0x40000000;
+        }
+        // Execute the real INT 18h keyboard-status ROM thunk. This may run
+        // against an empty cache, or flush previously warm code/data lines.
+        m.cpu.s[CS] = 0xf000;
+        m.cpu.ip = 0x1060;
+        m.cpu.r[AX] = 0x0100;
+        m.cpu.step_timed(&mut m.bus).1.unwrap();
+        m.cpu.s[CS] = 0;
+        m.cpu.ip = 0x100;
+        let (cold, result) = m.cpu.step_timed(&mut m.bus);
+        result.unwrap();
+        m.cpu.ip = 0x100;
+        let (warm, result) = m.cpu.step_timed(&mut m.bus);
+        result.unwrap();
+        assert_eq!((cold.bus, warm.bus), if enabled { (20, 0) } else { (8, 8) });
+    }
+}
+
+#[test]
 fn nec_divide_errors_use_exception_totals_without_external_int_or_success_costs() {
     // NEC table 6-1: unsigned DIVU error 45; signed DIV error 45..55.
     // Test both widths, register/memory, zero divisor and quotient overflow.
