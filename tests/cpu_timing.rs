@@ -750,3 +750,23 @@ fn external_entry_and_address_dependencies_are_separate_from_handler_retirement(
         assert_eq!(clocks(Profile::Pc9821ApDos, code), expected);
     }
 }
+
+#[test]
+fn register_dependency_masks_include_upper_words_and_ignore_unchanged_values() {
+    for reg in 0..8 {
+        let mut m = machine(Profile::Pc9821ApDos, &[]);
+        let [lo, hi] = m.cpu.r[reg].to_le_bytes();
+        // Change only the upper word, repeat the same value, then change the
+        // low word. Every architectural register must keep its own mask bit.
+        let mov = [0x66, 0xb8 + reg as u8, lo, hi, 1, 0];
+        m.bus.mem[0x100..0x106].copy_from_slice(&mov);
+        m.bus.mem[0x106..0x10c].copy_from_slice(&mov);
+        m.bus.mem[0x10c] = 0x40 + reg as u8;
+        for expected in [1 << reg, 0, 1 << reg] {
+            let (_, result) = m.cpu.step_timed(&mut m.bus);
+            result.unwrap();
+            assert_eq!(m.cpu.timing_writes, expected, "register {reg}");
+        }
+        assert_eq!(m.cpu.upper[reg], 1);
+    }
+}

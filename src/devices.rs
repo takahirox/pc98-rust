@@ -48,16 +48,12 @@ impl Pic {
         if available == 0 {
             return None;
         }
-        let blocking = self.eligible_isr();
-        for n in self.priority_order() {
-            if blocking & (1 << n) != 0 {
-                break;
-            }
-            if available & (1 << n) != 0 {
-                return Some(n);
-            }
-        }
-        None
+        // Rotate IR0..IR7 into priority order, then arbitrate the first bits.
+        // An in-service level blocks itself as well as every lower priority.
+        let origin = u32::from(self.lowest_priority + 1);
+        let requested = available.rotate_right(origin).trailing_zeros();
+        let blocking = self.eligible_isr().rotate_right(origin).trailing_zeros();
+        (requested < blocking).then_some(((requested + origin) & 7) as u8)
     }
     // Special-mask mode excludes masked service levels from both arbitration
     // and nonspecific EOI selection. Specific EOI still addresses the raw ISR.
@@ -960,6 +956,47 @@ impl Fdc {
             10 => 2,
             13 => 6,
             _ => 1,
+        }
+    }
+}
+
+#[cfg(test)]
+mod pic_arbitration_tests {
+    use super::Pic;
+
+    #[test]
+    fn bit_priority_matches_ordered_arbitration_for_all_requests_and_service_levels() {
+        let mut pic = Pic::new(8);
+        for origin in 0..8 {
+            pic.lowest_priority = origin;
+            for irr in 0..=255 {
+                pic.irr = irr;
+                for isr in 0..=255 {
+                    pic.isr = isr;
+                    for (mask, special) in [
+                        (0, false),
+                        (0x55, false),
+                        (0x55, true),
+                        (0xaa, true),
+                        (255, true),
+                    ] {
+                        pic.mask = mask;
+                        pic.special_mask = special;
+                        let mut expected = None;
+                        for n in pic.priority_order() {
+                            if pic.eligible_isr() & (1 << n) != 0 {
+                                break;
+                            }
+                            if pic.irr & !pic.mask & (1 << n) != 0 {
+                                expected = Some(n);
+                                break;
+                            }
+                        }
+                        assert_eq!(pic.pending(), expected,
+                            "origin={origin} IRR={irr:02x} ISR={isr:02x} mask={mask:02x} SMM={special}");
+                    }
+                }
+            }
         }
     }
 }
