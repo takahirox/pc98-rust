@@ -68,10 +68,18 @@ cannot strand a paused reset's initial image. Lower epochs/generations/sequences
 never present. Control responses retain their existing ordered RPC barriers.
 AudioWorklet has an independent PCM port, epoch and six credits; it never waits
 for render acknowledgments. Audio delivery precedes optional capture. Both render
-paths wait for the PCM reserve before launching work, with a bounded 100 ms
-deferral to retain preview refresh on an underspeed host. Cheap snapshot capture
-does not make the independent rasterizer free: it still competes for the host's
-CPU budget with guest execution, especially during scene changes.
+paths wait for the PCM reserve before launching work. The estimate subtracts
+48 source samples per host millisecond since the last sink report arrived,
+accounting for consumption while Wasm runs. This only gates optional video;
+guest clocks and producer pacing remain unchanged. The normal reserve is 60 ms;
+when all six credits are filled, 50 ms suffices because a partially consumed
+block may keep the cursor below 60 ms and production is blocked on a returned
+credit. Healthy streams have no preview deadline override. A sink that has
+already underflowed in this audio epoch and has no estimated reserve retains
+a 100 ms preview deadline, so permanent host overload cannot freeze video.
+After deferral, capture uses a fresh full snapshot. Cheap snapshot capture does
+not make the independent rasterizer free: it still competes for the host's CPU
+budget with guest execution, especially during scene changes.
 
 Render startup errors/timeouts, runtime exceptions, invalid snapshot/credit
 messages and message deserialization errors terminate the renderer and switch to
@@ -129,7 +137,7 @@ Raw per-run observations: [Chromium](render-worker-chromium.json). Hardware:
 These measurements were rerun after the PCM-reserve correction in PR head
 `86499a9`, from checkpoint `c0e798560aa2862e0871b1c36f9db5b746b3a164`.
 Its runtime and benchmark sources match that PR head. Both inline and worker
-paths use the final scheduler: video waits for PCM reserve, with the same
+paths used the scheduler at that revision: video waits for PCM reserve, with the same
 100 ms preview deadline. The raw JSON records that source revision and SHA-256
 hashes of `emulator-worker.js`, the measurement script and release Wasm, so a
 JavaScript-only scheduler change can be distinguished from an unchanged core.
@@ -195,7 +203,7 @@ message/presentation cost). These measurements favor offloading the existing Rus
 rasterizer and keeping the small DOM put. Permanently transferring the visible
 Canvas would complicate fallback and context recovery without a demonstrated
 benefit here; merely moving put would leave the material producer cost intact.
-These refreshed measurements include the audio-priority correction below.
+These measurements precede the follow-up for run 42353334646 below.
 Cheap capture alone does not justify launching render work while PCM reserve is
 depleted; both paths defer optional video work until refill or the bounded
 preview deadline.
@@ -229,7 +237,7 @@ changed to hide this limit.
 | Ap ADV98 + BGM | 35102 → 31346 | 321917 → 280957 | 0–1440 / 0–1440 |
 
 **Firefox Ap playback is not glitch-free on this measured configuration**, in
-either architecture, even with the final PCM-reserve deferral. The worker path
+either architecture, even with the then-current PCM-reserve deferral. The worker path
 improves guest/audio production but regresses Ap presentation fps by about
 26–27%. Frame latency increases for VM and Ap music, while Ap video latency is
 nearly unchanged. Do not infer universal performance success from the additional
@@ -379,3 +387,100 @@ acceptance tests or other benchmark running alongside:
 - Checked raw-result completeness, finite metrics, recorded source/artifact hashes,
   Markdown links, table calculations and `git diff --check`. Runtime sources are
   unchanged by this evidence refresh.
+
+### Follow-up for Ubuntu run 42353334646
+
+[The next Ubuntu x64 acceptance run](https://github.com/takahirox/pc98-rust/actions/runs/42353334646)
+still failed at both sample rates. Its traces showed roughly 13–14 ms host slices
+for 10 ms guest time during scene changes, versus about 9 ms between scenes;
+snapshot preparation stayed below 0.6 ms. The producer checked an old sink
+cursor after running Wasm, treating PCM consumed during that slice as available
+reserve. The 100 ms preview override could then launch more host work while
+PCM was depleted.
+
+Video now uses the aged reserve estimate described above. Only an already
+underflowing, empty stream may use the preview deadline; a flush establishes a
+new underflow baseline so an earlier epoch cannot relax a new stream's prefill.
+The scheduler regression reports cursors with returned blocks, as production
+does, and reproduces a finite slow scene: the former policy underflows while
+the corrected policy preserves PCM and resumes presentation. Separate tests
+cover stale cursors and permanent overload without hiding underflow counters.
+
+Two host costs were also removed. BIOS keyboard polling repeatedly cleared
+512 timing-cache tags even when no line had ever been populated; empty flushes
+and invalidations now return immediately, retaining every modeled cache miss
+and victim position. OPN rate, sustain and total-level expressions are computed
+once for their 176 possible register values, then indexed from the current
+register bits. Operator phase, envelope progression and guest sample clocks
+are unchanged. Native regressions cover cache enable/disable across real BIOS
+thunks and all 128 total-level settings while a voice remains keyed.
+
+A fixed release-Wasm ADV98 sequence (18.05 guest seconds of setup, Enter, then
+12 guest seconds with a second Enter after 9 seconds) produced identical values
+for all 32 exported metrics before and after the core changes. The complete PCM
+stream also retained SHA-256
+`5ae49558809fb70b575e0b7495909b8e0cf99471d69fb2d037d223ae36e0299c`.
+
+Browser validation uses Ubuntu 24.04.3 **x64** containers with Chromium 141.0.7390.37 and
+Playwright 1.56.1, running through Rosetta on the M4 Max. A one-CPU stress case
+(`--cpu-period=10000 --cpu-quota=10000`, local serving path) failed the original
+head with 1,051 missed samples in its first failing window. The corrected
+scheduler passed the unchanged case, with **zero missed samples in all 16
+windows**, including scene transitions and stream barriers. This local x64
+evidence does not replace a GitHub acceptance run after publication.
+
+Final validation:
+
+- `npm run build`: release Wasm, media/font verification and all 27 publication
+  assets passed the site audit.
+- `cargo test --locked -- --test-threads=4`, with the workflow's optimized test
+  profile and debug/overflow checks retained, on Darwin arm64: **605 passed**. Formatting, Clippy
+  with warnings denied, and all 10 fixture-fetch tests passed.
+- `node --test tests/audio-worker.test.js tests/audio-worklet.test.js tests/render-worker.test.js`:
+  **20 passed**, including stale cursors, slow-scene negative control, permanent
+  starvation preview, and underflow isolation across flush epochs.
+- `npx playwright test tests/browser/audio-continuity.spec.js --workers=1` in
+  the unrestricted Ubuntu x64 container: **2 passed**, both serving paths and
+  48/44.1 kHz, **zero missed samples in all 32 observed windows**. Existing
+  overflow, drop, checksum, sequence, pitch/tempo and control assertions passed.
+- `npx playwright test --workers=4 --grep-invert 'ADV98 production playback remains continuous through scene changes'`
+  in the same Ubuntu x64 container: **255 passed, 3 existing duplicate-path
+  skips**, completing the functional suite skipped by the failed GitHub run.
+
+A Firefox 142.0.1 Ap-video liveness smoke check retained presentation in both
+paths under continuous starvation: nine frames each over roughly eight-second
+windows, with no PCM overflow or drops. Audio still underflowed heavily and
+preview cadence was lower than in the historical measurements above. This is
+the cost of protecting positive PCM reserve; the empty, already-underflowing
+preview exception prevents a frozen display. This smoke check ran alongside
+functional validation, so it is not a comparable performance benchmark or a
+claim of continuous Firefox Ap playback.
+
+The frozen Worker SHA-256 used for these browser checks is
+`da2910e0265ed9767d085b01ad3928728c76bc7a1bcd807b7225f7283dc204b5`;
+the release Wasm SHA-256 is
+`c71cfd6324a68a8df63af1d01edd90c07a4248b5c5fd8bd75c61f57c4f913306`.
+
+
+### Final Chromium comparison after the follow-up
+
+[Raw observations](render-worker-followup-chromium.json) were captured with
+`node tools/measure_render.mjs --browser=chromium --repeat=1 --seconds=8 --output=docs/render-worker-followup-chromium.json`
+on the same M4 Max/Darwin arm64, Chromium 141.0.7390.37 and Playwright 1.56.1,
+with none of this task's acceptance checks running alongside. The raw context
+records the final runtime source and artifact hashes above. This is one pair
+per workload, not a repeatability or statistical claim. Arrows mean
+inline → render Worker.
+
+| Workload | Producer preparation ms/frame | Presented fps | Capture-to-Canvas ms | Guest seconds/wall second |
+| --- | ---: | ---: | ---: | ---: |
+| VM STAR TRAIL | 3.489 → 0.040 | 25.35 → 27.38 | 8.295 → 8.281 | 0.9946 → 0.9970 |
+| Ap 98VIDEOP | 0.886 → 0.016 | 25.08 → 25.20 | 5.103 → 6.295 | 1.0033 → 1.0031 |
+| Ap ADV98 + BGM | 1.254 → 0.025 | 25.07 → 25.11 | 5.712 → 5.943 | 1.0005 → 0.9997 |
+
+All six observations reported zero audio underflows, overflows and dropped PCM.
+Frame preparation still moves materially out of the producer. Latency and
+presentation differences remain mixed; these single observations do not establish
+universal throughput or scene-transition improvements. Raw queue occupancy,
+transition times, copy costs, UI timer delays and Wasm capacities are retained,
+including regressions. The inline comparison/fallback remains available.

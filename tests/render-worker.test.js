@@ -97,6 +97,8 @@ test('authoritative Worker coalesces full snapshots, rejects stale credits and r
   run("audioEnabled=true;audioState='running';port={};sentSamples=0;frameDue=0;presentDue()");
   assert.equal(frames.length,2);
   run('sentSamples=2880;presentDue()');
+  assert.equal(frames.length,2); // The sink consumed PCM while this cursor aged.
+  run('sinkStatsAt=performance.now();presentDue()');
   assert.equal(frames.length,3);
   run('testPort.onmessageerror()');
   assert.equal(events.at(-1).event,'renderFault');

@@ -102,6 +102,7 @@ pub(crate) struct TimingState {
     // A physical address divided by 16 can never equal usize::MAX. A sentinel
     // keeps each tag to one word and each hot cache probe to one comparison.
     cache: [[usize; 4]; 128],
+    cache_populated: bool,
     victim: [usize; 128],
     fetch_word: Option<usize>,
     cache_enabled: bool,
@@ -125,6 +126,7 @@ impl Default for TimingState {
             previous_writes: 0,
             rep_fetch: false,
             cache: [[usize::MAX; 4]; 128],
+            cache_populated: false,
             victim: [0; 128],
             fetch_word: None,
             cache_enabled: false,
@@ -151,6 +153,9 @@ impl TimingState {
         self.cache_enabled = cr0 & 0x40000000 == 0;
     }
     pub fn invalidate(&mut self, address: usize) {
+        if !self.cache_populated {
+            return;
+        }
         let line = address / 16;
         for tag in &mut self.cache[line % 128] {
             if *tag == line {
@@ -159,7 +164,12 @@ impl TimingState {
         }
     }
     pub fn flush(&mut self) {
-        self.cache = [[usize::MAX; 4]; 128];
+        // Firmware polling flushes frequently even with CR0.CD set. Avoid
+        // clearing 512 already-empty tags; retain the same guest cache misses.
+        if self.cache_populated {
+            self.cache = [[usize::MAX; 4]; 128];
+            self.cache_populated = false;
+        }
     }
     /// Account once per physical beat, not once per Rust byte read. Nominal
     /// V30 aligned bus clocks are included in the NEC instruction tables.
@@ -213,6 +223,7 @@ impl TimingState {
             if !hit && !write {
                 let way = self.victim[set];
                 self.cache[set][way] = line;
+                self.cache_populated = true;
                 self.victim[set] = (way + 1) % 4;
                 // DX2 external 2-1-1-1 fill, two core clocks per bus clock.
                 self.penalty += 10;

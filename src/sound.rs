@@ -2,8 +2,28 @@
 //! Shared synthesis: Yamaha YM2203 datasheet; Ap IRQ/SCH: YM2608 register 29h.
 //! Analog/envelope timing is approximate. VM does not expose this sound core.
 use std::f64::consts::TAU;
+use std::sync::LazyLock;
 
 const CLOCK: u64 = 3_993_600;
+
+struct Coefficients {
+    rate: [f64; 32],
+    sustain: [f64; 16],
+    total_level: [f64; 128],
+}
+// These expressions depend only on register bits, not on the guest clock or
+// operator state. Evaluate each once instead of calling powf for every sample.
+static COEFFICIENTS: LazyLock<Coefficients> = LazyLock::new(|| Coefficients {
+    rate: std::array::from_fn(|r| {
+        if r == 0 {
+            0.0
+        } else {
+            2f64.powf(r as f64 / 2.0) / (48_000.0 * 16.0)
+        }
+    }),
+    sustain: std::array::from_fn(|sl| 10f64.powf(-(sl as f64) * 3.0 / 20.0)),
+    total_level: std::array::from_fn(|tl| 10f64.powf(-(tl as f64) * 0.75 / 20.0)),
+});
 
 #[derive(Clone, Copy, Default)]
 struct Operator {
@@ -149,14 +169,9 @@ impl Opn {
         let dr = self.registers[0x60 + offset] & 31;
         let sr = self.registers[0x70 + offset] & 31;
         let slrr = self.registers[0x80 + offset];
-        let sustain = 10f64.powf(-f64::from(slrr >> 4) * 3.0 / 20.0);
-        let rate = |r: u8| {
-            if r == 0 {
-                0.0
-            } else {
-                2f64.powf(f64::from(r) / 2.0) / (48_000.0 * 16.0)
-            }
-        };
+        let coefficients = &*COEFFICIENTS;
+        let sustain = coefficients.sustain[(slrr >> 4) as usize];
+        let rate = |r: u8| coefficients.rate[r as usize];
         let op = &mut self.operators[ch][slot];
         match op.stage {
             1 => {
@@ -193,9 +208,7 @@ impl Opn {
         };
         let detune = f64::from((dtmul >> 4) & 3) * if dtmul & 64 == 0 { 0.1 } else { -0.1 };
         op.phase = (op.phase + (hz * multiple + detune) / 48_000.0).fract();
-        (op.phase * TAU + modulation * 4.0).sin()
-            * op.level
-            * 10f64.powf(-f64::from(tl) * 0.75 / 20.0)
+        (op.phase * TAU + modulation * 4.0).sin() * op.level * coefficients.total_level[tl as usize]
     }
     fn frequency(&self, low: usize) -> f64 {
         let high = self.registers[low + 4];

@@ -14,7 +14,7 @@ function invalidateVideo() {
 }
 let port, audioEnabled = false, audioState, audioEpoch = 0, flushWaiter;
 const audioBuffers = Array.from({length: 6}, () => new ArrayBuffer(1024 * 4));
-let sinkStats = {}, transaction = null;
+let sinkStats = {}, sinkStatsAt = 0, underflowsAtFlush = 0, transaction = null;
 let producedSamples = 0, sentSamples = 0, droppedSamples = 0;
 let deadline = 0, diagnostics = false;
 let tickToken = 0;
@@ -119,9 +119,21 @@ function presentDue() {
   if (now < frameDue) return;
   // Snapshot capture is cheap, but launching independent rasterization still
   // competes for the host's CPU budget. Refill PCM before either rendering
-  // path, especially during guest scene changes. Keep preview refresh within
-  // 100 ms of the due time even when the producer cannot fill its reserve.
-  if (playingAudio() && outstandingAudio() < 2880 && now < frameDue+100) return;
+  // path, especially during guest scene changes. A wall-clock preview deadline
+  // must not spend the remaining PCM reserve while guest slices are expensive.
+  // Resume with a fresh full snapshot as soon as the reserve recovers.
+  if (playingAudio()) {
+    // The last credit's cursor predates this guest slice. Account for PCM the
+    // sink could consume while Wasm ran, rather than treating that stale cursor
+    // as a full reserve. This estimate only gates video, never guest clocks.
+    const reserve = Math.max(0, outstandingAudio() - (now-sinkStatsAt)*48);
+    // Six filled credits can leave a partially consumed block: 50 ms then
+    // suffices because refill is blocked. Otherwise refill toward 60 ms first.
+    // A sink already underflowing with no estimated reserve keeps a low-rate
+    // preview; rendering must never spend a healthy stream's remaining reserve.
+    const starvedPreview = sinkStats.underflows > underflowsAtFlush && reserve === 0 && now >= frameDue+100;
+    if (reserve < (audioBuffers.length ? 2880 : 2400) && !starvedPreview) return;
+  }
   present(); frameDue = performance.now()+33;
 }
 function deliverAudio() {
@@ -268,8 +280,11 @@ async function command(type, data) {
     port = data;
     port.onmessage = ({data:m}) => {
       if (m.buffer) audioBuffers.push(m.buffer);
-      if (m.stats && m.epoch === audioEpoch) sinkStats = m.stats;
-      if (m.type === 'flushed' && m.epoch === audioEpoch) { flushWaiter?.(); flushWaiter = null; }
+      if (m.stats && m.epoch === audioEpoch) { sinkStats = m.stats; sinkStatsAt = performance.now(); }
+      if (m.type === 'flushed' && m.epoch === audioEpoch) {
+        underflowsAtFlush = sinkStats.underflows ?? 0;
+        flushWaiter?.(); flushWaiter = null;
+      }
       if (m.epoch === audioEpoch && playingAudio() && outstandingAudio() < 2880 && audioBuffers.length) schedule(0);
     };
     port.start(); await flushAudio(); return;
