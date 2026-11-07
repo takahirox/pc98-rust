@@ -92,9 +92,11 @@ test('authoritative Worker coalesces full snapshots, rejects stale credits and r
   assert.equal(run('frameBuffer'),null); // Default path retains no unused pixel transfer.
   context.credit=frames[1].buffer;
   run('testPort.onmessage({data:{sequence:2,buffer:credit}})');
-  // Cheap snapshot capture follows PCM delivery; it must not inherit the
-  // expensive inline rasterizer's depleted-reserve presentation deferral.
+  // Snapshot capture is cheap, but the render Worker still shares the host
+  // CPU budget. A depleted PCM reserve defers launching either render path.
   run("audioEnabled=true;audioState='running';port={};sentSamples=0;frameDue=0;presentDue()");
+  assert.equal(frames.length,2);
+  run('sentSamples=2880;presentDue()');
   assert.equal(frames.length,3);
   run('testPort.onmessageerror()');
   assert.equal(events.at(-1).event,'renderFault');

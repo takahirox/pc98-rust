@@ -8,7 +8,7 @@ const source = readFileSync(new URL('../web/emulator-worker.js',import.meta.url)
 // Exercise the production scheduler with a 7 ms cost per 10 ms guest slice.
 // This host can produce PCM in real time, but cannot also pay a nested timer's
 // 4 ms minimum on every slice. No wall-clock sleeps or platform speed thresholds.
-function worker(code=source, {prebuffer=2400, stalls=[], frameCost=0}={}) {
+function worker(code=source, {prebuffer=2400, stalls=[], frameCost=0, renderWorker=false}={}) {
   let now=0, nextId=0, samples=0, started=false, missed=0, slices=0, clocks=0;
   const frames=[];
   const events=[], blocks=[], recycled=[];
@@ -41,6 +41,12 @@ function worker(code=source, {prebuffer=2400, stalls=[], frameCost=0}={}) {
       }
     },
     testSink:sink, recycled,
+    testVideoPort:{postMessage:()=>{
+      frames.push(now);
+      // Another Worker is independently scheduled, but shares a finite host
+      // CPU budget. Charge its contention in a later task, after PCM delivery.
+      post(()=>{advance(now+frameCost);run('snapshotBuffer=new ArrayBuffer(547632)');});
+    }},
     testPort:{start(){},postMessage:m=>{
       if (m.type !== 'pcm') return;
       blocks.push({count:m.count,buffer:m.buffer});
@@ -48,12 +54,14 @@ function worker(code=source, {prebuffer=2400, stalls=[], frameCost=0}={}) {
     }},
     testCore:{memory:{buffer:new ArrayBuffer(640*400*4)},audio_ptr:()=>0,peek:()=>0,
       frame:()=>{frames.push(now);advance(now+frameCost);return 0;},
+      video_snapshot:()=>0,video_snapshot_len:()=>547632,
       audio_len:()=>samples,audio_clear:()=>{samples=0;},metric:id=>id===5?clocks:0,
       step_scheduler:(budget, cap)=>{assert.equal(budget,80000);assert.equal(cap,100000);slices++;advance(now+7);samples=480;clocks+=80000;}},
   });
   vm.runInContext(code.replace('import.meta.url', "'file:///emulator-worker.js'"),context);
   const run=code=>vm.runInContext(code,context);
   run("core=testCore;port=testPort;sinkStats=testSink;running=true;audioEnabled=true;audioState='running';frameDue="+(frameCost?'0':'Infinity')+";");
+  if(renderWorker) run('videoPort=testVideoPort;snapshotBuffer=new ArrayBuffer(547632)');
   for (const [at,duration] of stalls) post(()=>advance(now+duration),at);
   function next() {
     events.sort((a,b)=>a.at-b.at || a.id-b.id);
@@ -83,7 +91,24 @@ test('host rendering waits for PCM reserve while preview refresh stays bounded',
   const longestFrameGap=Math.max(...frames.slice(1).map((at,i)=>at-frames[i]));
   assert(longestFrameGap<=167,`frame gap ${longestFrameGap}`);
   assert(current.result().outstanding<3360);
-  const old=worker(source.replace('if (!videoPort && playingAudio() && outstandingAudio() < 2880 && now < frameDue+100) return;',''),{frameCost:22});
+  const old=worker(source.replace('if (playingAudio() && outstandingAudio() < 2880 && now < frameDue+100) return;',''),{frameCost:22});
+  old.run('schedule(0)'); old.until(5000);
+  assert(old.result().missed>48000*0.3);
+});
+
+test('independent rasterization waits for PCM reserve on a CPU-constrained host',()=>{
+  const options={frameCost:22,renderWorker:true};
+  const current=worker(source,options); current.run('schedule(0)'); current.until(5000);
+  assert.equal(current.result().missed,0);
+  assert(current.result().produced>=48000*4.95);
+  assert(current.result().frames.length>30);
+  const frames=current.result().frames;
+  assert(Math.max(...frames.slice(1).map((at,i)=>at-frames[i]))<=167);
+  assert(current.result().outstanding<3360);
+  // Negative control: the old path launched render work with a depleted sink
+  // just because snapshot capture in the producer itself was inexpensive.
+  const old=worker(source.replace('if (playingAudio() && outstandingAudio() < 2880 && now < frameDue+100)',
+    'if (!videoPort && playingAudio() && outstandingAudio() < 2880 && now < frameDue+100)'),options);
   old.run('schedule(0)'); old.until(5000);
   assert(old.result().missed>48000*0.3);
 });

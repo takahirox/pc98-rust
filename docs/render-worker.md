@@ -67,9 +67,11 @@ also accepts newer stamped state on a frame, so different port arrival orders
 cannot strand a paused reset's initial image. Lower epochs/generations/sequences
 never present. Control responses retain their existing ordered RPC barriers.
 AudioWorklet has an independent PCM port, epoch and six credits; it never waits
-for render acknowledgments. Audio delivery precedes optional capture. The expensive inline rasterizer still
-waits for the PCM reserve; the measured cheap snapshot path does not inherit
-that presentation deferral.
+for render acknowledgments. Audio delivery precedes optional capture. Both render
+paths wait for the PCM reserve before launching work, with a bounded 100 ms
+deferral to retain preview refresh on an underspeed host. Cheap snapshot capture
+does not make the independent rasterizer free: it still competes for the host's
+CPU budget with guest execution, especially during scene changes.
 
 Render startup errors/timeouts, runtime exceptions, invalid snapshot/credit
 messages and message deserialization errors terminate the renderer and switch to
@@ -179,9 +181,10 @@ message/presentation cost). These measurements favor offloading the existing Rus
 rasterizer and keeping the small DOM put. Permanently transferring the visible
 Canvas would complicate fallback and context recovery without a demonstrated
 benefit here; merely moving put would leave the material producer cost intact.
-Measured cheap snapshot capture also justifies retaining the PCM-reserve
-presentation deferral only for the expensive inline rasterizer. Both paths still
-deliver PCM before optional video work.
+These measurements preceded the audio-priority correction below. Cheap capture
+alone does not justify launching render work while PCM reserve is depleted;
+both paths now defer optional video work until refill or the bounded preview
+deadline.
 
 ### Firefox comparison and remaining limit
 
@@ -294,3 +297,45 @@ Duplicate render-fault notifications are idempotent and cannot mint additional
 pixel-buffer credits; the protocol regression passed, and both serving-path
 startup/fallback cases passed again (**2 passed**). No deployed-site check or
 post-merge verification is required.
+
+### Audio-priority correction after Ubuntu acceptance failure
+
+[GitHub run 42349797543](https://github.com/takahirox/pc98-rust/actions/runs/42349797543)
+failed the unchanged serial ADV98 audio gate at both sample rates. Its traces
+showed scene-change slices taking 13–15 ms for 10 ms of guest time, versus about
+8.7 ms between scenes; snapshot preparation stayed below 0.6 ms. Fast capture
+alone therefore did not establish that launching independent rasterization was
+safe while the audio reserve was depleted.
+
+The renderer now uses the same PCM-reserve deferral as inline rendering. The
+100 ms preview deadline, six audio credits, 60 ms target, guest clocks and all
+playback assertions remain unchanged. A deterministic scheduler regression
+charges independently scheduled render work against a shared host CPU budget:
+the corrected path preserves continuous PCM and bounded preview gaps; restoring
+the former exception for the render Worker causes sustained underflows.
+
+This correction is not proof that the required GitHub failure is resolved.
+Additional Ubuntu 24.04 ARM64 container experiments on the M4 Max, with the
+same release Wasm and Chromium 141.0.7390.37, still failed the unchanged audio
+gate in both versions when the entire browser/test process group was restricted
+to 0.5 or 0.75 CPU (10 ms quota period). The 0.75 CPU runs reported 540 missed
+samples before and 1,432 after in their first failing windows. These are host
+budget stress results, not passing acceptance or evidence of a browser speedup.
+
+Validation after the correction:
+
+- Release build and publication audit passed; the Rust/Wasm core is unchanged.
+- `node --test tests/audio-worker.test.js tests/audio-worklet.test.js tests/render-worker.test.js`:
+  **17 passed**, including the shared-CPU negative control.
+- `npx playwright test tests/browser/audio-continuity.spec.js --workers=1`:
+  **2 passed on Mac and 2 passed in the unrestricted Ubuntu ARM64 container**.
+  All 64 observed playback windows reported zero underflows; both serving paths,
+  sample rates, scene changes and stream-discontinuity assertions passed.
+- Functional Chromium suite, excluding that separately run audio test:
+  **255 passed, 3 existing duplicate-path cases skipped**.
+- Prepared all 56 fixture/media commands from the acceptance workflow. The
+  README's optimized native tests passed (**603 tests**), as did formatting,
+  Clippy, the 10 fixture-fetch tests and `git diff --check`.
+
+Required Ubuntu x64 GitHub acceptance must pass on the published corrected head;
+it cannot be established by a local Mac or ARM64 container pass.
