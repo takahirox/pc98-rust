@@ -126,65 +126,79 @@ are not performance evidence.
 Raw per-run observations: [Chromium](render-worker-chromium.json). Hardware:
 **Apple M4 Max, 16 logical CPUs, Darwin 27.2.0 arm64**, headless Chromium
 **141.0.7390.37**, pinned Playwright 1.56.1, production optimized release Wasm.
-The raw JSON records the Wasm SHA-256. Three pairs per workload, eight-second
-windows, one guest at a time, separate from acceptance tests. Values below are
-medians of the per-run means; arrows are **inline → render Worker**.
+These measurements were rerun after the PCM-reserve correction in PR head
+`86499a9`, from checkpoint `c0e798560aa2862e0871b1c36f9db5b746b3a164`.
+Its runtime and benchmark sources match that PR head. Both inline and worker
+paths use the final scheduler: video waits for PCM reserve, with the same
+100 ms preview deadline. The raw JSON records that source revision and SHA-256
+hashes of `emulator-worker.js`, the measurement script and release Wasm, so a
+JavaScript-only scheduler change can be distinguished from an unchanged core.
+The release build used rustup Rust **1.99.0**, pinned Binaryen **132** (`-O3`),
+and Node **26.12.1**. Its Wasm hash differs from the earlier measurements; the
+comparisons below use this same new artifact for both paths and engines, and do
+not measure the scheduler correction against the old binary.
+
+Three pairs per workload, eight-second windows, one guest at a time, separate
+from acceptance tests. Values below are medians of the per-run means; arrows
+are **inline → render Worker**.
 
 | Workload | Producer preparation ms/frame | Raster ms/frame | Presented fps | Capture-to-Canvas ms | Guest seconds/wall second |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| VM STAR TRAIL | 2.134 → 0.029 | 2.098 → 2.294 | 26.51 → 27.62 | 6.923 → 6.935 | 0.9962 → 0.9964 |
-| Ap 98VIDEOP | 0.867 → 0.025 | 0.854 → 0.846 | 25.43 → 25.60 | 5.439 → 5.330 | 1.0019 → 1.0021 |
-| Ap ADV98 + BGM | 1.205 → 0.023 | 1.191 → 1.155 | 25.32 → 25.80 | 5.683 → 5.600 | 1.0001 → 1.0003 |
+| VM STAR TRAIL | 0.924 → 0.007 | 0.911 → 0.937 | 27.72 → 28.09 | 5.293 → 5.365 | 0.9967 → 0.9965 |
+| Ap 98VIDEOP | 0.793 → 0.019 | 0.782 → 0.778 | 25.31 → 25.61 | 5.184 → 5.372 | 1.0020 → 1.0031 |
+| Ap ADV98 + BGM | 1.035 → 0.021 | 1.020 → 1.020 | 25.19 → 25.60 | 5.290 → 5.506 | 1.0000 → 1.0005 |
 
 | Workload | Guest slice ms | Producer copy ms/frame | Renderer import + RGBA copy ms/frame | Render-hop arrival estimate ms | Canvas put ms/frame | UI timer p95 ms |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| VM STAR TRAIL | 0.787 → 0.851 | 0.036 → 0.013 | 0.052 | 0.090 | 0.058 → 0.063 | 1.8 → 2.0 |
-| Ap 98VIDEOP | 4.757 → 4.688 | 0.013 → 0.010 | 0.020 | unresolved | 0.025 → 0.031 | 1.7 → 2.0 |
-| Ap ADV98 + BGM | 4.059 → 3.983 | 0.014 → 0.010 | 0.023 | 0.051 | 0.031 → 0.027 | 2.0 → 1.9 |
+| VM STAR TRAIL | 0.400 → 0.400 | 0.016 → 0.003 | 0.019 | unresolved | 0.028 → 0.030 | 1.8 → 1.8 |
+| Ap 98VIDEOP | 4.435 → 4.408 | 0.012 → 0.008 | 0.026 | 0.142 | 0.028 → 0.032 | 1.8 → 1.6 |
+| Ap ADV98 + BGM | 3.512 → 3.504 | 0.018 → 0.007 | 0.025 | unresolved | 0.030 → 0.031 | 1.8 → 1.6 |
 
 The render-hop estimate includes producer preparation; inline has no extra render
 hop. Cross-Worker time origins and privacy-related timer quantization limit these
-sub-millisecond estimates: Ap video's raw median was -0.053 ms, which is
-unresolved rather than a physical negative transport cost. Raw observations are
-retained; tiny arrival/latency differences should not be interpreted as wins.
+sub-millisecond estimates: VM and Ap music raw medians were -0.063 and
+-0.049 ms, respectively, which are unresolved rather than physical negative
+transport costs. Raw observations are retained; tiny arrival/latency differences
+should not be interpreted as wins.
 End-to-end latency includes all messages and rAF wait. Worst main-thread
-timer lateness was **5.6 ms inline / 2.9 ms worker** across these runs. All runs
+timer lateness was **2.9 ms inline / 2.8 ms worker** across these runs. All runs
 reported **zero audio underflow, overflow and dropped PCM**, and zero
 coalesced/stale frames in these unforced windows. PCM occupancy was 1,920–2,401
 source samples (40–50 ms), with 2,400–2,401 during STAR TRAIL/ADV98. Forced
 stall/drop/fault behavior is covered by deterministic regressions rather than
 timing thresholds.
 
-Video reset-to-return medians were **2962 → 2937 ms**;
-ADV98 first-background-response medians were **51 → 50 ms**.
+Video reset-to-return medians were **2967 → 2929 ms**;
+ADV98 first-background-response medians were **59 → 50 ms**.
 These small differences are within polling/automation/frame-cadence resolution;
 they do not establish a full-scene completion speedup. Guest throughput stays at
 about 1× because the configured guest clock/audio sink already paces both paths
 in real time on this host. The measurable benefit is producer headroom:
-approximately **34–74× less rendering work in the CPU/audio Worker**, and about
-**4.2% more presented STAR TRAIL frames**. Latency/UI timer changes are small and
-mixed, including a slight VM latency increase. This is not evidence that every
-scene or host is faster. The inline comparison/fallback remains available.
+approximately **42–131× less rendering work in the CPU/audio Worker**, with
+**1.3% more presented STAR TRAIL frames**. Capture-to-Canvas latency regressed
+slightly for all three workloads (about 0.07–0.22 ms); UI timer changes are small
+and mixed. This is not evidence that every scene or host is faster. The inline
+comparison/fallback remains available.
 
 Observed Wasm capacities were **13.44 → 13.69 + 3.13 MiB** for VM and
 **14.00 → 17.75 + 3.13 MiB** for Ap (emulator + renderer). Extra transfer capacity
 is 547,632 bytes. In addition to module/runtime resources, reusable snapshot
 vectors and allocator history increase committed Wasm capacity; this is a real
 cost, not process-RSS accounting. Renderer startup medians were
-4.3–4.6 ms. The extra snapshot copies and render-hop arrival costs are
+3.4–3.6 ms. The extra snapshot copies and render-hop arrival costs are
 included above.
 
 A separate 100-iteration 640×400 ImageData presentation probe measured DOM
-`putImageData` at **0.033 ms**, worker OffscreenCanvas put at **0.031 ms**, and
-worker put + `transferToImageBitmap().close()` at **0.133 ms** (before any bitmap
+`putImageData` at **0.017 ms**, worker OffscreenCanvas put at **0.018 ms**, and
+worker put + `transferToImageBitmap().close()` at **0.091 ms** (before any bitmap
 message/presentation cost). These measurements favor offloading the existing Rust
 rasterizer and keeping the small DOM put. Permanently transferring the visible
 Canvas would complicate fallback and context recovery without a demonstrated
 benefit here; merely moving put would leave the material producer cost intact.
-These measurements preceded the audio-priority correction below. Cheap capture
-alone does not justify launching render work while PCM reserve is depleted;
-both paths now defer optional video work until refill or the bounded preview
-deadline.
+These refreshed measurements include the audio-priority correction below.
+Cheap capture alone does not justify launching render work while PCM reserve is
+depleted; both paths defer optional video work until refill or the bounded
+preview deadline.
 
 ### Firefox comparison and remaining limit
 
@@ -195,39 +209,44 @@ repeatability/statistical claim. Arrows again mean inline → render Worker.
 
 | Workload | Guest seconds/wall second | Presented fps | Capture-to-Canvas ms | Guest slice ms | Transition ms |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| VM STAR TRAIL | 1.001 → 1.000 | 20.70 → 27.77 | 13.09 → 13.36 | 2.68 → 2.57 | — |
-| Ap 98VIDEOP | 0.316 → 0.371 | 14.18 → 10.27 | 12.57 → 12.58 | 25.80 → 26.65 | 9258 → 7675 |
-| Ap ADV98 + BGM | 0.287 → 0.366 | 14.28 → 10.69 | 16.28 → 16.32 | 27.15 → 27.23 | 160 → 142 |
+| VM STAR TRAIL | 1.001 → 1.002 | 20.56 → 27.87 | 13.35 → 14.05 | 2.83 → 2.92 | — |
+| Ap 98VIDEOP | 0.291 → 0.346 | 12.68 → 9.26 | 14.07 → 13.99 | 27.99 → 28.59 | 10042 → 8345 |
+| Ap ADV98 + BGM | 0.274 → 0.345 | 13.63 → 10.04 | 16.46 → 16.97 | 28.49 → 28.81 | 165 → 189 |
 
-VM presentation throughput improved about **34%**, with no audio underflow.
-Ap video guest throughput improved about **17%**, and reset-to-return fell about
-**17%**. Ap music throughput improved about **28%**. However, both Ap paths
-remain **far below real time**: a 10 ms guest slice takes about 26–27 ms before
-rendering. Extra video parallelism cannot make that intrinsically ordered
-producer meet its audio deadline. No guest clock, sample pitch/tempo or sample
-numbering was changed to hide this limit.
+VM presentation throughput improved about **36%**, with no audio underflow.
+Ap video guest throughput improved about **19%**, and reset-to-return fell about
+**17%**. Ap music throughput improved about **26%**, but its first-background
+response regressed **165 → 189 ms**. The latter measures a single response with
+polling/automation overhead, not full-scene completion. Both Ap paths remain
+**far below real time**: a 10 ms guest slice takes about 28–29 ms before rendering.
+Extra video parallelism cannot make that intrinsically ordered producer meet
+its audio deadline. No guest clock, sample pitch/tempo or sample numbering was
+changed to hide this limit.
 
 | Firefox workload | Underflowed output samples per wall second | Total underflows in respective windows | PCM queue range, inline / worker |
 | --- | ---: | ---: | ---: |
-| Ap 98VIDEOP | 30936 → 28266 | 285759 → 242239 | 0–1440 / 0–1920 |
-| Ap ADV98 + BGM | 34161 → 30587 | 301438 → 263325 | 0–1440 / 0–1440 |
+| Ap 98VIDEOP | 32093 → 29594 | 321535 → 258975 | 0–1920 / 0–1440 |
+| Ap ADV98 + BGM | 35102 → 31346 | 321917 → 280957 | 0–1440 / 0–1440 |
 
 **Firefox Ap playback is not glitch-free on this measured configuration**, in
-either architecture. The worker path improves guest/audio production but also
-regresses Ap presentation fps and slightly increases frame latency. Do not infer
-universal performance success from the additional Worker. Latest-frame
-coalescing under this load discards presentation requests while bounding memory;
-video coalescing was 18 → 91 and music 14 → 80 in these windows. Overflows,
-dropped producer PCM, and stale presented frames were zero in all six runs.
-UI timer p95 was 7 → 3 ms for VM and 8 → 8 ms for Ap. Wasm/transfer capacities
-matched Chromium; render startup was 13–15 ms. The simpler inline path remains
-available when its presentation/copy tradeoff is preferred.
+either architecture, even with the final PCM-reserve deferral. The worker path
+improves guest/audio production but regresses Ap presentation fps by about
+26–27%. Frame latency increases for VM and Ap music, while Ap video latency is
+nearly unchanged. Do not infer universal performance success from the additional
+Worker. Latest-frame coalescing under this load discards presentation requests
+while bounding memory; video coalescing was 25 → 81 and music 14 → 82 in these
+windows. Overflows, dropped producer PCM, and stale presented frames were zero
+in all six runs. UI timer p95 was 7 → 3 ms for VM, 8 → 8 ms for Ap video and
+9 → 8 ms for Ap music; worst timer lateness was 9 → 11 ms. Wasm/transfer
+capacities matched Chromium; render startup was 14 ms. The simpler inline path
+remains available when its presentation/copy tradeoff is preferred.
 
 Firefox's coarse timing precision cannot resolve the tiny capture/copy/port
-stages reliably: some means round to zero and one render-hop estimate is slightly
-negative. Those raw values are retained as measurement-resolution limits, not
-physical negative transport costs. Rasterization remained about 12–16 ms/frame.
-The separate presentation probe measured DOM/OffscreenCanvas put at 0.050 ms
+stages reliably: some means round to zero. Raw values are retained as
+measurement-resolution limits. Inline producer preparation was 13.73–16.01 ms
+per frame versus 0.009–0.025 ms for snapshot preparation (the small values are
+not precise speedup ratios). Rasterization remained about 14–17 ms/frame.
+The separate presentation probe measured DOM/OffscreenCanvas put at 0.040/0.050 ms
 and offscreen put + bitmap creation at 0.210 ms, again providing no evidence to
 move the small Canvas operation or add another host-processing Worker.
 
@@ -339,3 +358,24 @@ Validation after the correction:
 
 Required Ubuntu x64 GitHub acceptance must pass on the published corrected head;
 it cannot be established by a local Mac or ARM64 container pass.
+
+### Refreshed performance evidence after the audio-priority correction
+
+Reran the documented release-Wasm comparisons on the final scheduler, with no
+acceptance tests or other benchmark running alongside:
+
+- `npm run build`: release build, media/font checks and publication audit passed.
+- `node tools/measure_render.mjs --browser=chromium --repeat=3 --seconds=8 --output=target/render-chromium.json`:
+  completed all **18 observations** (three inline/worker pairs per workload).
+- `node tools/measure_render.mjs --browser=firefox --repeat=1 --seconds=8 --output=target/render-firefox.json`:
+  completed all **6 observations** (one inline/worker pair per workload).
+- Copied the complete per-run observations into the linked raw JSON files and
+  recorded source/scheduler/script hashes and build tool versions in their context.
+  The tables above replace the earlier pre-correction comparisons; Firefox Ap
+  underflows, presentation regressions and the music transition regression are
+  retained. These measurements do not establish Ubuntu x64 acceptance.
+- `node --test tests/audio-worker.test.js tests/audio-worklet.test.js tests/render-worker.test.js`:
+  **17 passed**, including the PCM-reserve/shared-CPU regressions.
+- Checked raw-result completeness, finite metrics, recorded source/artifact hashes,
+  Markdown links, table calculations and `git diff --check`. Runtime sources are
+  unchanged by this evidence refresh.
