@@ -1,5 +1,8 @@
 # Local game performance — Issue #144
 
+The [latest production matrix](#revised-production-measurements-review-follow-up)
+covers the current CPU/PIC artifact in both browsers and renderers.
+
 ## Workload and media boundary
 
 Use **ADV98 v0.1**, unchanged `ADV98.EXE`, author PokuG stdio.h, source
@@ -480,7 +483,191 @@ also enforce fewer than 3,360 outstanding samples and at most six queued
 blocks including the currently consumed block. No additional latency is introduced.
 These are local production-artifact passes, not a new GitHub Actions result.
 The revised head still needs its normal acceptance run after downstream
-publication; this revision does not push or merge. Firefox was not remeasured
-for this follow-up, and its earlier throughput/audio limitation is not claimed
-resolved. Benchmark media, profiles, traces and working reports stay outside Git;
-no new published assets, fixture downloads or hosted uploads are introduced.
+publication; this revision does not push or merge. The subsequent
+[production matrix](#revised-production-measurements-review-follow-up) remeasures
+Firefox as well as Chromium for this artifact and records the remaining
+throughput/audio limitation. Benchmark media, profiles, traces and working reports
+stay outside Git; no new published assets, fixture downloads or hosted uploads
+are introduced.
+
+## Revised production measurements (review follow-up)
+
+This matrix validates the CPU/segment/register/PIC revision above against the
+reviewed SIMD build, rather than reusing the earlier SIMD-only production data.
+Both artifacts use the unchanged production Worker, AudioWorklet, rendering paths
+and measurement harness. The fresh comparison uses `ba4b347` (Wasm SHA-256
+`01168eb2544cf4c731ae9bd80bd5dd474184a505ed7004900fde422d20e5a1c6`)
+and `8ee952a` (Wasm SHA-256
+`3f52117e7e89faa4ae2c53d2d60649c0664302ec12c160751482e35180e8d7fd`).
+The current artifact was rebuilt locally and its checksum matched before testing.
+
+The host, browser versions, guest configuration and media hashes are the same
+as above: Apple M4 Max, 16 logical CPUs, 64 GiB, Darwin 27.2.0 arm64,
+Chromium 141.0.7390.37 and Firefox 142.0.1, Ap DX2-66 with unchanged clocks,
+and the local ADV98 floppy/HDD music scenes. Node is 26.12.1, Playwright 1.56.1,
+Rust 1.99.0, Binaryen 132; the normal release build uses SIMD, opt-level 2/LTO
+and `wasm-opt -O3 -g`. The harness SHA-256 is
+`bc51367a9d123dafb50aa9cf4a119cb6bb00936c09a998fba03cf90da41bc6eb`;
+Worker SHA-256 remains
+`918440f74241a2f53f2d47635af94ca3816f77238f0553a61fe12c260e96d2c5`.
+No host profiler, compilation, regression suite or second emulator ran during
+these measurements. Each engine ran baseline then revision sequentially, with
+three repetitions per artifact, medium and renderer; renderer order alternates
+by repetition. Fixed artifact order leaves possible time-dependent host drift;
+these local medians do not establish a universal effect size.
+
+Each production window still uses 32 polls at 250 ms with Return at the
+midpoint, 1.5 seconds of settling beforehand, and the bounded one-second
+background-response probe. The separate capacity controls still execute exactly
+four guest seconds. No setup, failed presentation or slow engine is silently
+counted as a passing playback observation.
+
+### Scheduled production throughput
+
+Three-run medians; every arrow is reviewed SIMD → CPU/PIC revision. The full
+per-window CPU clocks, device scheduler cycles, instructions, disk reads and
+histogram percentiles are retained in `revisionProduction` in the
+[numeric report](runtime-performance-results.json). Timed browser observations
+and render-free capacity controls remain separate.
+
+| Engine / medium / renderer | Guest seconds/wall second | Million instructions/s | Slice mean ms | Slice p95/p99 ms |
+| --- | --- | --- | --- | --- |
+| Chromium / floppy / inline | 1.0004 → 1.0000 | 4.244 → 4.242 | 3.930 → 3.661 | 4.3/5.4 → 4.1/5.2 |
+| Chromium / floppy / Worker | 0.9999 → 0.9998 | 4.242 → 4.241 | 3.959 → 3.720 | 4.4/5.3 → 4.2/5.3 |
+| Chromium / HDD / inline | 0.9999 → 1.0001 | 4.243 → 4.244 | 3.850 → 3.660 | 4.4/5.6 → 4.1/5.2 |
+| Chromium / HDD / Worker | 1.0000 → 1.0000 | 4.243 → 4.244 | 3.956 → 3.719 | 4.3/5.7 → 4.2/5.2 |
+| Firefox / floppy / inline | 0.3928 → 0.4454 | 1.703 → 1.923 | 25.406 → 22.390 | 38.1/40.1 → 33.1/35.1 |
+| Firefox / floppy / Worker | 0.3928 → 0.4452 | 1.703 → 1.923 | 25.429 → 22.420 | 38.1/40.1 → 33.1/35.1 |
+| Firefox / HDD / inline | 0.3910 → 0.4460 | 1.696 → 1.928 | 25.538 → 22.389 | 38.1/39.1 → 34.1/35.1 |
+| Firefox / HDD / Worker | 0.3924 → 0.4437 | 1.702 → 1.918 | 25.435 → 22.476 | 38.1/40.1 → 34.1/35.1 |
+
+### Scene response and rendering
+
+Response means the first changed background, not full-screen decode completion.
+Unavailable means the bounded probe saw no response; these windows remain in
+the report. Capture-to-Canvas latency and raster time require presented frames.
+
+| Engine / medium / renderer | Response ms | Presented fps | Latency mean ms | Raster mean ms |
+| --- | --- | --- | --- | --- |
+| Chromium / floppy / inline | 49.2 → 51.7 | 25.07 → 25.05 | 6.05 → 5.64 | 1.225 → 1.259 |
+| Chromium / floppy / Worker | 50.8 → 51.4 | 25.07 → 25.06 | 6.19 → 5.84 | 1.239 → 1.273 |
+| Chromium / HDD / inline | 51.8 → 51.3 | 25.29 → 25.03 | 5.67 → 5.97 | 1.221 → 1.267 |
+| Chromium / HDD / Worker | 75.0 → 51.6 | 25.05 → 25.08 | 5.85 → 5.75 | 1.242 → 1.274 |
+| Firefox / floppy / inline | unavailable → unavailable | 0.00 → 0.00 | unavailable → unavailable | unavailable → unavailable |
+| Firefox / floppy / Worker | unavailable → unavailable | 0.00 → 0.00 | unavailable → unavailable | unavailable → unavailable |
+| Firefox / HDD / inline | unavailable → unavailable | 0.00 → 0.00 | unavailable → unavailable | unavailable → unavailable |
+| Firefox / HDD / Worker | unavailable → unavailable | 0.00 → 0.00 | unavailable → unavailable | unavailable → unavailable |
+
+### Host CPU and memory
+
+CPU is browser-process-tree CPU seconds per observation, not percent of one
+core; average cores divide CPU seconds by each observation's wall seconds.
+RSS is the summed end-of-window resident memory (shared pages can be
+counted repeatedly). These are medians of samples, not a memory-growth test.
+Wasm values below are emulator/render linear-memory MiB, separately from RSS;
+the full report retains exact byte counts and each window duration.
+
+| Engine / medium / renderer | Browser CPU seconds | Average CPU cores | Browser RSS MiB | Emulator/render Wasm MiB |
+| --- | --- | --- | --- | --- |
+| Chromium / floppy / inline | 4.10 → 3.88 | 0.497 → 0.472 | 486.2 → 481.5 | 14.00/0.00 → 14.00/0.00 |
+| Chromium / floppy / Worker | 4.10 → 3.94 | 0.500 → 0.479 | 497.1 → 494.6 | 17.75/3.12 → 17.75/3.12 |
+| Chromium / HDD / inline | 4.02 → 3.90 | 0.489 → 0.473 | 586.0 → 586.5 | 14.00/0.00 → 14.00/0.00 |
+| Chromium / HDD / Worker | 4.12 → 3.94 | 0.500 → 0.479 | 596.0 → 593.3 | 14.25/3.12 → 14.25/3.12 |
+| Firefox / floppy / inline | 10.02 → 9.78 | 1.040 → 1.042 | 836.0 → 836.4 | 14.00/0.00 → 14.00/0.00 |
+| Firefox / floppy / Worker | 10.05 → 9.75 | 1.039 → 1.041 | 850.9 → 849.2 | 18.31/3.12 → 17.75/3.12 |
+| Firefox / HDD / inline | 10.06 → 9.72 | 1.041 → 1.042 | 845.1 → 845.6 | 14.00/0.00 → 14.00/0.00 |
+| Firefox / HDD / Worker | 10.04 → 9.77 | 1.040 → 1.041 | 856.5 → 855.2 | 14.25/3.12 → 14.25/3.12 |
+
+### Audio production and missing samples
+
+The sink requires 48,000 samples/s. Rates use each observation's actual wall
+duration; missing counts and rates are independent three-run medians.
+Queue ranges span all polls in the three repetitions, in source samples.
+
+| Engine / medium / renderer | Produced / consumed samples/s | Missing samples | Missing samples/s | Queue range |
+| --- | --- | --- | --- | --- |
+| Chromium / floppy / inline | 48017/48017 → 47999/47999 | 0 → 0 | 0 → 0 | 2400–2401 → 2400–2401 |
+| Chromium / floppy / Worker | 47996/47996 → 47993/47993 | 0 → 0 | 0 → 0 | 2400–2401 → 2400–2401 |
+| Chromium / HDD / inline | 47994/47994 → 48004/48005 | 0 → 0 | 0 → 0 | 2400–2401 → 2400–2401 |
+| Chromium / HDD / Worker | 47999/47999 → 48001/48001 | 0 → 0 | 0 → 0 | 2400–2401 → 2400–2401 |
+| Firefox / floppy / inline | 18853/18853 → 21377/21377 | 280349 → 248828 | 28942 → 26635 | 0–1441 → 0–1920 |
+| Firefox / floppy / Worker | 18856/18856 → 21371/21371 | 283325 → 248829 | 29090 → 26567 | 0–1441 → 0–1921 |
+| Firefox / HDD / inline | 18766/18766 → 21409/21409 | 282077 → 248061 | 29178 → 26601 | 0–1440 → 0–1440 |
+| Firefox / HDD / Worker | 18834/18884 → 21297/21297 | 282493 → 249597 | 29246 → 26603 | 0–1441 → 0–1441 |
+
+### Matching fixed-work controls
+
+Four guest seconds with identical deterministic scene input, host milliseconds:
+
+| Engine / medium | Reviewed artifact ms | Revised artifact ms | Median capacity gain |
+| --- | --- | --- | --- |
+| Chromium / floppy | 1270.3 / 1274.5 / 1273.0 | 1180.2 / 1174.5 / 1176.8 | 8.2% |
+| Chromium / HDD | 1263.0 / 1269.5 / 1366.6 | 1163.4 / 1163.9 / 1164.7 | 9.1% |
+| Firefox / floppy | 10137.0 / 10175.0 / 10154.0 | 9040.0 / 9011.0 / 9022.0 | 12.5% |
+| Firefox / HDD | 10157.0 / 10161.0 / 10160.0 | 8984.0 / 9020.0 / 9011.0 | 12.8% |
+
+### Assessment and checks
+
+Chromium's median guest-slice cost decreased by 4.9–6.8% across the four
+production combinations. Guest execution remains paced near 1×, with about
+4.24 million completed instructions/s and roughly 48,000 produced/consumed
+samples/s. All 24 Chromium production windows have zero missing samples;
+queues remain 2,400–2,401 source samples. Presented fps stays about 25 and
+first-response differences are mixed and polling/frame-quantized. This supports
+lower execution cost and additional headroom, not a general presentation gain.
+Raster means increased in all four Chromium combinations; memory observations
+also do not establish a consistent reduction.
+Every Chromium window changes FM and SSG pitches and has 232 FM key edges;
+fixed-guest-time phase/checksum comparisons below remain the stronger invariants.
+
+**Firefox still fails real-time playback.** Revised production medians are only
+0.4437–0.4460 guest seconds/wall second and about
+21.3–21.4 kHz PCM production for a 48 kHz sink.
+Across its twelve windows per artifact, missing output samples total
+3,377,020 before and 2,981,113 after; compare the
+per-wall-second rates in the table as well as these totals. Both artifacts still
+empty the audio queue. The current execution gain does not remove the sustained
+producer deficit or establish acceptable music continuity.
+
+All 24 Firefox production windows present zero frames. Scene response and
+presentation/raster latency remain unavailable on both renderers, despite the
+completed transition disk reads. This retains the presentation-deferral failure;
+it does not turn an unobserved response into a successful transition. The
+render-free Firefox capacity controls also remain below 1×. Worker/inline
+similarity and queue starvation still point to host execution shortfall; more
+queue latency or a guest-clock change would not establish a throughput fix.
+
+All 48 production windows have zero overflow and producer drops. Frame
+coalescing counts, per-window CPU/device clocks, instruction counts, disk reads,
+PCM counts, FM/SSG pitches, note/IRQ edges, preparation/raster costs, browser
+CPU/RSS and separate Wasm memory sizes remain in the numeric report. Every
+production transition completes exactly 130 floppy or 260 IDE sector reads.
+
+All 24 fixed-work controls match the original literal per-medium guest seconds,
+CPU clocks, instructions, disk reads, PCM count/hash, frame hash, FM key edges
+and sound IRQ edges exactly. This includes the current artifact in both engines;
+its speedup does not come from omitted guest work or altered audio phase.
+The controls are still not production continuity evidence. The fresh Chromium
+capacity gains differ from the earlier screening medians, so retain both series
+and their variation rather than claiming a precise universal percentage.
+
+These measurements were made locally on 2026-11-07 UTC (2026-11-08 JST).
+Each report records its completion timestamp. Reproduce using the commands in
+[Reproduction](#reproduction) for each artifact installed at ignored
+`web/core.wasm`, with `--repeat=3 --seconds=8`, omitting `--profile=1` and setting
+`--revision` and a fresh external `--output` for each engine/artifact. Build the
+two source revisions separately with the same toolchain; retain identical
+harness, Worker and media hashes. The committed `revisionProduction` data keeps
+all 48 windows and 24 capacity controls, including slow and unavailable results.
+
+For this measurement-only follow-up, `npm ci`, `npm run build` and the 27-asset
+publication audit passed. The unchanged harness completed all combinations.
+Report checks verified matching before/after browser versions, host, harness,
+Worker and media, derived throughput rates, all deterministic control invariants,
+and restoration of the current Wasm checksum after testing. Documentation links,
+JSON parsing, ignore rules, tracked-file scope and whitespace were checked.
+Benchmark media and working outputs remain outside the checkout; only this
+self-authored report and its derived numeric JSON are added to the commit.
+Existing native/browser regression results above remain their dated observations.
+The Firefox limitation and fast-host/single-game scope remain explicit; these
+measurements do not claim an all-game fix or close the broader performance gap.
