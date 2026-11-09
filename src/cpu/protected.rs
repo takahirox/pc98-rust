@@ -99,15 +99,19 @@ impl Cpu {
         if b.profile == crate::Profile::Pc9801Vm {
             return Ok(());
         }
-        // Conventional real-mode segments need only the complete-span bound.
-        // Keep descriptor/page validation out of every inlined fetch site;
-        // retained hidden caches (including unreal mode) use the full path.
-        if self.cr0 & 0x80000001 == 0 && self.segment_caches[s].is_none() {
-            return if off.checked_add(bytes - 1).is_some_and(|end| end <= 0xffff) {
-                Ok(())
-            } else {
-                Err(ExecError::Fault(if s == SS { 12 } else { 13 }))
-            };
+        // HimemX leaves hidden segment caches populated after returning from
+        // protected mode. Expand-up real-mode accesses still need only their
+        // cached limit, even with a nonstandard base/limit (unreal mode).
+        // Expand-down segments retain the full lower/upper-bound check below.
+        if self.cr0 & 0x80000001 == 0 {
+            let d = self.segment_cache(s);
+            if d.access & 12 != 4 {
+                return if off.checked_add(bytes - 1).is_some_and(|end| end <= d.limit) {
+                    Ok(())
+                } else {
+                    Err(ExecError::Fault(if s == SS { 12 } else { 13 }))
+                };
+            }
         }
         self.check_segment_access(b, s, off, bytes, write, execute)
     }
@@ -686,8 +690,8 @@ mod tests {
                     }
                 }
             }
-            // Leaving PE retains hidden limits; this must not take the
-            // conventional-segment shortcut, even with paging disabled.
+            // Leaving PE retains hidden limits, rather than imposing the
+            // conventional 64 KiB bound when paging is disabled.
             c.segment_caches[s] = Some(SegmentCache {
                 base: 0x100000,
                 limit: 0x1ffff,
@@ -699,6 +703,50 @@ mod tests {
             assert!(matches!(c.check_access(&mut b, s, 0xff, 2, false, false),
                 Err(ExecError::Fault(n)) if n == if s == SS { 12 } else { 13 }));
             c.segment_caches[s] = None;
+        }
+    }
+
+    #[test]
+    fn real_mode_hidden_segments_keep_expand_down_and_overflow_bounds() {
+        let mut b = Bus::new(crate::Profile::Pc9821ApDos);
+        let mut c = Cpu::default();
+        for s in 0..6 {
+            for big in [false, true] {
+                c.segment_caches[s] = Some(SegmentCache {
+                    base: 0x100000,
+                    limit: 0xff,
+                    access: 0x97, // writable expand-down data
+                    attributes: if big { 0x40 } else { 0 },
+                });
+                for (off, bytes, valid) in [
+                    (0xff, 1, false),
+                    (0x100, 4, true),
+                    (0xfffe, 2, true),
+                    (0xffff, 2, big),
+                    (0x10000, 4, big),
+                    (u32::MAX, 1, big),
+                    (u32::MAX, 2, false),
+                ] {
+                    let result = c.check_access(&mut b, s, off, bytes, true, false);
+                    if valid {
+                        result.unwrap();
+                    } else {
+                        assert!(matches!(result, Err(ExecError::Fault(n))
+                            if n == if s == SS { 12 } else { 13 }));
+                    }
+                }
+                // Bit 2 means conforming for code, not expand-down. Even in
+                // real mode the retained limit must bound the entire operand.
+                let d = c.segment_caches[s].as_mut().unwrap();
+                d.access = 0x9f;
+                d.limit = u32::MAX;
+                c.check_access(&mut b, s, u32::MAX - 3, 4, false, true)
+                    .unwrap();
+                assert!(matches!(
+                    c.check_access(&mut b, s, u32::MAX - 2, 4, false, true),
+                    Err(ExecError::Fault(n)) if n == if s == SS { 12 } else { 13 }
+                ));
+            }
         }
     }
 

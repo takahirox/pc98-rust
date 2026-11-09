@@ -1,0 +1,544 @@
+{
+  "capacity": {
+    "baseline": {
+      "context": {
+        "date": "2026-11-09T07:42:48.663Z",
+        "browser": "141.0.7390.37",
+        "node": "v26.12.1",
+        "os": "Darwin 27.2.0 arm64",
+        "cpu": "Apple M4 Max",
+        "wasmSha256": "3f52117e7e89faa4ae2c53d2d60649c0664302ec12c160751482e35180e8d7fd",
+        "mediaSha256": "73065a3c42a4bae84aa62510c4f9bf9ef4e3c30563c643bdd21b424b1d192bfc",
+        "harnessSha256": "ee5bb939ca91773bd410351c54989497fa3f3c5bc1732b3dba77e409c29dc14d",
+        "playback": false,
+        "gameplay": true,
+        "repeat": 3
+      },
+      "rows": [
+        {
+          "wallMs": 9479.299999952316,
+          "guestSeconds": 24.000279499999998,
+          "instructions": 118102981,
+          "cycles": 1584018440,
+          "reads": 131,
+          "keys": 1464,
+          "irqs": 934,
+          "samples": 1152013,
+          "pcmHash": 3284892698,
+          "frameHash": 1013578406,
+          "error": ""
+        },
+        {
+          "wallMs": 9451.100000023842,
+          "guestSeconds": 24.000279499999998,
+          "instructions": 118102981,
+          "cycles": 1584018440,
+          "reads": 131,
+          "keys": 1464,
+          "irqs": 934,
+          "samples": 1152013,
+          "pcmHash": 3284892698,
+          "frameHash": 1013578406,
+          "error": ""
+        },
+        {
+          "wallMs": 9633.100000023842,
+          "guestSeconds": 24.000279499999998,
+          "instructions": 118102981,
+          "cycles": 1584018440,
+          "reads": 131,
+          "keys": 1464,
+          "irqs": 934,
+          "samples": 1152013,
+          "pcmHash": 3284892698,
+          "frameHash": 1013578406,
+          "error": ""
+        }
+      ]
+    },
+    "revision": {
+      "context": {
+        "date": "2026-11-09T07:45:16.540Z",
+        "browser": "141.0.7390.37",
+        "node": "v26.12.1",
+        "os": "Darwin 27.2.0 arm64",
+        "cpu": "Apple M4 Max",
+        "wasmSha256": "c424157247e0bb99bebecbe34ea3ae66fbd446395866653ee77ac4c9113061cf",
+        "mediaSha256": "73065a3c42a4bae84aa62510c4f9bf9ef4e3c30563c643bdd21b424b1d192bfc",
+        "harnessSha256": "ee5bb939ca91773bd410351c54989497fa3f3c5bc1732b3dba77e409c29dc14d",
+        "playback": false,
+        "gameplay": true,
+        "repeat": 3
+      },
+      "rows": [
+        {
+          "wallMs": 8196.899999856949,
+          "guestSeconds": 24.000279499999998,
+          "instructions": 118102981,
+          "cycles": 1584018440,
+          "reads": 131,
+          "keys": 1464,
+          "irqs": 934,
+          "samples": 1152013,
+          "pcmHash": 3284892698,
+          "frameHash": 1013578406,
+          "error": ""
+        },
+        {
+          "wallMs": 8200.899999976158,
+          "guestSeconds": 24.000279499999998,
+          "instructions": 118102981,
+          "cycles": 1584018440,
+          "reads": 131,
+          "keys": 1464,
+          "irqs": 934,
+          "samples": 1152013,
+          "pcmHash": 3284892698,
+          "frameHash": 1013578406,
+          "error": ""
+        },
+        {
+          "wallMs": 8167,
+          "guestSeconds": 24.000279499999998,
+          "instructions": 118102981,
+          "cycles": 1584018440,
+          "reads": 131,
+          "keys": 1464,
+          "irqs": 934,
+          "samples": 1152013,
+          "pcmHash": 3284892698,
+          "frameHash": 1013578406,
+          "error": ""
+        }
+      ]
+    },
+    "medianHostTimeReductionPercent": 13.528425095754104,
+    "medianCapacityIncreasePercent": 15.644938941767595
+  },
+  "playback": {
+    "baseline": {
+      "context": {
+        "date": "2026-11-09T07:40:15.480Z",
+        "browser": "141.0.7390.37",
+        "node": "v26.12.1",
+        "os": "Darwin 27.2.0 arm64",
+        "cpu": "Apple M4 Max",
+        "wasmSha256": "3f52117e7e89faa4ae2c53d2d60649c0664302ec12c160751482e35180e8d7fd",
+        "mediaSha256": "73065a3c42a4bae84aa62510c4f9bf9ef4e3c30563c643bdd21b424b1d192bfc",
+        "harnessSha256": "ee5bb939ca91773bd410351c54989497fa3f3c5bc1732b3dba77e409c29dc14d",
+        "playback": true,
+        "gameplay": true,
+        "repeat": 3
+      },
+      "selectedRuns": [
+        1,
+        2
+      ],
+      "excludedRuns": [
+        {
+          "run": 0,
+          "reason": "Interactive browser closure overlapped this initial run; later isolated windows are retained."
+        }
+      ],
+      "rows": [
+        {
+          "wallMs": 23331.635166000007,
+          "guestSeconds": 23.330273249999998,
+          "underflows": 0,
+          "overflows": 0,
+          "droppedSamples": 0,
+          "producedSamples": 1119853,
+          "consumedSamples": 1119853,
+          "sequenceErrors": 0,
+          "checksumErrors": 0,
+          "queueMin": 2400,
+          "queueMax": 2401,
+          "sliceMeanMs": 4.030261463174685,
+          "frames": 613,
+          "reads": 105,
+          "keys": 1548,
+          "irqs": 909,
+          "error": ""
+        },
+        {
+          "wallMs": 23337.768417000014,
+          "guestSeconds": 23.33028925,
+          "underflows": 0,
+          "overflows": 0,
+          "droppedSamples": 0,
+          "producedSamples": 1119854,
+          "consumedSamples": 1119854,
+          "sequenceErrors": 0,
+          "checksumErrors": 0,
+          "queueMin": 2400,
+          "queueMax": 2401,
+          "sliceMeanMs": 4.036733812801428,
+          "frames": 612,
+          "reads": 105,
+          "keys": 1548,
+          "irqs": 909,
+          "error": ""
+        }
+      ]
+    },
+    "revision": {
+      "context": {
+        "date": "2026-11-09T07:48:13.827Z",
+        "browser": "141.0.7390.37",
+        "node": "v26.12.1",
+        "os": "Darwin 27.2.0 arm64",
+        "cpu": "Apple M4 Max",
+        "wasmSha256": "c424157247e0bb99bebecbe34ea3ae66fbd446395866653ee77ac4c9113061cf",
+        "mediaSha256": "73065a3c42a4bae84aa62510c4f9bf9ef4e3c30563c643bdd21b424b1d192bfc",
+        "harnessSha256": "ee5bb939ca91773bd410351c54989497fa3f3c5bc1732b3dba77e409c29dc14d",
+        "playback": true,
+        "gameplay": true,
+        "repeat": 2
+      },
+      "rows": [
+        {
+          "wallMs": 23333.449791000003,
+          "guestSeconds": 23.330280625000007,
+          "underflows": 0,
+          "overflows": 0,
+          "droppedSamples": 0,
+          "producedSamples": 1119853,
+          "consumedSamples": 1119853,
+          "sequenceErrors": 0,
+          "checksumErrors": 0,
+          "queueMin": 2400,
+          "queueMax": 2401,
+          "sliceMeanMs": 3.9155164989237616,
+          "frames": 607,
+          "reads": 105,
+          "keys": 1548,
+          "irqs": 909,
+          "error": ""
+        },
+        {
+          "wallMs": 23335.997833999994,
+          "guestSeconds": 23.330274624999994,
+          "underflows": 0,
+          "overflows": 0,
+          "droppedSamples": 0,
+          "producedSamples": 1119853,
+          "consumedSamples": 1119853,
+          "sequenceErrors": 0,
+          "checksumErrors": 0,
+          "queueMin": 2400,
+          "queueMax": 2401,
+          "sliceMeanMs": 4.0262751843456135,
+          "frames": 603,
+          "reads": 105,
+          "keys": 1548,
+          "irqs": 909,
+          "error": ""
+        }
+      ]
+    }
+  },
+  "installedChrome": {
+    "capacity": {
+      "baselineBatches": [
+        {
+          "context": {
+            "date": "2026-11-09T07:50:29.536Z",
+            "browser": "157.0.8103.38",
+            "channel": "chrome",
+            "node": "v26.12.1",
+            "os": "Darwin 27.2.0 arm64",
+            "cpu": "Apple M4 Max",
+            "wasmSha256": "3f52117e7e89faa4ae2c53d2d60649c0664302ec12c160751482e35180e8d7fd",
+            "mediaSha256": "73065a3c42a4bae84aa62510c4f9bf9ef4e3c30563c643bdd21b424b1d192bfc",
+            "harnessSha256": "5580375dddadc983febb1f4a83538a080c45ab107586a051ede41838d6ba3f8f",
+            "playback": false,
+            "gameplay": true,
+            "repeat": 1
+          },
+          "rows": [
+            {
+              "wallMs": 11253.99999988079,
+              "guestSeconds": 24.000279499999998,
+              "instructions": 118102981,
+              "cycles": 1584018440,
+              "reads": 131,
+              "keys": 1464,
+              "irqs": 934,
+              "samples": 1152013,
+              "pcmHash": 3284892698,
+              "frameHash": 1013578406,
+              "error": ""
+            }
+          ]
+        },
+        {
+          "context": {
+            "date": "2026-11-09T07:55:16.107Z",
+            "browser": "157.0.8103.38",
+            "channel": "chrome",
+            "node": "v26.12.1",
+            "os": "Darwin 27.2.0 arm64",
+            "cpu": "Apple M4 Max",
+            "wasmSha256": "3f52117e7e89faa4ae2c53d2d60649c0664302ec12c160751482e35180e8d7fd",
+            "mediaSha256": "73065a3c42a4bae84aa62510c4f9bf9ef4e3c30563c643bdd21b424b1d192bfc",
+            "harnessSha256": "5580375dddadc983febb1f4a83538a080c45ab107586a051ede41838d6ba3f8f",
+            "playback": false,
+            "gameplay": true,
+            "repeat": 2
+          },
+          "rows": [
+            {
+              "wallMs": 9383,
+              "guestSeconds": 24.000279499999998,
+              "instructions": 118102981,
+              "cycles": 1584018440,
+              "reads": 131,
+              "keys": 1464,
+              "irqs": 934,
+              "samples": 1152013,
+              "pcmHash": 3284892698,
+              "frameHash": 1013578406,
+              "error": ""
+            },
+            {
+              "wallMs": 9285.199999928474,
+              "guestSeconds": 24.000279499999998,
+              "instructions": 118102981,
+              "cycles": 1584018440,
+              "reads": 131,
+              "keys": 1464,
+              "irqs": 934,
+              "samples": 1152013,
+              "pcmHash": 3284892698,
+              "frameHash": 1013578406,
+              "error": ""
+            }
+          ]
+        }
+      ],
+      "revisionBatches": [
+        {
+          "context": {
+            "date": "2026-11-09T07:52:41.976Z",
+            "browser": "157.0.8103.38",
+            "channel": "chrome",
+            "node": "v26.12.1",
+            "os": "Darwin 27.2.0 arm64",
+            "cpu": "Apple M4 Max",
+            "wasmSha256": "c424157247e0bb99bebecbe34ea3ae66fbd446395866653ee77ac4c9113061cf",
+            "mediaSha256": "73065a3c42a4bae84aa62510c4f9bf9ef4e3c30563c643bdd21b424b1d192bfc",
+            "harnessSha256": "5580375dddadc983febb1f4a83538a080c45ab107586a051ede41838d6ba3f8f",
+            "playback": false,
+            "gameplay": true,
+            "repeat": 1
+          },
+          "rows": [
+            {
+              "wallMs": 8281.299999952316,
+              "guestSeconds": 24.000279499999998,
+              "instructions": 118102981,
+              "cycles": 1584018440,
+              "reads": 131,
+              "keys": 1464,
+              "irqs": 934,
+              "samples": 1152013,
+              "pcmHash": 3284892698,
+              "frameHash": 1013578406,
+              "error": ""
+            }
+          ]
+        },
+        {
+          "context": {
+            "date": "2026-11-09T07:56:51.725Z",
+            "browser": "157.0.8103.38",
+            "channel": "chrome",
+            "node": "v26.12.1",
+            "os": "Darwin 27.2.0 arm64",
+            "cpu": "Apple M4 Max",
+            "wasmSha256": "c424157247e0bb99bebecbe34ea3ae66fbd446395866653ee77ac4c9113061cf",
+            "mediaSha256": "73065a3c42a4bae84aa62510c4f9bf9ef4e3c30563c643bdd21b424b1d192bfc",
+            "harnessSha256": "5580375dddadc983febb1f4a83538a080c45ab107586a051ede41838d6ba3f8f",
+            "playback": false,
+            "gameplay": true,
+            "repeat": 2
+          },
+          "rows": [
+            {
+              "wallMs": 8179.999999880791,
+              "guestSeconds": 24.000279499999998,
+              "instructions": 118102981,
+              "cycles": 1584018440,
+              "reads": 131,
+              "keys": 1464,
+              "irqs": 934,
+              "samples": 1152013,
+              "pcmHash": 3284892698,
+              "frameHash": 1013578406,
+              "error": ""
+            },
+            {
+              "wallMs": 8045.600000023842,
+              "guestSeconds": 24.000279499999998,
+              "instructions": 118102981,
+              "cycles": 1584018440,
+              "reads": 131,
+              "keys": 1464,
+              "irqs": 934,
+              "samples": 1152013,
+              "pcmHash": 3284892698,
+              "frameHash": 1013578406,
+              "error": ""
+            }
+          ]
+        }
+      ],
+      "medianHostTimeReductionPercent": 12.821059363947661,
+      "medianCapacityIncreasePercent": 14.706601468664315
+    },
+    "playback": {
+      "baseline": {
+        "context": {
+          "date": "2026-11-09T07:58:27.877Z",
+          "browser": "157.0.8103.38",
+          "channel": "chrome",
+          "node": "v26.12.1",
+          "os": "Darwin 27.2.0 arm64",
+          "cpu": "Apple M4 Max",
+          "wasmSha256": "3f52117e7e89faa4ae2c53d2d60649c0664302ec12c160751482e35180e8d7fd",
+          "mediaSha256": "73065a3c42a4bae84aa62510c4f9bf9ef4e3c30563c643bdd21b424b1d192bfc",
+          "harnessSha256": "5580375dddadc983febb1f4a83538a080c45ab107586a051ede41838d6ba3f8f",
+          "playback": true,
+          "gameplay": true,
+          "repeat": 1
+        },
+        "rows": [
+          {
+            "wallMs": 23365.922500000004,
+            "guestSeconds": 23.3702695,
+            "underflows": 0,
+            "overflows": 0,
+            "droppedSamples": 0,
+            "producedSamples": 1121773,
+            "consumedSamples": 1121773,
+            "sequenceErrors": 0,
+            "checksumErrors": 0,
+            "queueMin": 2400,
+            "queueMax": 2401,
+            "sliceMeanMs": 4.246983311907777,
+            "frames": 593,
+            "reads": 105,
+            "keys": 1548,
+            "irqs": 910,
+            "error": ""
+          }
+        ]
+      },
+      "revision": {
+        "context": {
+          "date": "2026-11-09T07:59:17.523Z",
+          "browser": "157.0.8103.38",
+          "channel": "chrome",
+          "node": "v26.12.1",
+          "os": "Darwin 27.2.0 arm64",
+          "cpu": "Apple M4 Max",
+          "wasmSha256": "c424157247e0bb99bebecbe34ea3ae66fbd446395866653ee77ac4c9113061cf",
+          "mediaSha256": "73065a3c42a4bae84aa62510c4f9bf9ef4e3c30563c643bdd21b424b1d192bfc",
+          "harnessSha256": "5580375dddadc983febb1f4a83538a080c45ab107586a051ede41838d6ba3f8f",
+          "playback": true,
+          "gameplay": true,
+          "repeat": 1
+        },
+        "rows": [
+          {
+            "wallMs": 23358.06075,
+            "guestSeconds": 23.360282500000004,
+            "underflows": 0,
+            "overflows": 0,
+            "droppedSamples": 0,
+            "producedSamples": 1121293,
+            "consumedSamples": 1121293,
+            "sequenceErrors": 0,
+            "checksumErrors": 0,
+            "queueMin": 2400,
+            "queueMax": 2400,
+            "sliceMeanMs": 3.8976027395525206,
+            "frames": 605,
+            "reads": 105,
+            "keys": 1548,
+            "irqs": 910,
+            "error": ""
+          }
+        ]
+      }
+    }
+  },
+  "deploymentControl": {
+    "url": "https://takahirox.github.io/pc98-rust/",
+    "javascriptAssets": [
+      {
+        "asset": "app.js",
+        "bytes": 27725,
+        "sha256": "80e295b421bd5ac4ed6c85089de11de14a30f4c6fb9ed2a917538d5cec7b4dab",
+        "matchesCheckout": true,
+        "lastModified": "Sat, 07 Nov 2026 18:37:22 GMT"
+      },
+      {
+        "asset": "emulator-worker.js",
+        "bytes": 19978,
+        "sha256": "918440f74241a2f53f2d47635af94ca3816f77238f0553a61fe12c260e96d2c5",
+        "matchesCheckout": true,
+        "lastModified": "Sat, 07 Nov 2026 18:37:22 GMT"
+      },
+      {
+        "asset": "audio-worklet.js",
+        "bytes": 4401,
+        "sha256": "de3fbb3997fab341f18cd4e1a9278477b6b97cde6f54826734e75f6c6f8d4b5a",
+        "matchesCheckout": true,
+        "lastModified": "Sat, 07 Nov 2026 18:37:22 GMT"
+      }
+    ],
+    "wasm": {
+      "bytes": 537340,
+      "sha256": "bf5e65e17ef1e0c4e5f4d02a454f9d77d43fac93a7eb052f9a52a258313e89bd",
+      "lastModified": "Sat, 07 Nov 2026 18:37:22 GMT"
+    },
+    "playback": {
+      "context": {
+        "date": "2026-11-09T08:03:29.740Z",
+        "browser": "157.0.8103.38",
+        "channel": "chrome",
+        "node": "v26.12.1",
+        "os": "Darwin 27.2.0 arm64",
+        "cpu": "Apple M4 Max",
+        "wasmSha256": "bf5e65e17ef1e0c4e5f4d02a454f9d77d43fac93a7eb052f9a52a258313e89bd",
+        "mediaSha256": "73065a3c42a4bae84aa62510c4f9bf9ef4e3c30563c643bdd21b424b1d192bfc",
+        "harnessSha256": "5580375dddadc983febb1f4a83538a080c45ab107586a051ede41838d6ba3f8f",
+        "playback": true,
+        "gameplay": true,
+        "repeat": 1
+      },
+      "rows": [
+        {
+          "wallMs": 23362.997625000004,
+          "guestSeconds": 23.360284125,
+          "underflows": 0,
+          "overflows": 0,
+          "droppedSamples": 0,
+          "producedSamples": 1121293,
+          "consumedSamples": 1121293,
+          "sequenceErrors": 0,
+          "checksumErrors": 0,
+          "queueMin": 2400,
+          "queueMax": 2401,
+          "sliceMeanMs": 4.319520553089168,
+          "frames": 591,
+          "reads": 105,
+          "keys": 1552,
+          "irqs": 910,
+          "error": ""
+        }
+      ]
+    }
+  }
+}

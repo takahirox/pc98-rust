@@ -116,8 +116,9 @@ prompt, `MEMSIZE` measures and successfully allocates **619,664 conventional
 bytes** (38,729 paragraphs), compared with 497,856 bytes under the previous
 `DOS=LOW` configuration. `XMSCHECK` exercises HMA/A20 and XMS transfers, rejected
 requests and recovery. These original MIT commands run inside guest DOS. This
-exceeds the 540 KiB memory target; no commercial game has been tested. See
-[measurement and validation](docs/desktop-validation.md#high-memory-desktop-issue-132).
+exceeds the 540 KiB memory target. See
+[measurement and validation](docs/desktop-validation.md#high-memory-desktop-issue-132)
+and the separate [local Doukyuusei 2 installation/performance investigation](docs/doukyuusei2-performance.md).
 
 The desktop's GPL and Artistic guest publication includes **complete matching
 sources and notices on the same site**, available from [Licenses & media credits](web/licenses.html):
