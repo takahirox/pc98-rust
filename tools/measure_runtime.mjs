@@ -13,6 +13,10 @@ const options=Object.fromEntries(process.argv.slice(2).map(v=>v.replace(/^--/,''
 const engine=options.browser??'chromium', repeat=Number(options.repeat??3), seconds=Number(options.seconds??8);
 if(!['chromium','firefox'].includes(engine) || !Number.isInteger(repeat) || repeat<1 || repeat>20 || !Number.isFinite(seconds) || seconds<4 || seconds>60)
   throw Error('Expected --browser=chromium|firefox, --repeat=1..20, --seconds=4..60');
+// The pinned Firefox automation forces debuggable baseline Wasm, even without
+// an explicit profiler. Keep that induced condition out of normal comparisons.
+if(engine==='firefox' && options.debugTier!=='1')
+  throw Error('Pinned Firefox automation forces debuggable baseline Wasm. Use a stock browser for normal performance, or --debugTier=1 only for deliberate starvation diagnostics.');
 const root=await realpath('.');
 const harnessSha256=createHash('sha256').update(await readFile(new URL(import.meta.url))).digest('hex');
 for(const name of ['media','output']) {
@@ -176,7 +180,7 @@ try {
   const result={context:{revision:options.revision??'unspecified',date:new Date().toISOString(),
     wasmSha256:createHash('sha256').update(await readFile('web/core.wasm')).digest('hex'),
     workerSha256:createHash('sha256').update(await readFile('web/emulator-worker.js')).digest('hex'),
-    harnessSha256,mediaHashes,engine,browser:browser.version(),
+    harnessSha256,mediaHashes,engine,firefoxDebuggerBaseline:engine==='firefox',browser:browser.version(),
     os:`${os.type()} ${os.release()} ${os.arch()}`,cpu:os.cpus()[0].model,logicalCpus:os.cpus().length,hostMemoryBytes:os.totalmem(),repeat,seconds,capacityOnly:options.capacityOnly==='1'},rows,capacity,profiles};
   await writeFile(options.output,JSON.stringify(result,null,2)+'\n',{flag:'wx'});
 }finally{await browser?.close();await browserServer?.close();server.kill();}

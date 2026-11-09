@@ -832,10 +832,14 @@ The [ADV98 continuity regression and rights audit](docs/audio-continuity.md)
 records the measured scheduler starvation, same-guest before/after comparison,
 bounded diagnostics and the remaining synthesis/hardware limits.
 The [local game performance runbook](docs/runtime-performance.md) measures ADV98
-floppy/HDD scenes in production Chromium/Firefox, compares both render paths,
+floppy/HDD scenes in Chromium, compares both render paths,
 and records execution headroom separately from real-time playback. Local media
 and working benchmark outputs stay outside the checkout; derived numeric
 observations are documented. This opt-in benchmark is not run by CI.
+Historical Firefox measurements used a patched automation browser that forces
+baseline Wasm. The [normal-browser reproduction control](docs/doukyuusei2-reproduction.md)
+uses stock browsers without an automation protocol and starts the local game
+with sound enabled, without advancing guest time manually.
 
 HDD replacement/eject first pauses at a Worker boundary, then checks dirty pages
 and retains the discard confirmation. Import stages acknowledged transferable

@@ -1,5 +1,20 @@
 # Local game performance — Issue #144
 
+## Correction: Firefox automation did not measure normal execution
+
+The historical Firefox measurements in this document used Playwright 1.56.1's
+patched Firefox. Its injected debuggers observe Wasm and disable optimizing
+compilation. Even launching that patched executable without a driver leaves its
+frame/Worker agents active. Those rows describe forced debug execution, not
+ordinary Firefox performance. The conclusions below that Firefox generally
+cannot sustain real time are withdrawn. Chromium measurements are unaffected.
+
+The [reproduction investigation](doukyuusei2-reproduction.md) compares stock
+Firefox of the same version and changes only debugger observation flags in a
+temporary copy of the patched browser. The old harness now requires explicit
+`--debugTier=1` for that induced condition; use the normal-browser control for
+ordinary playback. Historical counters and observations are retained below.
+
 The [latest production matrix](#revised-production-measurements-review-follow-up)
 covers the current CPU/PIC artifact in both browsers and renderers.
 
@@ -52,7 +67,8 @@ npm ci
 npm run build
 python3 tools/prepare_local_performance.py /tmp/pc98-issue144/media
 node tools/measure_runtime.mjs --media=/tmp/pc98-issue144/media --output=/tmp/pc98-issue144/chromium.json --browser=chromium --repeat=3 --seconds=8 --profile=1 --revision=YOUR_REVISION
-node tools/measure_runtime.mjs --media=/tmp/pc98-issue144/media --output=/tmp/pc98-issue144/firefox.json --browser=firefox --repeat=3 --seconds=8 --revision=YOUR_REVISION
+# Historical forced-debug control, not ordinary Firefox performance:
+node tools/measure_runtime.mjs --media=/tmp/pc98-issue144/media --output=/tmp/pc98-issue144/firefox-debug.json --browser=firefox --debugTier=1 --repeat=3 --seconds=8 --revision=YOUR_REVISION
 git check-ignore fixtures/dos-apps/adv98.zip fixtures/dos-apps/music-scenes.hdm fixtures/freedos/distribution.zip
 git status --short
 npm run check:site
