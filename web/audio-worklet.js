@@ -23,7 +23,7 @@ class PC98Audio extends AudioWorkletProcessor {
       underflows:this.underflows, overflows:this.overflows, audioEpoch:this.epoch,
       receivedSamples:this.receivedSamples, consumedSamples:this.consumedSamples,
       queuedSamples:this.queuedSamples, sequenceErrors:this.sequenceErrors,
-      staleBlocks:this.staleBlocks, maxUnderflowRun:this.maxUnderflowRun,
+      staleBlocks:this.staleBlocks, underflowRun:this.underflowRun, maxUnderflowRun:this.maxUnderflowRun,
       checksumErrors:this.checksumErrors, checkedBlocks:this.checkedBlocks,
       deviceSampleRate:sampleRate,
     }}, buffer ? [buffer] : []);
@@ -74,10 +74,15 @@ class PC98Audio extends AudioWorkletProcessor {
         if (this.started) {
           this.underflows++; this.underflowRun++;
           this.maxUnderflowRun = Math.max(this.maxUnderflowRun,this.underflowRun);
+          // Credit reports can hide gaps shorter than the periodic interval.
+          if (this.input && this.underflowRun === 1) this.report('stats');
         }
         continue;
       }
+      const recovered = this.underflowRun !== 0;
       this.underflowRun = 0;
+      // End preview permission immediately when real PCM resumes.
+      if (this.input && recovered) this.report('stats');
       const value = block.samples[this.offset];
       output[i] = value; this.energy += value*value; this.samples++;
       // Integer phase avoids accumulated rounding drift at 44.1 kHz.

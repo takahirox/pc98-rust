@@ -70,17 +70,40 @@ test('bounded prefill and underrun recovery preserve every queued sample and rep
   assert.equal(processor.underflows,0); // Startup silence is separate from starvation.
   assert(read(13000).every(n=>n===0));
   assert.equal(reports.at(-1).stats.underflows,13000); // Reports even with no credits to return.
+  assert.equal(reports.at(-1).stats.underflowRun,13000);
   assert.equal(processor.maxUnderflowRun,13000);
   send(Array(480).fill(6)); assert(read(128).every(n=>n===0));
   send(Array(480).fill(7)); send(Array(480).fill(8)); send(Array(480).fill(9)); send(Array(480).fill(10));
   assert.deepEqual(read(2400),Array.from({length:2400},(_,i)=>Math.floor(i/480)+6));
   assert.equal(processor.consumedSamples,4800);
+  assert.equal(reports.at(-1).stats.underflowRun,0);
+  assert(reports.at(-1).stats.underflows>13000); // History survives recovery.
   processor.receive({type:'flush',epoch:2});
   assert.equal(processor.consumedSamples,0); assert.equal(processor.queuedSamples,0);
+  assert.equal(reports.at(-1).stats.underflowRun,0);
   const missed=processor.underflows;
   read(128); assert.equal(processor.underflows,missed); // Paused/muted sink is inactive.
   send([7],1); assert.equal(processor.staleBlocks,1); assert.equal(processor.overflows,0);
 });
+test('short starvation and recovery report immediately between ordinary credit messages',()=>{
+  const {processor,reports,send,read}=sink(48000,2400);
+  for(let n=0;n<5;n++) send(Array(480).fill(1));
+  read(2400);
+  const before=reports.length;
+  assert(read(128).every(value=>value===0)); // Much shorter than the 250 ms periodic report.
+  assert.equal(reports.length,before+1);
+  assert.equal(reports.at(-1).type,'stats');
+  assert.equal(reports.at(-1).stats.underflowRun,1);
+  for(let n=0;n<5;n++) send(Array(480).fill(2));
+  const starved=reports.length;
+  assert(read(128).every(value=>value===2)); // No block is yet complete to return a credit.
+  assert.equal(reports.length,starved+1);
+  assert.equal(reports.at(-1).type,'stats');
+  assert.equal(reports.at(-1).stats.underflowRun,0);
+  assert.equal(reports.at(-1).stats.underflows,128);
+  assert.equal(processor.consumedSamples,2528);
+});
+
 test('source numbering and independently computed PCM checksums expose missing or corrupted blocks',()=>{
   const {processor,read}=sink();
   const buffer=Float32Array.from([1,2,3]).buffer;

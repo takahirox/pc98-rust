@@ -26,7 +26,7 @@ teacher portrait, dialogue, and Look/Talk controls without an emulator error.
 The opt-in harness accepts an already installed local HDD. It does not download
 or install the game, publish its files, or capture images/audio. Reports contain
 host timings, device counters and in-memory checksums only. Both media and report
-destinations must be outside the checkout. It launches an owned Chromium and
+destinations must be outside the checkout. It launches an owned browser and
 localhost server on port 8077; run one measurement at a time with no compilation,
 regression suite or other active emulator competing for the host.
 
@@ -41,6 +41,12 @@ without replacing the current build. Routing supplies the same selected artifact
 to both Workers. Fresh pages and media imports reset each repeat. Add
 `--channel=chrome` to test the installed Google Chrome with a fresh isolated
 profile; omission selects the repository's pinned Playwright Chromium.
+Use `--browser=firefox` for pinned Playwright Firefox (without `--channel`).
+The selected Wasm and all four JavaScript runtime assets are frozen before
+setup and routed to the page, Workers and AudioWorklet. The report records their
+hashes and successful interception counts. Use `--runtime=/absolute/directory`
+to select saved `app.js`, `emulator-worker.js`, `audio-worklet.js` and
+`render-worker.js` alongside a baseline Wasm.
 
 Capacity mode measures eight guest seconds of the opening, or 24 guest seconds
 of the prologue with mouse clicks every 480 guest milliseconds. It drains the
@@ -56,6 +62,12 @@ separated by 80 ms down and 400 ms up. It records actual elapsed wall time,
 guest progress, disk/music events, PCM production/consumption, underruns, drops,
 queue bounds and presented frames. These windows are time paced, so their exact
 instruction/frame counts need not match the deterministic capacity controls.
+Add `--visuals=1` to playback to sample nine small CG-area patch fingerprints
+every 25 ms, recording changes alongside guest clocks and IDE sector reads.
+Reports include observed sampling gaps; fingerprints establish visible changes,
+not completed scene loads or physical input-to-display latency. Pixels remain
+in the browser. `--profile=1` captures an aggregate Chromium Worker host profile;
+its timings must be excluded from unprofiled comparisons.
 
 ## Diagnosis and change
 
@@ -222,6 +234,7 @@ time with changing FM notes and no additional sink underruns on this fast host.
 Those short observations do not reproduce the user's sustained audio complaint
 or demonstrate its complete resolution. Interpreter headroom is useful evidence
 for constrained hosts, but it is not a universal transition-speed or audio-quality
-claim. Firefox has not been tested with this title; the existing independent
+claim. Subsequent Firefox measurements and further optimization are documented
+in the [second evaluation](doukyuusei2-performance-round2.md). The existing independent
 [Firefox performance limitation](runtime-performance.md#revised-production-measurements-review-follow-up)
 remains relevant.
