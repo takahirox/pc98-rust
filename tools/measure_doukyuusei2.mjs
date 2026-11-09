@@ -1,15 +1,20 @@
 // Opt-in local measurement; the installed game is never copied into web/.
 // See docs/doukyuusei2-performance.md for installation and interpretation.
-import {chromium} from '@playwright/test';
-import {spawn} from 'node:child_process';
+import {chromium, firefox} from '@playwright/test';
+import {createServer} from 'node:http';
 import {readFile, realpath, writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
+import {workerProfile} from '../tests/browser/helpers/worker-profile.js';
 
 const options = Object.fromEntries(process.argv.slice(2).map(value => value.replace(/^--/, '').split('=')));
 const repeat = Number(options.repeat ?? 3), playback = options.playback === '1';
+const engine = options.browser ?? 'chromium';
 if (!Number.isInteger(repeat) || repeat < 1 || repeat > 10) throw Error('Expected --repeat=1..10');
+if (!['chromium','firefox'].includes(engine) || engine === 'firefox' && (options.channel || options.profile === '1')) {
+  throw Error('Use --browser=chromium|firefox; channel selection and host profiles require Chromium');
+}
 if (options.channel && options.channel !== 'chrome') throw Error('Use --channel=chrome for installed Google Chrome, or omit it for pinned Chromium');
 const root = await realpath('.');
 for (const name of ['media', 'output']) {
@@ -19,20 +24,38 @@ for (const name of ['media', 'output']) {
 }
 const wasm = await readFile(options.wasm ?? 'web/core.wasm');
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
+// Freeze all executable assets before setup, including the lazily loaded
+// AudioWorklet. Later source edits cannot mix revisions within a long run.
+const runtime = await Promise.all(['app.js','emulator-worker.js','audio-worklet.js','render-worker.js']
+  .map(async name => [name,await readFile(options.runtime ? path.join(options.runtime,name) : new URL('../web/'+name,import.meta.url))]));
+const runtimeSha256 = Object.fromEntries(runtime.map(([name,body]) => [name,sha(body)]));
+const harnessSha256 = sha(await readFile(new URL(import.meta.url)));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-const server = spawn('python3', ['-m', 'http.server', '8077', '--bind', '127.0.0.1', '--directory', 'web'], {stdio:'ignore'});
+const assets = new Map([...runtime,['core.wasm',wasm]]);
+const webRoot = path.join(root,'web');
+let routedAssets;
+// Chromium's AudioWorklet module fetch can bypass Playwright page routing.
+// Serve frozen executables over HTTP so every execution context gets them.
+const server = createServer(async (request,response) => {
+  try {
+    const name = decodeURIComponent(new URL(request.url,'http://127.0.0.1').pathname).slice(1) || 'index.html';
+    const location = path.resolve(webRoot,name);
+    if (!location.startsWith(webRoot+path.sep)) { response.writeHead(404).end(); return; }
+    const body = assets.has(name) ? assets.get(name) : await readFile(location);
+    if (assets.has(name) && routedAssets) routedAssets[name]++;
+    const mime = {'.wasm':'application/wasm','.js':'text/javascript','.html':'text/html',
+      '.json':'application/json','.svg':'image/svg+xml','.css':'text/css'}[path.extname(name)] ?? 'application/octet-stream';
+    response.writeHead(200,{'Content-Type':mime,'Cache-Control':'no-store'}).end(body);
+  } catch { response.writeHead(404).end(); }
+});
 let browser;
 const rows = [];
 try {
-  for (let attempt = 0; ; attempt++) {
-    if (server.exitCode !== null || attempt === 100) throw Error('Cannot start local server; port 8077 must be free');
-    try { if ((await fetch('http://127.0.0.1:8077/')).ok) break; } catch {}
-    await sleep(50);
-  }
-  browser = await chromium.launch({headless:true, channel:options.channel});
+  await new Promise((resolve,reject) => { server.once('error',reject); server.listen(8077,'127.0.0.1',resolve); });
+  browser = await ({chromium, firefox}[engine]).launch({headless:true, ...(options.channel ? {channel:options.channel} : {})});
   for (let run = 0; run < repeat; run++) {
     const page = await browser.newPage();
-    await page.route('**/core.wasm', route => route.fulfill({contentType:'application/wasm', body:wasm}));
+    routedAssets = Object.fromEntries([...assets.keys()].map(name => [name,0]));
     await page.goto(`http://127.0.0.1:8077/?diagnostics${playback ? '' : '&manual'}`);
     await page.waitForFunction(() => !document.querySelector('#profile').disabled);
     await page.locator('#drive').selectOption('2');
@@ -79,10 +102,45 @@ try {
       await mouse(20,0,1,100); await mouse(0,0,0,1000);
     }
     let result;
+    // Diagnostic-only host samples; never compare these elapsed times with an
+    // unprofiled run. Keep only aggregate host function counts, not guest data.
+    const profile = options.profile === '1' ? workerProfile(browser,20000) : null;
+    if (profile) await sleep(500);
     if (playback) {
       await page.locator('#sound').click(); await page.locator('#pause').click();
       await sleep(1500);
       const a = await page.evaluate(() => pc98.stats()), began = performance.now();
+      if (options.visuals === '1') await page.evaluate(() => {
+        const canvas = document.querySelector('#screen'), context = canvas.getContext('2d');
+        const watch = window.pc98VisualWatch = {started:performance.now(), events:[], pending:null, overflow:false, samples:0, maxGapMs:0};
+        let previous = '', reads = -1;
+        let lastPoll = watch.started;
+        watch.timer = setInterval(() => {
+          if (watch.pending) return;
+          const now = performance.now();
+          watch.maxGapMs = Math.max(watch.maxGapMs,now-lastPoll); lastPoll = now; watch.samples++;
+          const wallMs = performance.now()-watch.started, hashes = [];
+          // Nine small patches cover the CG area above the dialogue panel.
+          // Pixels stay in-page; only fingerprints and timing counters leave it.
+          for (const y of [30,140,250]) for (const x of [70,310,550]) {
+            let hash = 2166136261;
+            for (const byte of context.getImageData(x,y,16,16).data) hash = Math.imul(hash ^ byte,16777619) >>> 0;
+            hashes.push(hash);
+          }
+          watch.pending = pc98.stats().then(state => {
+            const key = hashes.join(',');
+            if (key !== previous || state.hddReads !== reads) {
+              if (watch.events.length < 1024) watch.events.push({wallMs,stateWallMs:performance.now()-watch.started,
+                guestSeconds:state.guestSeconds, reads:state.hddReads, cpuCycles:state.cpuCycles,
+                guestSliceMs:state.videoStats.guestSliceMs, underflows:state.underflows,
+                underflowRun:state.underflowRun, queuedSamples:state.queuedSamples,
+                outstandingSamples:state.outstandingSamples, hashes});
+              else watch.overflow = true;
+            }
+            previous = key; reads = state.hddReads;
+          }).finally(() => { watch.pending = null; });
+        },25);
+      });
       const polls = [];
       for (let n = 0; n < (options.gameplay === '1' ? 48 : 16); n++) {
         if (options.gameplay === '1') {
@@ -101,6 +159,10 @@ try {
         frames:b.presentationStats.frames-a.presentationStats.frames,
         reads:delta('hddReads'), keys:delta('fmKeyEdges'), irqs:delta('soundIrqEdges'), error:b.error};
       if (b.audioState !== 'running' || !b.running || b.audioEpoch !== a.audioEpoch) throw Error('Playback stopped or flushed');
+      if (options.visuals === '1') result.visuals = await page.evaluate(async () => {
+        const watch = window.pc98VisualWatch; clearInterval(watch.timer); await watch.pending;
+        return {sampleMs:25, samples:watch.samples, maxGapMs:watch.maxGapMs, overflow:watch.overflow, events:watch.events};
+      });
     } else {
       const parts = []; let pcmHash = 2166136261;
       for (let part = 0; part < (options.gameplay === '1' ? 3 : 1); part++) {
@@ -133,11 +195,27 @@ try {
     if (!result.keys || (options.gameplay === '1' && !result.reads)) {
       throw Error('Expected game music and scene loading did not run; check the clean installed HDD and setup');
     }
-    rows.push(result); console.log(JSON.stringify({run, ...result})); await page.close();
+    const presented = await page.evaluate(() => pc98.stats());
+    result.videoMode = presented.videoMode; result.rendererFailure = presented.rendererFailure;
+    result.routedAssets = routedAssets;
+    for (const name of ['core.wasm','app.js','emulator-worker.js','render-worker.js',...(playback ? ['audio-worklet.js'] : [])]) {
+      if (!routedAssets[name]) throw Error(`Selected runtime asset was not intercepted: ${name}`);
+    }
+    if (profile) {
+      const sampled = await profile, names = new Map(sampled.nodes.map(node => [node.id,node.callFrame.functionName]));
+      const counts = new Map();
+      for (const id of sampled.samples ?? []) counts.set(names.get(id),(counts.get(names.get(id)) ?? 0)+1);
+      result.hostProfile = {samples:sampled.samples.length, functions:[...counts].sort((a,b) => b[1]-a[1]).slice(0,25)};
+    }
+    rows.push(result);
+    const {visuals, hostProfile, ...summary} = result;
+    console.log(JSON.stringify({run, ...summary, visualEvents:visuals?.events.length, profileSamples:hostProfile?.samples}));
+    await page.close();
   }
   await writeFile(options.output, JSON.stringify({context:{date:new Date().toISOString(), browser:browser.version(),
-    channel:options.channel ?? 'chromium', node:process.version,
+    engine, channel:options.channel ?? engine, node:process.version,
     os:`${os.type()} ${os.release()} ${os.arch()}`, cpu:os.cpus()[0].model,
-    wasmSha256:sha(wasm), mediaSha256:sha(await readFile(options.media)),
-    harnessSha256:sha(await readFile(new URL(import.meta.url))), playback, gameplay:options.gameplay === '1', repeat}, rows}, null, 2)+'\n', {flag:'wx'});
-} finally { await browser?.close(); server.kill(); }
+    wasmSha256:sha(wasm), runtimeSha256, mediaSha256:sha(await readFile(options.media)),
+    harnessSha256, playback, gameplay:options.gameplay === '1',
+    profile:options.profile === '1', visuals:options.visuals === '1', repeat}, rows}, null, 2)+'\n', {flag:'wx'});
+} finally { await browser?.close(); server.closeAllConnections(); server.close(); }

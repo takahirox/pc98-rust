@@ -14,7 +14,7 @@ function invalidateVideo() {
 }
 let port, audioEnabled = false, audioState, audioEpoch = 0, flushWaiter;
 const audioBuffers = Array.from({length: 6}, () => new ArrayBuffer(1024 * 4));
-let sinkStats = {}, sinkStatsAt = 0, underflowsAtFlush = 0, transaction = null;
+let sinkStats = {}, sinkStatsAt = 0, transaction = null;
 let producedSamples = 0, sentSamples = 0, droppedSamples = 0;
 let deadline = 0, diagnostics = false;
 // Opt-in bounded host-cost histogram; no guest data or per-instruction logging.
@@ -134,9 +134,11 @@ function presentDue() {
     const reserve = Math.max(0, outstandingAudio() - (now-sinkStatsAt)*48);
     // Six filled credits can leave a partially consumed block: 50 ms then
     // suffices because refill is blocked. Otherwise refill toward 60 ms first.
-    // A sink already underflowing with no estimated reserve keeps a low-rate
-    // preview; rendering must never spend a healthy stream's remaining reserve.
-    const starvedPreview = sinkStats.underflows > underflowsAtFlush && reserve === 0 && now >= frameDue+100;
+    // The sink reports whether its current output run is missing PCM. Delayed
+    // credits can leave a positive reserve estimate even while it emits silence.
+    // Bound preview refresh during that condition; recovered streams still wait
+    // for their normal reserve, regardless of historical underrun totals.
+    const starvedPreview = sinkStats.audioEpoch === audioEpoch && sinkStats.underflowRun > 0 && now >= frameDue+100;
     if (reserve < (audioBuffers.length ? 2880 : 2400) && !starvedPreview) return;
   }
   present(); frameDue = performance.now()+33;
@@ -287,9 +289,14 @@ async function command(type, data) {
       if (m.buffer) audioBuffers.push(m.buffer);
       if (m.stats && m.epoch === audioEpoch) { sinkStats = m.stats; sinkStatsAt = performance.now(); }
       if (m.type === 'flushed' && m.epoch === audioEpoch) {
-        underflowsAtFlush = sinkStats.underflows ?? 0;
         flushWaiter?.(); flushWaiter = null;
       }
+      // A short missing-PCM run can begin and recover between guest slices.
+      // Service its bounded preview deadline on the fresh sink notification,
+      // while no Wasm slice is executing, instead of losing that edge at tick().
+      const activeStarvation = m.type === 'stats' && m.epoch === audioEpoch && m.stats?.underflowRun > 0
+        && playingAudio() && running && !manual && !busy && !transaction && performance.now() >= frameDue+100;
+      if (activeStarvation) presentDue();
       if (m.epoch === audioEpoch && playingAudio() && outstandingAudio() < 2880 && audioBuffers.length) schedule(0);
     };
     port.start(); await flushAudio(); return;

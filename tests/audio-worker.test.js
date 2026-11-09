@@ -13,13 +13,14 @@ function worker(code=source, {prebuffer=2400, stalls=[], frameCost=0, renderWork
   const frames=[];
   const events=[], blocks=[], recycled=[];
   const sink={audioEpoch:0,consumedSamples:0};
-  let consumed=0, reported=0;
+  let consumed=0, reported=0, underflowRun=0;
   const post = (fn, delay=0) => {
     const event={id:++nextId,at:now+delay,fn}; events.push(event); return event.id;
   };
   function advance(time) {
     let remaining=(time-now)*48;
     if (started) {
+      const requested=remaining;
       while(remaining && blocks.length) {
         const block=blocks[0], n=Math.min(remaining,block.count);
         block.count-=n; remaining-=n; consumed+=n;
@@ -31,6 +32,8 @@ function worker(code=source, {prebuffer=2400, stalls=[], frameCost=0, renderWork
         }
       }
       missed+=remaining;
+      if (remaining) underflowRun = remaining < requested ? remaining : underflowRun+remaining;
+      else if (requested) underflowRun=0;
     }
     now=time;
   }
@@ -76,6 +79,7 @@ function worker(code=source, {prebuffer=2400, stalls=[], frameCost=0, renderWork
     if (recycled.length) run('sinkStatsAt=performance.now()');
     sink.consumedSamples=reported;
     sink.underflows=missed;
+    sink.underflowRun=underflowRun;
     run('audioBuffers.push(...recycled.splice(0))');
     if(!event.cancelled) event.fn();
     return true;
@@ -145,6 +149,58 @@ test('a persistently starved sink keeps a preview without claiming continuous au
   const frozen=worker(source.replace(' && !starvedPreview',''),options);
   frozen.run('schedule(0)'); frozen.until(3000);
   assert(frozen.result().frames.length<2);
+});
+
+test('current sink starvation permits bounded previews despite a positive stale reserve',()=>{
+  const old=source.replace('sinkStats.audioEpoch === audioEpoch && sinkStats.underflowRun > 0',
+    'sinkStats.underflows > 0 && reserve === 0');
+  for (const [code,expected] of [[source,1],[old,0]]) {
+    const w=worker(code,{renderWorker:true});
+    // A delayed cursor overestimates 30 ms of PCM while the sink has already
+    // emitted silence. Waiting for that estimate to hit exactly zero freezes it.
+    w.run('sentSamples=1440;sinkStats.underflows=1000;sinkStats.underflowRun=1000;frameDue=-99;presentDue()');
+    assert.equal(w.result().frames.length,0);
+    w.run('frameDue=-100;presentDue()');
+    assert.equal(w.result().frames.length,expected);
+    assert.equal(w.result().slices,0); // Rendering does not advance guest time.
+  }
+});
+
+test('recovered and previous-epoch underruns cannot bypass a healthy stream reserve',()=>{
+  for (const [epoch,run] of [[0,0],[-1,1000]]) {
+    const w=worker(source,{renderWorker:true});
+    w.run(`sinkStats.audioEpoch=${epoch};sinkStats.underflows=1000;sinkStats.underflowRun=${run};frameDue=-100;presentDue()`);
+    assert.equal(w.result().frames.length,0);
+  }
+});
+
+test('a missing-PCM edge between guest slices refreshes the preview before recovery overwrites it',async()=>{
+  for (const [code,expected] of [[source,1],[source.replace('if (activeStarvation) presentDue();',''),0]]) {
+    const w=worker(code,{renderWorker:true});
+    const connected=w.run("command('audioPort',testPort)");
+    w.run("testPort.onmessage({data:{type:'flushed',epoch:audioEpoch,stats:{audioEpoch,consumedSamples:0,underflows:1000,underflowRun:0}}})");
+    await connected;
+    w.run('sentSamples=1440;frameDue=-100;presentDue()');
+    assert.equal(w.result().frames.length,0);
+    w.run("testPort.onmessage({data:{type:'stats',epoch:audioEpoch,stats:{audioEpoch,consumedSamples:0,underflows:1001,underflowRun:1}}})");
+    w.run("testPort.onmessage({data:{type:'stats',epoch:audioEpoch,stats:{audioEpoch,consumedSamples:0,underflows:1128,underflowRun:0}}})");
+    w.run('presentDue()');
+    assert.equal(w.result().frames.length,expected);
+    assert.equal(w.result().slices,0);
+  }
+});
+
+test('starvation notifications do not refresh during pause, inspection or media operations',async()=>{
+  for (const state of ['running=false','manual=true','busy=true',"transaction='media'"]) {
+    const w=worker(source,{renderWorker:true});
+    const connected=w.run("command('audioPort',testPort)");
+    w.run("testPort.onmessage({data:{type:'flushed',epoch:audioEpoch,stats:{audioEpoch,consumedSamples:0,underflowRun:0}}})");
+    await connected;
+    w.run(`frameDue=-100;${state}`);
+    w.run("testPort.onmessage({data:{type:'stats',epoch:audioEpoch,stats:{audioEpoch,consumedSamples:0,underflowRun:1}}})");
+    assert.equal(w.result().frames.length,0);
+    assert.equal(w.result().slices,0);
+  }
 });
 
 test('a flushed stream cannot use a previous epoch underflow to spend its new prefill',async()=>{
