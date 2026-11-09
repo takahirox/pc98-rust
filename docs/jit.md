@@ -1,6 +1,6 @@
 # Browser x86-to-WebAssembly JIT — Issue #150
 
-The browser emulator dynamically compiles hot Ap real-mode instruction blocks
+With JIT selected, the browser emulator dynamically compiles hot Ap real-mode instruction blocks
 into WebAssembly. Generated code implements register operations, flags and
 branches. It shares the owning core's memory and calls Rust at every instruction
 boundary to preserve fetches, guest clocks and device events. The native core
@@ -17,8 +17,8 @@ execution, 32-bit defaults, single-step and unusual fetch boundaries use the
 existing interpreter. This is a bounded first tier, not a replacement for the
 full CPU implementation.
 
-JIT is enabled by default in the browser. Add `?jit=0` (or `&jit=0`) to select the
-interpreter for the whole session. VM uses the interpreter. An unavailable JIT
+The initial tier is opt-in: add `?jit=1` (or `&jit=1`) to enable it. The default
+and explicit `?jit=0` sessions retain the interpreter. VM uses the interpreter. An unavailable JIT
 module or compilation failure also retains interpreter execution; no browser or
 runtime dependency is downloaded. The compiler is the original MIT-licensed
 [`web/jit.js`](../web/jit.js), using the standard
@@ -117,6 +117,22 @@ repeated final comparison and pre-merge validation are recorded in
 No visible-transition or audio-continuity improvement is inferred from the
 register-loop result.
 
+The final same-core comparison alternates mode order across six fresh Chrome
+controls. Every canonical guest/PCM/frame result above matches:
+
+| Installed-game mode | Host ms, individual controls | Median host ms |
+| --- | --- | ---: |
+| Interpreter | 8,080.3, 8,241.9, 8,203.3 | 8,203.3 |
+| JIT | 8,273.8, 8,304.4, 8,297.3 | 8,297.3 |
+
+Only 88,022 of 118,102,981 measured instructions use this tier (about 0.075%).
+The JIT control is 1.1% slower by the median. Consequently the ordinary browser
+keeps the interpreter; the optional tier is available for supported workloads
+and future coverage work. These explicit-mode measurements were collected at
+`f606aac`; the subsequent opt-in default changes neither the core/compiler bytes
+nor either explicit-mode execution path. Normal-playback observations and final
+acceptance are recorded in the linked Issue/PR.
+
 The local installed-game harness supports `--jit=0` and `--jit=1`, freezes the
 compiler asset alongside the runtime, and records JIT counters. Use one browser
 at a time after builds/regression suites finish, without a debugger or profiler:
@@ -128,8 +144,9 @@ node tools/measure_doukyuusei2.mjs --media=/tmp/pc98-146/installed.hdi --output=
 
 Alternate order and repeat; compare fixed work and guest results before comparing
 host time. The [normal startup controller](doukyuusei2-reproduction.md) also
-accepts `--jit=0|1` and records JIT activity. Its input-to-image observations and
-delivery counters do not establish synthesis fidelity. Game media, installed
+accepts `--jit=0|1`, defaults to the interpreter and records JIT activity.
+Its image-change observations and delivery counters do not establish synthesis
+fidelity. Game media, installed
 HDDs, captures, recordings, raw profiles and raw reports stay outside checkout
 and publication. Issue #146 remains open unless the original debugger-free
 Chrome complaint is independently reproduced and resolved.

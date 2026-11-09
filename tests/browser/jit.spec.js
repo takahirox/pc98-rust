@@ -36,12 +36,17 @@ test('production Worker JIT matches interpreter clocks, registers, pixels and PC
 
 test('an unavailable JIT module retains a working interpreter',async({page},testInfo)=>{
   test.skip(testInfo.project.name==='pages','Failure path is covered once; both asset roots are covered above.');
-  await page.route('**/jit.js',route=>route.abort());
+  let requests=0;
+  await page.route('**/jit.js',route=>{requests++;return route.abort();});
   await page.goto('./?diagnostics&manual');await expect(page.locator('#profile')).toBeEnabled();
+  expect((await page.evaluate(()=>pc98.stats())).jit).toEqual({mode:'interpreter',unavailable:false});
+  expect(requests).toBe(0);
+  await page.goto('./?diagnostics&manual&jit=1');await expect(page.locator('#profile')).toBeEnabled();
   const result=await inspect(page,()=>{
     pc98.core.step_scheduler(80000,10000);return pc98.stats();
   });
   expect(result.jit).toEqual({mode:'interpreter',unavailable:true});
+  expect(requests).toBe(1);
   expect(result.completedInstructions).toBeGreaterThan(0);expect(result.error).toBe('');
   await expect(page.locator('#error')).toBeHidden();
 });

@@ -8,6 +8,7 @@ import path from 'node:path';
 import os from 'node:os';
 
 const options=Object.fromEntries(process.argv.slice(2).map(v=>v.replace(/^--/,'').split('=')));
+options.jit??='0';
 const engine=options.browser, clicks=Number(options.clicks??48);
 if(options.jit!==undefined&&!['0','1'].includes(options.jit))throw Error('Expected --jit=0|1');
 if(!['chrome','firefox'].includes(engine) || !Number.isInteger(clicks) || clicks<1 || clicks>240)

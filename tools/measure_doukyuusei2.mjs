@@ -9,6 +9,7 @@ import os from 'node:os';
 import {workerProfile} from '../tests/browser/helpers/worker-profile.js';
 
 const options = Object.fromEntries(process.argv.slice(2).map(value => value.replace(/^--/, '').split('=')));
+options.jit ??= '0';
 const repeat = Number(options.repeat ?? 3), playback = options.playback === '1';
 const engine = options.browser ?? 'chromium';
 if(options.jit!==undefined&&!['0','1'].includes(options.jit))throw Error('Expected --jit=0|1');

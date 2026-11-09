@@ -233,7 +233,7 @@ async function command(type, data) {
     const response = await fetch(new URL('core.wasm', import.meta.url));
     if (!response.ok) throw Error(`Missing Wasm bundle (HTTP ${response.status}). Run npm run build.`);
     core = (await WebAssembly.instantiate(await response.arrayBuffer(), {})).instance.exports;
-    if (data.jit !== false && typeof core.jit_begin_slice === 'function') {
+    if (data.jit === true && typeof core.jit_begin_slice === 'function') {
       try {
         const {WasmJit} = await import(new URL('jit.js',import.meta.url));
         jit = new WasmJit(core);
