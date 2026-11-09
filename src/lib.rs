@@ -149,6 +149,70 @@ impl Machine {
 mod wasm {
     use super::*;
     use std::cell::RefCell;
+    thread_local! {
+        static JIT: RefCell<cpu::jit::Engine> = RefCell::new(cpu::jit::Engine::default());
+        static JIT_LAYOUT: RefCell<[usize; 3]> = const { RefCell::new([0; 3]) };
+    }
+    #[no_mangle]
+    pub extern "C" fn jit_clear() {
+        JIT.with(|j| j.borrow_mut().clear());
+    }
+    #[no_mangle]
+    pub extern "C" fn jit_begin_slice(clocks: u32, cap: u32) {
+        MACHINE.with(|m| JIT.with(|j| j.borrow_mut().begin_slice(&m.borrow(), clocks, cap)));
+    }
+    #[no_mangle]
+    pub extern "C" fn jit_dispatch(compile: u32) -> u32 {
+        MACHINE.with(|m| JIT.with(|j| j.borrow_mut().dispatch(&mut m.borrow_mut(), compile != 0)))
+    }
+    #[no_mangle]
+    pub extern "C" fn jit_packet() -> *const u32 {
+        JIT.with(|j| j.borrow().packet().as_ptr())
+    }
+    #[no_mangle]
+    pub extern "C" fn jit_packet_len() -> usize {
+        JIT.with(|j| j.borrow().packet().len())
+    }
+    #[no_mangle]
+    pub extern "C" fn jit_done() -> u32 {
+        JIT.with(|j| j.borrow().done())
+    }
+    #[no_mangle]
+    pub extern "C" fn jit_metric(index: usize) -> f64 {
+        JIT.with(|j| j.borrow().counters.get(index).copied().unwrap_or(0) as f64)
+    }
+    #[no_mangle]
+    pub extern "C" fn jit_register(id: u32, ready: u32) -> u32 {
+        JIT.with(|j| u32::from(j.borrow_mut().register(id, ready != 0)))
+    }
+    #[no_mangle]
+    pub extern "C" fn jit_start(id: u32) -> u32 {
+        MACHINE.with(|m| JIT.with(|j| u32::from(j.borrow_mut().start(&mut m.borrow_mut(), id))))
+    }
+    #[no_mangle]
+    pub extern "C" fn jit_next(index: usize, taken: u32) -> u32 {
+        MACHINE.with(|m| {
+            JIT.with(|j| u32::from(j.borrow_mut().next(&mut m.borrow_mut(), index, taken != 0)))
+        })
+    }
+    #[no_mangle]
+    pub extern "C" fn jit_fallback() {
+        MACHINE.with(|m| JIT.with(|j| j.borrow_mut().fallback(&mut m.borrow_mut())));
+    }
+    #[no_mangle]
+    pub extern "C" fn jit_layout() -> *const usize {
+        MACHINE.with(|m| {
+            JIT_LAYOUT.with(|layout| {
+                let mut m = m.borrow_mut();
+                *layout.borrow_mut() = [
+                    m.cpu.r.as_mut_ptr() as usize,
+                    &mut m.cpu.flags as *mut u16 as usize,
+                    &mut m.cpu.ip as *mut u32 as usize,
+                ];
+                layout.borrow().as_ptr()
+            })
+        })
+    }
     thread_local! {static MACHINE:RefCell<Machine>=RefCell::new(Machine::default());static TRANSFER:RefCell<Vec<u8>>=const{RefCell::new(Vec::new())};static MESSAGE:RefCell<Vec<u8>>=const{RefCell::new(Vec::new())};static PENDING:RefCell<Option<hdd::HdiImport>>=const{RefCell::new(None)};static EXPORTED:std::cell::Cell<usize>=const{std::cell::Cell::new(0)};}
     #[no_mangle]
     pub extern "C" fn input_buffer(len: usize) -> *mut u8 {
@@ -195,6 +259,7 @@ mod wasm {
             m.bus.profile = profile;
             m.reset();
         });
+        jit_clear();
         1
     }
     #[no_mangle]
@@ -207,7 +272,8 @@ mod wasm {
     }
     #[no_mangle]
     pub extern "C" fn reset() {
-        MACHINE.with(|m| m.borrow_mut().reset())
+        MACHINE.with(|m| m.borrow_mut().reset());
+        jit_clear();
     }
     #[no_mangle]
     pub extern "C" fn eject(drive: usize) {

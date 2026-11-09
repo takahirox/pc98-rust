@@ -841,6 +841,13 @@ baseline Wasm. The [normal-browser reproduction control](docs/doukyuusei2-reprod
 uses stock browsers without an automation protocol and starts the local game
 with sound enabled, without advancing guest time manually.
 
+The browser's [x86-to-Wasm JIT](docs/jit.md) compiles hot Ap real-mode
+register/immediate blocks and retains instruction-level timing and interrupts.
+Unsupported operations use the interpreter; add `?jit=0` for an interpreter
+comparison. The native/headless and observer APIs retain the reference interpreter.
+The JIT report documents coverage, bounded compilation, correctness checks and
+fixed-work measurements separately from real-time game playback.
+
 HDD replacement/eject first pauses at a Worker boundary, then checks dirty pages
 and retains the discard confirmation. Import stages acknowledged transferable
 chunks of at most 1 MiB before atomic commit; failure cancels staging and retains

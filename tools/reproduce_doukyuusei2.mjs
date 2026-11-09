@@ -9,6 +9,7 @@ import os from 'node:os';
 
 const options=Object.fromEntries(process.argv.slice(2).map(v=>v.replace(/^--/,'').split('=')));
 const engine=options.browser, clicks=Number(options.clicks??48);
+if(options.jit!==undefined&&!['0','1'].includes(options.jit))throw Error('Expected --jit=0|1');
 if(!['chrome','firefox'].includes(engine) || !Number.isInteger(clicks) || clicks<1 || clicks>240)
   throw Error('Expected --browser=chrome|firefox and --clicks=1..240');
 const root=await realpath('.');
@@ -29,7 +30,7 @@ if(engine==='firefox') {
 }
 await access(options.output).then(()=>{throw Error('Output already exists');},()=>{});
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
-const names=['app.js','emulator-worker.js','audio-worklet.js','render-worker.js','core.wasm'];
+const names=['app.js','emulator-worker.js','audio-worklet.js','render-worker.js','core.wasm','jit.js'];
 const assets=new Map(await Promise.all(names.map(async name=>[name,await readFile(path.join(root,'web',name))])));
 const sourceHashes=Object.fromEntries([...assets].map(([name,body])=>[name,sha(body)]));
 // These bounded input/audio getters exist only in the served local control.
@@ -68,7 +69,7 @@ async function sample(){
       frames:s.presentationStats.frames,guestSlices:s.videoStats.guestSlices,guestSliceMs:s.videoStats.guestSliceMs,
       hddReads:s.hddReads,fmKeyEdges:s.fmKeyEdges,soundIrqEdges:s.soundIrqEdges,
       videoMode:s.videoMode,rendererFailure:s.rendererFailure,error:s.error,hidden:document.hidden,
-      output:reproductionAudio(),patches});
+      output:reproductionAudio(),patches,jit:s.jit});
     if(s.error || !s.running || s.audioState!=='running')throw Error('Playback stopped or faulted');
   }finally{pending=false;}
 }
@@ -163,7 +164,7 @@ const server=createServer(async(request,response)=>{
 });
 try{
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(8079,'127.0.0.1',resolve);});
-  const url='http://127.0.0.1:8079/?diagnostics';
+  const url='http://127.0.0.1:8079/?diagnostics&jit='+(options.jit==='0'?'0':'1');
   const args=engine==='firefox'?['-no-remote','-profile',profile,url]:
     ['--user-data-dir='+profile,'--no-first-run','--no-default-browser-check','--autoplay-policy=no-user-gesture-required',url];
   child=spawn(options.executable,args,{stdio:['ignore','ignore','pipe']});
@@ -172,12 +173,12 @@ try{
     new Promise((_,reject)=>child.once('error',reject).once('exit',code=>reject(Error('Browser exited '+code)))),
     new Promise((_,reject)=>setTimeout(()=>reject(Error('Reproduction deadline; '+stderr)),240000+clicks*600).unref()),
   ]);
-  const missing=names.filter(name=>!counts[name]);
+  const missing=names.filter(name=>!counts[name] && !(name==='jit.js'&&options.jit==='0'));
   if(missing.length && !result.error)result.error='Selected runtime assets were not served: '+missing.join(', ');
   await writeFile(options.output,JSON.stringify({context:{date:new Date().toISOString(),engine,
     automationProtocol:false,manualGuestAdvance:false,headless:false,automaticAudioActivation:true,
     os:os.type()+' '+os.release()+' '+os.arch(),cpu:os.cpus()[0].model,node:process.version,
-    sourceHashes,servedHashes,harnessHash,mediaSha256:sha(await readFile(options.media)),counts,clicks},...result},null,2)+'\n',{flag:'wx'});
+    sourceHashes,servedHashes,harnessHash,mediaSha256:sha(await readFile(options.media)),counts,clicks,jit:options.jit!=='0'},...result},null,2)+'\n',{flag:'wx'});
   const a=result.rows[0],b=result.rows.at(-1);
   console.log(JSON.stringify({error:result.error,rows:result.rows.length,
     guestSecondsPerWallSecond:a?(b.guestSeconds-a.guestSeconds)*1000/(b.wallMs-a.wallMs):null,

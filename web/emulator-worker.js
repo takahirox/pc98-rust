@@ -2,7 +2,7 @@
 // Requests: {id,type,data}; replies: {id,value|error,state}. Unsolicited frame,
 // stopped and fault events never resolve requests. frameAck returns ownership
 // of the sole pixel buffer; audio uses its own credit-based MessagePort.
-let core, running = false, manual = false, busy = false, timer;
+let core, jit, jitUnavailable = false, running = false, manual = false, busy = false, timer;
 let generation = 0, frameBuffer = new ArrayBuffer(640 * 400 * 4), frameDue = 0, frameRequested = false;
 let videoPort, snapshotBuffer = null, videoEpoch = 0, frameSequence = 0;
 let inFlightSequence = 0;
@@ -27,10 +27,13 @@ function guestSlice() {
   const now = core.metric(5);
   if (guestDeadline <= now) guestDeadline = now + 80000;
   const started = performance.now();
-  core.step_scheduler(Math.ceil(guestDeadline-now), 100000);
+  stepScheduler(Math.ceil(guestDeadline-now), 100000);
   const elapsed = performance.now()-started;
   videoStats.guestSliceMs += elapsed; videoStats.guestSlices++;
   if (diagnostics) sliceHistogram[Math.min(500,Math.floor(elapsed*10))]++;
+}
+function stepScheduler(clocks,cap) {
+  return jit ? jit.step(clocks,cap) : core.step_scheduler(clocks,cap);
 }
 const tickTasks = new MessageChannel();
 tickTasks.port1.onmessage = ({data:token}) => {
@@ -63,7 +66,8 @@ function stats() {
     instructionThroughput, error:message(), beep:core.beep(), running, audioState, audioGain:running && audioEnabled && audioState === 'running' ? 1 : 0,
     audioEnergy:0, scheduledSamples:0, ...sinkStats, generation,
     frameInFlight:videoPort ? !snapshotBuffer : !frameBuffer, videoEpoch, videoMode:videoPort ? 'worker' : 'inline', videoStats:{...videoStats}, audioBuffers:audioBuffers.length, transaction,
-    producedSamples, sentSamples, droppedSamples, outstandingSamples:outstandingAudio()};
+    producedSamples, sentSamples, droppedSamples, outstandingSamples:outstandingAudio(),
+    jit:jit ? jit.stats() : {mode:'interpreter',unavailable:jitUnavailable}};
 }
 function input(bytes) {
   if (bytes.byteLength > 4 * 1024 * 1024) throw Error('Transfer exceeds 4 MiB');
@@ -229,6 +233,12 @@ async function command(type, data) {
     const response = await fetch(new URL('core.wasm', import.meta.url));
     if (!response.ok) throw Error(`Missing Wasm bundle (HTTP ${response.status}). Run npm run build.`);
     core = (await WebAssembly.instantiate(await response.arrayBuffer(), {})).instance.exports;
+    if (data.jit !== false && typeof core.jit_begin_slice === 'function') {
+      try {
+        const {WasmJit} = await import(new URL('jit.js',import.meta.url));
+        jit = new WasmJit(core);
+      } catch { jitUnavailable = true; }
+    }
     diagnostics = !!data.diagnostics;
     manual = diagnostics && data.manual; core.set_boot_source(1);
     // Playwright evaluates bounded synchronous probes inside this same Worker.
@@ -239,7 +249,7 @@ async function command(type, data) {
         if (transaction || busy) throw Error('Inspection overlaps a media/control operation');
         if (!Number.isInteger(clocks) || clocks < 0 || !Number.isInteger(cap) || cap < 0) throw Error('Invalid inspection budget');
         if (cap && allowance <= 0) throw Error('Inspection exceeded profile work budget');
-        const done = core.step_scheduler(clocks, Math.min(cap,allowance));
+        const done = stepScheduler(clocks, Math.min(cap,allowance));
         allowance -= done;
         return done;
       }
@@ -362,9 +372,10 @@ async function command(type, data) {
     if (!calls.has(name)) throw Error('Unsupported core command');
     if (transaction && !['hdi_append','hdi_commit','hdi_cancel','hdi_len','hdi_dirty_page','key','mouse'].includes(name)) throw Error('Media operation in progress');
     if (['reset','set_profile','set_boot_source','eject','hdi_begin','hdi_commit','hdi_cancel'].includes(name)) invalidateVideo();
-    if (['reset','set_profile'].includes(name)) { await flushAudio(); generation++; }
+    if (['reset','set_profile'].includes(name)) { await flushAudio(); generation++; jit?.clear(); }
     if (transaction && (name === 'key' && args[1] || name === 'mouse' && args.some(Boolean))) throw Error('Input is paused for media transfer');
     const value = core[name](...args);
+    if (name === 'hdi_commit' && value) jit?.clear();
     if (name === 'hdi_begin' && value) transaction = 'import';
     if (name === 'hdi_commit' && value || name === 'hdi_cancel') transaction = null;
     if (['hdi_begin','hdi_append','hdi_commit'].includes(name) && !value) throw Error(message(2));

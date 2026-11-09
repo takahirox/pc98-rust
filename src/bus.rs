@@ -624,7 +624,7 @@ impl Bus {
     }
     // Fixed PC-98 wiring: latch rising slave INT edges even with CPU IF clear.
     // A master poll leaves slave acknowledgement to a separate port read.
-    fn sync_cascade(&mut self) {
+    pub(crate) fn sync_cascade(&mut self) {
         let asserted = self.pics[1].pending().is_some();
         if asserted && !self.slave_int {
             self.pics[0].request(7);

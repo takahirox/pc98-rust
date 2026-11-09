@@ -1,5 +1,6 @@
 //! Original V30 and bounded i486 interpreter. Instructions never delegate to a host emulator.
 use crate::bus::Bus;
+pub mod jit;
 mod paging;
 mod protected;
 mod vm86;

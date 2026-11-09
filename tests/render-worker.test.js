@@ -73,7 +73,7 @@ test('authoritative Worker coalesces full snapshots, rejects stale credits and r
     testPort:{start(){},close(){},postMessage:(m,transfers)=>frames.push(structuredClone(m,{transfer:transfers}))},
   });
   const run=code=>vm.runInContext(code,context);
-  run(emulatorSource.replace('import.meta.url',"'file:///emulator-worker.js'"));
+  run(emulatorSource.replaceAll('import.meta.url',"'file:///emulator-worker.js'"));
   run('core=testCore');
   await run("command('videoPort',testPort)");
   assert.equal(frames.length,1);
