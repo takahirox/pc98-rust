@@ -178,6 +178,10 @@ bounds, access and permission checks. These reduce host interpreter overhead;
 they do not alter instruction clocks, bus policies, audio reserves or work caps.
 Rollback checkpoints copy scalar/optional architectural state directly and clone
 only the owning paging storage. Fetch/timed-step call boundaries are inlined.
+Real-mode expand-up accesses also check populated hidden caches inline, using
+their actual retained limits after HimemX returns from protected mode. Expand-down,
+protected-mode and paged accesses keep the full validation path. The
+[local Doukyuusei 2 investigation](doukyuusei2-performance.md) measures this case.
 PIC arbitration returns immediately without an unmasked request, and PIT counter
 updates wait for an actual input clock while retaining the fractional remainder.
 Scheduled host rendering refills audio first, with a maximum 100 ms deferral

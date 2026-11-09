@@ -1,6 +1,8 @@
 /target/
 /node_modules/
 /research/
+# Private user-provided game installation media.
+/roms/
 /web/core.wasm
 /test-results/
 /playwright-report/
