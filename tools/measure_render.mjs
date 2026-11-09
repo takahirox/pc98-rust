@@ -7,6 +7,8 @@ import os from 'node:os';
 import {createHash} from 'node:crypto';
 const options=Object.fromEntries(process.argv.slice(2).map(v=>v.replace(/^--/,'').split('=')));
 const engine=options.browser??'chromium', repeat=Number(options.repeat??3), seconds=Number(options.seconds??8);
+if(engine==='firefox' && options.debugTier!=='1')
+  throw Error('Pinned Firefox automation forces debuggable baseline Wasm. Use a stock browser for normal performance, or --debugTier=1 only for deliberate starvation diagnostics.');
 const server=spawn('python3',['-m','http.server','8072','--bind','127.0.0.1','--directory','web'],{stdio:'ignore'});
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 let browser;
@@ -139,6 +141,6 @@ try {
       rows.push(row); console.log(JSON.stringify(row)); await page.close();
     }
   }
-  const result={context:{date:new Date().toISOString(),wasmSha256:createHash('sha256').update(await readFile('web/core.wasm')).digest('hex'),engine,browser:browser.version(),os:`${os.type()} ${os.release()} ${os.arch()}`,cpu:os.cpus()[0].model,logicalCpus:os.cpus().length,repeat,seconds,presentationProbe},rows};
+  const result={context:{date:new Date().toISOString(),wasmSha256:createHash('sha256').update(await readFile('web/core.wasm')).digest('hex'),engine,firefoxDebuggerBaseline:engine==='firefox',browser:browser.version(),os:`${os.type()} ${os.release()} ${os.arch()}`,cpu:os.cpus()[0].model,logicalCpus:os.cpus().length,repeat,seconds,presentationProbe},rows};
   await writeFile(options.output??`target/render-${engine}.json`,JSON.stringify(result,null,2)+'\n');
 } finally {await browser?.close();server.kill();}

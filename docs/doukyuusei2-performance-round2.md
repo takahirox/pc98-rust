@@ -1,5 +1,14 @@
 # Continued Doukyuusei 2 evaluation — Issue #146
 
+**Correction:** the Firefox observations below used Playwright 1.56.1's patched
+browser, whose injected debuggers force baseline Wasm execution. They establish
+the behavior of the starvation fallback under that induced load, not ordinary
+Firefox throughput or a normal-browser improvement from PR #148. The previous
+attribution to Firefox's general execution capacity is withdrawn. See the
+[normal-browser reproduction investigation](doukyuusei2-reproduction.md).
+The historical numbers are retained; the interpreter and fallback tests remain
+valid, while the scope of the browser-performance conclusion is corrected.
+
 This evaluation starts from merged PR #147 (`df2c804`), using the same clean,
 locally installed HDD and deterministic prologue input described in the
 [first evaluation](doukyuusei2-performance.md). Proprietary media, installed

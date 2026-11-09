@@ -1,5 +1,13 @@
 # Independent browser rasterization (#142)
 
+**Firefox measurement correction:** the historical Firefox timings and dropout
+counts in this document used Playwright 1.56.1's patched browser, which forces
+debuggable baseline Wasm through its injected Worker debuggers. They describe
+that induced load, not ordinary Firefox performance. See the
+[stock-browser reproduction and causal controls](doukyuusei2-reproduction.md).
+Snapshot correctness, ownership regressions and Chromium observations remain
+applicable; the general Firefox performance limitation is withdrawn.
+
 The emulation Worker exclusively owns the Machine, CPU, bus, RAM/VRAM, IRQs,
 disks, FM/PCM synthesizers and virtual clock. The render Worker instantiates the
 same release Wasm module but calls only `input_buffer` and `video_render`.
@@ -98,7 +106,7 @@ are opt-in and have no machine-speed CI threshold:
 
 ```sh
 node tools/measure_render.mjs --browser=chromium --repeat=3 --seconds=8 --output=target/render-chromium.json
-node tools/measure_render.mjs --browser=firefox --repeat=1 --seconds=8 --output=target/render-firefox.json
+node tools/measure_render.mjs --browser=firefox --debugTier=1 --repeat=1 --seconds=8 --output=target/render-firefox-debug.json
 ```
 
 The script serves `web/` locally, launches one real headless browser guest at a

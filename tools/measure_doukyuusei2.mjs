@@ -16,6 +16,11 @@ if (!['chromium','firefox'].includes(engine) || engine === 'firefox' && (options
   throw Error('Use --browser=chromium|firefox; channel selection and host profiles require Chromium');
 }
 if (options.channel && options.channel !== 'chrome') throw Error('Use --channel=chrome for installed Google Chrome, or omit it for pinned Chromium');
+// Playwright 1.56.1's patched Firefox observes Wasm globals and disables
+// optimizing compilation. Its starvation is not ordinary Firefox performance.
+if (engine === 'firefox' && options.debugTier !== '1') {
+  throw Error('Pinned Firefox automation forces debuggable baseline Wasm. Use the stock-browser reproduction control, or --debugTier=1 only for deliberate starvation diagnostics.');
+}
 const root = await realpath('.');
 for (const name of ['media', 'output']) {
   if (!options[name] || !path.isAbsolute(options[name])) throw Error(`--${name} must be an absolute path outside the checkout`);
@@ -213,7 +218,7 @@ try {
     await page.close();
   }
   await writeFile(options.output, JSON.stringify({context:{date:new Date().toISOString(), browser:browser.version(),
-    engine, channel:options.channel ?? engine, node:process.version,
+    engine, channel:options.channel ?? engine, firefoxDebuggerBaseline:engine === 'firefox', node:process.version,
     os:`${os.type()} ${os.release()} ${os.arch()}`, cpu:os.cpus()[0].model,
     wasmSha256:sha(wasm), runtimeSha256, mediaSha256:sha(await readFile(options.media)),
     harnessSha256, playback, gameplay:options.gameplay === '1',

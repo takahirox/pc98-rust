@@ -41,7 +41,10 @@ without replacing the current build. Routing supplies the same selected artifact
 to both Workers. Fresh pages and media imports reset each repeat. Add
 `--channel=chrome` to test the installed Google Chrome with a fresh isolated
 profile; omission selects the repository's pinned Playwright Chromium.
-Use `--browser=firefox` for pinned Playwright Firefox (without `--channel`).
+Pinned Playwright Firefox forces baseline Wasm; `--browser=firefox --debugTier=1`
+is only an explicit diagnostic of that induced load, without `--channel`.
+For ordinary Firefox or a complete audio-enabled startup, use the
+[normal-browser reproduction control](doukyuusei2-reproduction.md).
 The selected Wasm and all four JavaScript runtime assets are frozen before
 setup and routed to the page, Workers and AudioWorklet. The report records their
 hashes and successful interception counts. Use `--runtime=/absolute/directory`
@@ -235,6 +238,6 @@ Those short observations do not reproduce the user's sustained audio complaint
 or demonstrate its complete resolution. Interpreter headroom is useful evidence
 for constrained hosts, but it is not a universal transition-speed or audio-quality
 claim. Subsequent Firefox measurements and further optimization are documented
-in the [second evaluation](doukyuusei2-performance-round2.md). The existing independent
-[Firefox performance limitation](runtime-performance.md#revised-production-measurements-review-follow-up)
-remains relevant.
+in the [second evaluation](doukyuusei2-performance-round2.md). Its Firefox results
+were affected by the pinned automation's forced debug execution; see the
+[subsequent correction and reproduction controls](doukyuusei2-reproduction.md).
