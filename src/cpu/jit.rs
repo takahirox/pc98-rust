@@ -148,7 +148,9 @@ pub struct Engine {
     plans: Vec<Option<Plan>>,
     serial: u32,
     packet: Vec<u32>,
-    active: Option<(u32, usize, [u16; 8], u8, bool)>,
+    active: Option<(u32, usize, u8, bool)>,
+    // Fixed change masks never consume or rewrite this bank snapshot.
+    before: [u16; 8],
     operand: Option<(u32, u32)>,
     scratch: [u32; 2],
     deadline: u64,
@@ -166,6 +168,7 @@ impl Default for Engine {
             serial: 0,
             packet: Vec::new(),
             active: None,
+            before: [0; 8],
             operand: None,
             scratch: [0; 2],
             deadline: 0,
@@ -416,6 +419,7 @@ impl Engine {
     /// Interpreter execution stops only at a ready block or one compilation offer.
     pub fn dispatch(&mut self, m: &mut Machine, compile: bool) -> u32 {
         while self.runnable(m) {
+            let mut hot_fallback = false;
             // Cold/unsupported addresses pay only a mode/key probe. Full IRQ,
             // descriptor and trap guards belong at a translation/entry boundary.
             if m.bus.profile == Profile::Pc9821ApDos
@@ -490,12 +494,26 @@ impl Engine {
                     } else if id == 0 && self.probes[index].hits == HEAT && !compile {
                         self.probes[index].hits -= 1;
                     }
+                    hot_fallback = id == 0 && self.probes[index].hits >= HEAT;
                 }
             }
             // Bound discovery work in cold code. Vary the short
             // stride so regular loops do not always sample the same position.
             // Ready blocks still chain directly without an interpreter burst.
-            let cap = self.remaining.min(3 + (self.sample_phase & 3));
+            // A cold-code burst at a hot unsupported boundary can repeatedly
+            // swallow the supported successor. Probe after a short fallback.
+            let stride = if hot_fallback {
+                // A short ROM burst normally covers the synthetic OUT/IRET
+                // pair and exposes its guest caller to the next probe.
+                if m.cpu.s[CS] == 0xf000 && m.cpu.ip & 3 == 0 {
+                    2
+                } else {
+                    1
+                }
+            } else {
+                3 + (self.sample_phase & 3)
+            };
+            let cap = self.remaining.min(stride);
             self.sample_phase = self.sample_phase.wrapping_add(1);
             let done = m.step_scheduler((self.deadline - m.bus.cycles) as u32, cap);
             self.remaining -= done;
@@ -588,11 +606,9 @@ impl Engine {
             }
             self.operand = Some((physical, width));
         }
-        let before = if op.register_writes == 0xff {
-            m.cpu.r
-        } else {
-            [0; 8]
-        };
+        if op.register_writes == 0xff {
+            self.before = m.cpu.r;
+        }
         m.cpu.jit_prepare(&mut m.bus, op, at as u32);
         if op
             .memory
@@ -613,7 +629,6 @@ impl Engine {
         self.active = Some((
             id,
             index,
-            before,
             op.register_writes,
             op.memory
                 .is_some_and(|memory| memory.flags & Memory::WRITE != 0),
@@ -625,7 +640,7 @@ impl Engine {
     }
     /// Commit one translated instruction, tick devices, then guard the next one.
     pub fn next(&mut self, m: &mut Machine, index: usize, taken: bool) -> bool {
-        let Some((id, previous, before, register_writes, write)) = self.active.take() else {
+        let Some((id, previous, register_writes, write)) = self.active.take() else {
             return false;
         };
         if write {
@@ -641,7 +656,7 @@ impl Engine {
             }
         }
         m.bus.timing.taken = taken;
-        let timing = m.cpu.jit_finish(&mut m.bus, before, register_writes);
+        let timing = m.cpu.jit_finish(&mut m.bus, &self.before, register_writes);
         let clocks = m
             .clock_converter
             .advance(m.bus.profile, timing.cpu_cycles());
@@ -694,12 +709,12 @@ impl Cpu {
     fn jit_finish(
         &mut self,
         b: &mut Bus,
-        before: [u16; 8],
+        before: &[u16; 8],
         register_writes: u8,
     ) -> crate::timing::StepTiming {
         let timing = b.timing.finish(b.profile, false, 0);
         self.timing_writes = if register_writes == 0xff {
-            changed_registers(&before, &self.upper, &self.r, &self.upper)
+            changed_registers(before, &self.upper, &self.r, &self.upper)
         } else {
             register_writes
         };
@@ -734,6 +749,58 @@ mod tests {
         assert_ne!(id, 0);
         assert!(e.register(id, true));
         id
+    }
+    #[test]
+    fn hot_unsupported_boundary_does_not_skip_a_warm_supported_successor() {
+        let mut actual = machine();
+        let mut reference = machine();
+        for m in [&mut actual, &mut reference] {
+            m.bus.mem[0x100..0x105].copy_from_slice(&[0x98, 0x40, 0xeb, 0xfc, 0x90]);
+            m.cpu.r[AX] = 0x80;
+        }
+        let mut e = Engine::default();
+        let unsupported = key(&actual.cpu);
+        let successor = unsupported + 1;
+        assert_ne!(probe(unsupported), probe(successor));
+        for (key, hits) in [(unsupported, HEAT), (successor, HEAT - 1)] {
+            e.probes[probe(key)] = Probe { key, hits, id: 0 };
+        }
+        e.begin_slice(&actual, 80_000, 10);
+        let id = e.dispatch(&mut actual, true);
+        assert_ne!(id, 0);
+        assert_eq!(e.packet()[2], 0x101);
+        assert_eq!(e.done(), 1);
+        reference.step(1);
+        assert_eq!(format!("{:?}", actual.cpu), format!("{:?}", reference.cpu));
+        assert_eq!(actual.bus.cycles, reference.bus.cycles);
+    }
+    #[test]
+    fn hot_rom_pair_exposes_its_supported_caller_without_an_extra_cold_burst() {
+        let mut actual = machine();
+        let mut reference = machine();
+        for m in [&mut actual, &mut reference] {
+            m.cpu.s[CS] = 0xf000;
+            m.cpu.ip = 0x1060;
+            m.cpu.r[AX] = 0x0400;
+            m.cpu.r[SP] = 0x8000;
+            m.bus.mem[0xf1060..0xf1063].copy_from_slice(&[0xe6, 0xf0, 0xcf]);
+            m.bus.mem[0x8000..0x8006].copy_from_slice(&[1, 1, 0, 0, 2, 0]);
+        }
+        let mut e = Engine::default();
+        let rom = key(&actual.cpu);
+        let caller = 0x101;
+        assert_ne!(probe(rom), probe(caller));
+        for (key, hits) in [(rom, HEAT), (caller, HEAT - 1)] {
+            e.probes[probe(key)] = Probe { key, hits, id: 0 };
+        }
+        e.begin_slice(&actual, 80_000, 10);
+        assert_ne!(e.dispatch(&mut actual, true), 0);
+        assert_eq!(e.packet()[2], 0x101);
+        assert_eq!(e.done(), 2);
+        reference.step(2);
+        assert_eq!(format!("{:?}", actual.cpu), format!("{:?}", reference.cpu));
+        assert_eq!(actual.bus.cycles, reference.bus.cycles);
+        assert_eq!(actual.bus.mem, reference.bus.mem);
     }
     #[test]
     fn segment_overrides_keep_original_fetch_operand_and_prefix_timing() {

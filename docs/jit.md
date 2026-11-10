@@ -49,7 +49,10 @@ bounds native plans and compiled modules to 4,096 entries. Only one compilation
 is in flight. Evicted addresses can warm again. Compilation is asynchronous;
 guest execution continues through the interpreter until a module is ready.
 Cold code is sampled between short interpreter runs of 3–6 units, reducing
-discovery overhead on memory-heavy code. Ready blocks can chain immediately.
+discovery overhead on memory-heavy code. Hot addresses without a translation
+use one-unit runs so supported successors can warm and enter the JIT. Aligned
+synthetic-ROM entries use two-unit runs, normally covering OUT/IRET together.
+Each unit still uses the original CPU and device boundary. Ready blocks can chain immediately.
 
 Every block entry checks CPU mode, TF and CS base. Supported operations cannot
 change mode, segment registers, TF, halt or REP state while the synchronous Wasm
@@ -83,7 +86,9 @@ SS even when another segment is encoded. Validated
 physical operand addresses are reused within each instruction. Exact known GPR
 change masks avoid whole-bank snapshots/comparisons for flag-only instructions
 and operations that always change a specific word register; identity/alias cases
-retain actual-change comparison. Each entry
+retain actual-change comparison. The register-bank snapshot is stored only for
+actual-change comparison; fixed masks avoid rewriting or copying it through the
+active transaction. Each entry
 computes the current offset and validates the complete operand against the current
 hidden segment bounds. A two-word scratch area carries the bus-read value and
 generated write result across the instruction boundary. Rust performs the original
@@ -469,7 +474,7 @@ image-transition latency or a resolution of the original playback complaint.
 The selected runtime has no native-helper subset; the measurement harness can
 report that subset separately for experimental runtimes.
 
-The packed 554,355-byte Wasm SHA-256 is
+The prefix-only packed 554,355-byte Wasm SHA-256 is
 `5bb593cedd49f1cc8476fa8b60a36f89c065777010ba41ff1cc39a8b15bac3d0`;
 the unchanged compiler SHA-256 is
 `434d9923b16d1a3ba2ddf03404be826b56b9de190fadbff83fafbb35fb008afd`.
@@ -501,3 +506,78 @@ reference-core operations. The existing production Worker comparison includes a
 CS memory operand at both serving roots and all three default/explicit modes.
 Final regression and CI results are recorded in
 [Issue #158](https://github.com/takahirox/pc98-rust/issues/158) and its linked PR.
+
+
+## Hot interpreter boundaries — Issue #158 follow-up
+
+The packed-prefix revision passed local acceptance, but CI run `42842603404`
+reproduced scene-time audio starvation in both the default JIT and explicit
+interpreter: 2,328 and 4,829 missing samples in failing windows. Traces showed
+10 ms guest CPU slices taking roughly 12–14 ms while frame preparation stayed
+below 0.5 ms. No audio threshold, queue target, workflow or guest clock was changed.
+This failure remains part of the evidence; it was not blindly rerun.
+
+Further CPU checkpoint-elision experiments preserved guest results but added
+per-instruction proof costs. A six-control screen of the refined variant was
+neutral with JIT (9,603.9 vs 9,616.4 ms) and 5.4% slower by mean interpreter
+active time (10,914.1 vs 10,350.3 ms). The planned larger screen stopped after
+its current browser exited, retaining all six completed controls. ROM-only
+proofs, operand-address reuse and CPU clone/layout variants also failed to
+establish an additional benefit. A separate nine-control legal ADV98 comparison
+found no improvement from outlining CPU cloning or changing CPU representation.
+All these CPU changes and their temporary tests were removed. The selected
+interpreter retains its original checkpoints and memory implementation.
+
+A separate aggregate opcode diagnostic found 4,116,663 interpreted F6-family
+units and many supported conditional operations in the target window. This
+suggested examining discovery boundaries, rather than assuming every fallback
+needed a new opcode implementation. Counts include unsupported members and cold
+code too; they are not an execution trace or proof that every instance is
+compilable. The diagnostic preserves the canonical guest results, is excluded
+from timing claims, and its counters, exports and harness edits were removed.
+
+At a hot address without a translation, a 3–6-unit cold-code sampling burst can
+repeatedly execute supported successors before probing them. The selected tier
+uses one-unit fallback bursts at those addresses. Aligned F000 ROM entries use
+two-unit bursts, normally executing the synthetic OUT/IRET pair before probing
+the guest caller. These are ordinary interpreter units, with their original
+clocks, firmware work, device ticks, IRQ delivery and work/deadline limits.
+ROM execution itself is not translated or replaced with native helpers.
+
+The JIT's actual-change register snapshot now lives separately from its active
+boundary metadata and is passed by reference. Only operations requiring an
+actual register comparison rewrite it. Fixed masks avoid repeatedly storing an
+unused zero bank or copying it through the transaction. Independent native
+regressions require a warm supported successor to be offered after exactly one
+unsupported unit, or after the ROM pair, and compare full CPU state/clocks with
+the original interpreter. Existing actual-Wasm differential tests cover mixed
+change masks, identity writes, flags, memory, IRQs and reset barriers.
+
+Nine fresh installed-Chrome controls use the balanced order A/B/C, B/C/A, C/A/B,
+with the same frozen assets, harness and canonical 24-guest-second workload:
+
+| Runtime | Active host ms, individual controls | Median ms | Mean ms |
+| --- | --- | ---: | ---: |
+| Main `2e5b2cc` | 9,625.3 / 9,548.5 / 9,623.1 | 9,623.1 | 9,599.0 |
+| Hot discovery | 9,278.9 / 9,232.4 / 9,261.1 | 9,261.1 | 9,257.5 |
+| Hot discovery plus snapshot reuse | 8,945.0 / 9,262.3 / 8,750.0 | 8,945.0 | 8,985.8 |
+
+The selected combined median is 7.0% lower than main (mean 6.4% lower). Its
+incremental results overlap the discovery-only variant, and vary more. Every
+selected control is nevertheless below every main control in this round.
+Median in-window spans are 23,096.2 vs 23,816.3 ms; these include timer/compiler
+waits, unlike active host time. Per-window median p99 active slice times are
+5.6 / 5.4 / 5.2 ms vs main's 6.1 / 6.2 / 5.8 ms. Neither metric measures completed
+visible-transition latency or proves an original audio fix.
+
+Pure generated execution rises from 74,519,713 to 92,431,402 of 118,102,981
+instructions (63.1% to 78.3%). Compilations fall from 3,300 to 2,579 (21.8%), and
+generated bytes from 887,920 to 680,622 (23.3%). The 24-byte operation record,
+16-instruction block cap and unchanged compiler are retained. There is no
+native-helper subset. The final 554,400-byte Wasm SHA-256 is
+`ddb9eeee6459757fc659bbca760d694ca82b19e4fb8f6752a22423db52ce0ad8`. The selection matrix used
+`94c034e1d146112d8d332646539555282080ab12d1bd44b57a2249718ad6f8c4`; a comment correction changes only
+panic-source line metadata and the name section. All executable sections are
+byte-identical. The independent holdout uses the final artifact.
+Independent holdout and final regression/CI outcomes are recorded in the linked
+Issue/PR; the initial round alone is not a universal throughput claim.
