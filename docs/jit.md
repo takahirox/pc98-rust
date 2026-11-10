@@ -10,10 +10,11 @@ and synchronous `step`/observer APIs retain the interpreter as their reference.
 
 The tier covers unprefixed 8/16-bit ALU, MOV, XCHG, TEST, NOT/NEG,
 register INC/DEC, SAHF/LAHF, carry/direction flags, short conditional branches,
-LOOP/JCXZ, relative JMP/CALL, word register PUSH/POP and near RET. Memory operands
+LOOP/JCXZ, relative JMP/CALL, word register PUSH/POP, near RET and single-bit
+register shifts/rotations (`D0`/`D1`, including the SHL/SAL alias). Memory operands
 use 16-bit ModR/M addressing or accumulator absolute offsets. Blocks contain at
 most 16 instructions and stop at a branch or unsupported operation. Prefixes,
-strings, shifts, far transfers, other stack operations, I/O, firmware services,
+strings, memory/variable-count shifts, far transfers, other stack operations, I/O, firmware services,
 protected/paged execution, 32-bit defaults, single-step and unusual fetch
 boundaries use the existing interpreter. This is a bounded first tier, not a replacement for the
 full CPU implementation.
@@ -256,3 +257,115 @@ All nine controls use harness SHA-256
 `1a0163d5cfdd42d4bd16ece8f95d5c565f360c925c8ea6632730bbb2a6115121`;
 common runtime hashes match and the selected compiler/core bytes are frozen per
 control. Raw reports remain outside the checkout.
+
+
+## Further boundary experiments — Issue #156
+
+The next investigation tested the researched techniques in separate, frozen-asset
+controls rather than assuming that fewer operations would improve whole-game
+capacity. The local original ADV98 scene/audio control passed both modes before
+changes (32 windows, zero missing samples); the original normal-Chrome complaint
+was not reproduced by that control. The prior CI scene-time failure in both
+modes remains a separate observation in #146/#155.
+
+All fixed-work comparisons use the same installed Chrome 157.0.8103.38 on Apple
+M4 Max / Darwin 27.2.0, without concurrent owned builds, test suites or profilers.
+Each three-mode experiment uses nine fresh browsers in the balanced order
+A/B/C, B/C/A, C/A/B. Every mode validates the canonical instruction count,
+CPU/device clocks, CPU/frame/PCM fingerprints, HDD reads and music/IRQ edges.
+The harness additionally reports p50/p95/p99/maximum active execution time for
+800 ten-guest-millisecond slices in each of its three windows. These timings
+include PCM fingerprint work, not just CPU instruction execution. Profiled
+controls are diagnostic evidence only and are excluded from timing comparisons.
+
+Rejected prototypes are retained as numeric evidence, not extra runtime paths:
+
+| Prototype | Same-round repeated result | Decision |
+| --- | --- | --- |
+| Defer OPN timer arithmetic until a flag event or register write | 7,874.1 ms median vs 7,905.2 ms baseline; 0.4% reduction within overlapping runs | Rejected: insufficient benefit for the extra scheduling state |
+| OPN deferral plus unused FLAGS-load/local removal | 7,953.7 ms median vs 7,905.2 ms baseline | Rejected |
+| Defer arithmetic FLAGS when immediately overwritten, restoring them on every boundary exit | 7,903.2 ms median vs 7,740.0 ms PIT-only control | Rejected: no incremental benefit despite exact results and exit/IRQ/self-modification tests |
+| Reduced-unit, narrow CPU/device clock conversion plus PIT fast path | 7,759.3 ms median vs 7,780.4 ms baseline, but 7,780.2 ms mean vs 7,745.9 ms | Rejected: no repeatable benefit |
+| Fixed-word instruction-byte guards added to that conversion | 8,141.4 ms median vs 7,780.4 ms baseline | Rejected: slower than the existing slice comparison |
+
+The PIT mode-3 candidate avoids variable modulo while an advance remains inside
+the active period; wrap handling, odd divisors, pending replacement divisors,
+output/count values and IRQ edges retain their existing behavior. Existing
+specification traces, single-clock/batch comparisons, zero/maximum advances and
+reprogramming tests cover these boundaries. A separate nine-control comparison
+measured 7,740.0 ms median (7,750.5 ms mean) vs 7,910.8 ms (7,888.7 ms).
+
+A fresh baseline host profile identified interpreter fallback, JIT preparation,
+bus ticking and timing retirement as the largest active contributors. The
+existing same-game opcode aggregation also recorded about 2.53 million
+unprefixed register `D0`/`D1` operations. The JIT extension covers their eight
+single-bit shift/rotate groups with the existing CPU's precise flag policy;
+rotates preserve SZP and all forms preserve AF. Register identity/alias cases
+keep actual GPR-change comparison. Memory operands and other counts retain the
+interpreter. Node regressions compare every byte value, both carries, all groups
+and register aliases, word boundaries and randomized values against the actual
+reference core. The existing production Worker probe now includes carry-dependent
+SHR/RCL inside its call loop at both serving roots.
+
+
+### Selected repeated comparison
+
+The selected revision combines the register shift/rotate extension with the PIT
+fast path and a 32-entry SSG amplitude table added to the existing constant
+coefficient cache. The SSG table evaluates the original `powf` expression once
+per level; sample multiplication order and every tone/noise/envelope update
+remain unchanged. A new original synthetic register trace covers all 16 envelope
+shapes and all 32 volume encodings, comparing PCM fingerprints captured from the
+unchanged implementation. No game recordings or imported music are included.
+
+Nine final continuous-capacity controls used the original main artifact and two
+revised artifacts, with/without that SSG table. Other runtime assets and the
+harness were identical; builds and tests were finished before the controls.
+
+| Artifact | Active host ms, individual controls | Median ms | Mean ms |
+| --- | --- | ---: | ---: |
+| Main baseline | 7,887.8 / 7,885.9 / 7,845.5 | 7,885.9 | 7,873.1 |
+| Selected JIT shifts + PIT + SSG table | 7,746.2 / 7,686.7 / 7,721.0 | 7,721.0 | 7,718.0 |
+| JIT shifts + PIT, without SSG table | 7,814.0 / 7,736.1 / 7,904.3 | 7,814.0 | 7,818.1 |
+
+The selected median is 2.1% lower than main, and its mean is 2.0% lower. All
+three selected controls are below all three main controls. Each window's median
+p99 active time per 10 guest milliseconds changes from 5.6 / 5.5 / 4.8 ms to
+5.2 / 5.3 / 4.5 ms; observed maxima across these controls are 6.6 and 5.9 ms.
+These are fixed-work capacity observations on this host, not a claim about
+completed image-transition latency, other games or audio fidelity.
+
+All nine controls retain 118,102,981 instructions, 1,584,018,440 CPU clocks,
+24.0002795 guest seconds, 131 HDD reads, 1,464 music key edges, 934 sound IRQ
+edges, 1,152,013 samples, PCM fingerprint 3,284,892,698, frame fingerprint
+1,013,578,406 and CPU fingerprint 2,669,599,220. Continuous-window translated
+instructions increase from 59,618,051 to 60,913,847. Compilation cannot progress
+inside an eight-second synchronous window; production slices yield between
+windows of guest execution, so this is a specific capacity control.
+
+The selected 553,550-byte Wasm SHA-256 is
+`6925a427c57ed18af7233089b2c635f00b2aad45dd528955eb037b331cb9f5c4`;
+compiler SHA-256 is
+`434d9923b16d1a3ba2ddf03404be826b56b9de190fadbff83fafbb35fb008afd`.
+All 45 controls in the five experiments use measurement harness SHA-256
+`5acaac04db63377e4c0f4a3bec0d4e11ab9f3cf3a807bf207f4cffd6df8456ad`.
+The initial pilot pair used the preceding harness without tail summaries and is
+excluded from those repeated comparisons. One completed early control hung while
+closing its browser after saving the report; its browser process had exited,
+only the owned Node listener remained, and it was terminated before continuing.
+The completed artifact-validated report was retained. Subsequent controls use a
+post-report cleanup watchdog outside the repository; no timing windows overlap.
+
+Separate normal visible Chrome controls use no debugger, CDP, profiler or
+manual guest advancement. Each recorded 381 observations over about 95 seconds
+through the classroom/flashback/return sequence. Guest/wall ratios are 1.0000540
+for main and 1.0000695 for the selected revision. Both record zero source
+underflows, device underruns, drops, overflows, sequence/checksum errors and
+emulator faults, with 1,069 HDD reads. The selected driver completes 4,163
+compilations with a full 4,096-entry cache, 13 valid invalidations and no failures.
+These controls establish healthy playback and exercised eviction, not resolution
+of the user's original symptom or physical synthesis accuracy.
+
+The final regression results are recorded in
+[Issue #156](https://github.com/takahirox/pc98-rust/issues/156) and its linked PR.
+Issue #146 remains open for the original playback investigation.

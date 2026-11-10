@@ -298,6 +298,14 @@ fn decode(m: &Machine, ip: u32) -> Option<Op> {
                     _ => 2,
                 }
         }
+        0xd0 | 0xd1 => {
+            code(m, ip, 2)?;
+            modrm = m.bus.mem[at + 1];
+            if modrm < 0xc0 {
+                return None;
+            }
+            2
+        }
         0xa0..=0xa3 => 3,
         0xa8 => 2,
         0xa9 => 3,

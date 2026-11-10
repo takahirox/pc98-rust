@@ -56,6 +56,31 @@ function arithmetic(kind,wide,dst,a,b,{write=true,increment=false,memory=false}=
   return out;
 }
 
+function singleShift(kind,wide,dst){
+  const mask=wide?65535:255,sign=wide?32768:128;
+  const out=[...set(4,reg(dst,wide)),...set(8,nz(and(get(4),c([0,2,4,6].includes(kind)?sign:1))))];
+  let value;
+  switch(kind){
+    case 0:value=or(shl(get(4),1),get(8));break;
+    case 1:value=or(bin(0x76,get(4),c(1)),shl(get(8),wide?15:7));break;
+    case 2:value=or(shl(get(4),1),flag(1));break;
+    case 3:value=or(bin(0x76,get(4),c(1)),shl(flag(1),wide?15:7));break;
+    case 4:case 6:value=shl(get(4),1);break;
+    case 5:value=bin(0x76,get(4),c(1));break;
+    case 7:value=or(bin(0x76,get(4),c(1)),and(get(4),c(sign)));break;
+  }
+  out.push(...set(6,and(value,c(mask))),...put(dst,wide,get(6)));
+  const overflow=[0,2,4,6].includes(kind)?xor(nz(and(get(6),c(sign))),get(8)):
+    [1,3].includes(kind)?xor(nz(and(get(6),c(sign))),nz(and(get(6),c(sign>>1)))):
+    kind===5?nz(and(get(4),c(sign))):c(0);
+  // AF is preserved, including the existing deterministic policy for shifts.
+  const parts=[and(get(7),c(~(0x801|(kind>=4?0xc4:0)))),get(8),shl(overflow,11)];
+  if(kind>=4)parts.push(shl(not(get(6)),6),shl(nz(and(get(6),c(sign))),7),
+    shl(not(and([...and(get(6),c(255)),0x69],c(1))),2));
+  out.push(...store(1,0,2,parts.reduce(or)));
+  return out;
+}
+
 /** Compile only Rust-preflighted unprefixed real-mode instructions. */
 export function compileBlock(packet){
   const count=packet[1];
@@ -108,6 +133,9 @@ export function compileBlock(packet){
       body.push(...get(2),...memoryValue(),0x36,2,0,...put(4,true,add(reg(4,true),c(2))));
     }else if(op===0xc6||op===0xc7){
       body.push(...rmStore(c(imm(2+displacement,wide))));
+    }else if(op===0xd0||op===0xd1){
+      if(memory)throw Error('Unsupported JIT memory shift');
+      body.push(...singleShift(r,wide,rm));
     }else if(op>=0xe0&&op<=0xe3){
       if(op!==0xe3)body.push(...put(1,true,sub(reg(1,true),c(1))));
       let take=op===0xe3?not(reg(1,true)):nz(reg(1,true));
