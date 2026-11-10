@@ -151,7 +151,7 @@ mod wasm {
     use std::cell::RefCell;
     thread_local! {
         static JIT: RefCell<cpu::jit::Engine> = RefCell::new(cpu::jit::Engine::default());
-        static JIT_LAYOUT: RefCell<[usize; 3]> = const { RefCell::new([0; 3]) };
+        static JIT_LAYOUT: RefCell<[usize; 4]> = const { RefCell::new([0; 4]) };
     }
     #[no_mangle]
     pub extern "C" fn jit_clear() {
@@ -182,6 +182,10 @@ mod wasm {
         JIT.with(|j| j.borrow().counters.get(index).copied().unwrap_or(0) as f64)
     }
     #[no_mangle]
+    pub extern "C" fn jit_enter(id: u32) -> u32 {
+        MACHINE.with(|m| JIT.with(|j| j.borrow_mut().enter(&mut m.borrow_mut(), id)))
+    }
+    #[no_mangle]
     pub extern "C" fn jit_register(id: u32, ready: u32) -> u32 {
         JIT.with(|j| u32::from(j.borrow_mut().register(id, ready != 0)))
     }
@@ -208,6 +212,7 @@ mod wasm {
                     m.cpu.r.as_mut_ptr() as usize,
                     &mut m.cpu.flags as *mut u16 as usize,
                     &mut m.cpu.ip as *mut u32 as usize,
+                    JIT.with(|j| j.borrow_mut().scratch_ptr() as usize),
                 ];
                 layout.borrow().as_ptr()
             })

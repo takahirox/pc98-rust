@@ -10,8 +10,12 @@ import {workerProfile} from '../tests/browser/helpers/worker-profile.js';
 
 const options = Object.fromEntries(process.argv.slice(2).map(value => value.replace(/^--/, '').split('=')));
 options.jit ??= '0';
+// Yield between guest slices so asynchronous JIT compilation can progress.
+// wallMs sums active guest/hash work; timer waits and compiler tasks are excluded.
+const yieldJit = options.yieldJit === '1';
 const repeat = Number(options.repeat ?? 3), playback = options.playback === '1';
 const engine = options.browser ?? 'chromium';
+if(options.yieldJit!==undefined&&!['0','1'].includes(options.yieldJit))throw Error('Expected --yieldJit=0|1');
 if(options.jit!==undefined&&!['0','1'].includes(options.jit))throw Error('Expected --jit=0|1');
 if (!Number.isInteger(repeat) || repeat < 1 || repeat > 10) throw Error('Expected --repeat=1..10');
 if (!['chromium','firefox'].includes(engine) || engine === 'firefox' && (options.channel || options.profile === '1')) {
@@ -76,12 +80,13 @@ try {
       finally { await worker.evaluate(() => pc98.endInspection()); }
     }
     async function advance(ms) {
-      await inspect(ms => {
+      await inspect(async ({ms,yieldJit}) => {
         for (let at = 0; at < ms; at += 10) {
           pc98.advance(Math.min(10, ms-at)*1000); pc98.core.audio_clear();
+          if(yieldJit)await new Promise(resolve=>setTimeout(resolve,0));
         }
         if (pc98.stats().error) throw Error(pc98.stats().error);
-      }, ms);
+      }, {ms,yieldJit});
     }
     async function key(scan) {
       await worker.evaluate(scan => pc98.core.key(scan, 1), scan); await advance(50);
@@ -173,29 +178,35 @@ try {
     } else {
       const parts = []; let pcmHash = 2166136261;
       for (let part = 0; part < (options.gameplay === '1' ? 3 : 1); part++) {
-        const block = await inspect(({gameplay, part, seed}) => {
-          const a = pc98.stats(), began = performance.now(); let samples = 0, pcmHash = seed;
+        const block = await inspect(async ({gameplay, part, seed, yieldJit}) => {
+          const a = pc98.stats(), spanStart = performance.now(); let wallMs = 0, samples = 0, pcmHash = seed;
           for (let at = 0; at < 800; at++) {
-            const n = part*800+at;
+            const began = performance.now(), n = part*800+at;
             if (gameplay && n % 48 === 0) pc98.core.mouse(0,0,1);
             if (gameplay && n % 48 === 8) pc98.core.mouse(0,0,0);
             pc98.advance(10000);
             const count = pc98.core.audio_len(), ptr = pc98.core.audio_ptr() >>> 0; samples += count;
             for (const bits of new Uint32Array(pc98.core.memory.buffer,ptr,count)) pcmHash = Math.imul(pcmHash ^ bits,16777619) >>> 0;
             pc98.core.audio_clear();
+            wallMs += performance.now()-began;
+            if(yieldJit)await new Promise(resolve=>setTimeout(resolve,0));
           }
-          const wallMs = performance.now()-began, b = pc98.stats(); let frameHash = 2166136261;
+          const spanMs = performance.now()-spanStart, b = pc98.stats(); let frameHash = 2166136261;
           const ptr = pc98.core.frame() >>> 0;
           for (const byte of new Uint8Array(pc98.core.memory.buffer,ptr,640*400*4)) frameHash = Math.imul(frameHash ^ byte,16777619) >>> 0;
-          return {wallMs, guestSeconds:b.guestSeconds-a.guestSeconds, instructions:b.completedInstructions-a.completedInstructions,
+          const [r,f,ip] = new Uint32Array(pc98.core.memory.buffer,pc98.core.jit_layout()>>>0,3);
+          let cpuHash = 2166136261;
+          for(const [address,length] of [[r,16],[f,2],[ip,4]])for(const byte of new Uint8Array(pc98.core.memory.buffer,address,length))cpuHash=Math.imul(cpuHash^byte,16777619)>>>0;
+          cpuHash=Math.imul(cpuHash^pc98.core.metric(17),16777619)>>>0;
+          return {wallMs, spanMs, cpuHash, guestSeconds:b.guestSeconds-a.guestSeconds, instructions:b.completedInstructions-a.completedInstructions,
             translatedInstructions:(b.jit?.instructions??0)-(a.jit?.instructions??0),
             cycles:b.cpuCycles-a.cpuCycles, reads:b.hddReads-a.hddReads, keys:b.fmKeyEdges-a.fmKeyEdges,
             irqs:b.soundIrqEdges-a.soundIrqEdges, samples, pcmHash, frameHash, error:b.error};
-        }, {gameplay:options.gameplay === '1', part, seed:pcmHash});
+        }, {gameplay:options.gameplay === '1', part, seed:pcmHash, yieldJit});
         parts.push(block); pcmHash = block.pcmHash;
       }
       result = {...parts.at(-1)};
-      for (const key of ['wallMs','guestSeconds','instructions','translatedInstructions','cycles','reads','keys','irqs','samples']) {
+      for (const key of ['wallMs','spanMs','guestSeconds','instructions','translatedInstructions','cycles','reads','keys','irqs','samples']) {
         result[key] = parts.reduce((sum, part) => sum+part[key], 0);
       }
     }
@@ -226,5 +237,5 @@ try {
     os:`${os.type()} ${os.release()} ${os.arch()}`, cpu:os.cpus()[0].model,
     wasmSha256:sha(wasm), runtimeSha256, mediaSha256:sha(await readFile(options.media)),
     harnessSha256, playback, jit:options.jit!=='0', gameplay:options.gameplay === '1',
-    profile:options.profile === '1', visuals:options.visuals === '1', repeat}, rows}, null, 2)+'\n', {flag:'wx'});
+    profile:options.profile === '1', yieldJit, visuals:options.visuals === '1', repeat}, rows}, null, 2)+'\n', {flag:'wx'});
 } finally { await browser?.close(); server.closeAllConnections(); server.close(); }

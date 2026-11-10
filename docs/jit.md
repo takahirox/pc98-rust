@@ -1,20 +1,21 @@
-# Browser x86-to-WebAssembly JIT — Issue #150
+# Browser x86-to-WebAssembly JIT — Issues #150 and #152
 
 With JIT selected, the browser emulator dynamically compiles hot Ap real-mode instruction blocks
-into WebAssembly. Generated code implements register operations, flags and
-branches. It shares the owning core's memory and calls Rust at every instruction
+into WebAssembly. Generated code implements register and memory operations, flags, word stack
+operations and near calls/returns. It shares the owning core's memory and calls Rust at every instruction
 boundary to preserve fetches, guest clocks and device events. The native core
 and synchronous `step`/observer APIs retain the interpreter as their reference.
 
 ## Coverage and controls
 
-The first tier covers unprefixed 8/16-bit register/immediate ALU, MOV, XCHG,
-INC/DEC, TEST, SAHF/LAHF, carry/direction flags, short conditional branches,
-LOOP/JCXZ and relative JMP in conventional RAM. Blocks contain at most 16
-instructions and stop at a branch or unsupported operation. Memory operands,
-prefixes, strings, stack operations, I/O, firmware services, protected/paged
-execution, 32-bit defaults, single-step and unusual fetch boundaries use the
-existing interpreter. This is a bounded first tier, not a replacement for the
+The tier covers unprefixed 8/16-bit ALU, MOV, XCHG, TEST, NOT/NEG,
+register INC/DEC, SAHF/LAHF, carry/direction flags, short conditional branches,
+LOOP/JCXZ, relative JMP/CALL, word register PUSH/POP and near RET. Memory operands
+use 16-bit ModR/M addressing or accumulator absolute offsets. Blocks contain at
+most 16 instructions and stop at a branch or unsupported operation. Prefixes,
+strings, shifts, far transfers, other stack operations, I/O, firmware services,
+protected/paged execution, 32-bit defaults, single-step and unusual fetch
+boundaries use the existing interpreter. This is a bounded first tier, not a replacement for the
 full CPU implementation.
 
 The initial tier is opt-in: add `?jit=1` (or `&jit=1`) to enable it. The default
@@ -37,11 +38,11 @@ into a new machine generation.
 ## Boundaries preserved
 
 The Rust bridge lives in [`src/cpu/jit.rs`](../src/cpu/jit.rs). It observes hot
-addresses through a 4,096-entry heat table, offers blocks after 32 observed visits, and
-bounds native plans and compiled modules to 128 entries. Only one compilation
+addresses through a 16,384-entry heat table, offers blocks after 32 observed visits, and
+bounds native plans and compiled modules to 4,096 entries. Only one compilation
 is in flight. Evicted addresses can warm again. Compilation is asynchronous;
 guest execution continues through the interpreter until a module is ready.
-Cold code is sampled between short interpreter runs of 17–32 units, reducing
+Cold code is sampled between short interpreter runs of 3–6 units, reducing
 discovery overhead on memory-heavy code. Ready blocks can chain immediately.
 
 Every translated instruction rechecks CPU mode, TF, the interrupt shadow,
@@ -59,8 +60,25 @@ conversion. Devices tick after every instruction, including a zero-clock tick;
 PCM/timer/IRQ work is never deferred to the end of a block. Both the 80,000-clock
 deadline and the 100,000-unit cap remain effective inside compiled blocks.
 
-Generated modules access the low register bank, FLAGS and IP through addresses
-obtained from the owning core, rather than assuming Rust field offsets. Cached
+A small Wasm dispatcher calls ready modules through a bounded function table,
+avoiding a JavaScript round trip between short blocks. It returns at a compilation
+offer or slice end. Entry distinguishes an offer from a stale plan invalidated by
+its byte guard; stale entries fall back without resubmitting an old packet.
+
+Memory address forms, widths and access directions are decoded once. Each entry
+computes the current offset and validates the complete operand against the current
+hidden segment bounds. A two-word scratch area carries the bus-read value and
+generated write result across the instruction boundary. Rust performs the original
+byte bus accesses, retaining cache/wait accounting and video-device effects. Bus
+writes commit before the next instruction's byte guard, including self-modifying
+stores. Complete preflight avoids duplicate segment/paging checks during these
+real-mode bus accesses; code fetches likewise keep each original bus access.
+Word stack operations decline big stacks. RET target peeks are restricted to
+ordinary RAM; mapped stacks or invalid targets return to the interpreter before
+fetching/popping. Other mapped data operands retain the actual bus path.
+
+Generated modules access the low register bank, FLAGS, IP and scratch area through
+addresses obtained from the owning core, rather than assuming Rust field offsets. Cached
 addresses are ordinary numbers, not typed-array views that detach when memory
 grows. Byte and word writes retain neighboring bytes and upper register words.
 Reset and media/control barriers run between finite slices and clear cache
@@ -105,7 +123,7 @@ PCM fingerprint matches. Six blocks (3,601 generated bytes) warm on each JIT
 page; their asynchronous compilation wall latency totals 8.4–9.2 ms. Timing
 starts after warm-up; it does not include browser startup or initial compilation.
 
-The first installed-game screen retains exactly 118,102,981 instructions,
+The initial Issue #150 installed-game comparison retains exactly 118,102,981 instructions,
 1,584,018,440 CPU clocks, 131 reads, 1,464 music key edges, 934 sound IRQ edges,
 1,152,013 PCM samples, PCM fingerprint 3,284,892,698 and final-frame fingerprint
 1,013,578,406 in all modes. Per-instruction discovery initially made the JIT
@@ -125,8 +143,8 @@ controls. Every canonical guest/PCM/frame result above matches:
 | Interpreter | 8,080.3, 8,241.9, 8,203.3 | 8,203.3 |
 | JIT | 8,273.8, 8,304.4, 8,297.3 | 8,297.3 |
 
-Only 88,022 of 118,102,981 measured instructions use this tier (about 0.075%).
-The JIT control is 1.1% slower by the median. Consequently the ordinary browser
+Only 88,022 of 118,102,981 measured instructions used the initial tier (about 0.075%).
+The initial JIT control was 1.1% slower by the median. Consequently the ordinary browser
 keeps the interpreter; the optional tier is available for supported workloads
 and future coverage work. These explicit-mode measurements were collected at
 `f606aac`; the subsequent opt-in default changes neither the core/compiler bytes
@@ -138,9 +156,18 @@ compiler asset alongside the runtime, and records JIT counters. Use one browser
 at a time after builds/regression suites finish, without a debugger or profiler:
 
 ```sh
-node tools/measure_doukyuusei2.mjs --media=/tmp/pc98-146/installed.hdi --output=/tmp/pc98-146/interpreter.json --channel=chrome --gameplay=1 --repeat=1 --jit=0
-node tools/measure_doukyuusei2.mjs --media=/tmp/pc98-146/installed.hdi --output=/tmp/pc98-146/jit.json --channel=chrome --gameplay=1 --repeat=1 --jit=1
+node tools/measure_doukyuusei2.mjs --media=/tmp/pc98-146/installed.hdi --output=/tmp/pc98-146/interpreter.json --channel=chrome --gameplay=1 --repeat=1 --jit=0 --yieldJit=1
+node tools/measure_doukyuusei2.mjs --media=/tmp/pc98-146/installed.hdi --output=/tmp/pc98-146/jit.json --channel=chrome --gameplay=1 --repeat=1 --jit=1 --yieldJit=1
 ```
+
+`--yieldJit=1` yields between 10 ms guest slices during setup and measurement,
+allowing asynchronous compilation to progress as it does between production
+Worker slices. Without it, a long synchronous inspection can hold compilation
+until an entire eight-second guest window finishes and understate coverage.
+`wallMs` sums active guest execution and PCM hashing; it excludes timer waits and
+compiler tasks between slices. `spanMs` additionally includes these inter-slice
+tasks and waits. Neither measures visible transition completion or synthesis
+quality. The CPU fingerprint covers the low register bank, FLAGS, IP and CS.
 
 Alternate order and repeat; compare fixed work and guest results before comparing
 host time. The [normal startup controller](doukyuusei2-reproduction.md) also
@@ -150,3 +177,31 @@ fidelity. Game media, installed
 HDDs, captures, recordings, raw profiles and raw reports stay outside checkout
 and publication. Issue #146 remains open unless the original debugger-free
 Chrome complaint is independently reproduced and resolved.
+
+
+## Installed-game iteration — Issue #152
+
+A separate aggregate opcode count on the canonical game window identified near
+CALL and RET at about 7% each and register group TEST at about 4.7%. The initial
+JIT did not cover these operations or the frequent memory MOV/ALU paths. A
+synchronous inspection also prevented compilation from progressing during the
+window; yielding increased old-tier coverage from 88,022 to 1,732,419 instructions,
+while revealing 4,268 total compilations and a full 128-entry cache.
+
+Exploratory candidates added memory/stack semantics, enlarged the bounded cache,
+moved block dispatch into Wasm, combined operand accesses with existing boundary
+callbacks, predecoded address forms and removed duplicate preflight checks.
+Adding coverage alone made the game slower. Per-operand helper imports and
+minimum-two-instruction admission were rejected. The selected candidate keeps
+single-instruction blocks, a 4,096-entry cache and 3–6-unit discovery intervals;
+it translated 72,662,313 of the canonical 118,102,981 measured instructions (61.5%)
+in its initial screen. All canonical CPU/device clocks and PCM/frame fingerprints
+matched. These screens select candidates; they are not the final repeated timing
+claim.
+
+The final alternating controls, artifact identities, elapsed-time definitions,
+full validation and normal-playback observations are recorded in
+[Issue #152](https://github.com/takahirox/pc98-rust/issues/152) and its linked PR.
+Performance comparisons use the same harness and installed Chrome, with one
+owned browser at a time and no concurrent local builds or test suites. The
+reference interpreter and opt-in policy remain available for other workloads.
