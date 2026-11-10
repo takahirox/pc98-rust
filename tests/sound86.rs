@@ -715,3 +715,52 @@ fn shared_sound_pic_reinitialization_instances_and_machine_reset() {
         assert_eq!(other.bus.irq(), Some(0x1c));
     }
 }
+
+#[test]
+fn ssg_volume_and_all_envelope_shapes_preserve_original_pcm() {
+    // Original synthetic register sequence: all 32 volume encodings, all 16
+    // envelope shapes, three tone periods, noise and mixer gating. No music,
+    // game media or imported chip implementation is used.
+    let hashes: Vec<u32> = (0..16)
+        .map(|shape| {
+            let mut opn = Opn::default();
+            for (a, v) in [
+                (0, 5),
+                (1, 0),
+                (2, 13),
+                (3, 0),
+                (4, 27),
+                (5, 0),
+                (6, 3),
+                (7, 0),
+                (11, 1),
+                (12, 0),
+                (13, shape),
+            ] {
+                opn_register(&mut opn, a, v);
+            }
+            let mut hash = 2166136261u32;
+            for i in 0..4096 {
+                if i % 29 == 0 {
+                    let volume = (i / 29) as u8 & 31;
+                    for (channel, offset) in [(0, 0), (1, 11), (2, 21)] {
+                        opn_register(&mut opn, 8 + channel, volume.wrapping_add(offset) & 31);
+                    }
+                }
+                if i % 257 == 0 {
+                    opn_register(&mut opn, 7, [0, 0x38, 7, 0x3f][i / 257 % 4]);
+                }
+                hash = (hash ^ opn.sample().to_bits()).wrapping_mul(16777619);
+            }
+            hash
+        })
+        .collect();
+    assert_eq!(
+        hashes,
+        [
+            1811828547, 1811828547, 1811828547, 1811828547, 1012363417, 1012363417, 1012363417,
+            1012363417, 2615909038, 1811828547, 3338361429, 2738169803, 3704898526, 3466569209,
+            1775222489, 1012363417,
+        ]
+    );
+}

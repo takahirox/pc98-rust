@@ -10,6 +10,7 @@ struct Coefficients {
     rate: [f64; 32],
     sustain: [f64; 16],
     total_level: [f64; 128],
+    ssg_level: [f64; 32],
 }
 // These expressions depend only on register bits, not on the guest clock or
 // operator state. Evaluate each once instead of calling powf for every sample.
@@ -23,6 +24,7 @@ static COEFFICIENTS: LazyLock<Coefficients> = LazyLock::new(|| Coefficients {
     }),
     sustain: std::array::from_fn(|sl| 10f64.powf(-(sl as f64) * 3.0 / 20.0)),
     total_level: std::array::from_fn(|tl| 10f64.powf(-(tl as f64) * 0.75 / 20.0)),
+    ssg_level: std::array::from_fn(|level| 10f64.powf((level as f64 - 31.0) * 1.5 / 20.0)),
 });
 
 #[derive(Clone, Copy, Default)]
@@ -334,9 +336,8 @@ impl Opn {
             if level != 0 {
                 let gate = (self.registers[7] & (1 << ch) != 0 || self.ssg_phase[ch] < 0.5)
                     && (self.registers[7] & (8 << ch) != 0 || self.noise & 1 != 0);
-                sum += if gate { 1.0 } else { -1.0 }
-                    * 0.08
-                    * 10f64.powf((f64::from(level) - 31.0) * 1.5 / 20.0);
+                sum +=
+                    if gate { 1.0 } else { -1.0 } * 0.08 * COEFFICIENTS.ssg_level[level as usize];
             }
         }
         sum.clamp(-1.0, 1.0) as f32

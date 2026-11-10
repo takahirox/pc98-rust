@@ -180,7 +180,7 @@ try {
       const parts = []; let pcmHash = 2166136261;
       for (let part = 0; part < (options.gameplay === '1' ? 3 : 1); part++) {
         const block = await inspect(async ({gameplay, part, seed, yieldJit}) => {
-          const a = pc98.stats(), spanStart = performance.now(); let wallMs = 0, samples = 0, pcmHash = seed;
+          const a = pc98.stats(), spanStart = performance.now(); let wallMs = 0, samples = 0, pcmHash = seed; const sliceTimes = [];
           for (let at = 0; at < 800; at++) {
             const began = performance.now(), n = part*800+at;
             if (gameplay && n % 48 === 0) pc98.core.mouse(0,0,1);
@@ -189,24 +189,28 @@ try {
             const count = pc98.core.audio_len(), ptr = pc98.core.audio_ptr() >>> 0; samples += count;
             for (const bits of new Uint32Array(pc98.core.memory.buffer,ptr,count)) pcmHash = Math.imul(pcmHash ^ bits,16777619) >>> 0;
             pc98.core.audio_clear();
-            wallMs += performance.now()-began;
+            const elapsed = performance.now()-began; wallMs += elapsed; sliceTimes.push(elapsed);
             if(yieldJit)await new Promise(resolve=>setTimeout(resolve,0));
           }
-          const spanMs = performance.now()-spanStart, b = pc98.stats(); let frameHash = 2166136261;
+          const spanMs = performance.now()-spanStart, b = pc98.stats();
+          sliceTimes.sort((a,b)=>a-b);
+          const sliceTiming = {count:sliceTimes.length, p50Ms:sliceTimes[399], p95Ms:sliceTimes[759], p99Ms:sliceTimes[791], maxMs:sliceTimes[799]};
+          let frameHash = 2166136261;
           const ptr = pc98.core.frame() >>> 0;
           for (const byte of new Uint8Array(pc98.core.memory.buffer,ptr,640*400*4)) frameHash = Math.imul(frameHash ^ byte,16777619) >>> 0;
           const [r,f,ip] = new Uint32Array(pc98.core.memory.buffer,pc98.core.jit_layout()>>>0,3);
           let cpuHash = 2166136261;
           for(const [address,length] of [[r,16],[f,2],[ip,4]])for(const byte of new Uint8Array(pc98.core.memory.buffer,address,length))cpuHash=Math.imul(cpuHash^byte,16777619)>>>0;
           cpuHash=Math.imul(cpuHash^pc98.core.metric(17),16777619)>>>0;
-          return {wallMs, spanMs, cpuHash, guestSeconds:b.guestSeconds-a.guestSeconds, instructions:b.completedInstructions-a.completedInstructions,
+          return {wallMs, spanMs, sliceTiming, cpuHash, guestSeconds:b.guestSeconds-a.guestSeconds, instructions:b.completedInstructions-a.completedInstructions,
             translatedInstructions:(b.jit?.instructions??0)-(a.jit?.instructions??0),
             cycles:b.cpuCycles-a.cpuCycles, reads:b.hddReads-a.hddReads, keys:b.fmKeyEdges-a.fmKeyEdges,
             irqs:b.soundIrqEdges-a.soundIrqEdges, samples, pcmHash, frameHash, error:b.error};
         }, {gameplay:options.gameplay === '1', part, seed:pcmHash, yieldJit:measurementYields});
         parts.push(block); pcmHash = block.pcmHash;
       }
-      result = {...parts.at(-1)};
+      result = {...parts.at(-1), sliceTimings:parts.map(part=>part.sliceTiming)};
+      delete result.sliceTiming;
       for (const key of ['wallMs','spanMs','guestSeconds','instructions','translatedInstructions','cycles','reads','keys','irqs','samples']) {
         result[key] = parts.reduce((sum, part) => sum+part[key], 0);
       }

@@ -321,3 +321,27 @@ test('predecoded register-change policies preserve the next memory address depen
   for(const core of [p.a,p.b]){const s=state(core);setState(core,s.r,s.flags,0x120);core.step(1);}
   assert.deepEqual(state(p.a),state(p.b));
 });
+
+test('single-bit shifts and rotations preserve all flags and byte aliases',async()=>{
+  for(const wide of [false,true])for(let group=0;group<8;group++)for(let dst=0;dst<8;dst++){
+    const p=await pair([wide?0xd1:0xd0,0xc0|group<<3|dst]);
+    const values=wide?[0,1,0x7fff,0x8000,0x8001,0xffff,0x5555,0xaaaa,...Array.from({length:16},()=>random()&65535)]:Array.from({length:256},(_,i)=>i);
+    for(const value of values)for(const carry of [0,1]){
+      const regs=Array.from({length:8},()=>random()&65535);
+      if(wide)regs[dst]=value;
+      else {const r=dst&3,shift=dst<4?0:8;regs[r]=(regs[r]&~(255<<shift))|value<<shift;}
+      const flags=(random()&0xcd4)|2|carry;
+      execute(p,regs,flags);
+    }
+  }
+});
+
+test('memory shifts retain the interpreter bus path',async()=>{
+  const p=await pair([0xd1,0x26,0,0x80],[0xb8,1,0x80,0xa3,0,0x80]);
+  assert.equal(p.plan[1],1); // The leading NOP ends before unsupported memory SHL.
+  for(const core of [p.a,p.b]){const s=state(core);setState(core,s.r,2,0x100);core.step(2);setState(core,s.r,2,1);}
+  p.a.jit_begin_slice(80000,2);assert.equal(p.a.jit_start(p.id),1);p.run(...layout(p.a));p.b.step(1);
+  assert.equal(p.a.jit_done(),1);assert.deepEqual(state(p.a),state(p.b));
+  p.a.jit_dispatch(0);p.b.step(1);assert.deepEqual(state(p.a),state(p.b));
+  for(const at of [0x8000,0x8001])assert.equal(p.a.peek(at),p.b.peek(at));
+});

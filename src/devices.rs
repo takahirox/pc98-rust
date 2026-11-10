@@ -377,8 +377,14 @@ impl Counter {
         let n = self.mode3_reload;
         // A full period ends with the low-to-high transition. Detect it before
         // reducing modulo N, so even hidden transitions reach the PIC latch.
-        rising |= ticks >= n - self.mode3_phase;
-        self.mode3_phase = (self.mode3_phase + ticks) % n;
+        let until_wrap = n - self.mode3_phase;
+        if ticks < until_wrap {
+            // Most instruction-sized ticks stay in this period: no division.
+            self.mode3_phase += ticks;
+        } else {
+            rising = true;
+            self.mode3_phase = (ticks - until_wrap) % n;
+        }
         let high_clocks = n.div_ceil(2);
         self.output = self.mode3_phase < high_clocks;
         let elapsed = if self.output {
