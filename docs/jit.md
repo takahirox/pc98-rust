@@ -45,9 +45,11 @@ guest execution continues through the interpreter until a module is ready.
 Cold code is sampled between short interpreter runs of 3–6 units, reducing
 discovery overhead on memory-heavy code. Ready blocks can chain immediately.
 
-Every translated instruction rechecks CPU mode, TF, the interrupt shadow,
-current CS bounds/base, expected IP and every instruction byte before its
-semantics run. Branch targets are checked against the current segment bounds,
+Every block entry checks CPU mode, TF and CS base. Supported operations cannot
+change mode, segment registers, TF, halt or REP state while the synchronous Wasm
+dispatcher runs. Unsupported control changes leave the block and pass the full
+entry guard again. Each instruction still checks the interrupt shadow, IRQs,
+current CS bounds, expected IP and every code byte before its semantics run. Branch targets are checked against the current segment bounds,
 including after a hidden-cache change. A conservative rejection returns to the
 interpreter, which decides whether an untaken branch actually faults. Code
 mutation stops the old block before the changed operation and allows rewarming.
@@ -65,7 +67,11 @@ avoiding a JavaScript round trip between short blocks. It returns at a compilati
 offer or slice end. Entry distinguishes an offer from a stale plan invalidated by
 its byte guard; stale entries fall back without resubmitting an old packet.
 
-Memory address forms, widths and access directions are decoded once. Each entry
+Memory address forms, widths and access directions are decoded once. Validated
+physical operand addresses are reused within each instruction. Exact known GPR
+change masks avoid whole-bank snapshots/comparisons for flag-only instructions
+and operations that always change a specific word register; identity/alias cases
+retain actual-change comparison. Each entry
 computes the current offset and validates the complete operand against the current
 hidden segment bounds. A two-word scratch area carries the bus-read value and
 generated write result across the instruction boundary. Rust performs the original
@@ -110,7 +116,7 @@ It warms 200,000 units on each fresh page, alternates mode order, then compares
 clocks, fetch/retirement counters and PCM fingerprints before reporting timings.
 This is a supported-register workload, not a prediction for memory-heavy games.
 
-On Apple M4 Max, Darwin 27.2.0 arm64, Node 26.12.1 and installed Chrome
+The initial Issue #150 tier on Apple M4 Max, Darwin 27.2.0 arm64, Node 26.12.1 and installed Chrome
 157.0.8103.38, three controls per mode measured:
 
 | Register loop | Host ms, individual controls | Median host ms |
@@ -166,7 +172,9 @@ Worker slices. Without it, a long synchronous inspection can hold compilation
 until an entire eight-second guest window finishes and understate coverage.
 `wallMs` sums active guest execution and PCM hashing; it excludes timer waits and
 compiler tasks between slices. `spanMs` additionally includes these inter-slice
-tasks and waits. Neither measures visible transition completion or synthesis
+tasks and waits. `--yieldJit=setup` warms compilation during setup, then measures
+continuous eight-guest-second windows with yields only between windows; this
+separately controls the timer/host-scheduling spread seen with short slices. Neither measures visible transition completion or synthesis
 quality. The CPU fingerprint covers the low register bank, FLAGS, IP and CS.
 
 Alternate order and repeat; compare fixed work and guest results before comparing
@@ -197,7 +205,9 @@ single-instruction blocks, a 4,096-entry cache and 3–6-unit discovery interval
 it translated 72,662,313 of the canonical 118,102,981 measured instructions (61.5%)
 in its initial screen. All canonical CPU/device clocks and PCM/frame fingerprints
 matched. These screens select candidates; they are not the final repeated timing
-claim.
+claim. An intermediate nine-control short-slice comparison was 2.4% slower than
+the previous JIT, requiring another iteration on preflight, register-change
+bookkeeping and invariant entry checks.
 
 The final alternating controls, artifact identities, elapsed-time definitions,
 full validation and normal-playback observations are recorded in
@@ -205,3 +215,40 @@ full validation and normal-playback observations are recorded in
 Performance comparisons use the same harness and installed Chrome, with one
 owned browser at a time and no concurrent local builds or test suites. The
 reference interpreter and opt-in policy remain available for other workloads.
+
+
+### Final continuous-capacity comparison
+
+On the same Apple M4 Max / Darwin 27.2.0 / Node 26.12.1 / installed Chrome
+157.0.8103.38 host, nine fresh-browser controls used the balanced order
+old/new/interpreter, new/interpreter/old, interpreter/old/new. Each used
+`--yieldJit=setup`: asynchronous setup followed by three continuous eight-guest-second
+windows. Builds and test suites were finished before these controls began.
+
+| Mode | Active host ms, individual controls | Median host ms |
+| --- | --- | ---: |
+| Previous JIT, main `72d3c4c` | 8,691.4 / 8,436.2 / 8,888.1 | 8,691.4 |
+| Revised JIT | 8,032.3 / 7,735.1 / 8,268.0 | 8,032.3 |
+| Same-core interpreter | 8,509.5 / 8,655.2 / 8,450.5 | 8,509.5 |
+
+The revised median uses 7.6% less active host time than the previous JIT and
+5.6% less than the same-core interpreter. All three revised controls are below
+all three previous-JIT controls. Inclusive window medians are 8,692.0 / 8,033.1 /
+8,509.6 ms respectively. These are fixed-work capacity results on this host.
+
+Every control retains the canonical 24.0002795 guest seconds, instruction/clock,
+HDD/music/IRQ, PCM and frame results above. The low-GPR/FLAGS/IP/CS fingerprint
+is 2,669,599,220 in all nine. Continuous-window translated counts are
+145,266 for the previous JIT and 59,618,051 for the revision; these differ from
+the short-slice counts because compilation cannot progress inside a window.
+Separate short-slice repeats and normal visible playback are recorded in
+[Issue #152](https://github.com/takahirox/pc98-rust/issues/152) and its linked PR.
+
+The baseline core is 549,188 bytes, SHA-256
+`2455a962c8c0474aa563793598d1642f1b45b4325971d108189007fe31c7ee3d`.
+The revised core is 552,941 bytes, SHA-256
+`12b5d7411b71ba4726502f79aa0c84ea52a5187eb3ef551b456e711c38f6305e`.
+All nine controls use harness SHA-256
+`1a0163d5cfdd42d4bd16ece8f95d5c565f360c925c8ea6632730bbb2a6115121`;
+common runtime hashes match and the selected compiler/core bytes are frozen per
+control. Raw reports remain outside the checkout.

@@ -12,10 +12,11 @@ const options = Object.fromEntries(process.argv.slice(2).map(value => value.repl
 options.jit ??= '0';
 // Yield between guest slices so asynchronous JIT compilation can progress.
 // wallMs sums active guest/hash work; timer waits and compiler tasks are excluded.
-const yieldJit = options.yieldJit === '1';
+const yieldJit = ['1','setup'].includes(options.yieldJit);
+const measurementYields = options.yieldJit === '1';
 const repeat = Number(options.repeat ?? 3), playback = options.playback === '1';
 const engine = options.browser ?? 'chromium';
-if(options.yieldJit!==undefined&&!['0','1'].includes(options.yieldJit))throw Error('Expected --yieldJit=0|1');
+if(options.yieldJit!==undefined&&!['0','1','setup'].includes(options.yieldJit))throw Error('Expected --yieldJit=0|1|setup');
 if(options.jit!==undefined&&!['0','1'].includes(options.jit))throw Error('Expected --jit=0|1');
 if (!Number.isInteger(repeat) || repeat < 1 || repeat > 10) throw Error('Expected --repeat=1..10');
 if (!['chromium','firefox'].includes(engine) || engine === 'firefox' && (options.channel || options.profile === '1')) {
@@ -202,7 +203,7 @@ try {
             translatedInstructions:(b.jit?.instructions??0)-(a.jit?.instructions??0),
             cycles:b.cpuCycles-a.cpuCycles, reads:b.hddReads-a.hddReads, keys:b.fmKeyEdges-a.fmKeyEdges,
             irqs:b.soundIrqEdges-a.soundIrqEdges, samples, pcmHash, frameHash, error:b.error};
-        }, {gameplay:options.gameplay === '1', part, seed:pcmHash, yieldJit});
+        }, {gameplay:options.gameplay === '1', part, seed:pcmHash, yieldJit:measurementYields});
         parts.push(block); pcmHash = block.pcmHash;
       }
       result = {...parts.at(-1)};
@@ -237,5 +238,5 @@ try {
     os:`${os.type()} ${os.release()} ${os.arch()}`, cpu:os.cpus()[0].model,
     wasmSha256:sha(wasm), runtimeSha256, mediaSha256:sha(await readFile(options.media)),
     harnessSha256, playback, jit:options.jit!=='0', gameplay:options.gameplay === '1',
-    profile:options.profile === '1', yieldJit, visuals:options.visuals === '1', repeat}, rows}, null, 2)+'\n', {flag:'wx'});
+    profile:options.profile === '1', yieldJit, measurementYields, visuals:options.visuals === '1', repeat}, rows}, null, 2)+'\n', {flag:'wx'});
 } finally { await browser?.close(); server.closeAllConnections(); server.close(); }

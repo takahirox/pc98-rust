@@ -15,6 +15,7 @@ struct Op {
     len: u8,
     modrm: u8,
     memory: Option<Memory>,
+    register_writes: u8,
 }
 #[derive(Clone, Copy, Debug)]
 struct Memory {
@@ -65,6 +66,43 @@ impl Op {
             0x50..=0x57 | 0xe8 | 0xa2 | 0xa3 | 0x88 | 0x89 | 0xc6 | 0xc7
         )
     }
+    fn register_policy(self) -> u8 {
+        let op = self.bytes[0];
+        match op {
+            // These word operations always change the named low register.
+            0x40..=0x4f => 1 << (op & 7),
+            0x50..=0x57 | 0xc3 | 0xe8 => 1 << SP,
+            0xe0..=0xe2 => 1 << CX,
+            0x00..=0x3d if op & 7 <= 5 => {
+                if op >> 3 == 7 || op & 7 < 2 && self.modrm < 0xc0 {
+                    0
+                } else {
+                    0xff
+                }
+            }
+            0x70..=0x7f
+            | 0x84
+            | 0x85
+            | 0x90
+            | 0x9e
+            | 0xa2
+            | 0xa3
+            | 0xa8
+            | 0xa9
+            | 0xe3
+            | 0xe9
+            | 0xeb
+            | 0xf5
+            | 0xf8
+            | 0xf9
+            | 0xfc
+            | 0xfd => 0,
+            0x80 | 0x81 | 0x83 if self.modrm < 0xc0 || self.modrm & 0x38 == 0x38 => 0,
+            0x88 | 0x89 | 0xc6 | 0xc7 if self.modrm < 0xc0 => 0,
+            0xf6 | 0xf7 if self.modrm < 0xc0 || self.modrm & 0x38 == 0 => 0,
+            _ => 0xff, // Preserve actual-change comparison for aliases/identity operations.
+        }
+    }
     fn target(self) -> u32 {
         let displacement = if matches!(self.bytes[0], 0xe8 | 0xe9) {
             u16::from_le_bytes([self.bytes[1], self.bytes[2]]) as i16 as i32
@@ -96,8 +134,8 @@ pub struct Engine {
     plans: Vec<Option<Plan>>,
     serial: u32,
     packet: Vec<u32>,
-    active: Option<(u32, usize, [u16; 8], bool)>,
-    operand: Option<(usize, u32, u32)>,
+    active: Option<(u32, usize, [u16; 8], u8, bool)>,
+    operand: Option<(u32, u32)>,
     scratch: [u32; 2],
     deadline: u64,
     remaining: u32,
@@ -274,7 +312,9 @@ fn decode(m: &Machine, ip: u32) -> Option<Op> {
         len: length as u8,
         modrm,
         memory: None,
+        register_writes: 0,
     };
+    result.register_writes = result.register_policy();
     result.memory = memory_spec(result);
     if result.branch() && op != 0xc3 {
         code(m, result.target(), 1)?;
@@ -364,7 +404,7 @@ impl Engine {
                     }
                     let id = self.probes[index].id;
                     if let Some(plan) = self.plan(id).filter(|p| p.key == key) {
-                        if plan.ready && eligible(m) {
+                        if plan.ready {
                             return id;
                         }
                     } else if id == 0 && self.probes[index].hits == HEAT && compile && eligible(m) {
@@ -444,9 +484,17 @@ impl Engine {
             return false;
         };
         let plan_key = plan.key;
-        if !eligible(m) || key(&m.cpu) != ((plan_key & !0xffff_ffff) | u64::from(op.ip)) {
+        if index == 0 {
+            if !eligible(m) || key(&m.cpu) != plan_key {
+                return false;
+            }
+        } else if m.cpu.ip != op.ip {
             return false;
         }
+        // Generated blocks run synchronously and these operations cannot change
+        // CPU mode, segments, TF, halt or REP state. Unsupported control changes
+        // leave the block and must pass the complete entry guard again. IRQs,
+        // deadlines, code bytes and memory spans remain instruction boundaries.
         if m.cpu.flags & IF != 0 && m.cpu.inhibit == 0 {
             // The interpreter refreshes the cascade wire even when INTA finds
             // no vector. Preserve its deassertion/next-edge history too.
@@ -479,16 +527,18 @@ impl Engine {
             let segment = memory.segment as usize;
             let offset = memory.offset(&m.cpu);
             let width = u32::from(memory.width);
-            if memory.flags & Memory::STACK != 0 && m.cpu.segment_cache(SS).big() {
+            let descriptor = m.cpu.segment_cache(segment);
+            if memory.flags & Memory::STACK != 0 && descriptor.big() {
                 return false;
             }
-            if !m.cpu.segment_cache(segment).contains(offset, width) {
+            if !descriptor.contains(offset, width) {
                 return false;
             }
+            let physical = descriptor.base.wrapping_add(offset);
             if memory.flags & Memory::RETURN != 0 {
                 // Return target peeks are limited to ordinary RAM. All actual
                 // reads still use the bus after the complete preflight.
-                let at = m.cpu.linear(segment, offset);
+                let at = physical as usize;
                 if at.checked_add(2).is_none_or(|end| end > 0xa0000) {
                     return false;
                 }
@@ -497,19 +547,26 @@ impl Engine {
                     return false;
                 }
             }
-            self.operand = Some((segment, offset, width));
+            self.operand = Some((physical, width));
         }
-        let before = m.cpu.r;
+        let before = if op.register_writes == 0xff {
+            m.cpu.r
+        } else {
+            [0; 8]
+        };
         m.cpu.jit_prepare(&mut m.bus, op, at as u32);
         if op
             .memory
             .is_some_and(|memory| memory.flags & Memory::READ != 0)
         {
-            if let Some((segment, offset, width)) = self.operand {
+            if let Some((physical, width)) = self.operand {
                 let mut value = 0;
                 for byte in 0..width {
-                    let physical = m.cpu.linear(segment, offset + byte) as u32;
-                    value |= u32::from(m.bus.cpu_read(physical, byte, width, false)) << (byte * 8);
+                    value |=
+                        u32::from(
+                            m.bus
+                                .cpu_read(physical.wrapping_add(byte), byte, width, false),
+                        ) << (byte * 8);
                 }
                 self.scratch[0] = value;
             }
@@ -518,6 +575,7 @@ impl Engine {
             id,
             index,
             before,
+            op.register_writes,
             op.memory
                 .is_some_and(|memory| memory.flags & Memory::WRITE != 0),
         ));
@@ -528,20 +586,23 @@ impl Engine {
     }
     /// Commit one translated instruction, tick devices, then guard the next one.
     pub fn next(&mut self, m: &mut Machine, index: usize, taken: bool) -> bool {
-        let Some((id, previous, before, write)) = self.active.take() else {
+        let Some((id, previous, before, register_writes, write)) = self.active.take() else {
             return false;
         };
         if write {
-            if let Some((segment, offset, width)) = self.operand {
+            if let Some((physical, width)) = self.operand {
                 for byte in 0..width {
-                    let physical = m.cpu.linear(segment, offset + byte) as u32;
-                    m.bus
-                        .cpu_write(physical, byte, width, (self.scratch[1] >> (byte * 8)) as u8);
+                    m.bus.cpu_write(
+                        physical.wrapping_add(byte),
+                        byte,
+                        width,
+                        (self.scratch[1] >> (byte * 8)) as u8,
+                    );
                 }
             }
         }
         m.bus.timing.taken = taken;
-        let timing = m.cpu.jit_finish(&mut m.bus, before);
+        let timing = m.cpu.jit_finish(&mut m.bus, before, register_writes);
         let clocks = m
             .clock_converter
             .advance(m.bus.profile, timing.cpu_cycles());
@@ -590,9 +651,18 @@ impl Cpu {
         }
         self.retired += 1;
     }
-    fn jit_finish(&mut self, b: &mut Bus, before: [u16; 8]) -> crate::timing::StepTiming {
+    fn jit_finish(
+        &mut self,
+        b: &mut Bus,
+        before: [u16; 8],
+        register_writes: u8,
+    ) -> crate::timing::StepTiming {
         let timing = b.timing.finish(b.profile, false, 0);
-        self.timing_writes = changed_registers(&before, &self.upper, &self.r, &self.upper);
+        self.timing_writes = if register_writes == 0xff {
+            changed_registers(&before, &self.upper, &self.r, &self.upper)
+        } else {
+            register_writes
+        };
         self.last_timing = timing;
         self.cycles += u64::from(timing.cpu_cycles());
         self.completed_instructions += u64::from(timing.instructions);

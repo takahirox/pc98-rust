@@ -295,3 +295,29 @@ test('Wasm dispatcher preserves unsigned identities across the JavaScript bounda
   for(let n=0;jit.pending;n++){assert(n<100);await new Promise(resolve=>setTimeout(resolve,0));}
   assert.equal(registered,id);assert(jit.cache.has(id));assert.equal(jit.stats().failures,0);
 });
+
+test('predecoded register-change policies preserve the next memory address dependency clocks',async()=>{
+  const cases=[
+    [[0x43],[0x8a,0x00]],[[0x4b],[0x8a,0x00]],[[0x3b,0xdb],[0x8a,0x00]],
+    [[0x83,0xc3,0],[0x8a,0x00]],[[0x89,0xdb],[0x8a,0x00]],[[0x87,0xf3],[0x8a,0x00]],
+    [[0x40],[0x67,0x8a,0x00]],[[0x48],[0x67,0x8a,0x00]],[[0xe2,0],[0x67,0x8a,0x01]],
+    [[0x51],[0x67,0x8a,0x04,0x24]],[[0xe8,0xfc,0xff],[0x67,0x8a,0x04,0x24]],
+    [[0x90],[0x8a,0x00]],[[0x9e],[0x8a,0x00]],[[0xf7,0xd3],[0x8a,0x00]],
+  ];
+  for(const [instruction,read] of cases){
+    const p=await pair(instruction,read);
+    for(const value of [0,1,0x1000,0x3000,0xffff]){
+      execute(p,[value,value,0,value,0x8000,0,0x1000,0],0x807);
+      // The fallback read observes the previous instruction's true GPR-change
+      // mask. Identity writes must not invent an address-generation penalty.
+      for(const core of [p.a,p.b]){const s=state(core);setState(core,s.r,s.flags,0x100);core.step(1);}
+      assert.deepEqual(state(p.a),state(p.b));
+    }
+  }
+  const patch=[0x68,0,0x80];patch.length=0x20;patch.fill(0,3);patch.push(0x67,0x8a,0x04,0x24);
+  const p=await pair([0x5c],patch);
+  for(const core of [p.a,p.b]){setState(core,[0,0,0,0,0x8002,0,0,0],2,0x100);core.step(1);}
+  execute(p,[0,0,0,0,0x8000,0,0,0],2); // POP SP reloads the original SP: no change.
+  for(const core of [p.a,p.b]){const s=state(core);setState(core,s.r,s.flags,0x120);core.step(1);}
+  assert.deepEqual(state(p.a),state(p.b));
+});
