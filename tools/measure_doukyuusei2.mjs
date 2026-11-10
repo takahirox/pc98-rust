@@ -9,8 +9,10 @@ import os from 'node:os';
 import {workerProfile} from '../tests/browser/helpers/worker-profile.js';
 
 const options = Object.fromEntries(process.argv.slice(2).map(value => value.replace(/^--/, '').split('=')));
+options.jit ??= '0';
 const repeat = Number(options.repeat ?? 3), playback = options.playback === '1';
 const engine = options.browser ?? 'chromium';
+if(options.jit!==undefined&&!['0','1'].includes(options.jit))throw Error('Expected --jit=0|1');
 if (!Number.isInteger(repeat) || repeat < 1 || repeat > 10) throw Error('Expected --repeat=1..10');
 if (!['chromium','firefox'].includes(engine) || engine === 'firefox' && (options.channel || options.profile === '1')) {
   throw Error('Use --browser=chromium|firefox; channel selection and host profiles require Chromium');
@@ -31,7 +33,7 @@ const wasm = await readFile(options.wasm ?? 'web/core.wasm');
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 // Freeze all executable assets before setup, including the lazily loaded
 // AudioWorklet. Later source edits cannot mix revisions within a long run.
-const runtime = await Promise.all(['app.js','emulator-worker.js','audio-worklet.js','render-worker.js']
+const runtime = await Promise.all(['app.js','emulator-worker.js','audio-worklet.js','render-worker.js',...(options.jit==='0'?[]:['jit.js'])]
   .map(async name => [name,await readFile(options.runtime ? path.join(options.runtime,name) : new URL('../web/'+name,import.meta.url))]));
 const runtimeSha256 = Object.fromEntries(runtime.map(([name,body]) => [name,sha(body)]));
 const harnessSha256 = sha(await readFile(new URL(import.meta.url)));
@@ -61,7 +63,7 @@ try {
   for (let run = 0; run < repeat; run++) {
     const page = await browser.newPage();
     routedAssets = Object.fromEntries([...assets.keys()].map(name => [name,0]));
-    await page.goto(`http://127.0.0.1:8077/?diagnostics${playback ? '' : '&manual'}`);
+    await page.goto(`http://127.0.0.1:8077/?diagnostics${playback ? '' : '&manual'}&jit=${options.jit==='0'?'0':'1'}`);
     await page.waitForFunction(() => !document.querySelector('#profile').disabled);
     await page.locator('#drive').selectOption('2');
     await page.locator('#file').setInputFiles(options.media);
@@ -186,13 +188,14 @@ try {
           const ptr = pc98.core.frame() >>> 0;
           for (const byte of new Uint8Array(pc98.core.memory.buffer,ptr,640*400*4)) frameHash = Math.imul(frameHash ^ byte,16777619) >>> 0;
           return {wallMs, guestSeconds:b.guestSeconds-a.guestSeconds, instructions:b.completedInstructions-a.completedInstructions,
+            translatedInstructions:(b.jit?.instructions??0)-(a.jit?.instructions??0),
             cycles:b.cpuCycles-a.cpuCycles, reads:b.hddReads-a.hddReads, keys:b.fmKeyEdges-a.fmKeyEdges,
             irqs:b.soundIrqEdges-a.soundIrqEdges, samples, pcmHash, frameHash, error:b.error};
         }, {gameplay:options.gameplay === '1', part, seed:pcmHash});
         parts.push(block); pcmHash = block.pcmHash;
       }
       result = {...parts.at(-1)};
-      for (const key of ['wallMs','guestSeconds','instructions','cycles','reads','keys','irqs','samples']) {
+      for (const key of ['wallMs','guestSeconds','instructions','translatedInstructions','cycles','reads','keys','irqs','samples']) {
         result[key] = parts.reduce((sum, part) => sum+part[key], 0);
       }
     }
@@ -201,9 +204,10 @@ try {
       throw Error('Expected game music and scene loading did not run; check the clean installed HDD and setup');
     }
     const presented = await page.evaluate(() => pc98.stats());
+    result.jit = presented.jit;
     result.videoMode = presented.videoMode; result.rendererFailure = presented.rendererFailure;
     result.routedAssets = routedAssets;
-    for (const name of ['core.wasm','app.js','emulator-worker.js','render-worker.js',...(playback ? ['audio-worklet.js'] : [])]) {
+    for (const name of ['core.wasm','app.js','emulator-worker.js','render-worker.js',...(options.jit==='0'?[]:['jit.js']),...(playback ? ['audio-worklet.js'] : [])]) {
       if (!routedAssets[name]) throw Error(`Selected runtime asset was not intercepted: ${name}`);
     }
     if (profile) {
@@ -221,6 +225,6 @@ try {
     engine, channel:options.channel ?? engine, firefoxDebuggerBaseline:engine === 'firefox', node:process.version,
     os:`${os.type()} ${os.release()} ${os.arch()}`, cpu:os.cpus()[0].model,
     wasmSha256:sha(wasm), runtimeSha256, mediaSha256:sha(await readFile(options.media)),
-    harnessSha256, playback, gameplay:options.gameplay === '1',
+    harnessSha256, playback, jit:options.jit!=='0', gameplay:options.gameplay === '1',
     profile:options.profile === '1', visuals:options.visuals === '1', repeat}, rows}, null, 2)+'\n', {flag:'wx'});
 } finally { await browser?.close(); server.closeAllConnections(); server.close(); }

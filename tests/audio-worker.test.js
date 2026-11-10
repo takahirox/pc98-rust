@@ -67,7 +67,7 @@ function worker(code=source, {prebuffer=2400, stalls=[], frameCost=0, renderWork
       audio_len:()=>samples,audio_clear:()=>{samples=0;},metric:id=>id===5?clocks:0,
       step_scheduler:(budget, cap)=>{assert.equal(budget,80000);assert.equal(cap,100000);slices++;advance(now+sliceCost(slices));samples=480;clocks+=80000;}},
   });
-  vm.runInContext(code.replace('import.meta.url', "'file:///emulator-worker.js'"),context);
+  vm.runInContext(code.replaceAll('import.meta.url', "'file:///emulator-worker.js'"),context);
   const run=code=>vm.runInContext(code,context);
   run("core=testCore;port=testPort;sinkStats=testSink;running=true;audioEnabled=true;audioState='running';frameDue="+(frameCost?'0':'Infinity')+";");
   if(renderWorker) run('videoPort=testVideoPort;snapshotBuffer=new ArrayBuffer(547632)');

@@ -36,7 +36,8 @@ test('ADV98 production playback remains continuous through scene changes', async
     const Context=window.AudioContext;
     window.AudioContext=class extends Context { constructor(options) { super({...options,sampleRate:44100}); } };
   });
-  await page.goto('./');
+  // Cover optional JIT at 48 kHz and the default interpreter at the Pages root.
+  await page.goto(testInfo.project.name==='local' ? './?diagnostics&jit=1' : './');
   await expect(page.locator('#profile')).toBeEnabled();
   await page.locator('#profile').selectOption('1');
   await expect(page.locator('#file')).toBeEnabled();
@@ -111,6 +112,8 @@ test('ADV98 production playback remains continuous through scene changes', async
   expect(ssgPeriods.size).toBeGreaterThanOrEqual(3);
   expect(previous.checkedBlocks).toBeGreaterThan(1000);
   expect(previous.beepEdges).toBe(0);
+  expect(previous.jit.mode).toBe(testInfo.project.name==='local' ? 'jit' : 'interpreter');
+  if(testInfo.project.name==='local') expect(previous.jit.failures).toBe(0);
 
   // Exercise the same live guest through every stream discontinuity. Each
   // barrier discards old PCM, recovers all six credits, then starts a fresh

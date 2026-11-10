@@ -482,7 +482,7 @@ try {
     if (m.error) waiter.reject(Error(m.error)); else waiter.resolve(m.value);
   };
   const params = new URLSearchParams(location.search);
-  await rpc('init',{diagnostics:params.has('diagnostics'),manual:params.has('manual')});
+  await rpc('init',{diagnostics:params.has('diagnostics'),manual:params.has('manual'),jit:params.get('jit')==='1'});
   if (!(params.has('diagnostics') && params.get('renderer') === 'inline')) await startRenderer();
   // This client posts commands and caches metrics; Wasm exports stay in the Worker.
   core = new Proxy({}, {get:(_,name) => name === 'metric' ? id => metrics.get(id) :

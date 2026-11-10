@@ -31,7 +31,7 @@ export async function inspect(page, fn, arg) {
 // epochs, credits, timings and instruction throughput may change independently.
 export async function mediaGuestState(page) {
   return inspect(page, () => {
-    const {videoStats, videoEpoch, videoMode, frameInFlight, instructionThroughput, ...stats} = pc98.stats();
+    const {videoStats, videoEpoch, videoMode, frameInFlight, instructionThroughput, jit, ...stats} = pc98.stats();
     return {text:pc98.text(), stats};
   });
 }
