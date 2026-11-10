@@ -842,7 +842,8 @@ uses stock browsers without an automation protocol and starts the local game
 with sound enabled, without advancing guest time manually.
 
 The browser's opt-in [x86-to-Wasm JIT](docs/jit.md) compiles hot Ap real-mode
-register/immediate blocks and retains instruction-level timing and interrupts.
+blocks, including guarded memory operands and word stack operations, while
+retaining instruction-level timing and interrupts.
 Unsupported operations use the interpreter; add `?jit=1` to enable the initial
 tier or `?jit=0` for an explicit interpreter comparison. The default browser,
 native/headless and observer APIs retain the reference interpreter.

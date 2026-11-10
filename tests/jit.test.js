@@ -6,7 +6,7 @@ import {compileBlock,WasmJit} from '../web/jit.js';
 const module=await WebAssembly.compile(await readFile(new URL('../web/core.wasm',import.meta.url)));
 const metrics=[0,1,2,3,5,6,7,9,10,14,15,19,20,23,26,27,28,30];
 const packet=core=>new Uint32Array(core.memory.buffer,core.jit_packet()>>>0,core.jit_packet_len()).slice();
-const layout=core=>Array.from(new Uint32Array(core.memory.buffer,core.jit_layout()>>>0,3));
+const layout=core=>Array.from(new Uint32Array(core.memory.buffer,core.jit_layout()>>>0,4));
 function state(core){
   const [r,f,ip]=layout(core),view=new DataView(core.memory.buffer);
   return {r:Array.from(new Uint16Array(core.memory.buffer,r,8)),flags:view.getUint16(f,true),ip:view.getUint32(ip,true),
@@ -161,4 +161,163 @@ test('reset cancels an old offer without starting concurrent compilation or regi
   jit.step(80000,10000);await turn();assert.equal(resolvers.length,2);
   await resolvers[1]();for(let n=0;jit.pending;n++){assert(n<100);await turn();}
   assert.equal(jit.stats().compiled,1);assert.equal(jit.stats().failures,0);
+});
+
+test('group TEST/NOT/NEG translations match flags and byte/word aliases',async()=>{
+  for(const op of [0xf6,0xf7])for(const group of [0,2,3])for(const rm of [0,4,7]){
+    const code=[op,0xc0|group<<3|rm,...(group===0?(op===0xf6?[0x81]:[1,0x80]):[])];
+    const p=await pair(code);
+    for(let n=0;n<100;n++)execute(p,Array.from({length:8},()=>random()&65535),(random()&0xcd5)|2);
+  }
+});
+
+test('word PUSH/POP preserve SP aliasing, stack bytes and wraparound',async()=>{
+  for(let r=0;r<8;r++){
+    const p=await pair([0x50+r],[0x58]); // Fallback POP AX checks the value written by generated PUSH.
+    for(const sp of [0,2,0x8000,65535]){
+      const regs=Array.from({length:8},()=>random()&65535);regs[4]=sp;
+      execute(p,regs,0xcd7);
+      const expected=regs[r];
+      for(const core of [p.a,p.b]){const s=state(core);setState(core,s.r,s.flags,0x100);core.step(1);}
+      assert.deepEqual(state(p.a),state(p.b));assert.equal(state(p.a).r[0],expected);
+    }
+    // A conventional POP has a valid two-byte span; offset 0xffff falls back.
+    const q=await pair([0x58+r]);
+    for(const sp of [0,2,0x8000,65534]){
+      const regs=Array.from({length:8},()=>random()&65535);regs[4]=sp;execute(q,regs,0xcd7);
+    }
+  }
+});
+
+test('near CALL/RET translate control flow and retain stack and clock state',async()=>{
+  const p=await pair([0xe8,0xfc,0xff],[0xc3]); // Return address 5, destination 1.
+  for(const sp of [0,2,0x8000]){
+    const regs=[0,0,0,0,sp,0,0,0];execute(p,regs,0x202);
+    assert.equal(state(p.a).ip,1);
+    // Reference RET checks the return address written by generated CALL.
+    for(const core of [p.a,p.b]){const s=state(core);setState(core,s.r,s.flags,0x100);core.step(1);}
+    assert.equal(state(p.a).ip,5);assert.equal(state(p.a).r[4],sp);assert.deepEqual(state(p.a),state(p.b));
+  }
+  const q=await pair([0xc3],[0x6a,1,0xe9,0xfc,0xfe]); // PUSH 1; JMP 1 prepares a safe return target.
+  for(const core of [q.a,q.b]){setState(core,[0,0,0,0,0x8000,0,0,0],2,0x100);core.step(2);}
+  q.a.jit_begin_slice(80000,2);assert.equal(q.a.jit_start(q.id),1);q.run(...layout(q.a));q.b.step(2);
+  assert.equal(q.a.jit_done(),2);assert.equal(state(q.a).ip,1);assert.deepEqual(state(q.a),state(q.b));
+});
+
+test('memory translations retain effective addresses, aliases, bytes and bus timing',async()=>{
+  const forms=[];
+  for(let mode=0;mode<3;mode++)for(let rm=0;rm<8;rm++)forms.push({m:mode<<6|rm,
+    disp:mode===1?[0xf1]:mode===2?[0xe0,0xff]:rm===6?[0x45,0x23]:[]});
+  const cases=[];
+  for(const {m,disp} of forms)for(const [op,r,imm] of [[0x01,3,[]],[0x8b,5,[]],[0x87,6,[]],[0xc7,0,[0x81,0x80]]]){
+    cases.push({code:[op,m|r<<3,...disp,...imm],m,disp});
+  }
+  for(let kind=0;kind<8;kind++)for(const wide of [0,1])for(const reverse of [0,2]){
+    cases.push({code:[kind*8+wide+reverse,0x9e,0xe0,0xff],m:0x9e,disp:[0xe0,0xff]});
+  }
+  for(const op of [0x80,0x81,0x83])for(let group=0;group<8;group++){
+    cases.push({code:[op,0x86|group<<3,0xe0,0xff,...(op===0x81?[1,0x80]:[0x81])],m:0x86,disp:[0xe0,0xff]});
+  }
+  for(const op of [0x84,0x85,0x86,0x88,0x89,0x8a,0xc6,0xf6,0xf7]){
+    for(const group of op>=0xf6?[0,2,3]:[0])cases.push({code:[op,0x87|group<<3,0xe0,0xff,
+      ...(op===0xc6||op>=0xf6&&group===0?(op===0xf7?[1,0x80]:[0x81]):[])],m:0x87,disp:[0xe0,0xff]});
+  }
+  for(const op of [0xa0,0xa1,0xa2,0xa3])cases.push({code:[op,0x45,0x23],offset:0x2345});
+  const patch=[0xb8,0,0x20,0x8e,0xd8,0xb8,0,0x30,0x8e,0xd0,0x90];
+  patch.length=0x20;patch.fill(0,11);patch.push(0x89,0x07,0x36,0x89,0x07);
+  for(const {code,m,disp,offset} of cases){
+    const p=await pair(code,patch);
+    for(const core of [p.a,p.b]){const s=state(core);setState(core,s.r,2,0x100);core.step(5);}
+    for(let n=0;n<8;n++){
+      const regs=Array.from({length:8},()=>0x2000+(random()&0x1fff));
+      const rm=m&7,mode=m>>6;
+      const base=offset??[regs[3]+regs[6],regs[3]+regs[7],regs[5]+regs[6],regs[5]+regs[7],regs[6],regs[7],mode===0?(disp[0]|disp[1]<<8):regs[5],regs[3]][rm];
+      const displacement=offset!==undefined||mode===0?0:mode===1?(disp[0]<<24)>>24:((disp[0]|disp[1]<<8)<<16)>>16;
+      const at=offset??((base+displacement)&65535),ss=offset===undefined&&(rm===2||rm===3||rm===6&&mode!==0);
+      // Seed both segments through reference guest stores; then restore the
+      // same registers so a destination alias cannot silently move the write.
+      const seed=[random()&65535,0,0,at,0,0,0,0];
+      for(const core of [p.a,p.b]){setState(core,seed,2,0x120);core.step(2);}
+      execute(p,regs,(random()&0xcd5)|2);
+      const physical=(ss?0x30000:0x20000)+at;
+      assert.deepEqual(Array.from({length:4},(_,i)=>p.a.peek(physical+i)),Array.from({length:4},(_,i)=>p.b.peek(physical+i)));
+    }
+  }
+});
+
+test('generated memory operations preserve GRCG writes across all four video planes',async()=>{
+  const setup=[0xb8,0,0xa8,0x8e,0xd8,0xb0,0xc0,0xe6,0x7c];
+  for(const tile of [0xf0,0x0f,0xaa,0x55])setup.push(0xb0,tile,0xe6,0x7e);
+  setup.push(0x90);setup.length=0x40;setup.fill(0,26);setup.push(0xb0,0,0xe6,0x7c);
+  for(const code of [[0x89,0x07],[0x01,0x07],[0x87,0x07],[0xf7,0x17],[0xf7,0x1f]]){
+    const p=await pair(code,setup);
+    for(const core of [p.a,p.b]){const s=state(core);setState(core,s.r,2,0x100);core.step(13);}
+    execute(p,[0x81c3,0,0,3,0x8000,0,0,0],0x807);
+    for(const core of [p.a,p.b]){const s=state(core);setState(core,s.r,s.flags,0x140);core.step(2);}
+    assert.deepEqual(state(p.a),state(p.b));
+    for(const plane of [0xa8000,0xb0000,0xb8000,0xe0000]){
+      assert.deepEqual(Array.from({length:8},(_,i)=>p.a.peek(plane+i)),Array.from({length:8},(_,i)=>p.b.peek(plane+i)));
+    }
+  }
+});
+
+test('a translated memory store invalidates a later instruction before it executes',async()=>{
+  const p=await pair([0x88,0x07],[0xb8,0xc0,0x1f,0x8e,0xd8]); // DS=CS through reference MOV.
+  for(const core of [p.a,p.b]){const s=state(core);setState(core,s.r,2,0x100);core.step(2);setState(core,[0x48,0,0,4,0x8000,0,0,0],2,1);}
+  p.a.jit_begin_slice(80000,3);assert.equal(p.a.jit_start(p.id),1);p.run(...layout(p.a));p.b.step(2);
+  assert.equal(p.a.jit_done(),2);assert.equal(p.a.jit_metric(2),1);assert.deepEqual(state(p.a),state(p.b));
+  p.a.jit_fallback();p.b.step(1);assert.equal(state(p.a).r[0],0x47);assert.deepEqual(state(p.a),state(p.b));
+});
+
+test('Wasm dispatcher falls back after entry invalidation without compiling a stale packet',async()=>{
+  const core=await boot([0x90,0x40,0xeb,0xfc],[0x2e,0xc6,0x06,2,0,0x48]);
+  const jit=new WasmJit(core);
+  for(let n=0;n<8;n++){jit.step(80000,10000);await new Promise(resolve=>setTimeout(resolve,0));}
+  assert(jit.stats().instructions>10000);
+  const s=state(core);setState(core,s.r,2,0x100);core.step(1);
+  setState(core,[0x8000,0,0,0,0x8000,0,0,0],2,1);
+  jit.step(80000,100);assert.equal(core.metric(4),0);assert(jit.stats().invalidations>0);
+  await new Promise(resolve=>setTimeout(resolve,0));assert.equal(jit.stats().failures,0);
+  jit.clear();assert.equal(jit.stats().cached,0);
+  for(let slot=0;slot<jit.table.length;slot++)assert.equal(jit.table.get(slot),null);
+});
+
+test('Wasm dispatcher preserves unsigned identities across the JavaScript boundary',async()=>{
+  const memory=new WebAssembly.Memory({initial:1}),id=0x80000000;
+  new Uint32Array(memory.buffer,0,4).set([0x100,0x120,0x124,0x130]);
+  new Uint32Array(memory.buffer,32,6).set([id,1,1,1,0x90,0]);
+  let offers=0,registered=0;
+  const core={memory,metric:()=>66000000,jit_layout:()=>0,jit_begin_slice:()=>{},
+    jit_dispatch:()=>offers++===0?id:0,jit_enter:()=>2,jit_fallback:()=>assert.fail('unexpected fallback'),
+    jit_done:()=>0,jit_packet:()=>32,jit_packet_len:()=>6,jit_next:()=>0,jit_metric:()=>0,
+    jit_register:value=>{registered=value;return 1;},jit_clear:()=>{}};
+  const jit=new WasmJit(core);jit.step(80000,100);
+  for(let n=0;jit.pending;n++){assert(n<100);await new Promise(resolve=>setTimeout(resolve,0));}
+  assert.equal(registered,id);assert(jit.cache.has(id));assert.equal(jit.stats().failures,0);
+});
+
+test('predecoded register-change policies preserve the next memory address dependency clocks',async()=>{
+  const cases=[
+    [[0x43],[0x8a,0x00]],[[0x4b],[0x8a,0x00]],[[0x3b,0xdb],[0x8a,0x00]],
+    [[0x83,0xc3,0],[0x8a,0x00]],[[0x89,0xdb],[0x8a,0x00]],[[0x87,0xf3],[0x8a,0x00]],
+    [[0x40],[0x67,0x8a,0x00]],[[0x48],[0x67,0x8a,0x00]],[[0xe2,0],[0x67,0x8a,0x01]],
+    [[0x51],[0x67,0x8a,0x04,0x24]],[[0xe8,0xfc,0xff],[0x67,0x8a,0x04,0x24]],
+    [[0x90],[0x8a,0x00]],[[0x9e],[0x8a,0x00]],[[0xf7,0xd3],[0x8a,0x00]],
+  ];
+  for(const [instruction,read] of cases){
+    const p=await pair(instruction,read);
+    for(const value of [0,1,0x1000,0x3000,0xffff]){
+      execute(p,[value,value,0,value,0x8000,0,0x1000,0],0x807);
+      // The fallback read observes the previous instruction's true GPR-change
+      // mask. Identity writes must not invent an address-generation penalty.
+      for(const core of [p.a,p.b]){const s=state(core);setState(core,s.r,s.flags,0x100);core.step(1);}
+      assert.deepEqual(state(p.a),state(p.b));
+    }
+  }
+  const patch=[0x68,0,0x80];patch.length=0x20;patch.fill(0,3);patch.push(0x67,0x8a,0x04,0x24);
+  const p=await pair([0x5c],patch);
+  for(const core of [p.a,p.b]){setState(core,[0,0,0,0,0x8002,0,0,0],2,0x100);core.step(1);}
+  execute(p,[0,0,0,0,0x8000,0,0,0],2); // POP SP reloads the original SP: no change.
+  for(const core of [p.a,p.b]){const s=state(core);setState(core,s.r,s.flags,0x120);core.step(1);}
+  assert.deepEqual(state(p.a),state(p.b));
 });
