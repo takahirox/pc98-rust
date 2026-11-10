@@ -841,12 +841,13 @@ baseline Wasm. The [normal-browser reproduction control](docs/doukyuusei2-reprod
 uses stock browsers without an automation protocol and starts the local game
 with sound enabled, without advancing guest time manually.
 
-The browser's opt-in [x86-to-Wasm JIT](docs/jit.md) compiles hot Ap real-mode
+The browser's default [x86-to-Wasm JIT](docs/jit.md) compiles hot Ap real-mode
 blocks, including guarded memory operands and word stack operations, while
 retaining instruction-level timing and interrupts.
-Unsupported operations use the interpreter; add `?jit=1` to enable the initial
-tier or `?jit=0` for an explicit interpreter comparison. The default browser,
-native/headless and observer APIs retain the reference interpreter.
+Unsupported operations use the interpreter automatically, as do unavailable
+JIT modules or compilation failures. Add `?jit=0` for an interpreter comparison
+or troubleshooting; `?jit=1` remains supported. Native/headless and synchronous
+observer APIs retain the reference interpreter.
 The JIT report documents coverage, bounded compilation, correctness checks and
 fixed-work measurements separately from real-time game playback.
 

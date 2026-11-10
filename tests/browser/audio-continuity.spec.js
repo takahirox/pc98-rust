@@ -36,8 +36,8 @@ test('ADV98 production playback remains continuous through scene changes', async
     const Context=window.AudioContext;
     window.AudioContext=class extends Context { constructor(options) { super({...options,sampleRate:44100}); } };
   });
-  // Cover optional JIT at 48 kHz and the default interpreter at the Pages root.
-  await page.goto(testInfo.project.name==='local' ? './?diagnostics&jit=1' : './');
+  // Cover default JIT at 48 kHz and the explicit interpreter at the Pages root.
+  await page.goto(testInfo.project.name==='local' ? './?diagnostics' : './?diagnostics&jit=0');
   await expect(page.locator('#profile')).toBeEnabled();
   await page.locator('#profile').selectOption('1');
   await expect(page.locator('#file')).toBeEnabled();
