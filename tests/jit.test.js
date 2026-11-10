@@ -345,3 +345,30 @@ test('memory shifts retain the interpreter bus path',async()=>{
   p.a.jit_dispatch(0);p.b.step(1);assert.deepEqual(state(p.a),state(p.b));
   for(const at of [0x8000,0x8001])assert.equal(p.a.peek(at),p.b.peek(at));
 });
+
+test('all segment overrides preserve memory selection, stack rules and full instruction lengths',async()=>{
+  const prefixes=[0x26,0x2e,0x36,0x3e,0x64,0x65],selectors=[0x3000,0x1fc0,0x5000,0x4000,0x6000,0x7000];
+  const patch=[];
+  for(const s of [0,2,3,4,5])patch.push(0xb8,selectors[s]&255,selectors[s]>>8,0x8e,0xc0|s<<3);
+  for(let s=0;s<6;s++)patch.push(prefixes[s],0xc7,6,0,0x80,s,0x12);
+  const cases=[[0x8b,7],[0x8b,0x46,0],[0x8a,0x27],[0xa1,0,0x80],[0x89,7],
+    [0xc7,6,0,0x80,0x34,0x12],[0x50],[0x58],[0xc3],[0xe8,0,0],[0x74,1],[0xd0,0xe8]];
+  for(const prefix of prefixes)for(const code of cases){
+    const p=await pair([prefix,...code],patch);
+    for(const core of [p.a,p.b]){const s=state(core);setState(core,s.r,2,0x100);core.step(16);}
+    execute(p,[0xffff,2,0,0x8000,0x8000,0x8000,0,0],3);
+    if(code[0]===0x74)execute(p,[0xffff,2,0,0x8000,0x8000,0x8000,0,0],0x42);
+    for(const selector of selectors)for(const offset of [0x7ffe,0x7fff,0x8000,0x8001]){
+      const at=(selector<<4)+offset;assert.equal(p.a.peek(at),p.b.peek(at));
+    }
+  }
+});
+
+test('unsupported prefix combinations and opcodes retain interpreter decoding',async()=>{
+  for(const code of [[0x26,0x2e,0x8b,7],[0x66,0x40],[0x67,0x40],[0x26,0xcd,0x18]]){
+    const p=await pair(code);assert.equal(p.plan[1],1);
+    p.a.jit_begin_slice(80000,2);assert.equal(p.a.jit_start(p.id),1);p.run(...layout(p.a));p.b.step(1);
+    assert.equal(p.a.jit_done(),1);assert.deepEqual(state(p.a),state(p.b));
+    p.a.jit_dispatch(0);p.b.step(1);assert.deepEqual(state(p.a),state(p.b));
+  }
+});

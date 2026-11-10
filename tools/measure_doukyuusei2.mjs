@@ -204,6 +204,7 @@ try {
           cpuHash=Math.imul(cpuHash^pc98.core.metric(17),16777619)>>>0;
           return {wallMs, spanMs, sliceTiming, cpuHash, guestSeconds:b.guestSeconds-a.guestSeconds, instructions:b.completedInstructions-a.completedInstructions,
             translatedInstructions:(b.jit?.instructions??0)-(a.jit?.instructions??0),
+            nativeInstructions:(b.jit?.nativeInstructions??0)-(a.jit?.nativeInstructions??0),
             cycles:b.cpuCycles-a.cpuCycles, reads:b.hddReads-a.hddReads, keys:b.fmKeyEdges-a.fmKeyEdges,
             irqs:b.soundIrqEdges-a.soundIrqEdges, samples, pcmHash, frameHash, error:b.error};
         }, {gameplay:options.gameplay === '1', part, seed:pcmHash, yieldJit:measurementYields});
@@ -211,7 +212,7 @@ try {
       }
       result = {...parts.at(-1), sliceTimings:parts.map(part=>part.sliceTiming)};
       delete result.sliceTiming;
-      for (const key of ['wallMs','spanMs','guestSeconds','instructions','translatedInstructions','cycles','reads','keys','irqs','samples']) {
+      for (const key of ['wallMs','spanMs','guestSeconds','instructions','translatedInstructions','nativeInstructions','cycles','reads','keys','irqs','samples']) {
         result[key] = parts.reduce((sum, part) => sum+part[key], 0);
       }
     }

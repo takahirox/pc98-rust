@@ -12,8 +12,12 @@ The tier covers unprefixed 8/16-bit ALU, MOV, XCHG, TEST, NOT/NEG,
 register INC/DEC, SAHF/LAHF, carry/direction flags, short conditional branches,
 LOOP/JCXZ, relative JMP/CALL, word register PUSH/POP, near RET and single-bit
 register shifts/rotations (`D0`/`D1`, including the SHL/SAL alias). Memory operands
-use 16-bit ModR/M addressing or accumulator absolute offsets. Blocks contain at
-most 16 instructions and stop at a branch or unsupported operation. Prefixes,
+use 16-bit ModR/M addressing or accumulator absolute offsets. Each supported
+operation may carry one ES/CS/SS/DS/FS/GS segment override; register operations
+and word stack operations retain their original ignored-override behavior.
+Blocks contain at most 16 instructions and stop at a branch or unsupported
+operation.
+Additional or other prefixes,
 strings, memory/variable-count shifts, far transfers, other stack operations, I/O, firmware services,
 protected/paged execution, 32-bit defaults, single-step and unusual fetch
 boundaries use the existing interpreter. This is a bounded first tier, not a replacement for the
@@ -45,7 +49,10 @@ bounds native plans and compiled modules to 4,096 entries. Only one compilation
 is in flight. Evicted addresses can warm again. Compilation is asynchronous;
 guest execution continues through the interpreter until a module is ready.
 Cold code is sampled between short interpreter runs of 3–6 units, reducing
-discovery overhead on memory-heavy code. Ready blocks can chain immediately.
+discovery overhead on memory-heavy code. Hot addresses without a translation
+use one-unit runs so supported successors can warm and enter the JIT. Aligned
+synthetic-ROM entries use two-unit runs, normally covering OUT/IRET together.
+Each unit still uses the original CPU and device boundary. Ready blocks can chain immediately.
 
 Every block entry checks CPU mode, TF and CS base. Supported operations cannot
 change mode, segment registers, TF, halt or REP state while the synchronous Wasm
@@ -55,6 +62,10 @@ current CS bounds, expected IP and every code byte before its semantics run. Bra
 including after a hidden-cache change. A conservative rejection returns to the
 interpreter, which decides whether an untaken branch actually faults. Code
 mutation stops the old block before the changed operation and allows rewarming.
+The saved byte span includes the segment prefix. Packets expose the canonical
+opcode/operands to the unchanged compiler, retaining the original IP and full
+instruction length for branches and return addresses. Prefix fetches and timing
+penalties remain part of the reference instruction transaction.
 
 With interrupts enabled, the bridge refreshes the PIC cascade wire even if no
 vector is pending. A pending vector returns to the original interrupt delivery
@@ -70,10 +81,14 @@ offer or slice end. Entry distinguishes an offer from a stale plan invalidated b
 its byte guard; stale entries fall back without resubmitting an old packet.
 
 Memory address forms, widths and access directions are decoded once. Validated
+segment overrides select the current hidden descriptor; stack references keep
+SS even when another segment is encoded. Validated
 physical operand addresses are reused within each instruction. Exact known GPR
 change masks avoid whole-bank snapshots/comparisons for flag-only instructions
 and operations that always change a specific word register; identity/alias cases
-retain actual-change comparison. Each entry
+retain actual-change comparison. The register-bank snapshot is stored only for
+actual-change comparison; fixed masks avoid rewriting or copying it through the
+active transaction. Each entry
 computes the current offset and validates the complete operand against the current
 hidden segment bounds. A two-word scratch area carries the bus-read value and
 generated write result across the instruction boundary. Rust performs the original
@@ -369,3 +384,200 @@ of the user's original symptom or physical synthesis accuracy.
 The final regression results are recorded in
 [Issue #156](https://github.com/takahirox/pc98-rust/issues/156) and its linked PR.
 Issue #146 remains open for the original playback investigation.
+
+## Segment-override experiments — Issue #158
+
+The initial fourteen candidates were evaluated against main `2e5b2cc`. All 33
+fixed-work timing controls and one separate diagnostic profile retain the
+canonical instruction/clock counts, CPU/frame/PCM fingerprints and disk/music/IRQ
+observations listed above. Media and raw reports remain outside Git. The host,
+installed Chrome and guest workload are unchanged; timing windows have no
+concurrent owned builds, test suites or profilers.
+
+### Rejected native and control-flow paths
+
+The first nine candidates extended hot INT/IRET and scalar I/O paths with guarded
+predecoded calls to the existing native core. They also exercised ordinary ROM
+fetches, full fault/firmware completion, narrowly proven nonfaulting transactions,
+register-change tracking, inlining and removal of redundant stack validation.
+The diagnostic measurement-window profile found 5,506,790 INT 18h/AH=04h
+keyboard-state requests. Native-assisted coverage reached 85.1%, including
+16,962,839 helper instructions; this was not pure generated-code coverage.
+
+The refinements did not establish a repeatable capacity benefit:
+
+| Comparison | Main active ms | Native candidate active ms | Result |
+| --- | --- | --- | --- |
+| Four balanced controls, guarded snapshot elision | 8,118.5 / 7,631.2 | 7,929.6 / 8,203.2 | Candidate median 8,066.4 vs 7,874.9 ms; slower |
+| Six balanced controls, refined native retirement | 7,856.2 / 7,592.6 / 7,607.3 | 7,715.6 / 9,237.3 / 7,818.4 | Candidate median 7,818.4 vs 7,607.3 ms; 2.8% slower |
+
+Other single native pilots ranged from 7,965.4 to 9,710.1 ms and were excluded
+from causal speedup claims. The native code, ROM eligibility changes, service
+predicates and diagnostic exports are absent from the selected implementation.
+
+Two further prototypes joined conditional fall-through paths while keeping every
+instruction guard. Joining all conditionals produced 902,713 generated bytes and
+a 7,869.4 ms pilot. Keeping backward loops short and joining forward conditionals
+produced 845,413 bytes and 7,584.1 ms. Neither justified the extra code volume
+against the prefix-only candidate below. A 32-instruction block limit produced
+7,665.8 ms, just one fewer compiled module and 18 additional translated
+instructions. The 16-instruction limit and existing branch boundaries are kept.
+
+### Selected generated-code expansion
+
+One segment override is now supported across the existing instruction families.
+The decoded operation retains seven raw bytes for the live guard, its canonical
+opcode and prefix length. Operand widths use `NonZeroU8`: only byte/word spans
+are constructed, so zero can represent an absent operand without a separate
+`Option<Memory>` tag. A local layout probe confirms `Memory`/`Option<Memory>`
+are both eight bytes, restoring each hot operation record from 28 to 24 bytes
+(the original record size). Compilation packets carry canonical operands and the
+full original length, so the existing Wasm generator needs no change. Memory
+metadata selects ES/CS/SS/DS/FS/GS once; each execution still validates the current
+descriptor and uses the original bus reads/writes. Stack overrides stay ignored.
+Multiple, size-changing, repeat and lock prefixes retain interpreter decoding.
+
+Two initial representations were compared: a canonical-byte record with a
+separate prefix comparison, and an initial raw-byte record with one contiguous
+guard, before its memory metadata was packed. Nine fresh Chrome controls used the balanced order A/B/C, B/C/A, C/A/B.
+Setup and measurement yield between ten-guest-millisecond slices so compilation
+can progress. Each control measures three continuous eight-guest-second windows.
+
+| Artifact | Active host ms, individual controls | Median ms | Mean ms |
+| --- | --- | ---: | ---: |
+| Main baseline | 7,652.0 / 7,594.6 / 9,111.0 | 7,652.0 | 8,119.2 |
+| Initial prefix representation | 7,634.0 / 7,582.0 / 7,610.1 | 7,610.1 | 7,608.7 |
+| Initial raw-byte prefix representation | 7,576.9 / 7,532.6 / 7,624.2 | 7,576.9 | 7,577.9 |
+
+The initial raw-byte median is about 1.0% lower than main in that round. Runs overlap, and the high main
+control substantially affects the mean; no general 6.7% throughput gain is
+inferred from that mean. The two prefix representations also overlap. The
+raw-byte representation keeps the original contiguous byte-guard contract.
+In that round, per-window median p99 active slice times are 4.8 / 4.6 / 4.4 ms, against
+5.2 / 5.3 / 4.4 ms on main. Active time includes PCM fingerprint work and excludes
+timer waits/compiler tasks. In-window spans include those waits/tasks, while
+setup and gaps between the three windows are excluded from both metrics.
+
+An independent six-control holdout after selection did not repeat that timing
+benefit. Main active times were 7,779.8 / 7,765.0 / 8,469.0 ms (mean 8,004.6),
+and the initial raw-byte record measured 8,036.5 / 8,548.7 / 7,981.6 ms
+(mean 8,188.9), 2.3% higher. All results are retained. That finding prompted the
+nonzero-width packing above, preserving the original operation-record footprint.
+Execution-time gains are treated as uncertain; increased coverage and reduced
+compilation volume are reported separately.
+
+Generated execution increases from 74,519,713 to 78,154,322 of 118,102,981
+instructions (63.1% to 66.2%). Completed compilations decrease from 3,300 to 2,529
+(23.4%), and generated module bytes from 887,920 to 673,414 (24.2%). These are
+fixed-work coverage and compilation-volume observations, not measured completed
+image-transition latency or a resolution of the original playback complaint.
+The selected runtime has no native-helper subset; the measurement harness can
+report that subset separately for experimental runtimes.
+
+The prefix-only packed 554,355-byte Wasm SHA-256 is
+`5bb593cedd49f1cc8476fa8b60a36f89c065777010ba41ff1cc39a8b15bac3d0`;
+the unchanged compiler SHA-256 is
+`434d9923b16d1a3ba2ddf03404be826b56b9de190fadbff83fafbb35fb008afd`.
+The final prefix comparisons use harness SHA-256
+`75ef04c2d149388007e2a500921172cf7748673d2eba9f3cf9572bf84fe90f70`.
+Earlier native pilots used the preceding harness; profiles are diagnostic only.
+One completed native control hit its post-report cleanup watchdog. Its validated
+report was retained, and scoped process checks found no orphaned headless
+browser in the owned worktree before subsequent controls continued.
+
+Separate visible Chrome controls use no debugger, automation protocol, profiler
+or manual guest advancement. Each recorded 381 observations over about 95 seconds
+through the classroom/flashback/return sequence. Main and packed-prefix builds
+both report zero source/device underruns, drops, overflows, sequence/checksum
+errors and emulator faults, with guest/wall ratios 1.000115 and 1.000081.
+Main completed 4,185 compilations with a full 4,096-entry cache; the packed build
+completed 3,168 with 3,168 cached entries. Both have zero compilation failures.
+Mean guest-slice times were 3.815 and 3.857 ms in these single controls; no runtime
+speedup is inferred. The observed improvements concern coverage, compilation
+volume and cache/metadata footprint. The original playback symptom was not
+reproduced in these controls, so Issue #146 remains open.
+
+New regressions compare full native CPU state and clocks for all six overrides,
+and reject a changed prefix before fetching or reading a mapped graphics operand.
+Actual release-Wasm differential cases cover distinct segment values, byte
+aliases, absolute/displaced memory, seven-byte instructions, stack/call/return
+rules and both conditional outcomes. Unsupported prefix combinations remain
+reference-core operations. The existing production Worker comparison includes a
+CS memory operand at both serving roots and all three default/explicit modes.
+Final regression and CI results are recorded in
+[Issue #158](https://github.com/takahirox/pc98-rust/issues/158) and its linked PR.
+
+
+## Hot interpreter boundaries — Issue #158 follow-up
+
+The packed-prefix revision passed local acceptance, but CI run `42842603404`
+reproduced scene-time audio starvation in both the default JIT and explicit
+interpreter: 2,328 and 4,829 missing samples in failing windows. Traces showed
+10 ms guest CPU slices taking roughly 12–14 ms while frame preparation stayed
+below 0.5 ms. No audio threshold, queue target, workflow or guest clock was changed.
+This failure remains part of the evidence; it was not blindly rerun.
+
+Further CPU checkpoint-elision experiments preserved guest results but added
+per-instruction proof costs. A six-control screen of the refined variant was
+neutral with JIT (9,603.9 vs 9,616.4 ms) and 5.4% slower by mean interpreter
+active time (10,914.1 vs 10,350.3 ms). The planned larger screen stopped after
+its current browser exited, retaining all six completed controls. ROM-only
+proofs, operand-address reuse and CPU clone/layout variants also failed to
+establish an additional benefit. A separate nine-control legal ADV98 comparison
+found no improvement from outlining CPU cloning or changing CPU representation.
+All these CPU changes and their temporary tests were removed. The selected
+interpreter retains its original checkpoints and memory implementation.
+
+A separate aggregate opcode diagnostic found 4,116,663 interpreted F6-family
+units and many supported conditional operations in the target window. This
+suggested examining discovery boundaries, rather than assuming every fallback
+needed a new opcode implementation. Counts include unsupported members and cold
+code too; they are not an execution trace or proof that every instance is
+compilable. The diagnostic preserves the canonical guest results, is excluded
+from timing claims, and its counters, exports and harness edits were removed.
+
+At a hot address without a translation, a 3–6-unit cold-code sampling burst can
+repeatedly execute supported successors before probing them. The selected tier
+uses one-unit fallback bursts at those addresses. Aligned F000 ROM entries use
+two-unit bursts, normally executing the synthetic OUT/IRET pair before probing
+the guest caller. These are ordinary interpreter units, with their original
+clocks, firmware work, device ticks, IRQ delivery and work/deadline limits.
+ROM execution itself is not translated or replaced with native helpers.
+
+The JIT's actual-change register snapshot now lives separately from its active
+boundary metadata and is passed by reference. Only operations requiring an
+actual register comparison rewrite it. Fixed masks avoid repeatedly storing an
+unused zero bank or copying it through the transaction. Independent native
+regressions require a warm supported successor to be offered after exactly one
+unsupported unit, or after the ROM pair, and compare full CPU state/clocks with
+the original interpreter. Existing actual-Wasm differential tests cover mixed
+change masks, identity writes, flags, memory, IRQs and reset barriers.
+
+Nine fresh installed-Chrome controls use the balanced order A/B/C, B/C/A, C/A/B,
+with the same frozen assets, harness and canonical 24-guest-second workload:
+
+| Runtime | Active host ms, individual controls | Median ms | Mean ms |
+| --- | --- | ---: | ---: |
+| Main `2e5b2cc` | 9,625.3 / 9,548.5 / 9,623.1 | 9,623.1 | 9,599.0 |
+| Hot discovery | 9,278.9 / 9,232.4 / 9,261.1 | 9,261.1 | 9,257.5 |
+| Hot discovery plus snapshot reuse | 8,945.0 / 9,262.3 / 8,750.0 | 8,945.0 | 8,985.8 |
+
+The selected combined median is 7.0% lower than main (mean 6.4% lower). Its
+incremental results overlap the discovery-only variant, and vary more. Every
+selected control is nevertheless below every main control in this round.
+Median in-window spans are 23,096.2 vs 23,816.3 ms; these include timer/compiler
+waits, unlike active host time. Per-window median p99 active slice times are
+5.6 / 5.4 / 5.2 ms vs main's 6.1 / 6.2 / 5.8 ms. Neither metric measures completed
+visible-transition latency or proves an original audio fix.
+
+Pure generated execution rises from 74,519,713 to 92,431,402 of 118,102,981
+instructions (63.1% to 78.3%). Compilations fall from 3,300 to 2,579 (21.8%), and
+generated bytes from 887,920 to 680,622 (23.3%). The 24-byte operation record,
+16-instruction block cap and unchanged compiler are retained. There is no
+native-helper subset. The final 554,400-byte Wasm SHA-256 is
+`ddb9eeee6459757fc659bbca760d694ca82b19e4fb8f6752a22423db52ce0ad8`. The selection matrix used
+`94c034e1d146112d8d332646539555282080ab12d1bd44b57a2249718ad6f8c4`; a comment correction changes only
+panic-source line metadata and the name section. All executable sections are
+byte-identical. The independent holdout uses the final artifact.
+Independent holdout and final regression/CI outcomes are recorded in the linked
+Issue/PR; the initial round alone is not a universal throughput claim.

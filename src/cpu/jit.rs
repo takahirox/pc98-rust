@@ -2,6 +2,7 @@
 //! Rust retains instruction fetches, timing, interrupts and device ownership.
 use super::*;
 use crate::{Machine, Profile};
+use std::num::NonZeroU8;
 
 const HEAT: u8 = 32;
 const SLOTS: usize = 4096;
@@ -11,8 +12,10 @@ const BLOCK: usize = 16;
 #[derive(Clone, Copy, Debug)]
 struct Op {
     ip: u32,
-    bytes: [u8; 6],
+    bytes: [u8; 7],
+    opcode: u8,
     len: u8,
+    prefix_len: u8,
     modrm: u8,
     memory: Option<Memory>,
     register_writes: u8,
@@ -22,7 +25,7 @@ struct Memory {
     segment: u8,
     base: u8,
     index: u8,
-    width: u8,
+    width: NonZeroU8,
     displacement: u16,
     // Read, write, word stack, return, ModR/M effective-address timing.
     flags: u8,
@@ -48,11 +51,21 @@ impl Memory {
     }
 }
 impl Op {
+    fn segment_override(self) -> Option<usize> {
+        match self.bytes[0] {
+            0x26 => Some(ES),
+            0x2e => Some(CS),
+            0x36 => Some(SS),
+            0x3e => Some(DS),
+            0x64 | 0x65 => Some((self.bytes[0] - 0x60) as usize),
+            _ => None,
+        }
+    }
     fn branch(self) -> bool {
-        matches!(self.bytes[0], 0x70..=0x7f | 0xe0..=0xe3 | 0xe8 | 0xe9 | 0xeb | 0xc3)
+        matches!(self.opcode, 0x70..=0x7f | 0xe0..=0xe3 | 0xe8 | 0xe9 | 0xeb | 0xc3)
     }
     fn memory_write(self) -> bool {
-        let op = self.bytes[0];
+        let op = self.opcode;
         match op {
             0x50..=0x57 | 0xe8 | 0xa2 | 0xa3 | 0x86..=0x89 | 0xc6 | 0xc7 => true,
             0x80 | 0x81 | 0x83 => self.modrm & 0x38 != 0x38,
@@ -62,12 +75,12 @@ impl Op {
     }
     fn memory_read(self) -> bool {
         !matches!(
-            self.bytes[0],
+            self.opcode,
             0x50..=0x57 | 0xe8 | 0xa2 | 0xa3 | 0x88 | 0x89 | 0xc6 | 0xc7
         )
     }
     fn register_policy(self) -> u8 {
-        let op = self.bytes[0];
+        let op = self.opcode;
         match op {
             // These word operations always change the named low register.
             0x40..=0x4f => 1 << (op & 7),
@@ -104,10 +117,11 @@ impl Op {
         }
     }
     fn target(self) -> u32 {
-        let displacement = if matches!(self.bytes[0], 0xe8 | 0xe9) {
-            u16::from_le_bytes([self.bytes[1], self.bytes[2]]) as i16 as i32
+        let skip = usize::from(self.prefix_len);
+        let displacement = if matches!(self.opcode, 0xe8 | 0xe9) {
+            u16::from_le_bytes([self.bytes[skip + 1], self.bytes[skip + 2]]) as i16 as i32
         } else {
-            self.bytes[1] as i8 as i32
+            self.bytes[skip + 1] as i8 as i32
         };
         self.ip
             .wrapping_add(u32::from(self.len))
@@ -134,7 +148,9 @@ pub struct Engine {
     plans: Vec<Option<Plan>>,
     serial: u32,
     packet: Vec<u32>,
-    active: Option<(u32, usize, [u16; 8], u8, bool)>,
+    active: Option<(u32, usize, u8, bool)>,
+    // Fixed change masks never consume or rewrite this bank snapshot.
+    before: [u16; 8],
     operand: Option<(u32, u32)>,
     scratch: [u32; 2],
     deadline: u64,
@@ -152,6 +168,7 @@ impl Default for Engine {
             serial: 0,
             packet: Vec::new(),
             active: None,
+            before: [0; 8],
             operand: None,
             scratch: [0; 2],
             deadline: 0,
@@ -200,7 +217,8 @@ fn memory_modrm(op: u8) -> bool {
     matches!(op, 0x80 | 0x81 | 0x83..=0x8b | 0xc6 | 0xc7 | 0xf6 | 0xf7) || op <= 0x3d && op & 7 < 4
 }
 fn memory_spec(op: Op) -> Option<Memory> {
-    let opcode = op.bytes[0];
+    let opcode = op.opcode;
+    let bytes = &op.bytes[usize::from(op.prefix_len)..];
     let flags = (if op.memory_read() { Memory::READ } else { 0 })
         | (if op.memory_write() { Memory::WRITE } else { 0 });
     let (segment, base, index, displacement, width, extra) =
@@ -222,7 +240,7 @@ fn memory_spec(op: Op) -> Option<Memory> {
                 DS,
                 8,
                 8,
-                u16::from_le_bytes([op.bytes[1], op.bytes[2]]),
+                u16::from_le_bytes([bytes[1], bytes[2]]),
                 1 + (opcode & 1),
                 0,
             )
@@ -240,9 +258,9 @@ fn memory_spec(op: Op) -> Option<Memory> {
                 _ => (BX, 8, false),
             };
             let displacement = match mode {
-                0 if op.modrm & 7 == 6 => u16::from_le_bytes([op.bytes[2], op.bytes[3]]),
-                1 => op.bytes[2] as i8 as u16,
-                2 => u16::from_le_bytes([op.bytes[2], op.bytes[3]]),
+                0 if op.modrm & 7 == 6 => u16::from_le_bytes([bytes[2], bytes[3]]),
+                1 => bytes[2] as i8 as u16,
+                2 => u16::from_le_bytes([bytes[2], bytes[3]]),
                 _ => 0,
             };
             (
@@ -256,17 +274,29 @@ fn memory_spec(op: Op) -> Option<Memory> {
         } else {
             return None;
         };
+    let segment = if extra & Memory::STACK == 0 {
+        op.segment_override().unwrap_or(segment)
+    } else {
+        segment
+    };
     Some(Memory {
         segment: segment as u8,
         base: base as u8,
         index: index as u8,
         displacement,
-        width,
+        width: NonZeroU8::new(width).unwrap(),
         flags: flags | extra,
     })
 }
 fn decode(m: &Machine, ip: u32) -> Option<Op> {
     let at = code(m, ip, 1)?;
+    let prefix = match m.bus.mem[at] {
+        prefix @ (0x26 | 0x2e | 0x36 | 0x3e | 0x64 | 0x65) => prefix,
+        _ => 0,
+    };
+    let prefix_len = u32::from(prefix != 0);
+    let instruction_ip = ip + prefix_len;
+    let at = code(m, instruction_ip, 1)?;
     let op = m.bus.mem[at];
     let mut modrm = 0;
     let length = match op {
@@ -277,13 +307,13 @@ fn decode(m: &Machine, ip: u32) -> Option<Op> {
             if op & 7 >= 4 {
                 2 + u32::from(op & 1)
             } else {
-                code(m, ip, 2)?;
+                code(m, instruction_ip, 2)?;
                 modrm = m.bus.mem[at + 1];
                 2 + displacement_len(modrm)
             }
         }
         0x80 | 0x81 | 0x83 | 0x84..=0x8b | 0xc6 | 0xc7 | 0xf6 | 0xf7 => {
-            code(m, ip, 2)?;
+            code(m, instruction_ip, 2)?;
             modrm = m.bus.mem[at + 1];
             if matches!(op, 0xc6 | 0xc7) && modrm & 0x38 != 0
                 || matches!(op, 0xf6 | 0xf7) && !matches!(modrm & 0x38, 0 | 16 | 24)
@@ -299,7 +329,7 @@ fn decode(m: &Machine, ip: u32) -> Option<Op> {
                 }
         }
         0xd0 | 0xd1 => {
-            code(m, ip, 2)?;
+            code(m, instruction_ip, 2)?;
             modrm = m.bus.mem[at + 1];
             if modrm < 0xc0 {
                 return None;
@@ -311,13 +341,16 @@ fn decode(m: &Machine, ip: u32) -> Option<Op> {
         0xa9 => 3,
         _ => return None,
     };
-    code(m, ip, length)?;
-    let mut bytes = [0; 6];
-    bytes[..length as usize].copy_from_slice(&m.bus.mem[at..at + length as usize]);
+    let at = code(m, ip, length + prefix_len)?;
+    let mut bytes = [0; 7];
+    bytes[..(length + prefix_len) as usize]
+        .copy_from_slice(&m.bus.mem[at..at + (length + prefix_len) as usize]);
     let mut result = Op {
         ip,
         bytes,
-        len: length as u8,
+        opcode: op,
+        len: (length + prefix_len) as u8,
+        prefix_len: prefix_len as u8,
         modrm,
         memory: None,
         register_writes: 0,
@@ -386,6 +419,7 @@ impl Engine {
     /// Interpreter execution stops only at a ready block or one compilation offer.
     pub fn dispatch(&mut self, m: &mut Machine, compile: bool) -> u32 {
         while self.runnable(m) {
+            let mut hot_fallback = false;
             // Cold/unsupported addresses pay only a mode/key probe. Full IRQ,
             // descriptor and trap guards belong at a translation/entry boundary.
             if m.bus.profile == Profile::Pc9821ApDos
@@ -439,11 +473,12 @@ impl Engine {
                             self.packet.clear();
                             self.packet.extend([id, ops.len() as u32]);
                             for op in &ops {
+                                let bytes = &op.bytes[usize::from(op.prefix_len)..];
                                 self.packet.extend([
                                     op.ip,
                                     u32::from(op.len),
-                                    u32::from_le_bytes(op.bytes[..4].try_into().unwrap()),
-                                    u32::from(u16::from_le_bytes([op.bytes[4], op.bytes[5]])),
+                                    u32::from_le_bytes(bytes[..4].try_into().unwrap()),
+                                    u32::from(u16::from_le_bytes([bytes[4], bytes[5]])),
                                 ]);
                             }
                             self.plans[id as usize % SLOTS] = Some(Plan {
@@ -459,12 +494,26 @@ impl Engine {
                     } else if id == 0 && self.probes[index].hits == HEAT && !compile {
                         self.probes[index].hits -= 1;
                     }
+                    hot_fallback = id == 0 && self.probes[index].hits >= HEAT;
                 }
             }
             // Bound discovery work in cold code. Vary the short
             // stride so regular loops do not always sample the same position.
             // Ready blocks still chain directly without an interpreter burst.
-            let cap = self.remaining.min(3 + (self.sample_phase & 3));
+            // A cold-code burst at a hot unsupported boundary can repeatedly
+            // swallow the supported successor. Probe after a short fallback.
+            let stride = if hot_fallback {
+                // A short ROM burst normally covers the synthetic OUT/IRET
+                // pair and exposes its guest caller to the next probe.
+                if m.cpu.s[CS] == 0xf000 && m.cpu.ip & 3 == 0 {
+                    2
+                } else {
+                    1
+                }
+            } else {
+                3 + (self.sample_phase & 3)
+            };
+            let cap = self.remaining.min(stride);
             self.sample_phase = self.sample_phase.wrapping_add(1);
             let done = m.step_scheduler((self.deadline - m.bus.cycles) as u32, cap);
             self.remaining -= done;
@@ -514,7 +563,7 @@ impl Engine {
         let Some(at) = code(m, op.ip, u32::from(op.len)) else {
             return false;
         };
-        if op.branch() && op.bytes[0] != 0xc3 && code(m, op.target(), 1).is_none() {
+        if op.branch() && op.opcode != 0xc3 && code(m, op.target(), 1).is_none() {
             return false;
         }
         if m.bus.mem[at..at + op.len as usize] != op.bytes[..op.len as usize] {
@@ -534,7 +583,7 @@ impl Engine {
         if let Some(memory) = op.memory {
             let segment = memory.segment as usize;
             let offset = memory.offset(&m.cpu);
-            let width = u32::from(memory.width);
+            let width = u32::from(memory.width.get());
             let descriptor = m.cpu.segment_cache(segment);
             if memory.flags & Memory::STACK != 0 && descriptor.big() {
                 return false;
@@ -557,11 +606,9 @@ impl Engine {
             }
             self.operand = Some((physical, width));
         }
-        let before = if op.register_writes == 0xff {
-            m.cpu.r
-        } else {
-            [0; 8]
-        };
+        if op.register_writes == 0xff {
+            self.before = m.cpu.r;
+        }
         m.cpu.jit_prepare(&mut m.bus, op, at as u32);
         if op
             .memory
@@ -582,7 +629,6 @@ impl Engine {
         self.active = Some((
             id,
             index,
-            before,
             op.register_writes,
             op.memory
                 .is_some_and(|memory| memory.flags & Memory::WRITE != 0),
@@ -594,7 +640,7 @@ impl Engine {
     }
     /// Commit one translated instruction, tick devices, then guard the next one.
     pub fn next(&mut self, m: &mut Machine, index: usize, taken: bool) -> bool {
-        let Some((id, previous, before, register_writes, write)) = self.active.take() else {
+        let Some((id, previous, register_writes, write)) = self.active.take() else {
             return false;
         };
         if write {
@@ -610,7 +656,7 @@ impl Engine {
             }
         }
         m.bus.timing.taken = taken;
-        let timing = m.cpu.jit_finish(&mut m.bus, before, register_writes);
+        let timing = m.cpu.jit_finish(&mut m.bus, &self.before, register_writes);
         let clocks = m
             .clock_converter
             .advance(m.bus.profile, timing.cpu_cycles());
@@ -648,7 +694,8 @@ impl Cpu {
         }
         self.ip += u32::from(op.len);
         self.instruction_bytes = op.len;
-        let mut instruction = crate::timing::Instruction::new(self, op.bytes[0], 0, 0);
+        let mut instruction =
+            crate::timing::Instruction::new(self, op.opcode, u32::from(op.prefix_len), 0);
         instruction.modrm = op.modrm;
         b.timing.instruction = Some(instruction);
         if op
@@ -662,12 +709,12 @@ impl Cpu {
     fn jit_finish(
         &mut self,
         b: &mut Bus,
-        before: [u16; 8],
+        before: &[u16; 8],
         register_writes: u8,
     ) -> crate::timing::StepTiming {
         let timing = b.timing.finish(b.profile, false, 0);
         self.timing_writes = if register_writes == 0xff {
-            changed_registers(&before, &self.upper, &self.r, &self.upper)
+            changed_registers(before, &self.upper, &self.r, &self.upper)
         } else {
             register_writes
         };
@@ -702,6 +749,111 @@ mod tests {
         assert_ne!(id, 0);
         assert!(e.register(id, true));
         id
+    }
+    #[test]
+    fn hot_unsupported_boundary_does_not_skip_a_warm_supported_successor() {
+        let mut actual = machine();
+        let mut reference = machine();
+        for m in [&mut actual, &mut reference] {
+            m.bus.mem[0x100..0x105].copy_from_slice(&[0x98, 0x40, 0xeb, 0xfc, 0x90]);
+            m.cpu.r[AX] = 0x80;
+        }
+        let mut e = Engine::default();
+        let unsupported = key(&actual.cpu);
+        let successor = unsupported + 1;
+        assert_ne!(probe(unsupported), probe(successor));
+        for (key, hits) in [(unsupported, HEAT), (successor, HEAT - 1)] {
+            e.probes[probe(key)] = Probe { key, hits, id: 0 };
+        }
+        e.begin_slice(&actual, 80_000, 10);
+        let id = e.dispatch(&mut actual, true);
+        assert_ne!(id, 0);
+        assert_eq!(e.packet()[2], 0x101);
+        assert_eq!(e.done(), 1);
+        reference.step(1);
+        assert_eq!(format!("{:?}", actual.cpu), format!("{:?}", reference.cpu));
+        assert_eq!(actual.bus.cycles, reference.bus.cycles);
+    }
+    #[test]
+    fn hot_rom_pair_exposes_its_supported_caller_without_an_extra_cold_burst() {
+        let mut actual = machine();
+        let mut reference = machine();
+        for m in [&mut actual, &mut reference] {
+            m.cpu.s[CS] = 0xf000;
+            m.cpu.ip = 0x1060;
+            m.cpu.r[AX] = 0x0400;
+            m.cpu.r[SP] = 0x8000;
+            m.bus.mem[0xf1060..0xf1063].copy_from_slice(&[0xe6, 0xf0, 0xcf]);
+            m.bus.mem[0x8000..0x8006].copy_from_slice(&[1, 1, 0, 0, 2, 0]);
+        }
+        let mut e = Engine::default();
+        let rom = key(&actual.cpu);
+        let caller = 0x101;
+        assert_ne!(probe(rom), probe(caller));
+        for (key, hits) in [(rom, HEAT), (caller, HEAT - 1)] {
+            e.probes[probe(key)] = Probe { key, hits, id: 0 };
+        }
+        e.begin_slice(&actual, 80_000, 10);
+        assert_ne!(e.dispatch(&mut actual, true), 0);
+        assert_eq!(e.packet()[2], 0x101);
+        assert_eq!(e.done(), 2);
+        reference.step(2);
+        assert_eq!(format!("{:?}", actual.cpu), format!("{:?}", reference.cpu));
+        assert_eq!(actual.bus.cycles, reference.bus.cycles);
+        assert_eq!(actual.bus.mem, reference.bus.mem);
+    }
+    #[test]
+    fn segment_overrides_keep_original_fetch_operand_and_prefix_timing() {
+        for prefix in [0x26, 0x2e, 0x36, 0x3e, 0x64, 0x65] {
+            let mut a = machine();
+            let mut b = machine();
+            for m in [&mut a, &mut b] {
+                m.cpu.s = [0x3000, 0, 0x4000, 0x2000];
+                m.cpu.extra_segments = [0x5000, 0x6000];
+                m.cpu.r[BP] = 0x8000;
+                for segment in 0..6 {
+                    let physical = m.cpu.segment_cache(segment).base as usize + 0x8002;
+                    m.bus.mem[physical..physical + 2]
+                        .copy_from_slice(&(0xa000u16 + segment as u16).to_le_bytes());
+                }
+                m.bus.mem[0x100..0x105].copy_from_slice(&[prefix, 0x8b, 0x46, 2, 0xf4]);
+            }
+            let mut e = Engine::default();
+            let id = offered(&mut a, &mut e);
+            offered(&mut b, &mut Engine::default());
+            a.cpu.ip = 0x100;
+            b.cpu.ip = 0x100;
+            e.begin_slice(&a, 80_000, 1);
+            assert!(e.start(&mut a, id));
+            a.cpu.r[AX] = e.scratch[0] as u16;
+            assert!(!e.next(&mut a, 1, false));
+            b.step(1);
+            assert_eq!(format!("{:?}", a.cpu), format!("{:?}", b.cpu));
+            assert_eq!(a.bus.cycles, b.bus.cycles);
+        }
+    }
+    #[test]
+    fn changed_segment_prefix_exits_before_fetch_or_mapped_operand_read() {
+        let mut m = machine();
+        m.cpu.s[ES] = 0xa800;
+        m.cpu.r[BX] = 0;
+        m.bus.mem[0x100..0x104].copy_from_slice(&[0x26, 0x8b, 7, 0xf4]);
+        let mut e = Engine::default();
+        let id = offered(&mut m, &mut e);
+        m.cpu.ip = 0x100;
+        m.bus.mem[0x100] = 0x2e;
+        m.bus.egc.enabled = true;
+        m.bus.egc.registers[2] = 0x2100;
+        m.bus.grcg_mode = 0x80;
+        let egc = m.bus.egc.clone();
+        let before = format!("{:?}", m.cpu);
+        let clocks = m.bus.cycles;
+        e.begin_slice(&m, 80_000, 1);
+        assert!(!e.start(&mut m, id));
+        assert_eq!(format!("{:?}", m.cpu), before);
+        assert_eq!(m.bus.cycles, clocks);
+        assert_eq!(m.bus.egc, egc);
+        assert_eq!(e.counters[2], 1);
     }
     #[test]
     fn jit_declines_faulting_fetches_and_prefixes() {
