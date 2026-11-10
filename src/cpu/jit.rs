@@ -2,6 +2,7 @@
 //! Rust retains instruction fetches, timing, interrupts and device ownership.
 use super::*;
 use crate::{Machine, Profile};
+use std::num::NonZeroU8;
 
 const HEAT: u8 = 32;
 const SLOTS: usize = 4096;
@@ -24,7 +25,7 @@ struct Memory {
     segment: u8,
     base: u8,
     index: u8,
-    width: u8,
+    width: NonZeroU8,
     displacement: u16,
     // Read, write, word stack, return, ModR/M effective-address timing.
     flags: u8,
@@ -280,7 +281,7 @@ fn memory_spec(op: Op) -> Option<Memory> {
         base: base as u8,
         index: index as u8,
         displacement,
-        width,
+        width: NonZeroU8::new(width).unwrap(),
         flags: flags | extra,
     })
 }
@@ -564,7 +565,7 @@ impl Engine {
         if let Some(memory) = op.memory {
             let segment = memory.segment as usize;
             let offset = memory.offset(&m.cpu);
-            let width = u32::from(memory.width);
+            let width = u32::from(memory.width.get());
             let descriptor = m.cpu.segment_cache(segment);
             if memory.flags & Memory::STACK != 0 && descriptor.big() {
                 return false;

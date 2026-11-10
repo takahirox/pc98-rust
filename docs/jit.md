@@ -382,7 +382,7 @@ Issue #146 remains open for the original playback investigation.
 
 ## Segment-override experiments — Issue #158
 
-Fourteen incremental candidates were evaluated against main `2e5b2cc`. All 33
+The initial fourteen candidates were evaluated against main `2e5b2cc`. All 33
 fixed-work timing controls and one separate diagnostic profile retain the
 canonical instruction/clock counts, CPU/frame/PCM fingerprints and disk/music/IRQ
 observations listed above. Media and raw reports remain outside Git. The host,
@@ -422,15 +422,19 @@ instructions. The 16-instruction limit and existing branch boundaries are kept.
 
 One segment override is now supported across the existing instruction families.
 The decoded operation retains seven raw bytes for the live guard, its canonical
-opcode and prefix length. Compilation packets carry canonical operands and the
+opcode and prefix length. Operand widths use `NonZeroU8`: only byte/word spans
+are constructed, so zero can represent an absent operand without a separate
+`Option<Memory>` tag. A local layout probe confirms `Memory`/`Option<Memory>`
+are both eight bytes, restoring each hot operation record from 28 to 24 bytes
+(the original record size). Compilation packets carry canonical operands and the
 full original length, so the existing Wasm generator needs no change. Memory
 metadata selects ES/CS/SS/DS/FS/GS once; each execution still validates the current
 descriptor and uses the original bus reads/writes. Stack overrides stay ignored.
 Multiple, size-changing, repeat and lock prefixes retain interpreter decoding.
 
-Two representations were compared: an initial canonical-byte record with a
-separate prefix comparison, and the selected raw-byte record with one contiguous
-guard. Nine fresh Chrome controls used the balanced order A/B/C, B/C/A, C/A/B.
+Two initial representations were compared: a canonical-byte record with a
+separate prefix comparison, and an initial raw-byte record with one contiguous
+guard, before its memory metadata was packed. Nine fresh Chrome controls used the balanced order A/B/C, B/C/A, C/A/B.
 Setup and measurement yield between ten-guest-millisecond slices so compilation
 can progress. Each control measures three continuous eight-guest-second windows.
 
@@ -438,16 +442,24 @@ can progress. Each control measures three continuous eight-guest-second windows.
 | --- | --- | ---: | ---: |
 | Main baseline | 7,652.0 / 7,594.6 / 9,111.0 | 7,652.0 | 8,119.2 |
 | Initial prefix representation | 7,634.0 / 7,582.0 / 7,610.1 | 7,610.1 | 7,608.7 |
-| Selected raw-byte prefix representation | 7,576.9 / 7,532.6 / 7,624.2 | 7,576.9 | 7,577.9 |
+| Initial raw-byte prefix representation | 7,576.9 / 7,532.6 / 7,624.2 | 7,576.9 | 7,577.9 |
 
-The selected median is about 1.0% lower than main. Runs overlap, and the high main
+The initial raw-byte median is about 1.0% lower than main in that round. Runs overlap, and the high main
 control substantially affects the mean; no general 6.7% throughput gain is
 inferred from that mean. The two prefix representations also overlap. The
-selected representation keeps the original contiguous byte-guard contract.
-Per-window median p99 active slice times are 4.8 / 4.6 / 4.4 ms, against
+raw-byte representation keeps the original contiguous byte-guard contract.
+In that round, per-window median p99 active slice times are 4.8 / 4.6 / 4.4 ms, against
 5.2 / 5.3 / 4.4 ms on main. Active time includes PCM fingerprint work and excludes
 timer waits/compiler tasks. In-window spans include those waits/tasks, while
 setup and gaps between the three windows are excluded from both metrics.
+
+An independent six-control holdout after selection did not repeat that timing
+benefit. Main active times were 7,779.8 / 7,765.0 / 8,469.0 ms (mean 8,004.6),
+and the initial raw-byte record measured 8,036.5 / 8,548.7 / 7,981.6 ms
+(mean 8,188.9), 2.3% higher. All results are retained. That finding prompted the
+nonzero-width packing above, preserving the original operation-record footprint.
+Execution-time gains are treated as uncertain; increased coverage and reduced
+compilation volume are reported separately.
 
 Generated execution increases from 74,519,713 to 78,154,322 of 118,102,981
 instructions (63.1% to 66.2%). Completed compilations decrease from 3,300 to 2,529
@@ -457,8 +469,8 @@ image-transition latency or a resolution of the original playback complaint.
 The selected runtime has no native-helper subset; the measurement harness can
 report that subset separately for experimental runtimes.
 
-The selected 554,399-byte Wasm SHA-256 is
-`cf0a94ff4bb740d4c9eb9245012dfe6ad8091a975121a55da570519737d40170`;
+The packed 554,355-byte Wasm SHA-256 is
+`5bb593cedd49f1cc8476fa8b60a36f89c065777010ba41ff1cc39a8b15bac3d0`;
 the unchanged compiler SHA-256 is
 `434d9923b16d1a3ba2ddf03404be826b56b9de190fadbff83fafbb35fb008afd`.
 The final prefix comparisons use harness SHA-256
@@ -467,6 +479,18 @@ Earlier native pilots used the preceding harness; profiles are diagnostic only.
 One completed native control hit its post-report cleanup watchdog. Its validated
 report was retained, and scoped process checks found no orphaned headless
 browser in the owned worktree before subsequent controls continued.
+
+Separate visible Chrome controls use no debugger, automation protocol, profiler
+or manual guest advancement. Each recorded 381 observations over about 95 seconds
+through the classroom/flashback/return sequence. Main and packed-prefix builds
+both report zero source/device underruns, drops, overflows, sequence/checksum
+errors and emulator faults, with guest/wall ratios 1.000115 and 1.000081.
+Main completed 4,185 compilations with a full 4,096-entry cache; the packed build
+completed 3,168 with 3,168 cached entries. Both have zero compilation failures.
+Mean guest-slice times were 3.815 and 3.857 ms in these single controls; no runtime
+speedup is inferred. The observed improvements concern coverage, compilation
+volume and cache/metadata footprint. The original playback symptom was not
+reproduced in these controls, so Issue #146 remains open.
 
 New regressions compare full native CPU state and clocks for all six overrides,
 and reject a changed prefix before fetching or reading a mapped graphics operand.
