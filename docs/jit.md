@@ -18,8 +18,9 @@ protected/paged execution, 32-bit defaults, single-step and unusual fetch
 boundaries use the existing interpreter. This is a bounded first tier, not a replacement for the
 full CPU implementation.
 
-The initial tier is opt-in: add `?jit=1` (or `&jit=1`) to enable it. The default
-and explicit `?jit=0` sessions retain the interpreter. VM uses the interpreter. An unavailable JIT
+Browser sessions enable the JIT by default. Add `?jit=0` (or `&jit=0`) for
+interpreter comparisons or troubleshooting; explicit `?jit=1` remains supported.
+VM uses the interpreter. An unavailable JIT
 module or compilation failure also retains interpreter execution; no browser or
 runtime dependency is downloaded. The compiler is the original MIT-licensed
 [`web/jit.js`](../web/jit.js), using the standard
@@ -101,8 +102,10 @@ Native bridge regressions cover unsupported/faulting fetches, mode/IRQ/shadow
 guards, identity changes, PIC-wire history and changed branch bounds.
 
 The actual production-Worker browser regression compares registers, clocks,
-fetch counts, frame fingerprints and PCM fingerprints with JIT on/off at both
-serving roots. A separate failure-path case checks an unavailable JIT asset.
+fetch counts, frame fingerprints and PCM fingerprints for default JIT, explicit
+`jit=1` and explicit `jit=0` at both serving roots. A separate failure-path case
+checks default-startup fallback for an unavailable JIT asset and verifies that
+`jit=0` avoids loading it.
 The existing legal guest and wall-clock audio suites remain required.
 
 An opt-in original register-loop comparison needs no game media:
@@ -150,10 +153,10 @@ controls. Every canonical guest/PCM/frame result above matches:
 | JIT | 8,273.8, 8,304.4, 8,297.3 | 8,297.3 |
 
 Only 88,022 of 118,102,981 measured instructions used the initial tier (about 0.075%).
-The initial JIT control was 1.1% slower by the median. Consequently the ordinary browser
-keeps the interpreter; the optional tier is available for supported workloads
-and future coverage work. These explicit-mode measurements were collected at
-`f606aac`; the subsequent opt-in default changes neither the core/compiler bytes
+The initial JIT control was 1.1% slower by the median. Consequently the initial
+release kept the interpreter as the browser default while coverage improved.
+These historical explicit-mode measurements were collected at
+`f606aac`; making that release opt-in changed neither the core/compiler bytes
 nor either explicit-mode execution path. Normal-playback observations and final
 acceptance are recorded in the linked Issue/PR.
 
@@ -214,7 +217,8 @@ full validation and normal-playback observations are recorded in
 [Issue #152](https://github.com/takahirox/pc98-rust/issues/152) and its linked PR.
 Performance comparisons use the same harness and installed Chrome, with one
 owned browser at a time and no concurrent local builds or test suites. The
-reference interpreter and opt-in policy remain available for other workloads.
+reference interpreter remains available through `?jit=0`. Following these game
+improvements, browser sessions now enable the JIT by default.
 
 
 ### Final continuous-capacity comparison
