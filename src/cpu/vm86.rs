@@ -125,30 +125,44 @@ impl Cpu {
         // SP may wrap BETWEEN operands, just as on interrupt entry. Each
         // operand must still fit its segment. Protected/VM86 frames retain
         // their contiguous-frame validation.
-        if self.protected_mode() {
-            self.check_access(
-                b,
-                SS,
-                self.stack_pointer(),
-                self.bytes(true) * 3,
-                false,
-                false,
-            )?;
-        } else {
-            self.check_stack_sequence(b, 3, false)?;
-        }
         let sp = self.stack_pointer();
         let bytes = self.bytes(true);
-        let off = self.read_mem(b, SS, sp, bytes)?;
-        let frame_offset = |delta| {
-            if self.protected_mode() {
-                sp + delta
-            } else {
-                self.stack_offset(sp.wrapping_add(delta))
-            }
+        let base = if bytes == 2 {
+            self.real_word_frame(b, sp)
+        } else {
+            None
         };
-        let seg = self.read_mem(b, SS, frame_offset(bytes), bytes)? as u16;
-        let flags = self.read_mem(b, SS, frame_offset(2 * bytes), bytes)?;
+        let (off, seg, flags) = if let Some(base) = base {
+            let mut read_word = |delta| {
+                let physical = base.wrapping_add(delta);
+                let lo = b.cpu_read(physical, 0, 2, false);
+                let hi = b.cpu_read(physical.wrapping_add(1), 1, 2, false);
+                u16::from_le_bytes([lo, hi])
+            };
+            (
+                u32::from(read_word(0)),
+                read_word(2),
+                u32::from(read_word(4)),
+            )
+        } else {
+            if self.protected_mode() {
+                self.check_access(b, SS, sp, bytes * 3, false, false)?;
+            } else {
+                self.check_stack_sequence(b, 3, false)?;
+            }
+            let frame_offset = |delta| {
+                if self.protected_mode() {
+                    sp + delta
+                } else {
+                    self.stack_offset(sp.wrapping_add(delta))
+                }
+            };
+            (
+                self.read_mem(b, SS, sp, bytes)?,
+                self.read_mem(b, SS, frame_offset(bytes), bytes)? as u16,
+                self.read_mem(b, SS, frame_offset(2 * bytes), bytes)?,
+            )
+        };
         if self.protected_mode()
             && !virtual_return
             && self.operand32

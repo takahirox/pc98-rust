@@ -447,6 +447,16 @@ impl Cpu {
     fn pop(&mut self, b: &mut Bus) -> ExecResult<u32> {
         self.pop_width(b, self.bytes(true))
     }
+    /// Resolve a contiguous three-word frame on a 16-bit, unpaged Ap stack.
+    /// Wrapped frames and faulting spans use the per-operand checks.
+    fn real_word_frame(&self, b: &Bus, start: u32) -> Option<u32> {
+        if b.profile != crate::Profile::Pc9821ApDos || self.cr0 & 0x80000001 != 0 || start > 0xfffa
+        {
+            return None;
+        }
+        let stack = self.segment_cache(SS);
+        (!stack.big() && stack.contains(start, 6)).then_some(stack.base.wrapping_add(start))
+    }
     fn deliver_interrupt(&mut self, b: &mut Bus, n: u8) -> ExecResult<()> {
         if self.shutdown {
             return Ok(());
@@ -468,23 +478,34 @@ impl Cpu {
         // native and Wasm hosts (usize has different widths on those targets).
         let vector: [u8; 4] = std::array::from_fn(|i| {
             let physical = base.wrapping_add(entry).wrapping_add(i as u32);
-            b.cpu_access(physical, (i % 2) as u32, 2, false, false);
-            b.read(physical as usize)
+            b.cpu_read(physical, (i % 2) as u32, 2, false)
         });
         // Real-mode entry always saves FLAGS, CS and IP as words, even for 66 INT.
-        let bytes = 2;
-        // Preflight each push: the 16-bit stack pointer may wrap between words.
-        for i in 1..=3 {
-            self.check_mem(
-                b,
-                SS,
-                self.stack_offset(self.stack_pointer().wrapping_sub(i * bytes)),
-                bytes,
-            )?;
+        let start = u32::from(self.r[SP]).wrapping_sub(6);
+        if let Some(base) = self.real_word_frame(b, start) {
+            // Push FLAGS, CS, then IP. Preserve each word's byte order and bus timing.
+            for (delta, value) in [(4, self.flags), (2, self.s[CS]), (0, self.ip as u16)] {
+                let physical = base.wrapping_add(delta);
+                let [lo, hi] = value.to_le_bytes();
+                b.cpu_write(physical, 0, 2, lo);
+                b.cpu_write(physical.wrapping_add(1), 1, 2, hi);
+            }
+            self.r[SP] = start as u16;
+        } else {
+            let bytes = 2;
+            // Preflight each push: the 16-bit stack pointer may wrap between words.
+            for i in 1..=3 {
+                self.check_mem(
+                    b,
+                    SS,
+                    self.stack_offset(self.stack_pointer().wrapping_sub(i * bytes)),
+                    bytes,
+                )?;
+            }
+            self.push_width(b, self.flags as u32, bytes)?;
+            self.push_width(b, self.s[CS] as u32, bytes)?;
+            self.push_width(b, self.ip, bytes)?;
         }
-        self.push_width(b, self.flags as u32, bytes)?;
-        self.push_width(b, self.s[CS] as u32, bytes)?;
-        self.push_width(b, self.ip, bytes)?;
         self.flags &= !(IF | TF);
         self.flags_upper &= !4; // Real-mode interrupt/exception entry clears AC.
         self.trap_suppressed = true;
