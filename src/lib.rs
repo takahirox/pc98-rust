@@ -200,6 +200,17 @@ mod wasm {
         })
     }
     #[no_mangle]
+    pub extern "C" fn jit_batch_next(end: usize, taken: u32) -> u32 {
+        MACHINE.with(|m| {
+            JIT.with(|j| {
+                u32::from(
+                    j.borrow_mut()
+                        .next_batch(&mut m.borrow_mut(), end, taken != 0),
+                )
+            })
+        })
+    }
+    #[no_mangle]
     pub extern "C" fn jit_fallback() {
         MACHINE.with(|m| JIT.with(|j| j.borrow_mut().fallback(&mut m.borrow_mut())));
     }

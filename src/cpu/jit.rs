@@ -142,6 +142,42 @@ struct Probe {
     id: u32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct Checkpoint {
+    registers: [u16; 8],
+    flags: u16,
+    padding: u16,
+    ip: u32,
+}
+impl Checkpoint {
+    fn capture(cpu: &Cpu) -> Self {
+        Self {
+            registers: cpu.r,
+            flags: cpu.flags,
+            ip: cpu.ip,
+            ..Self::default()
+        }
+    }
+    fn restore(self, cpu: &mut Cpu) {
+        cpu.r = self.registers;
+        cpu.flags = self.flags;
+        cpu.ip = self.ip;
+    }
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct Scratch {
+    operand: [u32; 2],
+    checkpoints: [Checkpoint; BLOCK],
+}
+// The generated module copies the low register bank and stores FLAGS/IP.
+const _: () = assert!(std::mem::size_of::<Checkpoint>() == 24);
+const _: () = assert!(std::mem::offset_of!(Checkpoint, flags) == 16);
+const _: () = assert!(std::mem::offset_of!(Checkpoint, ip) == 20);
+const _: () = assert!(std::mem::offset_of!(Scratch, checkpoints) == 8);
+
 /// No generated code or guest bytes leave the owned emulator Worker.
 pub struct Engine {
     probes: Box<[Probe]>,
@@ -152,13 +188,13 @@ pub struct Engine {
     // Fixed change masks never consume or rewrite this bank snapshot.
     before: [u16; 8],
     operand: Option<(u32, u32)>,
-    scratch: [u32; 2],
+    scratch: Scratch,
     deadline: u64,
     remaining: u32,
     done: u32,
     sample_phase: u32,
-    /// Aggregate observations only: offers, committed JIT units, invalidations.
-    pub counters: [u64; 3],
+    /// Offers, committed units, invalidations, batch calls and batched units.
+    pub counters: [u64; 5],
 }
 impl Default for Engine {
     fn default() -> Self {
@@ -170,12 +206,12 @@ impl Default for Engine {
             active: None,
             before: [0; 8],
             operand: None,
-            scratch: [0; 2],
+            scratch: Scratch::default(),
             deadline: 0,
             remaining: 0,
             done: 0,
             sample_phase: 0,
-            counters: [0; 3],
+            counters: [0; 5],
         }
     }
 }
@@ -371,7 +407,7 @@ impl Engine {
         self.operand = None;
         self.remaining = 0;
         self.done = 0;
-        self.counters = [0; 3];
+        self.counters = [0; 5];
         self.sample_phase = 0;
         self.packet.clear();
     }
@@ -399,7 +435,7 @@ impl Engine {
         if !plan.ready {
             return 2;
         }
-        u32::from(self.prepare(m, id, 0))
+        u32::from(self.prepare(m, id, 0, None))
     }
     pub fn register(&mut self, id: u32, ready: bool) -> bool {
         if let Some(p) = self.plans[id as usize % SLOTS]
@@ -531,9 +567,15 @@ impl Engine {
         if !self.runnable(m) || !self.plan(id).is_some_and(|p| p.ready) {
             return false;
         }
-        self.prepare(m, id, 0)
+        self.prepare(m, id, 0, None)
     }
-    fn prepare(&mut self, m: &mut Machine, id: u32, index: usize) -> bool {
+    fn prepare(
+        &mut self,
+        m: &mut Machine,
+        id: u32,
+        index: usize,
+        validated_physical: Option<usize>,
+    ) -> bool {
         let Some(plan) = self.plan(id) else {
             return false;
         };
@@ -560,7 +602,7 @@ impl Engine {
                 return false;
             }
         }
-        let Some(at) = code(m, op.ip, u32::from(op.len)) else {
+        let Some(at) = validated_physical.or_else(|| code(m, op.ip, u32::from(op.len))) else {
             return false;
         };
         if op.branch() && op.opcode != 0xc3 && code(m, op.target(), 1).is_none() {
@@ -623,7 +665,7 @@ impl Engine {
                                 .cpu_read(physical.wrapping_add(byte), byte, width, false),
                         ) << (byte * 8);
                 }
-                self.scratch[0] = value;
+                self.scratch.operand[0] = value;
             }
         }
         self.active = Some((
@@ -636,10 +678,20 @@ impl Engine {
         true
     }
     pub fn scratch_ptr(&mut self) -> *mut u32 {
-        self.scratch.as_mut_ptr()
+        self.scratch.operand.as_mut_ptr()
     }
     /// Commit one translated instruction, tick devices, then guard the next one.
     pub fn next(&mut self, m: &mut Machine, index: usize, taken: bool) -> bool {
+        self.next_at(m, index, taken, None)
+    }
+    #[inline(always)]
+    fn next_at(
+        &mut self,
+        m: &mut Machine,
+        index: usize,
+        taken: bool,
+        validated_physical: Option<usize>,
+    ) -> bool {
         let Some((id, previous, register_writes, write)) = self.active.take() else {
             return false;
         };
@@ -650,7 +702,7 @@ impl Engine {
                         physical.wrapping_add(byte),
                         byte,
                         width,
-                        (self.scratch[1] >> (byte * 8)) as u8,
+                        (self.scratch.operand[1] >> (byte * 8)) as u8,
                     );
                 }
             }
@@ -664,7 +716,47 @@ impl Engine {
         self.remaining -= 1;
         self.done += 1;
         self.counters[1] += 1;
-        index == previous + 1 && self.runnable(m) && self.prepare(m, id, index)
+        index == previous + 1 && self.runnable(m) && self.prepare(m, id, index, validated_physical)
+    }
+    /// Commit a bounded generated run through the original instruction
+    /// boundaries. Only the first operation may have a prepared memory operand.
+    /// Later register results are speculative until their boundary commits.
+    pub fn next_batch(&mut self, m: &mut Machine, end: usize, taken: bool) -> bool {
+        let Some((id, start, _, _)) = self.active else {
+            return false;
+        };
+        let Some(ops) = self.plan(id).and_then(|plan| plan.ops.get(start..end)) else {
+            return false;
+        };
+        if ops.is_empty() || ops[1..].iter().any(|op| op.memory.is_some()) {
+            return false;
+        }
+        // Supported operations and device ticks preserve CS and CPU mode.
+        // Validate the whole contiguous code span once. Byte comparisons and
+        // interrupt/deadline checks still run at every replayed boundary.
+        let first_ip = ops[0].ip;
+        let last = ops.last().unwrap();
+        let physical = code(m, first_ip, last.ip + u32::from(last.len) - first_ip);
+        let final_state = Checkpoint::capture(&m.cpu);
+        self.counters[3] += 1;
+        for index in start..end {
+            let checkpoint = if index + 1 == end {
+                final_state
+            } else {
+                self.scratch.checkpoints[index]
+            };
+            checkpoint.restore(&mut m.cpu);
+            self.counters[4] += 1;
+            let next_physical = if index + 1 < end {
+                physical.map(|base| base + m.cpu.ip.wrapping_sub(first_ip) as usize)
+            } else {
+                None
+            };
+            if !self.next_at(m, index + 1, index + 1 == end && taken, next_physical) {
+                return false;
+            }
+        }
+        true
     }
     pub fn fallback(&mut self, m: &mut Machine) {
         if self.runnable(m) {
@@ -762,6 +854,86 @@ mod tests {
         id
     }
     #[test]
+    fn batch_checkpoints_preserve_deadlines_and_interrupt_boundaries() {
+        for scenario in 0..7 {
+            let mut actual = machine();
+            let mut reference = machine();
+            let mut speculative = machine();
+            if scenario == 6 {
+                for m in [&mut actual, &mut reference, &mut speculative] {
+                    m.bus.mem[0x103] = 0x10;
+                }
+            }
+            let mut engine = Engine::default();
+            let id = offered(&mut actual, &mut engine);
+            offered(&mut reference, &mut Engine::default());
+            offered(&mut speculative, &mut Engine::default());
+            for m in [&mut actual, &mut reference, &mut speculative] {
+                m.cpu.ip = 0x100;
+            }
+            // Produce the same bounded register results as generated Wasm.
+            for checkpoint in &mut engine.scratch.checkpoints[..3] {
+                speculative.step(1);
+                *checkpoint = Checkpoint {
+                    registers: speculative.cpu.r,
+                    flags: speculative.cpu.flags,
+                    ip: speculative.cpu.ip,
+                    ..Checkpoint::default()
+                };
+            }
+            let (clocks, cap) = match scenario {
+                0 => (80_000, 3),
+                1 => (80_000, 1),
+                2 => (1, 3),
+                _ => (80_000, 3),
+            };
+            for m in [&mut actual, &mut reference] {
+                if scenario == 3 {
+                    m.cpu.flags |= IF;
+                    m.cpu.inhibit = 1;
+                    m.bus.pics[0].mask &= !2;
+                    m.bus.key(0x1d, true);
+                } else if scenario == 4 {
+                    m.cpu.flags |= IF;
+                    m.bus.pics[0].mask &= !1;
+                    m.bus.interval = Some(crate::firmware::IntervalTimer {
+                        deadline: m.bus.cycles + 1,
+                        segment: 0,
+                        offset: 0,
+                    });
+                } else if scenario >= 5 {
+                    m.cpu.segment_caches[CS] = Some(SegmentCache {
+                        base: 0,
+                        limit: if scenario == 5 { 0x101 } else { 0x104 },
+                        access: 0x9b,
+                        attributes: 0,
+                    });
+                }
+            }
+            // Retain IF in the speculative results without delivering an IRQ
+            // while obtaining the complete run above.
+            for checkpoint in &mut engine.scratch.checkpoints[..3] {
+                checkpoint.flags |= actual.cpu.flags & IF;
+            }
+            engine.begin_slice(&actual, clocks, cap);
+            assert!(engine.start(&mut actual, id));
+            engine.scratch.checkpoints[2].restore(&mut actual.cpu);
+            assert!(!engine.next_batch(&mut actual, 3, true));
+            let done = engine.done();
+            assert!(done > 0);
+            if matches!(scenario, 3 | 4) {
+                assert_eq!(done, 1);
+            } else if scenario >= 5 {
+                assert_eq!(done, 2);
+            }
+            reference.step(done);
+            assert_eq!(format!("{:?}", actual.cpu), format!("{:?}", reference.cpu));
+            assert_eq!(actual.bus.cycles, reference.bus.cycles);
+            assert_eq!(actual.bus.mem, reference.bus.mem);
+            assert_eq!(engine.counters[4], u64::from(done));
+        }
+    }
+    #[test]
     fn hot_unsupported_boundary_does_not_skip_a_warm_supported_successor() {
         let mut actual = machine();
         let mut reference = machine();
@@ -836,7 +1008,7 @@ mod tests {
             b.cpu.ip = 0x100;
             e.begin_slice(&a, 80_000, 1);
             assert!(e.start(&mut a, id));
-            a.cpu.r[AX] = e.scratch[0] as u16;
+            a.cpu.r[AX] = e.scratch.operand[0] as u16;
             assert!(!e.next(&mut a, 1, false));
             b.step(1);
             assert_eq!(format!("{:?}", a.cpu), format!("{:?}", b.cpu));

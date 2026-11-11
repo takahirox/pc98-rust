@@ -81,12 +81,25 @@ function singleShift(kind,wide,dst){
   return out;
 }
 
-/** Compile only Rust-preflighted unprefixed real-mode instructions. */
-export function compileBlock(packet){
+function memoryOperation(encoded){
+  const op=encoded&255,m=(encoded>>>8)&255;
+  if(op>=0x50&&op<=0x5f||op>=0xa0&&op<=0xa3||op===0xe8||op===0xc3)return true;
+  return m<0xc0&&(op<=0x3d&&(op&7)<4
+    ||[0x80,0x81,0x83,0x84,0x85,0x86,0x87,0x88,0x89,0x8a,0x8b,0xc6,0xc7,0xf6,0xf7].includes(op));
+}
+
+/** Compile Rust-preflighted real-mode instructions with optional batch support. */
+export function compileBlock(packet,{batch=false}={}){
   const count=packet[1];
   if(!Number.isInteger(count)||count<1||count>16||packet.length!==2+count*4)throw Error('Invalid JIT plan');
   const body=[1,6,0x7f]; // Parameters: register/flags/IP/scratch addresses. Six i32 locals.
+  let start=0,end=0;
   for(let index=0;index<count;index++){
+    if(index===end){
+      start=index;end=index+1;
+      if(batch)while(end<count&&!memoryOperation(packet[4+end*4]))end++;
+    }
+    const grouped=end-start>1;
     const ip=packet[2+index*4],length=packet[3+index*4],encoded=packet[4+index*4],tail=packet[5+index*4];
     const bytes=[encoded&255,(encoded>>>8)&255,(encoded>>>16)&255,encoded>>>24,tail&255,tail>>>8];
     const [op,m]=bytes, wide=!!(op&1), rm=m&7, r=(m>>3)&7;
@@ -94,6 +107,8 @@ export function compileBlock(packet){
     const rmValue=()=>memory?memoryValue():reg(rm,wide);
     const rmStore=value=>memory?memoryStore(value):put(rm,wide,value);
     const imm=(at,w)=>w?bytes[at]|bytes[at+1]<<8:bytes[at];
+    // The first operation has already advanced IP in the Rust preflight.
+    if(grouped&&index>start)body.push(...get(2),...c(ip+length),0x36,2,0);
     body.push(...set(7,load(1,0,2)),...set(9,c(0)));
     if(op<=0x3d&&(op&7)<=5){
       const kind=op>>3, direct=(op&7)>=4, dst=direct?0:op&2?r:rm;
@@ -158,15 +173,27 @@ export function compileBlock(packet){
       const displacement=(op===0xe8||op===0xe9)?((imm(1,true)<<16)>>16):((bytes[1]<<24)>>24);
       body.push(...get(9),0x04,0x40,...get(2),...c((ip+length+displacement)&65535),0x36,2,0,0x0b);
     }
-    // One host callback per instruction: commit/tick, then guard the next fetch.
-    body.push(...c(index+1),...(op===0xe8||op===0xe9||op===0xeb?c(0):get(9)),0x10,0,0x45,0x04,0x40,0x0f,0x0b);
+    if(grouped&&index+1<end){
+      // Scratch starts with two operand words, then sixteen 24-byte states.
+      // Preserve each low register bank, FLAGS and IP for precise early exits.
+      const offset=8+index*24;
+      body.push(...get(3),...get(0),0xfd,0x00,4,0,0xfd,0x0b,4,...uleb(offset),
+        ...store(3,offset+16,2,load(1,0,2)),
+        ...get(3),...get(2),0x28,2,0,0x36,2,...uleb(offset+20));
+    }
+    if(index+1===end){
+      body.push(...c(index+1),...(op===0xe8||op===0xe9||op===0xeb?c(0):get(9)),
+        0x10,grouped?1:0,0x45,0x04,0x40,0x0f,0x0b);
+    }
   }
   body.push(0x0b);
   const types=[2,0x60,2,0x7f,0x7f,1,0x7f,0x60,4,0x7f,0x7f,0x7f,0x7f,0];
-  const imports=[2,...text('core'),...text('next'),0,0,...text('core'),...text('memory'),2,0,0];
+  const imports=[batch?3:2,...text('core'),...text('next'),0,0,
+    ...(batch?[...text('core'),...text('batch'),0,0]:[]),
+    ...text('core'),...text('memory'),2,0,0];
   return new Uint8Array([0,97,115,109,1,0,0,0,
     ...section(1,types),...section(2,imports),...section(3,[1,1]),
-    ...section(7,[1,...text('run'),0,1]),...section(10,[1,...uleb(body.length),...body])]);
+    ...section(7,[1,...text('run'),0,batch?2:1]),...section(10,[1,...uleb(body.length),...body])]);
 }
 
 // Keep hot block dispatch inside Wasm. The core still guards/ticks every
@@ -195,17 +222,18 @@ export class WasmJit {
   clear(){if(this.pending)this.pending.cancelled=true;this.layout=null;for(let slot=0;slot<CACHE_SIZE;slot++)this.table.set(slot,null);this.cache.clear();this.compiled=0;this.compilationMs=0;this.bytes=0;this.core.jit_clear();}
   stats(){return {mode:this.failed?'interpreter':'jit',compiled:this.compiled,cached:this.cache.size,
     compilationMs:this.compilationMs,generatedBytes:this.bytes,failures:this.failures,
-    offers:this.core.jit_metric(0),instructions:this.core.jit_metric(1),invalidations:this.core.jit_metric(2)};}
+    offers:this.core.jit_metric(0),instructions:this.core.jit_metric(1),invalidations:this.core.jit_metric(2),
+    batchCalls:this.core.jit_metric(3),batchedInstructions:this.core.jit_metric(4)};}
   offer(id){
     const core=this.core,ptr=core.jit_packet()>>>0,length=core.jit_packet_len();
     const packet=new Uint32Array(core.memory.buffer,ptr,length).slice();
     if(packet[0]!==id)throw Error('JIT plan identity mismatch');
     const token={cancelled:false};this.pending=token;
     const started=performance.now();
-    Promise.resolve().then(()=>{if(token.cancelled)return null;const bytes=compileBlock(packet);this.bytes+=bytes.length;return this.compile(bytes);})
+    Promise.resolve().then(()=>{if(token.cancelled)return null;const bytes=compileBlock(packet,{batch:typeof core.jit_batch_next==='function'});this.bytes+=bytes.length;return this.compile(bytes);})
       .then(module=>{
         if(this.pending!==token||token.cancelled)return;
-        const instance=new WebAssembly.Instance(module,{core:{memory:core.memory,next:core.jit_next}});
+        const instance=new WebAssembly.Instance(module,{core:{memory:core.memory,next:core.jit_next,batch:core.jit_batch_next}});
         if(!core.jit_register(id,1))return; // Reset/eviction may invalidate an offer.
         if(this.cache.size>=CACHE_SIZE){const old=this.cache.keys().next().value;this.cache.delete(old);core.jit_register(old,0);}
         this.table.set(id&(CACHE_SIZE-1),instance.exports.run);this.cache.set(id,instance.exports.run);this.compiled++;
