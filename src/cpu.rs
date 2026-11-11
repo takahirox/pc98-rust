@@ -2257,7 +2257,16 @@ impl Cpu {
                     self.branch(self.ip.wrapping_add(d))?;
                 }
             }
-            0xe4..=0xe7 | 0xec..=0xef => {
+            0xe6 | 0xee => {
+                let port = if op == 0xe6 {
+                    u16::from(self.fetch(b)?)
+                } else {
+                    self.r[DX]
+                };
+                self.check_io(b, port, 1)?;
+                self.output_width(b, port, u32::from(self.byte(0)), false);
+            }
+            0xe4 | 0xe5 | 0xe7 | 0xec | 0xed | 0xef => {
                 let w = op & 1 != 0;
                 let p = if op < 0xe8 {
                     self.fetch(b)? as u16
