@@ -152,6 +152,17 @@ impl TimingState {
         self.fetch_word = None;
         self.cache_enabled = cr0 & 0x40000000 == 0;
     }
+    /// Continue a register-only Ap JIT run after its first normal begin.
+    /// Mode, cache enable, REP/fault state and extra execution stay invariant.
+    #[inline(always)]
+    pub(crate) fn begin_jit_register(&mut self, previous_writes: u8) {
+        self.active = true;
+        self.taken = false;
+        self.address_execution = 0;
+        self.penalty = 0;
+        self.fetch_word = None;
+        self.previous_writes = previous_writes;
+    }
     pub fn invalidate(&mut self, address: usize) {
         if !self.cache_populated {
             return;
@@ -319,7 +330,7 @@ impl TimingState {
             let (clocks, approximate) = if profile == Profile::Pc9801Vm {
                 self.v30(i, fault)
             } else {
-                self.i486(i)
+                self.i486(i, self.taken)
             };
             if !fault && clocks == 0 {
                 self.untimed = Some((i.op, i.ext));
@@ -624,7 +635,37 @@ impl TimingState {
             approximate,
         )
     }
-    fn i486(&self, i: Instruction) -> (u32, bool) {
+    /// The guarded real-mode JIT subset has static opcode latency apart from
+    /// branch direction. Resolve both paths from the shared table at decode.
+    pub(crate) fn jit_execution(&self, op: u8, modrm: u8, prefixes: u32) -> [u32; 2] {
+        let instruction = Instruction {
+            op,
+            modrm,
+            prefixes,
+            width: 2,
+            ..Instruction::default()
+        };
+        [false, true].map(|taken| {
+            let (clocks, approximate) = self.i486(instruction, taken);
+            debug_assert!(clocks > 0 && !approximate);
+            clocks
+        })
+    }
+    /// JIT guards exclude faults, REP, firmware and variable-latency opcodes.
+    /// Fetch, operand and address penalties still come from the actual bus.
+    pub(crate) fn finish_jit(&mut self, execution: u32) -> StepTiming {
+        debug_assert!(self.fault_vector.is_none() && self.untimed.is_none());
+        debug_assert_eq!(self.extra_execution, 0);
+        self.active = false;
+        StepTiming {
+            execution: execution + self.address_execution,
+            bus: self.penalty,
+            instructions: 1,
+            approximated: self.approximated,
+            ..StepTiming::default()
+        }
+    }
+    fn i486(&self, i: Instruction, taken: bool) -> (u32, bool) {
         // RV/P table entries group virtual-8086 with real mode. Interrupt
         // entry and I/O retain their separate virtual-mode cases below.
         let protected = i.protected && !i.vm86;
@@ -686,7 +727,7 @@ impl TimingState {
                 }
             }
             0x70..=0x7f => {
-                if self.taken {
+                if taken {
                     3
                 } else {
                     1
@@ -814,28 +855,28 @@ impl TimingState {
             0xdb => 17,
             0xdf => 3,
             0xe0 => {
-                if self.taken {
+                if taken {
                     9
                 } else {
                     8
                 }
             }
             0xe1 => {
-                if self.taken {
+                if taken {
                     9
                 } else {
                     6
                 }
             }
             0xe2 => {
-                if self.taken {
+                if taken {
                     7
                 } else {
                     6
                 }
             }
             0xe3 => {
-                if self.taken {
+                if taken {
                     8
                 } else {
                     5
@@ -957,14 +998,14 @@ impl TimingState {
                     }
                 }
                 0x80..=0x8f => {
-                    if self.taken {
+                    if taken {
                         3
                     } else {
                         1
                     }
                 }
                 0x90..=0x9f => {
-                    if self.taken {
+                    if taken {
                         rm(4, 3)
                     } else {
                         rm(3, 4)
@@ -997,7 +1038,7 @@ impl TimingState {
                         26
                     }
                 }
-                0xb0 | 0xb1 => rm(6, if self.taken { 7 } else { 10 }),
+                0xb0 | 0xb1 => rm(6, if taken { 7 } else { 10 }),
                 0xb2 | 0xb4 | 0xb5 => {
                     if protected {
                         12

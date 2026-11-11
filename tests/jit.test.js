@@ -40,8 +40,8 @@ async function pair(instruction,patch=[],ip=1){
   }
   assert(id,'hot register block was not offered');
   const plan=packet(a);assert.equal(plan[2],ip);
-  const bytes=compileBlock(plan),compiled=await WebAssembly.compile(bytes);
-  const run=new WebAssembly.Instance(compiled,{core:{memory:a.memory,next:a.jit_next}}).exports.run;
+  const bytes=compileBlock(plan,{batch:true}),compiled=await WebAssembly.compile(bytes);
+  const run=new WebAssembly.Instance(compiled,{core:{memory:a.memory,next:a.jit_next,batch:a.jit_batch_next}}).exports.run;
   assert.equal(a.jit_register(id,1),1);assert.deepEqual(state(a),state(b));
   return {a,b,id,plan,run,ip};
 }
@@ -105,6 +105,29 @@ test('deadline/work caps stop at each instruction, including a zero-clock device
   const before=state(p.a);p.a.jit_begin_slice(0,100);assert.equal(p.a.jit_start(p.id),0);assert.equal(p.a.jit_done(),0);
   assert.deepEqual(state(p.a),before);
   p.a.jit_begin_slice(80000,0);assert.equal(p.a.jit_dispatch(1),0);assert.deepEqual(state(p.a),before);
+});
+
+test('a generated register block commits through one callback and stops at every work cap',async()=>{
+  const cases=[Array(14).fill(0x40),[
+    0xb0,0xff,0x04,1,0x14,0,0xb4,0x91,0x9e,0x9f,0x86,0xe0,
+    0xd0,0xd4,0x2c,0x80,0xf5,0x1c,0,0x89,0xc3,0x43,0x87,0xd8,
+  ]];
+  for(const code of cases){
+    const p=await pair(code);
+    assert.equal(p.plan[1],16);
+    for(let cap=1;cap<=16;cap++){
+      const calls=p.a.jit_metric(3),instructions=p.a.jit_metric(4);
+      execute(p,[65530,0,0,0,0,0,0,0],3,cap);
+      assert.equal(p.a.jit_metric(3)-calls,1);
+      assert.equal(p.a.jit_metric(4)-instructions,cap);
+    }
+    for(const core of [p.a,p.b])setState(core,[0,0,0,0,0,0,0,0],2,p.ip);
+    p.a.jit_begin_slice(1,16);assert.equal(p.a.jit_start(p.id),1);
+    p.run(...layout(p.a));
+    const done=p.b.step_scheduler(1,16);
+    assert.equal(p.a.jit_done(),done);
+    assert.deepEqual(state(p.a),state(p.b));
+  }
 });
 
 test('compilation failure keeps executing the interpreter; reset rejects an old offer',async()=>{

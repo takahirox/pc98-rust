@@ -19,6 +19,7 @@ struct Op {
     modrm: u8,
     memory: Option<Memory>,
     register_writes: u8,
+    execution: [u32; 2],
 }
 #[derive(Clone, Copy, Debug)]
 struct Memory {
@@ -142,23 +143,43 @@ struct Probe {
     id: u32,
 }
 
+#[repr(C)]
+#[derive(Default)]
+struct Scratch {
+    operand: [u32; 2],
+    committed: u32,
+    register_writes: [u32; BLOCK],
+}
+const _: () = assert!(std::mem::offset_of!(Scratch, committed) == 8);
+const _: () = assert!(std::mem::offset_of!(Scratch, register_writes) == 12);
+
+#[derive(Clone, Copy)]
+struct ActiveInstruction {
+    id: u32,
+    index: usize,
+    next_ip: u32,
+    register_writes: u8,
+    execution: [u32; 2],
+    write: bool,
+}
+
 /// No generated code or guest bytes leave the owned emulator Worker.
 pub struct Engine {
     probes: Box<[Probe]>,
     plans: Vec<Option<Plan>>,
     serial: u32,
     packet: Vec<u32>,
-    active: Option<(u32, usize, u8, bool)>,
+    active: Option<ActiveInstruction>,
     // Fixed change masks never consume or rewrite this bank snapshot.
     before: [u16; 8],
     operand: Option<(u32, u32)>,
-    scratch: [u32; 2],
+    scratch: Scratch,
     deadline: u64,
     remaining: u32,
     done: u32,
     sample_phase: u32,
-    /// Aggregate observations only: offers, committed JIT units, invalidations.
-    pub counters: [u64; 3],
+    /// Offers, committed units, invalidations, batch calls and batched units.
+    pub counters: [u64; 5],
 }
 impl Default for Engine {
     fn default() -> Self {
@@ -170,12 +191,12 @@ impl Default for Engine {
             active: None,
             before: [0; 8],
             operand: None,
-            scratch: [0; 2],
+            scratch: Scratch::default(),
             deadline: 0,
             remaining: 0,
             done: 0,
             sample_phase: 0,
-            counters: [0; 3],
+            counters: [0; 5],
         }
     }
 }
@@ -354,6 +375,7 @@ fn decode(m: &Machine, ip: u32) -> Option<Op> {
         modrm,
         memory: None,
         register_writes: 0,
+        execution: m.bus.timing.jit_execution(op, modrm, prefix_len),
     };
     result.register_writes = result.register_policy();
     result.memory = memory_spec(result);
@@ -371,7 +393,7 @@ impl Engine {
         self.operand = None;
         self.remaining = 0;
         self.done = 0;
-        self.counters = [0; 3];
+        self.counters = [0; 5];
         self.sample_phase = 0;
         self.packet.clear();
     }
@@ -399,7 +421,7 @@ impl Engine {
         if !plan.ready {
             return 2;
         }
-        u32::from(self.prepare(m, id, 0))
+        u32::from(self.prepare(m, id, 0, None, false))
     }
     pub fn register(&mut self, id: u32, ready: bool) -> bool {
         if let Some(p) = self.plans[id as usize % SLOTS]
@@ -531,9 +553,16 @@ impl Engine {
         if !self.runnable(m) || !self.plan(id).is_some_and(|p| p.ready) {
             return false;
         }
-        self.prepare(m, id, 0)
+        self.prepare(m, id, 0, None, false)
     }
-    fn prepare(&mut self, m: &mut Machine, id: u32, index: usize) -> bool {
+    fn prepare(
+        &mut self,
+        m: &mut Machine,
+        id: u32,
+        index: usize,
+        validated_physical: Option<usize>,
+        batched: bool,
+    ) -> bool {
         let Some(plan) = self.plan(id) else {
             return false;
         };
@@ -560,7 +589,7 @@ impl Engine {
                 return false;
             }
         }
-        let Some(at) = code(m, op.ip, u32::from(op.len)) else {
+        let Some(at) = validated_physical.or_else(|| code(m, op.ip, u32::from(op.len))) else {
             return false;
         };
         if op.branch() && op.opcode != 0xc3 && code(m, op.target(), 1).is_none() {
@@ -606,10 +635,15 @@ impl Engine {
             }
             self.operand = Some((physical, width));
         }
-        if op.register_writes == 0xff {
+        if !batched && op.register_writes == 0xff {
             self.before = m.cpu.r;
         }
-        m.cpu.jit_prepare(&mut m.bus, op, at as u32);
+        if batched {
+            debug_assert!(op.memory.is_none());
+            m.cpu.jit_prepare_register(&mut m.bus, op, at as u32);
+        } else {
+            m.cpu.jit_prepare(&mut m.bus, op, at as u32);
+        }
         if op
             .memory
             .is_some_and(|memory| memory.flags & Memory::READ != 0)
@@ -623,40 +657,65 @@ impl Engine {
                                 .cpu_read(physical.wrapping_add(byte), byte, width, false),
                         ) << (byte * 8);
                 }
-                self.scratch[0] = value;
+                self.scratch.operand[0] = value;
             }
         }
-        self.active = Some((
+        self.active = Some(ActiveInstruction {
             id,
             index,
-            op.register_writes,
-            op.memory
+            next_ip: m.cpu.ip,
+            register_writes: op.register_writes,
+            execution: op.execution,
+            write: op
+                .memory
                 .is_some_and(|memory| memory.flags & Memory::WRITE != 0),
-        ));
+        });
         true
     }
     pub fn scratch_ptr(&mut self) -> *mut u32 {
-        self.scratch.as_mut_ptr()
+        self.scratch.operand.as_mut_ptr()
     }
     /// Commit one translated instruction, tick devices, then guard the next one.
     pub fn next(&mut self, m: &mut Machine, index: usize, taken: bool) -> bool {
-        let Some((id, previous, register_writes, write)) = self.active.take() else {
+        self.next_at(m, index, taken, None, None, false)
+    }
+    #[inline(always)]
+    fn next_at(
+        &mut self,
+        m: &mut Machine,
+        index: usize,
+        taken: bool,
+        validated_physical: Option<usize>,
+        writes: Option<u8>,
+        continuing_batch: bool,
+    ) -> bool {
+        let Some(active) = self.active.take() else {
             return false;
         };
-        if write {
+        if active.write {
             if let Some((physical, width)) = self.operand {
                 for byte in 0..width {
                     m.bus.cpu_write(
                         physical.wrapping_add(byte),
                         byte,
                         width,
-                        (self.scratch[1] >> (byte * 8)) as u8,
+                        (self.scratch.operand[1] >> (byte * 8)) as u8,
                     );
                 }
             }
         }
         m.bus.timing.taken = taken;
-        let timing = m.cpu.jit_finish(&mut m.bus, &self.before, register_writes);
+        let timing = if let Some(writes) = writes {
+            m.cpu
+                .jit_finish_writes(&mut m.bus, writes, active.execution[usize::from(taken)])
+        } else {
+            m.cpu.jit_finish(
+                &mut m.bus,
+                &self.before,
+                active.register_writes,
+                active.execution[usize::from(taken)],
+            )
+        };
         let clocks = m
             .clock_converter
             .advance(m.bus.profile, timing.cpu_cycles());
@@ -664,7 +723,66 @@ impl Engine {
         self.remaining -= 1;
         self.done += 1;
         self.counters[1] += 1;
-        index == previous + 1 && self.runnable(m) && self.prepare(m, id, index)
+        index == active.index + 1
+            && self.runnable(m)
+            && self.prepare(m, active.id, index, validated_physical, continuing_batch)
+    }
+    /// Retire a generated register run at the original instruction boundaries.
+    /// The generated caller restores an early exit by re-executing its committed
+    /// prefix from saved register locals, without repeating any bus activity.
+    /// The supported opcode set preserves IF/mode and has no timing dependency
+    /// on intermediate CL, REP counts or arithmetic flags. Branch direction and
+    /// exact changed-register masks are supplied by the generated run.
+    pub fn next_batch(&mut self, m: &mut Machine, end: usize, taken: bool) -> bool {
+        self.scratch.committed = 0;
+        let Some(active) = self.active else {
+            return false;
+        };
+        let (id, start) = (active.id, active.index);
+        let Some(ops) = self.plan(id).and_then(|plan| plan.ops.get(start..end)) else {
+            return false;
+        };
+        if ops.is_empty() || ops[1..].iter().any(|op| op.memory.is_some()) {
+            return false;
+        }
+        let first_ip = ops[0].ip;
+        let last = ops.last().unwrap();
+        let physical = code(m, first_ip, last.ip + u32::from(last.len) - first_ip);
+        let target = last.branch().then(|| last.target());
+        let unconditional = matches!(last.opcode, 0xe9 | 0xeb);
+        self.counters[3] += 1;
+        for index in start..end {
+            let active = self.active.unwrap();
+            let branch_taken = index + 1 == end && taken;
+            m.cpu.ip = if branch_taken || index + 1 == end && unconditional {
+                target.unwrap_or(active.next_ip)
+            } else {
+                active.next_ip
+            };
+            self.scratch.committed += 1;
+            self.counters[4] += 1;
+            let next_physical = if index + 1 < end {
+                physical.map(|base| base + m.cpu.ip.wrapping_sub(first_ip) as usize)
+            } else {
+                None
+            };
+            let writes = if active.register_writes == 0xff {
+                self.scratch.register_writes[index] as u8
+            } else {
+                active.register_writes
+            };
+            if !self.next_at(
+                m,
+                index + 1,
+                branch_taken,
+                next_physical,
+                Some(writes),
+                index + 1 < end,
+            ) {
+                return false;
+            }
+        }
+        true
     }
     pub fn fallback(&mut self, m: &mut Machine) {
         if self.runnable(m) {
@@ -675,20 +793,8 @@ impl Engine {
     }
 }
 impl Cpu {
-    fn jit_prepare(&mut self, b: &mut Bus, op: Op, physical: u32) {
-        b.timing.begin(self.cr0);
-        b.timing.previous_writes = self.timing_writes;
-        if self.inhibit > 0 {
-            self.inhibit -= 1;
-        }
-        self.flags_upper &= !1;
-        self.instruction_bytes = 0;
-        self.operand32 = false;
-        self.address32 = false;
-        self.lock_prefix = false;
-        self.trap_suppressed = false;
-        // The guard matched the bytes in conventional RAM. Account for each
-        // four-byte fetch beat in order and retain the final byte for timing.
+    #[inline(always)]
+    fn jit_fetch(&mut self, b: &mut Bus, op: Op, physical: u32) {
         let last = physical + u32::from(op.len) - 1;
         for beat in (physical / 4)..=(last / 4) {
             b.timing.memory(
@@ -705,14 +811,41 @@ impl Cpu {
         b.timing.last_byte = op.bytes[usize::from(op.len) - 1];
         self.ip += u32::from(op.len);
         self.instruction_bytes = op.len;
-        let mut instruction =
-            crate::timing::Instruction::new(self, op.opcode, u32::from(op.prefix_len), 0);
-        instruction.modrm = op.modrm;
-        b.timing.instruction = Some(instruction);
+    }
+    fn jit_prepare_register(&mut self, b: &mut Bus, op: Op, physical: u32) {
+        b.timing.begin_jit_register(self.timing_writes);
+        if self.inhibit > 0 {
+            self.inhibit -= 1;
+        }
+        self.jit_fetch(b, op, physical);
+        // Successful opcode latency was resolved once when decoding the plan.
+        self.retired += 1;
+    }
+    fn jit_prepare(&mut self, b: &mut Bus, op: Op, physical: u32) {
+        b.timing.begin(self.cr0);
+        b.timing.previous_writes = self.timing_writes;
+        if self.inhibit > 0 {
+            self.inhibit -= 1;
+        }
+        self.flags_upper &= !1;
+        self.instruction_bytes = 0;
+        self.operand32 = false;
+        self.address32 = false;
+        self.lock_prefix = false;
+        self.trap_suppressed = false;
+        // The guard matched the bytes in conventional RAM. Account for each
+        // four-byte fetch beat in order and retain the final byte for timing.
+        self.jit_fetch(b, op, physical);
         if op
             .memory
             .is_some_and(|memory| memory.flags & Memory::ADDRESS != 0)
         {
+            // Address timing also distinguishes immediate-plus-displacement
+            // forms. The remaining instruction metadata is already decoded.
+            b.timing.instruction = Some(crate::timing::Instruction {
+                op: op.opcode,
+                ..crate::timing::Instruction::default()
+            });
             b.timing.address(b.profile, false, op.modrm, None);
         }
         self.retired += 1;
@@ -722,13 +855,24 @@ impl Cpu {
         b: &mut Bus,
         before: &[u16; 8],
         register_writes: u8,
+        execution: u32,
     ) -> crate::timing::StepTiming {
-        let timing = b.timing.finish(b.profile, false, 0);
-        self.timing_writes = if register_writes == 0xff {
+        let writes = if register_writes == 0xff {
             changed_registers(before, &self.upper, &self.r, &self.upper)
         } else {
             register_writes
         };
+        self.jit_finish_writes(b, writes, execution)
+    }
+    #[inline(always)]
+    fn jit_finish_writes(
+        &mut self,
+        b: &mut Bus,
+        writes: u8,
+        execution: u32,
+    ) -> crate::timing::StepTiming {
+        let timing = b.timing.finish_jit(execution);
+        self.timing_writes = writes;
         self.last_timing = timing;
         self.cycles += u64::from(timing.cpu_cycles());
         self.completed_instructions += u64::from(timing.instructions);
@@ -760,6 +904,89 @@ mod tests {
         assert_ne!(id, 0);
         assert!(e.register(id, true));
         id
+    }
+    #[test]
+    fn batch_retirement_preserves_deadlines_and_interrupt_boundaries() {
+        for scenario in 0..7 {
+            let mut actual = machine();
+            let mut reference = machine();
+            let mut speculative = machine();
+            if scenario == 6 {
+                for m in [&mut actual, &mut reference, &mut speculative] {
+                    m.bus.mem[0x103] = 0x10;
+                }
+            }
+            let mut engine = Engine::default();
+            let id = offered(&mut actual, &mut engine);
+            offered(&mut reference, &mut Engine::default());
+            offered(&mut speculative, &mut Engine::default());
+            for m in [&mut actual, &mut reference, &mut speculative] {
+                m.cpu.ip = 0x100;
+            }
+            // Produce the same timing masks and final registers as generated Wasm.
+            for writes in &mut engine.scratch.register_writes[..3] {
+                let before = speculative.cpu.r;
+                speculative.step(1);
+                *writes = u32::from(changed_registers(
+                    &before,
+                    &speculative.cpu.upper,
+                    &speculative.cpu.r,
+                    &speculative.cpu.upper,
+                ));
+            }
+            let (clocks, cap) = match scenario {
+                0 => (80_000, 3),
+                1 => (80_000, 1),
+                2 => (1, 3),
+                _ => (80_000, 3),
+            };
+            for m in [&mut actual, &mut reference] {
+                if scenario == 3 {
+                    m.cpu.flags |= IF;
+                    m.cpu.inhibit = 1;
+                    m.bus.pics[0].mask &= !2;
+                    m.bus.key(0x1d, true);
+                } else if scenario == 4 {
+                    m.cpu.flags |= IF;
+                    m.bus.pics[0].mask &= !1;
+                    m.bus.interval = Some(crate::firmware::IntervalTimer {
+                        deadline: m.bus.cycles + 1,
+                        segment: 0,
+                        offset: 0,
+                    });
+                } else if scenario >= 5 {
+                    m.cpu.segment_caches[CS] = Some(SegmentCache {
+                        base: 0,
+                        limit: if scenario == 5 { 0x101 } else { 0x104 },
+                        access: 0x9b,
+                        attributes: 0,
+                    });
+                }
+            }
+            engine.begin_slice(&actual, clocks, cap);
+            assert!(engine.start(&mut actual, id));
+            actual.cpu.r = speculative.cpu.r;
+            actual.cpu.flags = speculative.cpu.flags | (actual.cpu.flags & IF);
+            actual.cpu.ip = speculative.cpu.ip;
+            assert!(!engine.next_batch(&mut actual, 3, true));
+            let done = engine.done();
+            assert!(done > 0);
+            if matches!(scenario, 3 | 4) {
+                assert_eq!(done, 1);
+            } else if scenario >= 5 {
+                assert_eq!(done, 2);
+            }
+            reference.step(done);
+            assert_eq!(engine.scratch.committed, done);
+            // The generated caller restores the low registers and flags.
+            // Check all other CPU state and the complete bus retirement here.
+            actual.cpu.r = reference.cpu.r;
+            actual.cpu.flags = reference.cpu.flags;
+            assert_eq!(format!("{:?}", actual.cpu), format!("{:?}", reference.cpu));
+            assert_eq!(actual.bus.cycles, reference.bus.cycles);
+            assert_eq!(actual.bus.mem, reference.bus.mem);
+            assert_eq!(engine.counters[4], u64::from(done));
+        }
     }
     #[test]
     fn hot_unsupported_boundary_does_not_skip_a_warm_supported_successor() {
@@ -836,7 +1063,7 @@ mod tests {
             b.cpu.ip = 0x100;
             e.begin_slice(&a, 80_000, 1);
             assert!(e.start(&mut a, id));
-            a.cpu.r[AX] = e.scratch[0] as u16;
+            a.cpu.r[AX] = e.scratch.operand[0] as u16;
             assert!(!e.next(&mut a, 1, false));
             b.step(1);
             assert_eq!(format!("{:?}", a.cpu), format!("{:?}", b.cpu));
