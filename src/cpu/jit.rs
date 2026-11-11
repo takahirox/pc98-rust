@@ -19,6 +19,7 @@ struct Op {
     modrm: u8,
     memory: Option<Memory>,
     register_writes: u8,
+    execution: [u32; 2],
 }
 #[derive(Clone, Copy, Debug)]
 struct Memory {
@@ -152,13 +153,23 @@ struct Scratch {
 const _: () = assert!(std::mem::offset_of!(Scratch, committed) == 8);
 const _: () = assert!(std::mem::offset_of!(Scratch, register_writes) == 12);
 
+#[derive(Clone, Copy)]
+struct ActiveInstruction {
+    id: u32,
+    index: usize,
+    next_ip: u32,
+    register_writes: u8,
+    execution: [u32; 2],
+    write: bool,
+}
+
 /// No generated code or guest bytes leave the owned emulator Worker.
 pub struct Engine {
     probes: Box<[Probe]>,
     plans: Vec<Option<Plan>>,
     serial: u32,
     packet: Vec<u32>,
-    active: Option<(u32, usize, u8, bool)>,
+    active: Option<ActiveInstruction>,
     // Fixed change masks never consume or rewrite this bank snapshot.
     before: [u16; 8],
     operand: Option<(u32, u32)>,
@@ -364,6 +375,7 @@ fn decode(m: &Machine, ip: u32) -> Option<Op> {
         modrm,
         memory: None,
         register_writes: 0,
+        execution: m.bus.timing.jit_execution(op, modrm, prefix_len),
     };
     result.register_writes = result.register_policy();
     result.memory = memory_spec(result);
@@ -626,7 +638,12 @@ impl Engine {
         if !batched && op.register_writes == 0xff {
             self.before = m.cpu.r;
         }
-        m.cpu.jit_prepare(&mut m.bus, op, at as u32);
+        if batched {
+            debug_assert!(op.memory.is_none());
+            m.cpu.jit_prepare_register(&mut m.bus, op, at as u32);
+        } else {
+            m.cpu.jit_prepare(&mut m.bus, op, at as u32);
+        }
         if op
             .memory
             .is_some_and(|memory| memory.flags & Memory::READ != 0)
@@ -643,13 +660,16 @@ impl Engine {
                 self.scratch.operand[0] = value;
             }
         }
-        self.active = Some((
+        self.active = Some(ActiveInstruction {
             id,
             index,
-            op.register_writes,
-            op.memory
+            next_ip: m.cpu.ip,
+            register_writes: op.register_writes,
+            execution: op.execution,
+            write: op
+                .memory
                 .is_some_and(|memory| memory.flags & Memory::WRITE != 0),
-        ));
+        });
         true
     }
     pub fn scratch_ptr(&mut self) -> *mut u32 {
@@ -669,10 +689,10 @@ impl Engine {
         writes: Option<u8>,
         continuing_batch: bool,
     ) -> bool {
-        let Some((id, previous, register_writes, write)) = self.active.take() else {
+        let Some(active) = self.active.take() else {
             return false;
         };
-        if write {
+        if active.write {
             if let Some((physical, width)) = self.operand {
                 for byte in 0..width {
                     m.bus.cpu_write(
@@ -686,9 +706,15 @@ impl Engine {
         }
         m.bus.timing.taken = taken;
         let timing = if let Some(writes) = writes {
-            m.cpu.jit_finish_writes(&mut m.bus, writes)
+            m.cpu
+                .jit_finish_writes(&mut m.bus, writes, active.execution[usize::from(taken)])
         } else {
-            m.cpu.jit_finish(&mut m.bus, &self.before, register_writes)
+            m.cpu.jit_finish(
+                &mut m.bus,
+                &self.before,
+                active.register_writes,
+                active.execution[usize::from(taken)],
+            )
         };
         let clocks = m
             .clock_converter
@@ -697,9 +723,9 @@ impl Engine {
         self.remaining -= 1;
         self.done += 1;
         self.counters[1] += 1;
-        index == previous + 1
+        index == active.index + 1
             && self.runnable(m)
-            && self.prepare(m, id, index, validated_physical, continuing_batch)
+            && self.prepare(m, active.id, index, validated_physical, continuing_batch)
     }
     /// Retire a generated register run at the original instruction boundaries.
     /// The generated caller restores an early exit by re-executing its committed
@@ -709,9 +735,10 @@ impl Engine {
     /// exact changed-register masks are supplied by the generated run.
     pub fn next_batch(&mut self, m: &mut Machine, end: usize, taken: bool) -> bool {
         self.scratch.committed = 0;
-        let Some((id, start, _, _)) = self.active else {
+        let Some(active) = self.active else {
             return false;
         };
+        let (id, start) = (active.id, active.index);
         let Some(ops) = self.plan(id).and_then(|plan| plan.ops.get(start..end)) else {
             return false;
         };
@@ -721,14 +748,16 @@ impl Engine {
         let first_ip = ops[0].ip;
         let last = ops.last().unwrap();
         let physical = code(m, first_ip, last.ip + u32::from(last.len) - first_ip);
+        let target = last.branch().then(|| last.target());
+        let unconditional = matches!(last.opcode, 0xe9 | 0xeb);
         self.counters[3] += 1;
         for index in start..end {
-            let op = self.plan(id).unwrap().ops[index];
+            let active = self.active.unwrap();
             let branch_taken = index + 1 == end && taken;
-            m.cpu.ip = if branch_taken || matches!(op.opcode, 0xe9 | 0xeb) {
-                op.target()
+            m.cpu.ip = if branch_taken || index + 1 == end && unconditional {
+                target.unwrap_or(active.next_ip)
             } else {
-                op.ip + u32::from(op.len)
+                active.next_ip
             };
             self.scratch.committed += 1;
             self.counters[4] += 1;
@@ -737,7 +766,11 @@ impl Engine {
             } else {
                 None
             };
-            let writes = self.scratch.register_writes[index] as u8;
+            let writes = if active.register_writes == 0xff {
+                self.scratch.register_writes[index] as u8
+            } else {
+                active.register_writes
+            };
             if !self.next_at(
                 m,
                 index + 1,
@@ -760,20 +793,8 @@ impl Engine {
     }
 }
 impl Cpu {
-    fn jit_prepare(&mut self, b: &mut Bus, op: Op, physical: u32) {
-        b.timing.begin(self.cr0);
-        b.timing.previous_writes = self.timing_writes;
-        if self.inhibit > 0 {
-            self.inhibit -= 1;
-        }
-        self.flags_upper &= !1;
-        self.instruction_bytes = 0;
-        self.operand32 = false;
-        self.address32 = false;
-        self.lock_prefix = false;
-        self.trap_suppressed = false;
-        // The guard matched the bytes in conventional RAM. Account for each
-        // four-byte fetch beat in order and retain the final byte for timing.
+    #[inline(always)]
+    fn jit_fetch(&mut self, b: &mut Bus, op: Op, physical: u32) {
         let last = physical + u32::from(op.len) - 1;
         for beat in (physical / 4)..=(last / 4) {
             b.timing.memory(
@@ -790,14 +811,41 @@ impl Cpu {
         b.timing.last_byte = op.bytes[usize::from(op.len) - 1];
         self.ip += u32::from(op.len);
         self.instruction_bytes = op.len;
-        let mut instruction =
-            crate::timing::Instruction::new(self, op.opcode, u32::from(op.prefix_len), 0);
-        instruction.modrm = op.modrm;
-        b.timing.instruction = Some(instruction);
+    }
+    fn jit_prepare_register(&mut self, b: &mut Bus, op: Op, physical: u32) {
+        b.timing.begin_jit_register(self.timing_writes);
+        if self.inhibit > 0 {
+            self.inhibit -= 1;
+        }
+        self.jit_fetch(b, op, physical);
+        // Successful opcode latency was resolved once when decoding the plan.
+        self.retired += 1;
+    }
+    fn jit_prepare(&mut self, b: &mut Bus, op: Op, physical: u32) {
+        b.timing.begin(self.cr0);
+        b.timing.previous_writes = self.timing_writes;
+        if self.inhibit > 0 {
+            self.inhibit -= 1;
+        }
+        self.flags_upper &= !1;
+        self.instruction_bytes = 0;
+        self.operand32 = false;
+        self.address32 = false;
+        self.lock_prefix = false;
+        self.trap_suppressed = false;
+        // The guard matched the bytes in conventional RAM. Account for each
+        // four-byte fetch beat in order and retain the final byte for timing.
+        self.jit_fetch(b, op, physical);
         if op
             .memory
             .is_some_and(|memory| memory.flags & Memory::ADDRESS != 0)
         {
+            // Address timing also distinguishes immediate-plus-displacement
+            // forms. The remaining instruction metadata is already decoded.
+            b.timing.instruction = Some(crate::timing::Instruction {
+                op: op.opcode,
+                ..crate::timing::Instruction::default()
+            });
             b.timing.address(b.profile, false, op.modrm, None);
         }
         self.retired += 1;
@@ -807,17 +855,23 @@ impl Cpu {
         b: &mut Bus,
         before: &[u16; 8],
         register_writes: u8,
+        execution: u32,
     ) -> crate::timing::StepTiming {
         let writes = if register_writes == 0xff {
             changed_registers(before, &self.upper, &self.r, &self.upper)
         } else {
             register_writes
         };
-        self.jit_finish_writes(b, writes)
+        self.jit_finish_writes(b, writes, execution)
     }
     #[inline(always)]
-    fn jit_finish_writes(&mut self, b: &mut Bus, writes: u8) -> crate::timing::StepTiming {
-        let timing = b.timing.finish(b.profile, false, 0);
+    fn jit_finish_writes(
+        &mut self,
+        b: &mut Bus,
+        writes: u8,
+        execution: u32,
+    ) -> crate::timing::StepTiming {
+        let timing = b.timing.finish_jit(execution);
         self.timing_writes = writes;
         self.last_timing = timing;
         self.cycles += u64::from(timing.cpu_cycles());

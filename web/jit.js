@@ -10,6 +10,7 @@ const add=(a,b)=>bin(0x6a,a,b), sub=(a,b)=>bin(0x6b,a,b), shl=(a,n)=>bin(0x74,a,
 const nz=a=>[...a,0x45,0x45], not=a=>[...a,0x45];
 const load=(p,offset,width)=>[...get(p),width===1?0x2d:0x2f,width===1?0:1,...uleb(offset)];
 const store=(p,offset,width,value)=>[...get(p),...value,width===1?0x3a:0x3b,width===1?0:1,...uleb(offset)];
+const storeFlags=value=>[...get(1),...value,0x22,7,0x3b,1,0];
 const memoryValue=()=>[...get(3),0x28,2,0];
 const memoryStore=value=>[...get(3),...value,0x36,2,4];
 const reg=(r,wide)=>load(0,wide?r*2:(r&3)*2+(r>>2),wide?2:1);
@@ -29,7 +30,7 @@ function condition(code){
   }
   return code&1?not(value):nz(value);
 }
-function arithmetic(kind,wide,dst,a,b,{write=true,increment=false,memory=false}={}){
+function arithmetic(kind,wide,dst,a,b,{write=true,increment=false,memory=false,writeFlags=storeFlags}={}){
   const mask=wide?65535:255, sign=wide?32768:128;
   const carry=kind===2||kind===3?flag(1):c(0);
   let value;
@@ -52,11 +53,11 @@ function arithmetic(kind,wide,dst,a,b,{write=true,increment=false,memory=false}=
     const signs=xor(get(4),get(5));
     parts.push(shl(nz(and(and(subtract?signs:xor(signs,c(-1)),xor(get(4),get(6))),c(sign))),11));
   }
-  out.push(...store(1,0,2,parts.reduce(or)));
+  out.push(...writeFlags(parts.reduce(or)));
   return out;
 }
 
-function singleShift(kind,wide,dst){
+function singleShift(kind,wide,dst,writeFlags=storeFlags){
   const mask=wide?65535:255,sign=wide?32768:128;
   const out=[...set(4,reg(dst,wide)),...set(8,nz(and(get(4),c([0,2,4,6].includes(kind)?sign:1))))];
   let value;
@@ -77,7 +78,7 @@ function singleShift(kind,wide,dst){
   const parts=[and(get(7),c(~(0x801|(kind>=4?0xc4:0)))),get(8),shl(overflow,11)];
   if(kind>=4)parts.push(shl(not(get(6)),6),shl(nz(and(get(6),c(sign))),7),
     shl(not(and([...and(get(6),c(255)),0x69],c(1))),2));
-  out.push(...store(1,0,2,parts.reduce(or)));
+  out.push(...writeFlags(parts.reduce(or)));
   return out;
 }
 
@@ -136,24 +137,30 @@ export function compileBlock(packet,{batch=false}={}){
     const rmValue=()=>memory?memoryValue():reg(rm,wide);
     const rmStore=value=>memory?memoryStore(value):put(rm,wide,value);
     const imm=(at,w)=>w?bytes[at]|bytes[at+1]<<8:bytes[at];
+    const writeFlags=grouped?value=>set(7,value):storeFlags;
     if(grouped&&index===start)body.push(...set(10,[...get(0),0xfd,0x00,4,0]),...set(11,load(1,0,2)));
     const destinations=[];
+    let fixedWrites;
+    let recordWrites=false;
     if(grouped){
       const writes=writtenRegisters(op,m);
-      for(let r=0;r<8;r++)if(writes&(1<<r))destinations.push(r);
+      recordWrites=!!writes&&!(op>=0x40&&op<=0x57||op>=0xe0&&op<=0xe2||op===0x90||op===0xc3||op===0xe8);
+      if(!writes||op>=0x40&&op<=0x57||op>=0xe0&&op<=0xe2
+          ||(op===0xf6||op===0xf7)&&r===2)fixedWrites=writes;
+      else if(op===0x90||(op>=0x86&&op<=0x8b)&&m>=0xc0&&rm===r)fixedWrites=0;
+      else for(let r=0;r<8;r++)if(writes&(1<<r))destinations.push(r);
       for(let n=0;n<destinations.length;n++)body.push(...set(13+n,reg(destinations[n],true)));
     }
-    // The first operation has already advanced IP in the Rust preflight.
-    if(grouped&&index>start)body.push(...get(2),...c(ip+length),0x36,2,0);
     const operationStart=body.length;
-    body.push(...set(7,load(1,0,2)),...set(9,c(0)));
+    if(!grouped||index===start)body.push(...set(7,load(1,0,2)));
+    if(!grouped||index===start)body.push(...set(9,c(0)));
     if(op<=0x3d&&(op&7)<=5){
       const kind=op>>3, direct=(op&7)>=4, dst=direct?0:op&2?r:rm;
       const memDst=!direct&&!(op&2)&&memory;
       body.push(...arithmetic(kind,wide,dst,memDst?rmValue():reg(dst,wide),
-        direct?c(imm(1,wide)):op&2?rmValue():reg(r,wide),{write:kind!==7,memory:memDst}));
+        direct?c(imm(1,wide)):op&2?rmValue():reg(r,wide),{write:kind!==7,memory:memDst,writeFlags}));
     }else if(op>=0x40&&op<=0x4f){
-      body.push(...arithmetic(op&8?5:0,true,op&7,reg(op&7,true),c(1),{increment:true}));
+      body.push(...arithmetic(op&8?5:0,true,op&7,reg(op&7,true),c(1),{increment:true,writeFlags}));
     }else if(op>=0x50&&op<=0x57){
       body.push(...memoryStore(reg(op&7,true)),...put(4,true,sub(reg(4,true),c(2))));
     }else if(op>=0x58&&op<=0x5f){
@@ -162,9 +169,9 @@ export function compileBlock(packet,{batch=false}={}){
       body.push(...set(9,condition(op&15)));
     }else if([0x80,0x81,0x83].includes(op)){
       const value=op===0x83?(bytes[2+displacement]<<24)>>24:imm(2+displacement,wide);
-      body.push(...arithmetic(r,wide,rm,rmValue(),c(value),{write:r!==7,memory}));
+      body.push(...arithmetic(r,wide,rm,rmValue(),c(value),{write:r!==7,memory,writeFlags}));
     }else if(op===0x84||op===0x85){
-      body.push(...arithmetic(4,wide,rm,rmValue(),reg(r,wide),{write:false}));
+      body.push(...arithmetic(4,wide,rm,rmValue(),reg(r,wide),{write:false,writeFlags}));
     }else if(op===0x86||op===0x87){
       body.push(...set(4,rmValue()),...rmStore(reg(r,wide)),...put(r,wide,get(4)));
     }else if(op>=0x88&&op<=0x8b){
@@ -172,13 +179,13 @@ export function compileBlock(packet,{batch=false}={}){
     }else if(op>=0x90&&op<=0x97){
       body.push(...set(4,reg(0,true)),...put(0,true,reg(op&7,true)),...put(op&7,true,get(4)));
     }else if(op===0x9e){
-      body.push(...store(1,0,2,or(or(and(get(7),c(~0xd5)),and(reg(4,false),c(0xd5))),c(2))));
+      body.push(...writeFlags(or(or(and(get(7),c(~0xd5)),and(reg(4,false),c(0xd5))),c(2))));
     }else if(op===0x9f){
       body.push(...put(4,false,get(7)));
     }else if(op>=0xa0&&op<=0xa3){
       body.push(...(op&2?memoryStore(reg(0,wide)):put(0,wide,memoryValue())));
     }else if(op===0xa8||op===0xa9){
-      body.push(...arithmetic(4,wide,0,reg(0,wide),c(imm(1,wide)),{write:false}));
+      body.push(...arithmetic(4,wide,0,reg(0,wide),c(imm(1,wide)),{write:false,writeFlags}));
     }else if(op>=0xb0&&op<=0xbf){
       const word=op>=0xb8;body.push(...put(op&7,word,c(imm(1,word))));
     }else if(op===0xc3){
@@ -187,7 +194,7 @@ export function compileBlock(packet,{batch=false}={}){
       body.push(...rmStore(c(imm(2+displacement,wide))));
     }else if(op===0xd0||op===0xd1){
       if(memory)throw Error('Unsupported JIT memory shift');
-      body.push(...singleShift(r,wide,rm));
+      body.push(...singleShift(r,wide,rm,writeFlags));
     }else if(op>=0xe0&&op<=0xe3){
       if(op!==0xe3)body.push(...put(1,true,sub(reg(1,true),c(1))));
       let take=op===0xe3?not(reg(1,true)):nz(reg(1,true));
@@ -197,32 +204,33 @@ export function compileBlock(packet,{batch=false}={}){
       if(op===0xe8)body.push(...memoryStore(c((ip+length)&65535)),...put(4,true,sub(reg(4,true),c(2))));
       body.push(...set(9,c(1)));
     }else if(op===0xf6||op===0xf7){
-      if(r===0)body.push(...arithmetic(4,wide,rm,rmValue(),c(imm(2+displacement,wide)),{write:false}));
+      if(r===0)body.push(...arithmetic(4,wide,rm,rmValue(),c(imm(2+displacement,wide)),{write:false,writeFlags}));
       else if(r===2)body.push(...rmStore(xor(rmValue(),c(-1))));
-      else if(r===3)body.push(...arithmetic(5,wide,rm,c(0),rmValue(),{memory}));
+      else if(r===3)body.push(...arithmetic(5,wide,rm,c(0),rmValue(),{memory,writeFlags}));
       else throw Error('Unsupported JIT group');
     }else if([0xf5,0xf8,0xf9,0xfc,0xfd].includes(op)){
       const bits=op>=0xfc?1024:1;
-      body.push(...store(1,0,2,op===0xf5?xor(get(7),c(1)):op===0xf8||op===0xfc?and(get(7),c(~bits)):or(get(7),c(bits))));
+      body.push(...writeFlags(op===0xf5?xor(get(7),c(1)):op===0xf8||op===0xfc?and(get(7),c(~bits)):or(get(7),c(bits))));
     }else throw Error('Unsupported JIT opcode');
     const branch=op>=0x70&&op<=0x7f||op>=0xe0&&op<=0xe3||op===0xe8||op===0xe9||op===0xeb;
-    if(branch){
+    if(branch&&!grouped){
       const displacement=(op===0xe8||op===0xe9)?((imm(1,true)<<16)>>16):((bytes[1]<<24)>>24);
       body.push(...get(9),0x04,0x40,...get(2),...c((ip+length+displacement)&65535),0x36,2,0,0x0b);
     }
     operations[index]={ip,length,bytes:body.slice(operationStart)};
-    if(grouped){
+    if(grouped&&recordWrites){
       // Record only the exact changed-register mask required by guest timing.
       const changes=destinations.map((r,n)=>shl(nz(xor(reg(r,true),get(13+n))),r));
-      body.push(...get(3),...(changes.length?changes.reduce(or):c(0)),0x36,2,...uleb(12+index*4));
+      const writes=fixedWrites===undefined?changes.reduce(or):c(fixedWrites);
+      body.push(...get(3),...writes,0x36,2,...uleb(12+index*4));
     }
     if(index+1===end){
       const take=op===0xe8||op===0xe9||op===0xeb?c(0):get(9);
       if(grouped){
-        body.push(...set(8,[...c(end),...take,0x10,1]),
+        body.push(...storeFlags(get(7)),...set(8,[...c(end),...take,0x10,1]),
           ...set(12,[...get(3),0x28,2,8]),
           ...get(12),...c(end-start),0x49,0x04,0x40,
-          ...get(0),...get(10),0xfd,0x0b,4,0,...store(1,0,2,get(11)));
+          ...get(0),...get(10),0xfd,0x0b,4,0,...storeFlags(get(11)));
         // Early exits are uncommon. Re-execute only committed register
         // semantics, using the original prepared operand for the first op.
         // This path makes no callbacks and repeats no device access.
@@ -231,7 +239,7 @@ export function compileBlock(packet,{batch=false}={}){
           body.push(...get(12),...c(replay-start),0x4b,0x04,0x40,
             ...get(2),...c(saved.ip+saved.length),0x36,2,0,...saved.bytes,0x0b);
         }
-        body.push(0x0f,0x0b,...get(8),0x45,0x04,0x40,0x0f,0x0b);
+        body.push(...storeFlags(get(7)),0x0f,0x0b,...get(8),0x45,0x04,0x40,0x0f,0x0b);
       }else body.push(...c(end),...take,0x10,0,0x45,0x04,0x40,0x0f,0x0b);
     }
   }
