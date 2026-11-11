@@ -495,6 +495,42 @@ fn real_iret_wraps_between_stack_operands_but_not_inside_them() {
 }
 
 #[test]
+fn real_interrupt_frame_preserves_word_accesses_across_the_a20_boundary() {
+    for a20 in [false, true] {
+        let run = |attributes| {
+            let (mut c, mut b) = cpu(&[0xcd, 0x30]);
+            relocated(&mut c, &mut b, &[0x30]);
+            c.flags = 2 | IF | CF;
+            c.r[SP] = 0x9001;
+            c.segment_caches[SS] = Some(SegmentCache {
+                base: 0xf7004,
+                attributes,
+                ..c.segment_cache(SS)
+            });
+            b.a20 = a20;
+            // The first frame byte lands in ROM. Supply the return IP's low
+            // byte there so IRET can complete the round trip.
+            b.mem[0xfffff] = 2;
+            let (entry, result) = c.step_timed(&mut b);
+            result.unwrap();
+            assert_eq!((c.s[CS], c.ip, c.r[SP]), (0x300, 0x400, 0x8ffb));
+            let start = if a20 { 0x100000 } else { 0 };
+            assert_eq!(&b.mem[start..start + 5], &[0x10, 0, 0, 3, 2]);
+            let (ret, result) = c.step_timed(&mut b);
+            result.unwrap();
+            assert_eq!(
+                (c.s[CS], c.ip, c.r[SP], c.flags),
+                (0, 0x1002, 0x9001, 0x203)
+            );
+            (entry, ret)
+        };
+        // A big stack exercises the original word-by-word path with the
+        // same physical addresses, frame bytes and bus timing.
+        assert_eq!(run(0), run(0x40));
+    }
+}
+
+#[test]
 fn hardware_irq_and_fault_entry_clear_ac() {
     let (mut c, mut b) = cpu(&[0x90]);
     b.mem[9 * 4..9 * 4 + 4].copy_from_slice(&[0, 0x30, 0, 0]);
