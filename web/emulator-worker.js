@@ -3,14 +3,17 @@
 // stopped and fault events never resolve requests. frameAck returns ownership
 // of the sole pixel buffer; audio uses its own credit-based MessagePort.
 let core, jit, jitUnavailable = false, running = false, manual = false, busy = false, timer;
-let generation = 0, frameBuffer = new ArrayBuffer(640 * 400 * 4), frameDue = 0, frameRequested = false;
+let generation = 0, frameBuffer = new ArrayBuffer(640 * 400 * 4), frameRequested = false;
+let lastFrameCycles, previewDue = 0, captureDue = 0, captureTimer;
 let videoPort, snapshotBuffer = null, videoEpoch = 0, frameSequence = 0;
 let inFlightSequence = 0;
 const videoStats = {snapshots:0, coalesced:0, snapshotMs:0, copyMs:0, inlineRasterMs:0, guestSliceMs:0, guestSlices:0, maxPreparationMs:0};
 function invalidateVideo() {
   ++videoEpoch;
   postMessage({event:'videoEpoch',videoEpoch});
-  frameDue = 0;
+  lastFrameCycles = undefined;
+  previewDue = captureDue = 0;
+  clearTimeout(captureTimer);
 }
 let port, audioEnabled = false, audioState, audioEpoch = 0, flushWaiter;
 const audioBuffers = Array.from({length: 6}, () => new ArrayBuffer(1024 * 4));
@@ -97,6 +100,9 @@ function present() {
   }
   frameRequested = false;
   const started = performance.now(), captured = performance.timeOrigin+started, sequence = ++frameSequence;
+  const guestCycles = core.metric(5);
+  lastFrameCycles = guestCycles;
+  previewDue = started + 133;
   if (videoPort) {
     const ptr = core.video_snapshot() >>> 0, length = core.video_snapshot_len();
     const copied = performance.now();
@@ -108,7 +114,7 @@ function present() {
     videoStats.snapshots++;
     inFlightSequence = sequence;
     videoPort.postMessage({buffer:snapshotBuffer,length,sequence,videoEpoch,captured,
-      guestCycles:core.metric(5),...state()},[snapshotBuffer]);
+      guestCycles,...state()},[snapshotBuffer]);
     snapshotBuffer = null;
   } else {
     const ptr = core.frame() >>> 0; // May grow memory: obtain the view afterwards.
@@ -119,13 +125,14 @@ function present() {
     videoStats.maxPreparationMs = Math.max(videoStats.maxPreparationMs,performance.now()-started);
     videoStats.snapshots++;
     postMessage({event:'frame', buffer:frameBuffer,sequence,videoEpoch,captured,
-      guestCycles:core.metric(5),...state()}, [frameBuffer]);
+      guestCycles,...state()}, [frameBuffer]);
     frameBuffer = null;
   }
 }
 function presentDue() {
+  if (!frameRequested && core.metric(5) === lastFrameCycles) return;
   const now = performance.now();
-  if (now < frameDue) return;
+  if (now < captureDue) return;
   // Snapshot capture is cheap, but launching independent rasterization still
   // competes for the host's CPU budget. Refill PCM before either rendering
   // path, especially during guest scene changes. A wall-clock preview deadline
@@ -142,10 +149,25 @@ function presentDue() {
     // credits can leave a positive reserve estimate even while it emits silence.
     // Bound preview refresh during that condition; recovered streams still wait
     // for their normal reserve, regardless of historical underrun totals.
-    const starvedPreview = sinkStats.audioEpoch === audioEpoch && sinkStats.underflowRun > 0 && now >= frameDue+100;
+    const starvedPreview = sinkStats.audioEpoch === audioEpoch && sinkStats.underflowRun > 0 && now >= previewDue;
     if (reserve < (audioBuffers.length ? 2880 : 2400) && !starvedPreview) return;
   }
-  present(); frameDue = performance.now()+33;
+  present();
+}
+// The returned credit supplies the next capture time on the shared host
+// clock. It can wake video between guest slices without advancing the guest.
+function refreshAfterCredit(captureAt) {
+  clearTimeout(captureTimer);
+  if (running && !manual && !busy && !transaction) {
+    const now = performance.now();
+    captureDue = Number.isFinite(captureAt) ? Math.min(captureAt-performance.timeOrigin,now+1000/60) : now;
+    const delay = captureDue-now;
+    if (delay > 0) {
+      captureTimer = setTimeout(() => {
+        if (running && !manual && !busy && !transaction) presentDue();
+      },delay);
+    } else presentDue();
+  } else if (!running && frameRequested) present();
 }
 function deliverAudio() {
   const count = core.audio_len();
@@ -305,7 +327,7 @@ async function command(type, data) {
       // Service its bounded preview deadline on the fresh sink notification,
       // while no Wasm slice is executing, instead of losing that edge at tick().
       const activeStarvation = m.type === 'stats' && m.epoch === audioEpoch && m.stats?.underflowRun > 0
-        && playingAudio() && running && !manual && !busy && !transaction && performance.now() >= frameDue+100;
+        && playingAudio() && running && !manual && !busy && !transaction && performance.now() >= previewDue;
       if (activeStarvation) presentDue();
       if (m.epoch === audioEpoch && playingAudio() && outstandingAudio() < 2880 && audioBuffers.length) schedule(0);
     };
@@ -319,11 +341,7 @@ async function command(type, data) {
       if (videoPort !== connected) return;
       if (!snapshotBuffer && m.sequence === inFlightSequence && m.buffer?.byteLength === 547632) {
         snapshotBuffer = m.buffer;
-        // A credit never runs rasterization or a guest slice synchronously.
-        if (frameRequested) {
-          if (running) schedule(0);
-          else present();
-        }
+        refreshAfterCredit(m.captureAt);
       }
     };
     videoPort.onmessageerror = () => {
@@ -379,7 +397,7 @@ async function command(type, data) {
     if (name === 'hdi_begin' && value) transaction = 'import';
     if (name === 'hdi_commit' && value || name === 'hdi_cancel') transaction = null;
     if (['hdi_begin','hdi_append','hdi_commit'].includes(name) && !value) throw Error(message(2));
-    if (['reset','set_profile','eject'].includes(name)) { frameDue = 0; present(); }
+    if (['reset','set_profile','eject'].includes(name)) present();
     schedule(); return value;
   }
   throw Error(`Unknown Worker command: ${type}`);
@@ -389,10 +407,7 @@ onmessage = ({data:m}) => {
   if (m.type === 'frameAck') {
     if (m.data.byteLength === 640*400*4 && !frameBuffer) {
       frameBuffer = m.data;
-      if (frameRequested) {
-        if (running && playingAudio()) schedule(0);
-        else present();
-      }
+      refreshAfterCredit(m.captureAt);
     }
     return;
   }

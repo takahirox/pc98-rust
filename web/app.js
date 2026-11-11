@@ -6,6 +6,10 @@ let renderWorker, videoEpoch = 0, presentedSequence = 0;
 let rendererStartupMs = 0, rendererFailure = null;
 let renderStats = {}, presentationStats = {frames:0, stale:0, putMs:0, latencyMs:0, maxLatencyMs:0};
 let generation = 0, pendingFrame, presenting = false, workerFailed = false;
+const framePeriod = 1000/60;
+const presentationTolerance = 2;
+const captureLead = 10;
+let nextPresentation = 0;
 const pending = new Map(); let requestId = 0;
 const metrics = new Map(); let bootByte = 0;
 const mounted = [null, null, null], held = new Set();
@@ -39,15 +43,20 @@ function workerFault(error) {
   for (const waiter of pending.values()) waiter.reject(error);
   pending.clear(); mediaBusy(true); status('Worker stopped · reload to restart'); fail(error);
 }
-function recycleFrame(frame) {
+function recycleFrame(frame, captureAt) {
   if (frame.renderer) {
-    if (frame.renderer === renderWorker) renderWorker.postMessage({type:'frameAck',buffer:frame.buffer,sequence:frame.sequence},[frame.buffer]);
-  } else if (!workerFailed) worker.postMessage({type:'frameAck',data:frame.buffer},[frame.buffer]);
+    if (frame.renderer === renderWorker) renderWorker.postMessage({type:'frameAck',buffer:frame.buffer,sequence:frame.sequence,captureAt},[frame.buffer]);
+  } else if (!workerFailed) worker.postMessage({type:'frameAck',data:frame.buffer,captureAt},[frame.buffer]);
 }
-function render() {
+function render(timestamp) {
+  if (pendingFrame && running && !contextLost && timestamp+presentationTolerance < nextPresentation) {
+    requestAnimationFrame(render);
+    return;
+  }
   presenting = false;
   if (!pendingFrame) return;
   const frame = pendingFrame; pendingFrame = null;
+  let captureAt;
   try {
     if (frame.generation === generation && frame.videoEpoch === videoEpoch && frame.sequence > presentedSequence && !contextLost) {
       presentedSequence = frame.sequence;
@@ -58,12 +67,18 @@ function render() {
       presentationStats.latencyMs += latency;
       presentationStats.maxLatencyMs = Math.max(presentationStats.maxLatencyMs,latency);
       presentationStats.frames++;
+      nextPresentation = (nextPresentation && timestamp-nextPresentation < framePeriod
+        ? nextPresentation : timestamp) + framePeriod;
+      // Start capture before the next presentation slot. Use the actual
+      // callback time as the origin for the delay calculated from rAF.
+      if (running) captureAt = performance.timeOrigin+began
+        +Math.max(0,nextPresentation-timestamp-captureLead);
       if ($('profile').value === '1') $('display-mode').textContent = core?.metric(13)
         ? '640 × 400 · 256 colors · PEGC'
         : '640 × 400 · 16 colors · Shinonome Japanese CG · approximate OPN';
     }
     else presentationStats.stale++;
-  } finally { recycleFrame(frame); }
+  } finally { recycleFrame(frame,captureAt); }
 }
 function queueFrame(frame) {
   if (frame.videoEpoch < videoEpoch || frame.generation < generation || frame.sequence <= presentedSequence

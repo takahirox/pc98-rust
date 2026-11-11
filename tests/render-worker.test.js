@@ -31,8 +31,9 @@ test('one snapshot and one pixel credit bound traffic until presentation; return
   assert.equal(r.run('pixels'),null);
   assert.equal(r.credits.length,0); // No next snapshot before DOM acknowledges.
   r.context.ack=r.frames[0].buffer;
-  r.run('onmessage({data:{type:"frameAck",buffer:ack,sequence:1}})');
+  r.run('onmessage({data:{type:"frameAck",buffer:ack,sequence:1,captureAt:120}})');
   assert.equal(r.credits.length,1);
+  assert.equal(r.credits[0].captureAt,120);
   assert.equal(r.credits[0].buffer.byteLength,547632);
   assert.equal(r.context.packet.buffer.byteLength,0); // Real transferable detachment.
   r.snapshot(2);
@@ -63,9 +64,9 @@ test('overlapping snapshots, reversed sequences, invalid snapshots and duplicate
 const emulatorSource=readFileSync(new URL('../web/emulator-worker.js',import.meta.url),'utf8');
 test('authoritative Worker coalesces full snapshots, rejects stale credits and replaces only fault-owned buffers',async()=>{
   const frames=[],events=[];
-  let cycles=0;
+  let cycles=0, now=10, capture;
   const context=vm.createContext({TextDecoder,ArrayBuffer,Uint8Array,Float32Array,Uint32Array,
-    performance:{now:()=>10,timeOrigin:100},setTimeout:()=>1,clearTimeout(){},
+    performance:{now:()=>now,timeOrigin:100},setTimeout:fn=>{capture=fn;return 1;},clearTimeout(){},
     postMessage:m=>events.push(m),
     MessageChannel:class {constructor(){this.port1={};this.port2={postMessage(){}};}},
     testCore:{memory:{buffer:new ArrayBuffer(640*400*4)},metric:id=>id===5?cycles:0,peek:()=>0,
@@ -94,12 +95,29 @@ test('authoritative Worker coalesces full snapshots, rejects stale credits and r
   run('testPort.onmessage({data:{sequence:2,buffer:credit}})');
   // Snapshot capture is cheap, but the render Worker still shares the host
   // CPU budget. A depleted PCM reserve defers launching either render path.
-  run("audioEnabled=true;audioState='running';port={};sentSamples=0;frameDue=0;presentDue()");
+  cycles++;
+  run("audioEnabled=true;audioState='running';port={};sentSamples=0;presentDue()");
   assert.equal(frames.length,2);
   run('sentSamples=2880;presentDue()');
   assert.equal(frames.length,2); // The sink consumed PCM while this cursor aged.
   run('sinkStatsAt=performance.now();presentDue()');
   assert.equal(frames.length,3);
+
+  // The display credit wakes capture without advancing the guest. An early
+  // credit waits until its deadline and a repeated guest clock stays idle.
+  context.credit=frames[2].buffer;
+  cycles++;
+  run('running=true;sentSamples=3120;testPort.onmessage({data:{sequence:3,buffer:credit,captureAt:115}})');
+  assert.equal(frames.length,3);
+  now=14; run('presentDue()');
+  assert.equal(frames.length,3);
+  now=15; capture();
+  assert.equal(frames.length,4);
+  assert.equal(frames[3].guestCycles,cycles);
+  context.credit=frames[3].buffer;
+  run('testPort.onmessage({data:{sequence:4,buffer:credit}})');
+  assert.equal(frames.length,4);
+
   run('testPort.onmessageerror()');
   assert.equal(events.at(-1).event,'renderFault');
   await run("command('videoFallback')");

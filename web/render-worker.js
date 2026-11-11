@@ -32,7 +32,7 @@ onmessage = async ({data:m}) => {
       }
       pixels = m.buffer;
       const frame = snapshot; snapshot = null;
-      port.postMessage({buffer:frame.buffer,sequence:frame.sequence},[frame.buffer]);
+      port.postMessage({buffer:frame.buffer,sequence:frame.sequence,captureAt:m.captureAt},[frame.buffer]);
     }
   } catch (error) { postMessage({event:'fault',error:error.message}); }
 };

@@ -69,7 +69,7 @@ function worker(code=source, {prebuffer=2400, stalls=[], frameCost=0, renderWork
   });
   vm.runInContext(code.replaceAll('import.meta.url', "'file:///emulator-worker.js'"),context);
   const run=code=>vm.runInContext(code,context);
-  run("core=testCore;port=testPort;sinkStats=testSink;running=true;audioEnabled=true;audioState='running';frameDue="+(frameCost?'0':'Infinity')+";");
+  run("core=testCore;port=testPort;sinkStats=testSink;running=true;audioEnabled=true;audioState='running';");
   if(renderWorker) run('videoPort=testVideoPort;snapshotBuffer=new ArrayBuffer(547632)');
   for (const [at,duration] of stalls) post(()=>advance(now+duration),at);
   function next() {
@@ -136,7 +136,7 @@ test('a slow guest scene cannot force render work to spend the remaining PCM res
   // Same bounded scene cost, guest time, credits and reserve. The old wall
   // deadline launched a renderer while the producer was still behind.
   const old=worker(source.replace('if (reserve < (audioBuffers.length ? 2880 : 2400) && !starvedPreview) return;',
-    'if (playingAudio() && outstandingAudio() < 2880 && now < frameDue+100) return;'),options);
+    'if (playingAudio() && outstandingAudio() < 2880 && now < previewDue) return;'),options);
   old.run('schedule(0)'); old.until(3000);
   assert(old.result().missed>0);
 });
@@ -158,9 +158,9 @@ test('current sink starvation permits bounded previews despite a positive stale 
     const w=worker(code,{renderWorker:true});
     // A delayed cursor overestimates 30 ms of PCM while the sink has already
     // emitted silence. Waiting for that estimate to hit exactly zero freezes it.
-    w.run('sentSamples=1440;sinkStats.underflows=1000;sinkStats.underflowRun=1000;frameDue=-99;presentDue()');
+    w.run('sentSamples=1440;sinkStats.underflows=1000;sinkStats.underflowRun=1000;previewDue=1;presentDue()');
     assert.equal(w.result().frames.length,0);
-    w.run('frameDue=-100;presentDue()');
+    w.run('previewDue=0;presentDue()');
     assert.equal(w.result().frames.length,expected);
     assert.equal(w.result().slices,0); // Rendering does not advance guest time.
   }
@@ -169,7 +169,7 @@ test('current sink starvation permits bounded previews despite a positive stale 
 test('recovered and previous-epoch underruns cannot bypass a healthy stream reserve',()=>{
   for (const [epoch,run] of [[0,0],[-1,1000]]) {
     const w=worker(source,{renderWorker:true});
-    w.run(`sinkStats.audioEpoch=${epoch};sinkStats.underflows=1000;sinkStats.underflowRun=${run};frameDue=-100;presentDue()`);
+    w.run(`sinkStats.audioEpoch=${epoch};sinkStats.underflows=1000;sinkStats.underflowRun=${run};previewDue=0;presentDue()`);
     assert.equal(w.result().frames.length,0);
   }
 });
@@ -180,7 +180,7 @@ test('a missing-PCM edge between guest slices refreshes the preview before recov
     const connected=w.run("command('audioPort',testPort)");
     w.run("testPort.onmessage({data:{type:'flushed',epoch:audioEpoch,stats:{audioEpoch,consumedSamples:0,underflows:1000,underflowRun:0}}})");
     await connected;
-    w.run('sentSamples=1440;frameDue=-100;presentDue()');
+    w.run('sentSamples=1440;previewDue=0;presentDue()');
     assert.equal(w.result().frames.length,0);
     w.run("testPort.onmessage({data:{type:'stats',epoch:audioEpoch,stats:{audioEpoch,consumedSamples:0,underflows:1001,underflowRun:1}}})");
     w.run("testPort.onmessage({data:{type:'stats',epoch:audioEpoch,stats:{audioEpoch,consumedSamples:0,underflows:1128,underflowRun:0}}})");
@@ -196,7 +196,7 @@ test('starvation notifications do not refresh during pause, inspection or media 
     const connected=w.run("command('audioPort',testPort)");
     w.run("testPort.onmessage({data:{type:'flushed',epoch:audioEpoch,stats:{audioEpoch,consumedSamples:0,underflowRun:0}}})");
     await connected;
-    w.run(`frameDue=-100;${state}`);
+    w.run(`previewDue=0;${state}`);
     w.run("testPort.onmessage({data:{type:'stats',epoch:audioEpoch,stats:{audioEpoch,consumedSamples:0,underflowRun:1}}})");
     assert.equal(w.result().frames.length,0);
     assert.equal(w.result().slices,0);
@@ -208,7 +208,7 @@ test('a flushed stream cannot use a previous epoch underflow to spend its new pr
   const connected=w.run("command('audioPort',testPort)");
   w.run("testPort.onmessage({data:{type:'flushed',epoch:audioEpoch,stats:{audioEpoch,consumedSamples:0,underflows:1000}}})");
   await connected;
-  w.run('frameDue=-1000;presentDue()');
+  w.run('previewDue=0;presentDue()');
   assert.equal(w.result().frames.length,0);
 });
 
@@ -245,7 +245,9 @@ test('pause cancels a queued task, resume ignores stale tasks, and a full sink w
   w.run('running=true;schedule(0);running=false;schedule();running=true;schedule(0);');
   w.next(); assert.equal(w.result().slices,0); // Stale task cannot run the resumed schedule.
   w.next(); assert.equal(w.result().slices,1);
-  const full=worker(); full.run('sentSamples=2880;schedule(0)'); full.next();
+  const full=worker();
+  full.run('sentSamples=2880;lastFrameCycles=testCore.metric(5);schedule(0)');
+  full.next();
   assert.equal(full.result().slices,0);
   full.next();
   assert(full.result().now>=5); // No immediate spin once the watermark is full.
