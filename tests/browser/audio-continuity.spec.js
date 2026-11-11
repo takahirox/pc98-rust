@@ -2,8 +2,17 @@ import {test, expect, inspect} from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import {workerProfile} from './helpers/worker-profile.js';
 
-test.afterEach(async ({browser}, info) => {
+// Continuous screenshots and DOM snapshots compete with the real-time guest
+// and AudioWorklet on CI. Keep API/network traces and their stats results;
+// capture visual evidence only after a failure, outside the playback window.
+test.use({trace:{mode:'retain-on-failure',screenshots:false,snapshots:false}});
+
+test.afterEach(async ({browser,page}, info) => {
   if (info.status === info.expectedStatus && !process.env.PC98_AUDIO_PROFILE_ALWAYS) return;
+  try {
+    await info.attach('audio-state', {body:JSON.stringify(await stats(page)),contentType:'application/json'});
+    await info.attach('audio-screen', {body:await page.screenshot({timeout:5000}),contentType:'image/png'});
+  } catch (error) { console.log('Audio failure state unavailable:', error.message); }
   try {
     const profile = await workerProfile(browser);
     await fs.mkdir(info.outputDir, {recursive:true});
