@@ -36,6 +36,9 @@ pub struct Bus {
     pub sound_irq_edges: u64,
     pub audio: Vec<f32>,
     audio_fraction: u64,
+    deferred_devices: bool,
+    pending_device_clocks: u32,
+    device_deadline: u64,
     pub system_c: u8,
     pub display_page: u8,
     pub cpu_page: u8,
@@ -204,6 +207,9 @@ impl Bus {
             sound_irq_edges: 0,
             audio: Vec::with_capacity(4096),
             audio_fraction: 0,
+            deferred_devices: false,
+            pending_device_clocks: 0,
+            device_deadline: 0,
             system_c: 8,
             display_page: 0,
             cpu_page: 0,
@@ -462,10 +468,108 @@ impl Bus {
             self.write(physical as usize, value);
         }
     }
+    /// A preflighted JIT word can avoid decoding the same ordinary RAM span
+    /// twice. Boundary/device accesses keep byte ordering and bus side effects.
+    pub(crate) fn cpu_read_word(&mut self, physical: u32) -> u16 {
+        if physical < 0x9ffff {
+            let at = physical as usize;
+            self.timing
+                .memory(self.profile, at, 0, 2, false, false, true, false);
+            self.timing
+                .memory(self.profile, at + 1, 1, 2, false, false, true, false);
+            u16::from_le_bytes(self.mem[at..at + 2].try_into().unwrap())
+        } else {
+            u16::from_le_bytes([
+                self.cpu_read(physical, 0, 2, false),
+                self.cpu_read(physical.wrapping_add(1), 1, 2, false),
+            ])
+        }
+    }
+    pub(crate) fn cpu_write_word(&mut self, physical: u32, value: u16) {
+        if physical < 0x9ffff {
+            let at = physical as usize;
+            self.timing
+                .memory(self.profile, at, 0, 2, true, false, true, false);
+            self.timing
+                .memory(self.profile, at + 1, 1, 2, true, false, true, false);
+            if !self.timing.active {
+                self.timing.invalidate(at);
+                self.timing.invalidate(at + 1);
+            }
+            self.remember_memory(false, at);
+            self.remember_memory(false, at + 1);
+            self.mem[at..at + 2].copy_from_slice(&value.to_le_bytes());
+        } else {
+            let [low, high] = value.to_le_bytes();
+            self.cpu_write(physical, 0, 2, low);
+            self.cpu_write(physical.wrapping_add(1), 1, 2, high);
+        }
+    }
+    /// Only synchronous execution scopes without host observers may defer
+    /// device state. I/O, firmware and the scope exit materialize it first.
+    pub(crate) fn begin_device_run(&mut self) {
+        debug_assert!(!self.deferred_devices);
+        self.deferred_devices = self.profile == Profile::Pc9821ApDos;
+        self.device_deadline = 0;
+    }
+    pub(crate) fn end_device_run(&mut self) {
+        self.sync_devices();
+        self.deferred_devices = false;
+    }
+    pub(crate) fn sync_devices(&mut self) {
+        let clocks = std::mem::take(&mut self.pending_device_clocks);
+        if clocks != 0 {
+            // These instruction boundaries already polled level-like lines.
+            // Replaying a keyboard request here, between INTA and IN, would
+            // invent a second IRQ after the final queued scan is consumed.
+            self.tick_devices(clocks, self.cycles - u64::from(clocks), false);
+        }
+        // I/O or firmware can change timer programming after this barrier.
+        self.device_deadline = 0;
+    }
+    fn next_device_event(&self) -> u64 {
+        let mut clocks = (8_000_000 - self.audio_fraction).div_ceil(48_000);
+        clocks = clocks.min(self.pit.clocks_until_irq());
+        clocks = clocks.min(self.opn.clocks_until_timer());
+        clocks = clocks.min(self.mouse.clocks_until_irq());
+        if self.vsync_armed {
+            clocks = clocks.min(133_333 - self.cycles % 133_333);
+        }
+        if let Some(timer) = &self.interval {
+            if timer.deadline > self.cycles {
+                clocks = clocks.min(timer.deadline - self.cycles);
+            }
+        }
+        if self.fdc.pending {
+            clocks = clocks.min(u64::from(self.fdc.delay));
+        }
+        if let Some(pio) = &self.fdc.pio {
+            clocks = clocks.min(u64::from(pio.delay));
+        }
+        self.cycles.saturating_add(clocks)
+    }
     pub fn tick(&mut self, cycles: u32) {
-        let old_frame = self.cycles / 133_333;
-        let old_cycles = self.cycles;
         self.cycles += cycles as u64;
+        if self.deferred_devices {
+            self.pending_device_clocks += cycles;
+            if self.cycles < self.device_deadline {
+                // Keyboard is level-like in the existing model. Reassert it
+                // after INTA even on zero-clock instruction boundaries.
+                if !self.keyboard.fifo.is_empty() {
+                    self.pics[0].request(1);
+                }
+                self.sync_cascade();
+                return;
+            }
+            let elapsed = std::mem::take(&mut self.pending_device_clocks);
+            self.tick_devices(elapsed, self.cycles - u64::from(elapsed), true);
+            self.device_deadline = self.next_device_event();
+        } else {
+            self.tick_devices(cycles, self.cycles - u64::from(cycles), true);
+        }
+    }
+    fn tick_devices(&mut self, cycles: u32, old_cycles: u64, poll_keyboard: bool) {
+        let old_frame = old_cycles / 133_333;
         if self.profile == Profile::Pc9821ApDos {
             self.rtc.tick(cycles);
         }
@@ -519,7 +623,7 @@ impl Bus {
                 self.audio.push((beep + fm).clamp(-1.0, 1.0));
             }
         }
-        if !self.keyboard.fifo.is_empty() {
+        if poll_keyboard && !self.keyboard.fifo.is_empty() {
             self.pics[0].request(1)
         }
         self.tick_fdc(cycles);
@@ -651,6 +755,7 @@ impl Bus {
         self.pics[0].request(1)
     }
     pub fn input(&mut self, p: u16) -> u8 {
+        self.sync_devices();
         if matches!(p, 0 | 2 | 8 | 10) {
             self.sync_cascade();
             let slave_poll = p >= 8 && self.pics[1].poll_armed();
@@ -838,6 +943,7 @@ impl Bus {
         }
     }
     pub fn output(&mut self, p: u16, v: u8) {
+        self.sync_devices();
         if matches!(p, 0 | 2 | 8 | 10) {
             self.sync_cascade();
             self.pics[usize::from(p >= 8)].write(p & 2 != 0, v);
@@ -1301,6 +1407,180 @@ impl Bus {
 #[cfg(test)]
 mod cpu_access_tests {
     use super::*;
+
+    #[test]
+    fn io_barrier_does_not_reassert_a_keyboard_irq_after_inta() {
+        let mut reference = Bus::new(Profile::Pc9821ApDos);
+        let mut deferred = Bus::new(Profile::Pc9821ApDos);
+        for bus in [&mut reference, &mut deferred] {
+            bus.pics[0].mask &= !2;
+            bus.key(0x1d, true);
+        }
+        deferred.begin_device_run();
+        for clocks in [1, 1] {
+            reference.tick(clocks);
+            deferred.tick(clocks);
+        }
+        assert!(deferred.pending_device_clocks > 0);
+        assert_eq!(reference.irq(), Some(9));
+        assert_eq!(deferred.irq(), Some(9));
+        assert_eq!(reference.input(0x41), deferred.input(0x41));
+        assert_eq!(reference.pics[0].irr, deferred.pics[0].irr);
+        reference.tick(0);
+        deferred.tick(0);
+        deferred.end_device_run();
+        assert_eq!(reference.pics[0].irr, deferred.pics[0].irr);
+        assert_eq!(reference.audio, deferred.audio);
+    }
+
+    #[test]
+    fn deferred_devices_match_instruction_ticks_at_irqs_pcm_io_and_dma() {
+        let mut reference = Bus::new(Profile::Pc9821ApDos);
+        let mut deferred = Bus::new(Profile::Pc9821ApDos);
+        for bus in [&mut reference, &mut deferred] {
+            bus.pics[0].mask = 0;
+            bus.pics[1].mask = 0;
+            bus.key(0x1d, true);
+            bus.rtc.tick(7_999_900);
+            bus.output(0x77, 0x34);
+            bus.output(0x71, 17);
+            bus.output(0x71, 0);
+            bus.output(0x77, 0x76);
+            bus.output(0x73, 7);
+            bus.output(0x73, 0);
+            bus.output(0x35, 0);
+            bus.output(0x7fdd, 0);
+            for (address, value) in [
+                (0, 7),
+                (7, 0x38),
+                (8, 15),
+                (0x24, 255),
+                (0x25, 3),
+                (0x26, 255),
+                (0x27, 15),
+            ] {
+                bus.output(0x188, address);
+                bus.output(0x18a, value);
+            }
+            bus.interval = Some(crate::firmware::IntervalTimer {
+                deadline: 777,
+                segment: 0,
+                offset: 0,
+            });
+            bus.disks[0] = Some(Disk::parse(vec![0x5a; 1261568], "dma.hdm").unwrap());
+            bus.dma.addr[2] = 0x4000;
+            bus.dma.count[2] = 1023;
+            bus.dma.mode[2] = 0x46;
+            bus.dma.mask &= !4;
+            bus.fdc.command = vec![0x46, 0, 0, 0, 1, 3, 1, 0, 0];
+            bus.fdc.control = 0x18;
+            bus.fdc.pending = true;
+            bus.fdc.delay = 1001;
+            bus.vsync_armed = true;
+        }
+        deferred.begin_device_run();
+        for step in 0..50000 {
+            let clocks = if step % 997 == 0 { 337 } else { step % 7 };
+            reference.tick(clocks);
+            deferred.tick(clocks);
+            assert_eq!(reference.audio, deferred.audio, "PCM at step {step}");
+            for pic in 0..2 {
+                assert_eq!(
+                    reference.pics[pic].irr, deferred.pics[pic].irr,
+                    "IRQ at step {step}"
+                );
+                assert_eq!(reference.pics[pic].pending(), deferred.pics[pic].pending());
+            }
+            if step % 31 == 0 {
+                assert_eq!(reference.irq(), deferred.irq());
+                for bus in [&mut reference, &mut deferred] {
+                    bus.output(0, 0x20);
+                    bus.output(8, 0x20);
+                }
+            }
+            if step % 137 == 0 {
+                for port in [0x71, 0x73, 0x33, 0x41, 0x188, 0x90] {
+                    assert_eq!(
+                        reference.input(port),
+                        deferred.input(port),
+                        "port={port:x} step={step}"
+                    );
+                }
+                for bus in [&mut reference, &mut deferred] {
+                    bus.output(0x188, 0x27);
+                    bus.output(0x18a, 0x3f);
+                }
+            }
+        }
+        deferred.end_device_run();
+        assert_eq!(reference.pit, deferred.pit);
+        assert_eq!(
+            format!("{:?}", reference.rtc),
+            format!("{:?}", deferred.rtc)
+        );
+        assert_eq!(reference.mem, deferred.mem);
+        assert_eq!(reference.sound_irq_edges, deferred.sound_irq_edges);
+        assert_eq!(reference.fdc.reads, 1);
+        assert_eq!(reference.fdc.reads, deferred.fdc.reads);
+        assert_eq!(reference.opn.status(), deferred.opn.status());
+    }
+
+    #[test]
+    fn jit_ram_words_match_byte_accesses_at_cache_page_and_device_boundaries() {
+        for profile in [Profile::Pc9801Vm, Profile::Pc9821ApDos] {
+            for a20 in [false, true] {
+                let mut words = Bus::new(profile);
+                let mut bytes = Bus::new(profile);
+                words.a20 = a20;
+                bytes.a20 = a20;
+                for cr0 in [0, 0x40000000] {
+                    for address in [
+                        0,
+                        1,
+                        14,
+                        15,
+                        16,
+                        31,
+                        0xfff,
+                        0x1000,
+                        0x9fffe,
+                        0x9ffff,
+                        0xa0000,
+                        0xa7fff,
+                        0xa8000,
+                        0xbffff,
+                        0xe0004,
+                        0xfffff,
+                        0x100000,
+                        u32::MAX,
+                    ] {
+                        words.timing.begin(cr0);
+                        bytes.timing.begin(cr0);
+                        words.begin_cpu_memory();
+                        bytes.begin_cpu_memory();
+                        let expected = u16::from_le_bytes([
+                            bytes.cpu_read(address, 0, 2, false),
+                            bytes.cpu_read(address.wrapping_add(1), 1, 2, false),
+                        ]);
+                        assert_eq!(words.cpu_read_word(address), expected);
+                        words.cpu_write_word(address, 0x98ab);
+                        bytes.cpu_write(address, 0, 2, 0xab);
+                        bytes.cpu_write(address.wrapping_add(1), 1, 2, 0x98);
+                        assert_eq!(words.mem, bytes.mem);
+                        assert_eq!(words.graphics, bytes.graphics);
+                        assert_eq!(
+                            words.timing.finish(profile, false, 0),
+                            bytes.timing.finish(profile, false, 0)
+                        );
+                        words.finish_cpu_memory(false);
+                        bytes.finish_cpu_memory(false);
+                        assert_eq!(words.mem, bytes.mem);
+                        assert_eq!(words.graphics, bytes.graphics);
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn combined_cpu_accesses_preserve_decode_timing_and_fault_rollback() {

@@ -30,8 +30,10 @@ function condition(code){
   }
   return code&1?not(value):nz(value);
 }
-function arithmetic(kind,wide,dst,a,b,{write=true,increment=false,memory=false,writeFlags=storeFlags}={}){
+function arithmetic(kind,wide,dst,a,b,{write=true,increment=false,memory=false,writeFlags=storeFlags,putRegister=put,flagMask=0x8d5}={}){
   const mask=wide?65535:255, sign=wide?32768:128;
+  const changed=flagMask&(increment?0x8d4:0x8d5);
+  if(!write&&!changed)return [];
   const carry=kind===2||kind===3?flag(1):c(0);
   let value;
   switch(kind){
@@ -42,24 +44,26 @@ function arithmetic(kind,wide,dst,a,b,{write=true,increment=false,memory=false,w
     case 6:value=xor(get(4),get(5));break;
   }
   const out=[...set(4,a),...set(5,and(b,c(mask))),...set(8,carry),...set(6,and(value,c(mask)))];
-  if(write)out.push(...(memory?memoryStore(get(6)):put(dst,wide,get(6))));
-  const parts=[and(get(7),c(~(increment?0x8d4:0x8d5))),
-    shl(not(get(6)),6),shl(nz(and(get(6),c(sign))),7),
-    shl(not(and([...and(get(6),c(255)),0x69],c(1))),2)];
+  if(write)out.push(...(memory?memoryStore(get(6)):putRegister(dst,wide,get(6))));
+  if(!changed)return out;
+  const parts=[and(get(7),c(~changed))];
+  if(changed&0x40)parts.push(shl(not(get(6)),6));
+  if(changed&0x80)parts.push(shl(nz(and(get(6),c(sign))),7));
+  if(changed&4)parts.push(shl(not(and([...and(get(6),c(255)),0x69],c(1))),2));
   if([0,2,3,5,7].includes(kind)){
     const subtract=[3,5,7].includes(kind);
-    if(!increment)parts.push(subtract?bin(0x49,get(4),add(get(5),get(8))):bin(0x4b,add(add(get(4),get(5)),get(8)),c(mask)));
-    parts.push(and(xor(xor(get(4),get(5)),get(6)),c(16)));
+    if(changed&1)parts.push(subtract?bin(0x49,get(4),add(get(5),get(8))):bin(0x4b,add(add(get(4),get(5)),get(8)),c(mask)));
+    if(changed&16)parts.push(and(xor(xor(get(4),get(5)),get(6)),c(16)));
     const signs=xor(get(4),get(5));
-    parts.push(shl(nz(and(and(subtract?signs:xor(signs,c(-1)),xor(get(4),get(6))),c(sign))),11));
+    if(changed&0x800)parts.push(shl(nz(and(and(subtract?signs:xor(signs,c(-1)),xor(get(4),get(6))),c(sign))),11));
   }
   out.push(...writeFlags(parts.reduce(or)));
   return out;
 }
 
-function singleShift(kind,wide,dst,writeFlags=storeFlags){
+function singleShift(kind,wide,dst,writeFlags=storeFlags,readRegister=reg,putRegister=put,flagMask=0x8d5,memory=false){
   const mask=wide?65535:255,sign=wide?32768:128;
-  const out=[...set(4,reg(dst,wide)),...set(8,nz(and(get(4),c([0,2,4,6].includes(kind)?sign:1))))];
+  const out=[...set(4,memory?memoryValue():readRegister(dst,wide)),...set(8,nz(and(get(4),c([0,2,4,6].includes(kind)?sign:1))))];
   let value;
   switch(kind){
     case 0:value=or(shl(get(4),1),get(8));break;
@@ -70,23 +74,68 @@ function singleShift(kind,wide,dst,writeFlags=storeFlags){
     case 5:value=bin(0x76,get(4),c(1));break;
     case 7:value=or(bin(0x76,get(4),c(1)),and(get(4),c(sign)));break;
   }
-  out.push(...set(6,and(value,c(mask))),...put(dst,wide,get(6)));
+  out.push(...set(6,and(value,c(mask))),...(memory?memoryStore(get(6)):putRegister(dst,wide,get(6))));
+  const changed=flagMask&(0x801|(kind>=4?0xc4:0));
+  if(!changed)return out;
   const overflow=[0,2,4,6].includes(kind)?xor(nz(and(get(6),c(sign))),get(8)):
     [1,3].includes(kind)?xor(nz(and(get(6),c(sign))),nz(and(get(6),c(sign>>1)))):
     kind===5?nz(and(get(4),c(sign))):c(0);
   // AF is preserved, including the existing deterministic policy for shifts.
-  const parts=[and(get(7),c(~(0x801|(kind>=4?0xc4:0)))),get(8),shl(overflow,11)];
-  if(kind>=4)parts.push(shl(not(get(6)),6),shl(nz(and(get(6),c(sign))),7),
-    shl(not(and([...and(get(6),c(255)),0x69],c(1))),2));
+  const parts=[and(get(7),c(~changed))];
+  if(changed&1)parts.push(get(8));
+  if(changed&0x800)parts.push(shl(overflow,11));
+  if(changed&0x40)parts.push(shl(not(get(6)),6));
+  if(changed&0x80)parts.push(shl(nz(and(get(6),c(sign))),7));
+  if(changed&4)parts.push(shl(not(and([...and(get(6),c(255)),0x69],c(1))),2));
   out.push(...writeFlags(parts.reduce(or)));
   return out;
+}
+
+function constantShift(kind,wide,dst,count,writeFlags,readRegister,putRegister,flagMask,memory){
+  if(count===1)return singleShift(kind,wide,dst,writeFlags,readRegister,putRegister,flagMask,memory);
+  const read=memory?memoryValue():readRegister(dst,wide);
+  const write=value=>memory?memoryStore(value):putRegister(dst,wide,value);
+  if(!count)return write(read);
+  const bits=wide?16:8,mask=wide?65535:255;
+  const right=(value,n)=>bin(0x76,value,c(n));
+  let value,carry;
+  if(kind===0||kind===1){
+    const n=count%bits;
+    value=n?(kind===0?or(shl(get(4),n),right(get(4),bits-n)):or(right(get(4),n),shl(get(4),bits-n))):get(4);
+    carry=kind===0?and(value,c(1)):and(right(value,bits-1),c(1));
+  }else if(kind===4||kind===6){
+    value=count>=bits?c(0):shl(get(4),count);
+    carry=count>bits?c(0):and(right(get(4),bits-count),c(1));
+  }else if(kind===5){
+    value=count>=bits?c(0):right(get(4),count);
+    carry=count>bits?c(0):and(right(get(4),count-1),c(1));
+  }else if(kind===7){
+    value=bin(0x75,[...get(4),wide?0xc1:0xc0],c(count));
+    carry=and(right(get(4),Math.min(count-1,bits-1)),c(1));
+  }else throw Error('Unsupported JIT immediate carry rotation');
+  const out=[...set(4,read),...set(6,and(value,c(mask))),...write(get(6))];
+  // The interpreter preserves OF for counts other than one and AF always.
+  const changed=flagMask&(1|(kind>=4?0xc4:0));
+  if(!changed)return out;
+  const parts=[and(get(7),c(~changed))];
+  if(changed&1)parts.push(carry);
+  if(changed&0x40)parts.push(shl(not(get(6)),6));
+  if(changed&0x80)parts.push(shl(nz(and(get(6),c(wide?32768:128))),7));
+  if(changed&4)parts.push(shl(not(and([...and(get(6),c(255)),0x69],c(1))),2));
+  out.push(...writeFlags(parts.reduce(or)));
+  return out;
+}
+
+function shiftCount(encoded,tail){
+  const m=(encoded>>>8)&255,offset=2+((m>>6)===1?1:(m>>6)===2||(m>>6)===0&&(m&7)===6?2:0);
+  return ((offset<4?encoded>>>(offset*8):tail>>>((offset-4)*8))&255)&31;
 }
 
 function memoryOperation(encoded){
   const op=encoded&255,m=(encoded>>>8)&255;
   if(op>=0x50&&op<=0x5f||op>=0xa0&&op<=0xa3||op===0xe8||op===0xc3)return true;
   return m<0xc0&&(op<=0x3d&&(op&7)<4
-    ||[0x80,0x81,0x83,0x84,0x85,0x86,0x87,0x88,0x89,0x8a,0x8b,0xc6,0xc7,0xf6,0xf7].includes(op));
+    ||[0x80,0x81,0x83,0x84,0x85,0x86,0x87,0x88,0x89,0x8a,0x8b,0xc0,0xc1,0xc6,0xc7,0xd0,0xd1,0xf6,0xf7,0xfe,0xff].includes(op));
 }
 
 function writtenRegisters(op,m){
@@ -109,27 +158,73 @@ function writtenRegisters(op,m){
   if(op===0x9f||op===0xa0||op===0xa1)return 1;
   if(op===0xa2||op===0xa3)return 0;
   if(op>=0xb0&&op<=0xbf)return 1<<(op>=0xb8?op&7:op&3);
-  if(op===0xd0||op===0xd1)return target(rm);
+  if([0xc0,0xc1,0xd0,0xd1,0xfe,0xff].includes(op))return m<0xc0?0:target(rm);
   if(op>=0xe0&&op<=0xe2)return 1<<1;
   if(op===0xf6||op===0xf7)return r===0||m<0xc0?0:target(rm);
   throw Error('Missing JIT register-write policy');
+}
+
+// Only full-run results may omit dead flags. The cold committed-prefix
+// reconstruction below emits complete flag semantics at every instruction.
+function flagNeeds(packet,start,end){
+  const needed=[];
+  let live=0x8d5;
+  for(let index=end-1;index>=start;index--){
+    const encoded=packet[4+index*4],op=encoded&255,group=(encoded>>>11)&7;
+    let read=0,write=0;
+    if(op<=0x3d&&(op&7)<=5||[0x80,0x81,0x83,0x84,0x85,0xa8,0xa9].includes(op)||[0xf6,0xf7].includes(op)&&group!==2){
+      write=0x8d5;
+      if(op<=0x3d&&[2,3].includes(op>>3)||[0x80,0x81,0x83].includes(op)&&[2,3].includes(group))read=1;
+    }else if(op>=0x40&&op<=0x4f)write=0x8d4;
+    else if([0xc0,0xc1,0xd0,0xd1].includes(op)){
+      const count=op<0xd0?shiftCount(encoded,packet[5+index*4]):1;
+      if(count){write=(group<4?1:0xc5)|(count===1?0x800:0);if(group===2||group===3)read=1;}
+    }
+    else if(op===0xfe||op===0xff)write=0x8d4;
+    else if(op===0x9e)write=0xd5;
+    else if(op===0x9f)read=0xd5;
+    else if(op>=0x70&&op<=0x7f)read=[0x800,1,0x40,0x41,0x80,4,0x880,0x8c0][(op&14)>>1];
+    else if(op===0xe0||op===0xe1)read=0x40;
+    else if(op===0xf5){read=1;write=1;}
+    else if(op===0xf8||op===0xf9)write=1;
+    needed[index]=live&write;
+    live=(live&~write)|read;
+  }
+  return needed;
 }
 
 /** Compile Rust-preflighted real-mode instructions with optional batch support. */
 export function compileBlock(packet,{batch=false}={}){
   const count=packet[1];
   if(!Number.isInteger(count)||count<1||count>16||packet.length!==2+count*4)throw Error('Invalid JIT plan');
-  const body=batch?[4,6,0x7f,1,0x7b,1,0x7f,3,0x7f]:[1,6,0x7f];
+  const body=batch?[4,6,0x7f,1,0x7b,1,0x7f,11,0x7f]:[1,6,0x7f];
   // Existing arithmetic locals are followed by initial registers/FLAGS,
   // committed prefix length and at most two overwritten register values.
   const operations=[];
   let start=0,end=0;
+  let groupAt=0,usedRegisters=new Set(),dirtyRegisters=new Set(),neededFlags=[];
+  const reloadRegisters=()=>[...usedRegisters].flatMap(r=>set(15+r,load(0,r*2,2)));
+  const flushRegisters=()=>[...dirtyRegisters].flatMap(r=>store(0,r*2,2,get(15+r)));
   for(let index=0;index<count;index++){
     if(index===end){
       start=index;end=index+1;
       if(batch)while(end<count&&!memoryOperation(packet[4+end*4]))end++;
+      groupAt=body.length;usedRegisters=new Set();dirtyRegisters=new Set();
+      neededFlags=flagNeeds(packet,start,end);
     }
     const grouped=end-start>1;
+    const reg=(r,wide)=>{
+      if(!grouped)return load(0,wide?r*2:(r&3)*2+(r>>2),wide?2:1);
+      const word=wide?r:r&3;usedRegisters.add(word);
+      const value=get(15+word);
+      return wide?value:and(r&4?bin(0x76,value,c(8)):value,c(255));
+    };
+    const put=(r,wide,value)=>{
+      if(!grouped)return store(0,wide?r*2:(r&3)*2+(r>>2),wide?2:1,value);
+      const word=wide?r:r&3;usedRegisters.add(word);dirtyRegisters.add(word);
+      return set(15+word,wide?and(value,c(65535)):
+        or(and(get(15+word),c(r&4?255:65280)),r&4?shl(and(value,c(255)),8):and(value,c(255))));
+    };
     const ip=packet[2+index*4],length=packet[3+index*4],encoded=packet[4+index*4],tail=packet[5+index*4];
     const bytes=[encoded&255,(encoded>>>8)&255,(encoded>>>16)&255,encoded>>>24,tail&255,tail>>>8];
     const [op,m]=bytes, wide=!!(op&1), rm=m&7, r=(m>>3)&7;
@@ -154,13 +249,15 @@ export function compileBlock(packet,{batch=false}={}){
     const operationStart=body.length;
     if(!grouped||index===start)body.push(...set(7,load(1,0,2)));
     if(!grouped||index===start)body.push(...set(9,c(0)));
+    function emitOperation(flagMask){
+      const body=[];
     if(op<=0x3d&&(op&7)<=5){
       const kind=op>>3, direct=(op&7)>=4, dst=direct?0:op&2?r:rm;
       const memDst=!direct&&!(op&2)&&memory;
       body.push(...arithmetic(kind,wide,dst,memDst?rmValue():reg(dst,wide),
-        direct?c(imm(1,wide)):op&2?rmValue():reg(r,wide),{write:kind!==7,memory:memDst,writeFlags}));
+        direct?c(imm(1,wide)):op&2?rmValue():reg(r,wide),{write:kind!==7,memory:memDst,writeFlags,putRegister:put,flagMask}));
     }else if(op>=0x40&&op<=0x4f){
-      body.push(...arithmetic(op&8?5:0,true,op&7,reg(op&7,true),c(1),{increment:true,writeFlags}));
+      body.push(...arithmetic(op&8?5:0,true,op&7,reg(op&7,true),c(1),{increment:true,writeFlags,putRegister:put,flagMask}));
     }else if(op>=0x50&&op<=0x57){
       body.push(...memoryStore(reg(op&7,true)),...put(4,true,sub(reg(4,true),c(2))));
     }else if(op>=0x58&&op<=0x5f){
@@ -169,9 +266,9 @@ export function compileBlock(packet,{batch=false}={}){
       body.push(...set(9,condition(op&15)));
     }else if([0x80,0x81,0x83].includes(op)){
       const value=op===0x83?(bytes[2+displacement]<<24)>>24:imm(2+displacement,wide);
-      body.push(...arithmetic(r,wide,rm,rmValue(),c(value),{write:r!==7,memory,writeFlags}));
+      body.push(...arithmetic(r,wide,rm,rmValue(),c(value),{write:r!==7,memory,writeFlags,putRegister:put,flagMask}));
     }else if(op===0x84||op===0x85){
-      body.push(...arithmetic(4,wide,rm,rmValue(),reg(r,wide),{write:false,writeFlags}));
+      body.push(...arithmetic(4,wide,rm,rmValue(),reg(r,wide),{write:false,writeFlags,putRegister:put,flagMask}));
     }else if(op===0x86||op===0x87){
       body.push(...set(4,rmValue()),...rmStore(reg(r,wide)),...put(r,wide,get(4)));
     }else if(op>=0x88&&op<=0x8b){
@@ -185,16 +282,15 @@ export function compileBlock(packet,{batch=false}={}){
     }else if(op>=0xa0&&op<=0xa3){
       body.push(...(op&2?memoryStore(reg(0,wide)):put(0,wide,memoryValue())));
     }else if(op===0xa8||op===0xa9){
-      body.push(...arithmetic(4,wide,0,reg(0,wide),c(imm(1,wide)),{write:false,writeFlags}));
+      body.push(...arithmetic(4,wide,0,reg(0,wide),c(imm(1,wide)),{write:false,writeFlags,putRegister:put,flagMask}));
     }else if(op>=0xb0&&op<=0xbf){
       const word=op>=0xb8;body.push(...put(op&7,word,c(imm(1,word))));
     }else if(op===0xc3){
       body.push(...get(2),...memoryValue(),0x36,2,0,...put(4,true,add(reg(4,true),c(2))));
     }else if(op===0xc6||op===0xc7){
       body.push(...rmStore(c(imm(2+displacement,wide))));
-    }else if(op===0xd0||op===0xd1){
-      if(memory)throw Error('Unsupported JIT memory shift');
-      body.push(...singleShift(r,wide,rm,writeFlags));
+    }else if([0xc0,0xc1,0xd0,0xd1].includes(op)){
+      body.push(...constantShift(r,wide,rm,op<0xd0?imm(2+displacement,false)&31:1,writeFlags,reg,put,flagMask,memory));
     }else if(op>=0xe0&&op<=0xe3){
       if(op!==0xe3)body.push(...put(1,true,sub(reg(1,true),c(1))));
       let take=op===0xe3?not(reg(1,true)):nz(reg(1,true));
@@ -204,10 +300,13 @@ export function compileBlock(packet,{batch=false}={}){
       if(op===0xe8)body.push(...memoryStore(c((ip+length)&65535)),...put(4,true,sub(reg(4,true),c(2))));
       body.push(...set(9,c(1)));
     }else if(op===0xf6||op===0xf7){
-      if(r===0)body.push(...arithmetic(4,wide,rm,rmValue(),c(imm(2+displacement,wide)),{write:false,writeFlags}));
+      if(r===0)body.push(...arithmetic(4,wide,rm,rmValue(),c(imm(2+displacement,wide)),{write:false,writeFlags,putRegister:put,flagMask}));
       else if(r===2)body.push(...rmStore(xor(rmValue(),c(-1))));
-      else if(r===3)body.push(...arithmetic(5,wide,rm,c(0),rmValue(),{memory,writeFlags}));
+      else if(r===3)body.push(...arithmetic(5,wide,rm,c(0),rmValue(),{memory,writeFlags,putRegister:put,flagMask}));
       else throw Error('Unsupported JIT group');
+    }else if(op===0xfe||op===0xff){
+      if(r>1)throw Error('Unsupported JIT increment group');
+      body.push(...arithmetic(r?5:0,wide,rm,rmValue(),c(1),{increment:true,memory,writeFlags,putRegister:put,flagMask}));
     }else if([0xf5,0xf8,0xf9,0xfc,0xfd].includes(op)){
       const bits=op>=0xfc?1024:1;
       body.push(...writeFlags(op===0xf5?xor(get(7),c(1)):op===0xf8||op===0xfc?and(get(7),c(~bits)):or(get(7),c(bits))));
@@ -217,7 +316,13 @@ export function compileBlock(packet,{batch=false}={}){
       const displacement=(op===0xe8||op===0xe9)?((imm(1,true)<<16)>>16):((bytes[1]<<24)>>24);
       body.push(...get(9),0x04,0x40,...get(2),...c((ip+length+displacement)&65535),0x36,2,0,0x0b);
     }
-    operations[index]={ip,length,bytes:body.slice(operationStart)};
+      return body;
+    }
+    const prefix=body.slice(operationStart);
+    const cold=emitOperation(0x8d5);
+    const hot=grouped?emitOperation(neededFlags[index]):cold;
+    body.push(...hot);
+    operations[index]={ip,length,bytes:[...prefix,...cold]};
     if(grouped&&recordWrites){
       // Record only the exact changed-register mask required by guest timing.
       const changes=destinations.map((r,n)=>shl(nz(xor(reg(r,true),get(13+n))),r));
@@ -227,10 +332,11 @@ export function compileBlock(packet,{batch=false}={}){
     if(index+1===end){
       const take=op===0xe8||op===0xe9||op===0xeb?c(0):get(9);
       if(grouped){
-        body.push(...storeFlags(get(7)),...set(8,[...c(end),...take,0x10,1]),
+        body.splice(groupAt,0,...reloadRegisters());
+        body.push(...flushRegisters(),...storeFlags(get(7)),...set(8,[...c(end),...take,0x10,1]),
           ...set(12,[...get(3),0x28,2,8]),
           ...get(12),...c(end-start),0x49,0x04,0x40,
-          ...get(0),...get(10),0xfd,0x0b,4,0,...storeFlags(get(11)));
+          ...get(0),...get(10),0xfd,0x0b,4,0,...storeFlags(get(11)),...reloadRegisters());
         // Early exits are uncommon. Re-execute only committed register
         // semantics, using the original prepared operand for the first op.
         // This path makes no callbacks and repeats no device access.
@@ -239,7 +345,7 @@ export function compileBlock(packet,{batch=false}={}){
           body.push(...get(12),...c(replay-start),0x4b,0x04,0x40,
             ...get(2),...c(saved.ip+saved.length),0x36,2,0,...saved.bytes,0x0b);
         }
-        body.push(...storeFlags(get(7)),0x0f,0x0b,...get(8),0x45,0x04,0x40,0x0f,0x0b);
+        body.push(...flushRegisters(),...storeFlags(get(7)),0x0f,0x0b,...get(8),0x45,0x04,0x40,0x0f,0x0b);
       }else body.push(...c(end),...take,0x10,0,0x45,0x04,0x40,0x0f,0x0b);
     }
   }
@@ -303,6 +409,9 @@ export class WasmJit {
   step(clocks,cap){
     const core=this.core;
     if(this.failed||core.metric(31)!==66000000)return core.step_scheduler(clocks,cap);
+    const defer=typeof core.jit_devices_begin==='function';
+    if(defer)core.jit_devices_begin();
+    try{
     core.jit_begin_slice(clocks,cap);
     for(;;){
       if(!this.layout){
@@ -315,5 +424,6 @@ export class WasmJit {
       this.offer(id);
     }
     return core.jit_done();
+    }finally{if(defer)core.jit_devices_end();}
   }
 }

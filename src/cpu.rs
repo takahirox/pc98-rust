@@ -987,7 +987,9 @@ impl Cpu {
         let execution = self.execute(b).and_then(|()| {
             if std::mem::take(&mut b.firmware_request) {
                 b.timing.approximated = true;
+                b.sync_devices();
                 let service = crate::firmware::execute_service(self, b);
+                b.sync_devices();
                 b.timing.flush();
                 service?;
             }

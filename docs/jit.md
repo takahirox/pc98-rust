@@ -1,24 +1,25 @@
-# Browser x86-to-WebAssembly JIT — Issues #150 and #152
+# Browser x86-to-WebAssembly JIT
 
 With JIT selected, the browser emulator dynamically compiles hot Ap real-mode instruction blocks
 into WebAssembly. Generated code implements register and memory operations, flags, word stack
-operations and near calls/returns. It shares the owning core's memory and calls Rust at every instruction
-boundary to preserve fetches, guest clocks and device events. The native core
+operations and near calls/returns. It shares the owning core's memory and commits register runs through Rust,
+which preserves every instruction boundary, fetch, guest clock and device event. The native core
 and synchronous `step`/observer APIs retain the interpreter as their reference.
 
 ## Coverage and controls
 
 The tier covers unprefixed 8/16-bit ALU, MOV, XCHG, TEST, NOT/NEG,
-register INC/DEC, SAHF/LAHF, carry/direction flags, short conditional branches,
+register and memory INC/DEC, SAHF/LAHF, carry/direction flags, short conditional branches,
 LOOP/JCXZ, relative JMP/CALL, word register PUSH/POP, near RET and single-bit
-register shifts/rotations (`D0`/`D1`, including the SHL/SAL alias). Memory operands
+register/memory shifts and rotations (`D0`/`D1`), plus immediate shifts/rotations
+(`C0`/`C1`, excluding RCL/RCR). These include the SHL/SAL alias. Memory operands
 use 16-bit ModR/M addressing or accumulator absolute offsets. Each supported
 operation may carry one ES/CS/SS/DS/FS/GS segment override; register operations
 and word stack operations retain their original ignored-override behavior.
 Blocks contain at most 16 instructions and stop at a branch or unsupported
 operation.
 Additional or other prefixes,
-strings, memory/variable-count shifts, far transfers, other stack operations, I/O, firmware services,
+strings, CL-count shifts, immediate carry rotations, indirect/far transfers, other stack operations, I/O, firmware services,
 protected/paged execution, 32-bit defaults, single-step and unusual fetch
 boundaries use the existing interpreter. This is a bounded first tier, not a replacement for the
 full CPU implementation.
@@ -71,8 +72,10 @@ With interrupts enabled, the bridge refreshes the PIC cascade wire even if no
 vector is pending. A pending vector returns to the original interrupt delivery
 path. Each committed operation retains the original instruction fetch bus
 activity, timing table, register dependency mask and rational CPU/device clock
-conversion. Devices tick after every instruction, including a zero-clock tick;
-PCM/timer/IRQ work is never deferred to the end of a block. Both the 80,000-clock
+conversion. Device time advances at every instruction, including a zero-clock boundary.
+Within synchronous Ap slices, devices materialize at their next event, I/O,
+firmware or slice exit; keyboard/cascade polling remains at every boundary.
+The observer APIs keep the original per-instruction device updates. Both the 80,000-clock
 deadline and the 100,000-unit cap remain effective inside compiled blocks.
 
 A small Wasm dispatcher calls ready modules through a bounded function table,
@@ -91,8 +94,9 @@ actual-change comparison; fixed masks avoid rewriting or copying it through the
 active transaction. Each entry
 computes the current offset and validates the complete operand against the current
 hidden segment bounds. A two-word scratch area carries the bus-read value and
-generated write result across the instruction boundary. Rust performs the original
-byte bus accesses, retaining cache/wait accounting and video-device effects. Bus
+generated write result across the instruction boundary. Rust retains byte-level cache/wait accounting and video-device effects.
+A preflighted word wholly inside conventional RAM uses one decoded span;
+wrapping/boundary and mapped accesses retain the byte bus path. Bus
 writes commit before the next instruction's byte guard, including self-modifying
 stores. Complete preflight avoids duplicate segment/paging checks during these
 real-mode bus accesses; code fetches likewise keep each original bus access.
@@ -581,3 +585,37 @@ panic-source line metadata and the name section. All executable sections are
 byte-identical. The independent holdout uses the final artifact.
 Independent holdout and final regression/CI outcomes are recorded in the linked
 Issue/PR; the initial round alone is not a universal throughput claim.
+
+
+## Register caching, flag liveness and device deadlines — Issue #169
+
+Generated register runs load used low registers into Wasm locals and flush only
+written registers at the callback. A backward flag analysis suppresses flags
+that a later operation overwrites, preserving every flag at run exit and every
+flag consumed by ADC/SBB, carry rotations, LAHF and branches. The committed-prefix
+reconstruction retains full semantics, so an IRQ, work cap, deadline or stale code
+can stop at any original instruction without exposing an optimized-away flag.
+
+Ap device updates coalesce only until the next PCM sample, PIT/OPN/mouse IRQ,
+armed vertical retrace, firmware interval or FDC service event. I/O and firmware
+materialize pending time first. Keyboard requests and the PIC cascade retain
+instruction-boundary polling, including zero-clock boundaries. A partial I/O
+barrier must not replay a keyboard request after INTA: doing so invented an extra
+IRQ in the first experiment. The corrected implementation has a regression for
+that sequence and an aggregate DMA/PCM/PIC/timer differential test. Default native
+steps and the synchronous Wasm JIT slice use deadlines automatically; callbacks
+observing every instruction retain the original path.
+
+The JIT also translates immediate shifts/rotations with statically known timing,
+memory single-bit shifts/rotations and FE/FF INC/DEC. Constant counts retain x86
+count masking and the interpreter's deterministic AF/OF policy. Unsupported
+immediate carry rotations and indirect transfers keep the interpreter.
+
+The render-only instance compares complete snapshots except for the guest cycle
+stamp, replacing that stamp with the effective text/cursor blink phase. Identical
+scanout inputs reuse owned pixels. Changed frames recycle the input allocation
+and draw directly into owned pixels, avoiding an additional snapshot or frame
+copy. Palette, GDC, glyph, mode, page and VRAM changes still invalidate the cache.
+
+[The evaluation record](emulator-optimization-169.md) distinguishes adopted
+improvements, neutral coverage changes, rejected experiments and remaining limits.

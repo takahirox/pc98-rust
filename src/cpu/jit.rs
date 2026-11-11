@@ -68,7 +68,19 @@ impl Op {
     fn memory_write(self) -> bool {
         let op = self.opcode;
         match op {
-            0x50..=0x57 | 0xe8 | 0xa2 | 0xa3 | 0x86..=0x89 | 0xc6 | 0xc7 => true,
+            0x50..=0x57
+            | 0xe8
+            | 0xa2
+            | 0xa3
+            | 0x86..=0x89
+            | 0xc0
+            | 0xc1
+            | 0xc6
+            | 0xc7
+            | 0xd0
+            | 0xd1
+            | 0xfe
+            | 0xff => true,
             0x80 | 0x81 | 0x83 => self.modrm & 0x38 != 0x38,
             0xf6 | 0xf7 => self.modrm & 0x38 != 0,
             _ => op <= 0x3d && op & 3 < 2 && op >> 3 != 7,
@@ -114,6 +126,7 @@ impl Op {
             0x80 | 0x81 | 0x83 if self.modrm < 0xc0 || self.modrm & 0x38 == 0x38 => 0,
             0x88 | 0x89 | 0xc6 | 0xc7 if self.modrm < 0xc0 => 0,
             0xf6 | 0xf7 if self.modrm < 0xc0 || self.modrm & 0x38 == 0 => 0,
+            0xc0 | 0xc1 | 0xd0 | 0xd1 | 0xfe | 0xff if self.modrm < 0xc0 => 0,
             _ => 0xff, // Preserve actual-change comparison for aliases/identity operations.
         }
     }
@@ -235,7 +248,11 @@ fn displacement_len(m: u8) -> u32 {
     }
 }
 fn memory_modrm(op: u8) -> bool {
-    matches!(op, 0x80 | 0x81 | 0x83..=0x8b | 0xc6 | 0xc7 | 0xf6 | 0xf7) || op <= 0x3d && op & 7 < 4
+    matches!(
+        op,
+        0x80 | 0x81 | 0x83
+            ..=0x8b | 0xc0 | 0xc1 | 0xc6 | 0xc7 | 0xd0 | 0xd1 | 0xf6 | 0xf7 | 0xfe | 0xff
+    ) || op <= 0x3d && op & 7 < 4
 }
 fn memory_spec(op: Op) -> Option<Memory> {
     let opcode = op.opcode;
@@ -349,13 +366,15 @@ fn decode(m: &Machine, ip: u32) -> Option<Op> {
                     _ => 2,
                 }
         }
-        0xd0 | 0xd1 => {
+        0xc0 | 0xc1 | 0xd0 | 0xd1 | 0xfe | 0xff => {
             code(m, instruction_ip, 2)?;
             modrm = m.bus.mem[at + 1];
-            if modrm < 0xc0 {
+            if matches!(op, 0xc0 | 0xc1) && matches!((modrm >> 3) & 7, 2 | 3)
+                || matches!(op, 0xfe | 0xff) && modrm & 0x38 > 8
+            {
                 return None;
             }
-            2
+            2 + displacement_len(modrm) + u32::from(matches!(op, 0xc0 | 0xc1))
         }
         0xa0..=0xa3 => 3,
         0xa8 => 2,
@@ -537,7 +556,11 @@ impl Engine {
             };
             let cap = self.remaining.min(stride);
             self.sample_phase = self.sample_phase.wrapping_add(1);
-            let done = m.step_scheduler((self.deadline - m.bus.cycles) as u32, cap);
+            let done = m.step_scheduler_with_observer(
+                (self.deadline - m.bus.cycles) as u32,
+                cap,
+                |_, _| {},
+            );
             self.remaining -= done;
             self.done += done;
         }
@@ -649,15 +672,11 @@ impl Engine {
             .is_some_and(|memory| memory.flags & Memory::READ != 0)
         {
             if let Some((physical, width)) = self.operand {
-                let mut value = 0;
-                for byte in 0..width {
-                    value |=
-                        u32::from(
-                            m.bus
-                                .cpu_read(physical.wrapping_add(byte), byte, width, false),
-                        ) << (byte * 8);
-                }
-                self.scratch.operand[0] = value;
+                self.scratch.operand[0] = if width == 2 {
+                    u32::from(m.bus.cpu_read_word(physical))
+                } else {
+                    u32::from(m.bus.cpu_read(physical, 0, 1, false))
+                };
             }
         }
         self.active = Some(ActiveInstruction {
@@ -694,13 +713,12 @@ impl Engine {
         };
         if active.write {
             if let Some((physical, width)) = self.operand {
-                for byte in 0..width {
-                    m.bus.cpu_write(
-                        physical.wrapping_add(byte),
-                        byte,
-                        width,
-                        (self.scratch.operand[1] >> (byte * 8)) as u8,
-                    );
+                if width == 2 {
+                    m.bus
+                        .cpu_write_word(physical, self.scratch.operand[1] as u16);
+                } else {
+                    m.bus
+                        .cpu_write(physical, 0, 1, self.scratch.operand[1] as u8);
                 }
             }
         }

@@ -83,6 +83,20 @@ impl Default for Opn {
 }
 
 impl Opn {
+    pub(crate) fn clocks_until_timer(&self) -> u64 {
+        let a = ((self.registers[0x24] as u64) << 2) | (self.registers[0x25] as u64 & 3);
+        [72 * (1024 - a), 1152 * (256 - self.registers[0x26] as u64)]
+            .into_iter()
+            .enumerate()
+            .filter(|(t, _)| self.registers[0x27] & (1 << t) != 0)
+            .map(|(t, period)| {
+                (period.saturating_sub(self.timer[t]) * 8_000_000)
+                    .saturating_sub(self.fraction)
+                    .div_ceil(CLOCK)
+            })
+            .min()
+            .unwrap_or(u64::MAX)
+    }
     pub fn status(&self) -> u8 {
         self.status | if self.busy > 0 { 128 } else { 0 }
     }
