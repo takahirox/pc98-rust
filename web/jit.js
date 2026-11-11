@@ -88,11 +88,40 @@ function memoryOperation(encoded){
     ||[0x80,0x81,0x83,0x84,0x85,0x86,0x87,0x88,0x89,0x8a,0x8b,0xc6,0xc7,0xf6,0xf7].includes(op));
 }
 
+function writtenRegisters(op,m){
+  const wide=!!(op&1),rm=m&7,r=(m>>3)&7;
+  const target=n=>1<<(wide?n:n&3);
+  if(op<=0x3d&&(op&7)<=5){
+    if(op>>3===7)return 0;
+    if((op&7)>=4)return 1;
+    return op&2?target(r):m>=0xc0?target(rm):0;
+  }
+  if(op>=0x40&&op<=0x4f)return 1<<(op&7);
+  if(op>=0x50&&op<=0x57||op===0xc3||op===0xe8)return 1<<4;
+  if(op>=0x58&&op<=0x5f)return (1<<4)|(1<<(op&7));
+  if(op>=0x70&&op<=0x7f||[0x84,0x85,0x9e,0xa8,0xa9,0xe3,0xe9,0xeb,0xf5,0xf8,0xf9,0xfc,0xfd].includes(op))return 0;
+  if([0x80,0x81,0x83].includes(op))return r===7||m<0xc0?0:target(rm);
+  if(op===0x86||op===0x87)return target(r)|(m>=0xc0?target(rm):0);
+  if(op===0x88||op===0x89||op===0xc6||op===0xc7)return m>=0xc0?target(rm):0;
+  if(op===0x8a||op===0x8b)return target(r);
+  if(op>=0x90&&op<=0x97)return 1|(1<<(op&7));
+  if(op===0x9f||op===0xa0||op===0xa1)return 1;
+  if(op===0xa2||op===0xa3)return 0;
+  if(op>=0xb0&&op<=0xbf)return 1<<(op>=0xb8?op&7:op&3);
+  if(op===0xd0||op===0xd1)return target(rm);
+  if(op>=0xe0&&op<=0xe2)return 1<<1;
+  if(op===0xf6||op===0xf7)return r===0||m<0xc0?0:target(rm);
+  throw Error('Missing JIT register-write policy');
+}
+
 /** Compile Rust-preflighted real-mode instructions with optional batch support. */
 export function compileBlock(packet,{batch=false}={}){
   const count=packet[1];
   if(!Number.isInteger(count)||count<1||count>16||packet.length!==2+count*4)throw Error('Invalid JIT plan');
-  const body=[1,6,0x7f]; // Parameters: register/flags/IP/scratch addresses. Six i32 locals.
+  const body=batch?[4,6,0x7f,1,0x7b,1,0x7f,3,0x7f]:[1,6,0x7f];
+  // Existing arithmetic locals are followed by initial registers/FLAGS,
+  // committed prefix length and at most two overwritten register values.
+  const operations=[];
   let start=0,end=0;
   for(let index=0;index<count;index++){
     if(index===end){
@@ -107,8 +136,16 @@ export function compileBlock(packet,{batch=false}={}){
     const rmValue=()=>memory?memoryValue():reg(rm,wide);
     const rmStore=value=>memory?memoryStore(value):put(rm,wide,value);
     const imm=(at,w)=>w?bytes[at]|bytes[at+1]<<8:bytes[at];
+    if(grouped&&index===start)body.push(...set(10,[...get(0),0xfd,0x00,4,0]),...set(11,load(1,0,2)));
+    const destinations=[];
+    if(grouped){
+      const writes=writtenRegisters(op,m);
+      for(let r=0;r<8;r++)if(writes&(1<<r))destinations.push(r);
+      for(let n=0;n<destinations.length;n++)body.push(...set(13+n,reg(destinations[n],true)));
+    }
     // The first operation has already advanced IP in the Rust preflight.
     if(grouped&&index>start)body.push(...get(2),...c(ip+length),0x36,2,0);
+    const operationStart=body.length;
     body.push(...set(7,load(1,0,2)),...set(9,c(0)));
     if(op<=0x3d&&(op&7)<=5){
       const kind=op>>3, direct=(op&7)>=4, dst=direct?0:op&2?r:rm;
@@ -173,17 +210,29 @@ export function compileBlock(packet,{batch=false}={}){
       const displacement=(op===0xe8||op===0xe9)?((imm(1,true)<<16)>>16):((bytes[1]<<24)>>24);
       body.push(...get(9),0x04,0x40,...get(2),...c((ip+length+displacement)&65535),0x36,2,0,0x0b);
     }
-    if(grouped&&index+1<end){
-      // Scratch starts with two operand words, then sixteen 24-byte states.
-      // Preserve each low register bank, FLAGS and IP for precise early exits.
-      const offset=8+index*24;
-      body.push(...get(3),...get(0),0xfd,0x00,4,0,0xfd,0x0b,4,...uleb(offset),
-        ...store(3,offset+16,2,load(1,0,2)),
-        ...get(3),...get(2),0x28,2,0,0x36,2,...uleb(offset+20));
+    operations[index]={ip,length,bytes:body.slice(operationStart)};
+    if(grouped){
+      // Record only the exact changed-register mask required by guest timing.
+      const changes=destinations.map((r,n)=>shl(nz(xor(reg(r,true),get(13+n))),r));
+      body.push(...get(3),...(changes.length?changes.reduce(or):c(0)),0x36,2,...uleb(12+index*4));
     }
     if(index+1===end){
-      body.push(...c(index+1),...(op===0xe8||op===0xe9||op===0xeb?c(0):get(9)),
-        0x10,grouped?1:0,0x45,0x04,0x40,0x0f,0x0b);
+      const take=op===0xe8||op===0xe9||op===0xeb?c(0):get(9);
+      if(grouped){
+        body.push(...set(8,[...c(end),...take,0x10,1]),
+          ...set(12,[...get(3),0x28,2,8]),
+          ...get(12),...c(end-start),0x49,0x04,0x40,
+          ...get(0),...get(10),0xfd,0x0b,4,0,...store(1,0,2,get(11)));
+        // Early exits are uncommon. Re-execute only committed register
+        // semantics, using the original prepared operand for the first op.
+        // This path makes no callbacks and repeats no device access.
+        for(let replay=start;replay<end;replay++){
+          const saved=operations[replay];
+          body.push(...get(12),...c(replay-start),0x4b,0x04,0x40,
+            ...get(2),...c(saved.ip+saved.length),0x36,2,0,...saved.bytes,0x0b);
+        }
+        body.push(0x0f,0x0b,...get(8),0x45,0x04,0x40,0x0f,0x0b);
+      }else body.push(...c(end),...take,0x10,0,0x45,0x04,0x40,0x0f,0x0b);
     }
   }
   body.push(0x0b);
