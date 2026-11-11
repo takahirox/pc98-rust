@@ -27,26 +27,26 @@ async function boot(code,patch=[]){
   }
   return core;
 }
-async function pair(instruction,patch=[]){
+async function pair(instruction,patch=[],ip=1){
   // NOP makes a conditional branch a two-instruction block. Both outcomes
   // rejoin this original boot probe's loop; there are no external guest bytes.
-  const code=[0x90,...instruction,0x90,0xeb,(-instruction.length-4)&255];
+  const code=[...Array(ip).fill(0x90),...instruction,0x90,0xeb,(-instruction.length-4)&255];
   const a=await boot(code,patch),b=await boot(code,patch);
   let id=0;
   for(let n=0;!id;n++){
     assert(n<64,'hot probe did not warm');
-    for(const core of [a,b]){const [,,p]=layout(core);new DataView(core.memory.buffer).setUint32(p,1,true);}
+    for(const core of [a,b]){const [,,p]=layout(core);new DataView(core.memory.buffer).setUint32(p,ip,true);}
     a.jit_begin_slice(80000,1);id=a.jit_dispatch(1);b.step(a.jit_done());
   }
   assert(id,'hot register block was not offered');
-  const plan=packet(a);assert.equal(plan[2],1);
+  const plan=packet(a);assert.equal(plan[2],ip);
   const bytes=compileBlock(plan),compiled=await WebAssembly.compile(bytes);
   const run=new WebAssembly.Instance(compiled,{core:{memory:a.memory,next:a.jit_next}}).exports.run;
   assert.equal(a.jit_register(id,1),1);assert.deepEqual(state(a),state(b));
-  return {a,b,id,plan,run};
+  return {a,b,id,plan,run,ip};
 }
 function execute(p,regs,flags,cap=2){
-  for(const core of [p.a,p.b])setState(core,regs,flags,1);
+  for(const core of [p.a,p.b])setState(core,regs,flags,p.ip);
   p.a.jit_begin_slice(80000,cap);assert.equal(p.a.jit_start(p.id),1);
   p.run(...layout(p.a));p.b.step(cap);
   assert.equal(p.a.jit_done(),cap);
@@ -79,6 +79,14 @@ test('generated Wasm preserves byte aliases, immediate sign extension and INC ca
     const p=await pair(code);
     for(let n=0;n<100;n++)execute(p,Array.from({length:8},()=>random()&65535),(random()&0xcd5)|2);
   }
+});
+
+test('translated fetches retain timing across a cache line boundary',async()=>{
+  // The NOP warms the first cache line. MOV starts at 0x0f and spans two
+  // fetch beats and two cache lines.
+  const p=await pair([0xc7,0xc0,0x34,0x12],[],0x0e);
+  execute(p,[0,0,0,0,0,0,0,0],2);
+  assert.equal(state(p.a).r[0],0x1234);
 });
 
 test('every condition and LOOP path retains IP, registers and taken-branch timing',async()=>{

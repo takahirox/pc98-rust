@@ -687,11 +687,22 @@ impl Cpu {
         self.address32 = false;
         self.lock_prefix = false;
         self.trap_suppressed = false;
-        // Entry already validated the complete CS span, mode and raw bytes.
-        // Retain every original bus fetch without repeating translation/limits.
-        for byte in 0..u32::from(op.len) {
-            b.timing.last_byte = b.cpu_read(physical + byte, 0, 1, true);
+        // The guard matched the bytes in conventional RAM. Account for each
+        // four-byte fetch beat in order and retain the final byte for timing.
+        let last = physical + u32::from(op.len) - 1;
+        for beat in (physical / 4)..=(last / 4) {
+            b.timing.memory(
+                b.profile,
+                (beat * 4) as usize,
+                0,
+                1,
+                false,
+                true,
+                true,
+                false,
+            );
         }
+        b.timing.last_byte = op.bytes[usize::from(op.len) - 1];
         self.ip += u32::from(op.len);
         self.instruction_bytes = op.len;
         let mut instruction =
