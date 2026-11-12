@@ -26,6 +26,9 @@ impl Default for Mouse {
     }
 }
 impl Mouse {
+    pub(crate) fn clocks_until_irq(&self) -> u64 {
+        (8_000_000 - self.fraction).div_ceil(120 >> (self.rate & 3))
+    }
     /// Host supplies relative movement and DOM button bits; all consumption is
     /// through the guest PPI and optional periodic IRQ13, never application RAM.
     pub fn motion(&mut self, dx: i32, dy: i32, buttons: u8) {

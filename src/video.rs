@@ -203,17 +203,47 @@ impl VideoView<'_> {
 #[derive(Default)]
 pub struct SnapshotRenderer {
     glyphs: UserCharacters,
+    previous: Vec<u8>,
+    pixels: Vec<u8>,
+    blink_phase: (bool, bool),
 }
 impl SnapshotRenderer {
     pub fn render(&mut self, bytes: &[u8], out: &mut [u8]) -> bool {
+        if out.len() != 640 * 400 * 4 {
+            return false;
+        }
+        if let Some(pixels) = self.frame(bytes) {
+            out.copy_from_slice(pixels);
+            true
+        } else {
+            false
+        }
+    }
+    /// Retain pixels inside the renderer so the Worker can transfer them without
+    /// an extra full-frame cache copy, including when every frame changes.
+    pub fn frame(&mut self, bytes: &[u8]) -> Option<&[u8]> {
+        if self.update(bytes)? {
+            self.previous.clear();
+            self.previous.extend_from_slice(bytes);
+        }
+        Some(&self.pixels)
+    }
+    /// Recycle the previous input allocation on a changed frame. The Worker
+    /// obtains a fresh transfer pointer for each incoming snapshot.
+    pub fn frame_owned(&mut self, bytes: &mut Vec<u8>) -> Option<&[u8]> {
+        if self.update(bytes)? {
+            std::mem::swap(&mut self.previous, bytes);
+        }
+        Some(&self.pixels)
+    }
+    fn update(&mut self, bytes: &[u8]) -> Option<bool> {
         if bytes.len() < GRAPHICS
             || &bytes[..4] != MAGIC
             || bytes[4] > 1
             || bytes[6] > 1
             || bytes[5] & 128 != 0
-            || out.len() != 640 * 400 * 4
         {
-            return false;
+            return None;
         }
         let profile = if bytes[4] == 0 {
             Profile::Pc9801Vm
@@ -228,7 +258,7 @@ impl SnapshotRenderer {
         if bytes.len() != GRAPHICS + graphics_len
             || profile == Profile::Pc9801Vm && bytes[5] & 32 != 0
         {
-            return false;
+            return None;
         }
         let gdcs = std::array::from_fn(|i| {
             let b = &bytes[16 + i * 32..48 + i * 32];
@@ -248,6 +278,25 @@ impl SnapshotRenderer {
             g.scroll.copy_from_slice(&b[16..32]);
             g
         });
+        let cycles = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+        let frame = cycles / 133_333;
+        let gdc = &gdcs[0];
+        let text = bytes[5] & 64 != 0 && gdc.enabled;
+        let rate = u64::from(gdc.blink_rate.max(1));
+        let blink_phase = (
+            text && frame % (8 * rate) >= 6 * rate,
+            text && gdc.cursor_on(frame),
+        );
+        // Time affects scanout only through text/cursor blink. Compare the
+        // complete remaining snapshot, including palettes and writable glyphs,
+        // rather than guessing which guest writes might affect the screen.
+        if self.previous.len() == bytes.len()
+            && self.blink_phase == blink_phase
+            && self.previous[..8] == bytes[..8]
+            && self.previous[16..] == bytes[16..]
+        {
+            return Some(false);
+        }
         let palette = std::array::from_fn(|i| {
             bytes[HEADER + i * 3..HEADER + i * 3 + 3]
                 .try_into()
@@ -259,6 +308,7 @@ impl SnapshotRenderer {
                 .unwrap()
         });
         self.glyphs.restore_snapshot(&bytes[GLYPHS..TEXT]);
+        self.pixels.resize(640 * 400 * 4, 0);
         VideoView {
             profile,
             cg_dot: bytes[5] & 1 != 0,
@@ -269,7 +319,7 @@ impl SnapshotRenderer {
             pegc: bytes[5] & 32 != 0,
             text_enabled: bytes[5] & 64 != 0,
             display_page: bytes[6],
-            cycles: u64::from_le_bytes(bytes[8..16].try_into().unwrap()),
+            cycles,
             mem: &bytes[TEXT..GRAPHICS],
             graphics: &bytes[GRAPHICS..],
             gdcs: &gdcs,
@@ -277,7 +327,8 @@ impl SnapshotRenderer {
             pegc_palette: &pegc_palette,
             user_characters: &self.glyphs,
         }
-        .frame(out);
-        true
+        .frame(&mut self.pixels);
+        self.blink_phase = blink_phase;
+        Some(true)
     }
 }

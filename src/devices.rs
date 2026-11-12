@@ -213,6 +213,33 @@ impl Default for Counter {
     }
 }
 impl Counter {
+    fn ticks_until_irq(&self) -> Option<u64> {
+        if !self.enabled {
+            return None;
+        }
+        let ticks = match self.mode {
+            0 if self.output => return None,
+            0 | 2 if self.load_pending => u64::from(self.reload) + 1,
+            3 if self.load_pending => u64::from(self.reload) + 1,
+            3 if self.mode3_reload != self.reload && self.output => {
+                u64::from(self.mode3_reload.div_ceil(2) - self.mode3_phase)
+                    + u64::from(self.reload / 2)
+            }
+            3 => u64::from(self.mode3_reload - self.mode3_phase),
+            4 if self.load_pending => {
+                if self.output {
+                    u64::from(self.reload) + 2
+                } else {
+                    1
+                }
+            }
+            4 if !self.output => 1,
+            4 if self.mode4_armed => u64::from(self.remaining) + 1,
+            4 => return None,
+            _ => u64::from(self.remaining),
+        };
+        Some(ticks.max(1))
+    }
     fn write(&mut self, v: u8) {
         if self.mode == 0 {
             // A count write starts a new mode-0 lifecycle immediately. The
@@ -449,6 +476,11 @@ pub struct Pit {
     fraction: u64,
 }
 impl Pit {
+    pub(crate) fn clocks_until_irq(&self) -> u64 {
+        self.c[0].ticks_until_irq().map_or(u64::MAX, |ticks| {
+            (ticks * 8_000_000 - self.fraction).div_ceil(1_996_800)
+        })
+    }
     pub fn write(&mut self, channel: usize, v: u8) {
         if channel == 3 {
             let n = (v >> 6) as usize;
@@ -968,7 +1000,33 @@ impl Fdc {
 
 #[cfg(test)]
 mod pic_arbitration_tests {
-    use super::Pic;
+    use super::{Pic, Pit};
+
+    #[test]
+    fn pit_event_deadline_matches_clock_by_clock_rising_edges() {
+        for mode in [0, 1, 2, 3, 4, 5] {
+            for divisor in 1..=17 {
+                let mut pit = Pit::default();
+                pit.write(3, 0x30 | (mode << 1));
+                pit.write(0, divisor);
+                pit.write(0, 0);
+                for step in 0..80 {
+                    let mut reference = pit.c[0];
+                    let actual = (1_u64..=128).find(|_| reference.tick(1));
+                    assert_eq!(
+                        pit.c[0].ticks_until_irq(),
+                        actual,
+                        "mode={mode} divisor={divisor} step={step}"
+                    );
+                    pit.c[0].tick(1);
+                    if step == 19 || step == 41 {
+                        pit.write(0, divisor + 3);
+                        pit.write(0, 0);
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn bit_priority_matches_ordered_arbitration_for_all_requests_and_service_levels() {

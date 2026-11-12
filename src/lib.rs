@@ -89,7 +89,10 @@ impl Machine {
         firmware::initialize(&mut self.bus);
     }
     pub fn step(&mut self, budget: u32) -> u32 {
-        self.step_with_observer(budget, |_, _| {})
+        self.bus.begin_device_run();
+        let done = self.step_with_observer(budget, |_, _| {});
+        self.bus.end_device_run();
+        done
     }
     /// Step with a read-only callback before each instruction, after IRQ delivery.
     pub fn step_with_observer(
@@ -124,7 +127,10 @@ impl Machine {
     /// Returns bounded units executed; callers retain any unfinished time debt.
     /// One instruction/firmware transaction can overshoot the requested time.
     pub fn step_scheduler(&mut self, clocks: u32, max_units: u32) -> u32 {
-        self.step_scheduler_with_observer(clocks, max_units, |_, _| {})
+        self.bus.begin_device_run();
+        let done = self.step_scheduler_with_observer(clocks, max_units, |_, _| {});
+        self.bus.end_device_run();
+        done
     }
     pub fn step_scheduler_with_observer(
         &mut self,
@@ -160,6 +166,14 @@ mod wasm {
     #[no_mangle]
     pub extern "C" fn jit_begin_slice(clocks: u32, cap: u32) {
         MACHINE.with(|m| JIT.with(|j| j.borrow_mut().begin_slice(&m.borrow(), clocks, cap)));
+    }
+    #[no_mangle]
+    pub extern "C" fn jit_devices_begin() {
+        MACHINE.with(|m| m.borrow_mut().bus.begin_device_run());
+    }
+    #[no_mangle]
+    pub extern "C" fn jit_devices_end() {
+        MACHINE.with(|m| m.borrow_mut().bus.end_device_run());
     }
     #[no_mangle]
     pub extern "C" fn jit_dispatch(compile: u32) -> u32 {
@@ -316,7 +330,6 @@ mod wasm {
     thread_local! {
         static VIDEO: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
         static RENDERER: RefCell<video::SnapshotRenderer> = RefCell::new(video::SnapshotRenderer::default());
-        static PIXELS: RefCell<Vec<u8>> = RefCell::new(vec![0; 640*400*4]);
     }
     #[no_mangle]
     pub extern "C" fn video_snapshot() -> *const u8 {
@@ -334,15 +347,15 @@ mod wasm {
     #[no_mangle]
     pub extern "C" fn video_render(len: usize) -> *const u8 {
         TRANSFER.with(|v| {
-            PIXELS.with(|pixels| {
-                RENDERER.with(|renderer| {
-                    let bytes = v.borrow();
-                    let mut pixels = pixels.borrow_mut();
-                    if len != bytes.len() || !renderer.borrow_mut().render(&bytes, &mut pixels) {
-                        return std::ptr::null();
-                    }
-                    pixels.as_ptr()
-                })
+            RENDERER.with(|renderer| {
+                let mut bytes = v.borrow_mut();
+                if len != bytes.len() {
+                    return std::ptr::null();
+                }
+                renderer
+                    .borrow_mut()
+                    .frame_owned(&mut bytes)
+                    .map_or(std::ptr::null(), |pixels| pixels.as_ptr())
             })
         })
     }

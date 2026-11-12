@@ -139,6 +139,16 @@ test('compilation failure keeps executing the interpreter; reset rejects an old 
   const p=await pair([0x40]);p.a.reset();assert.equal(p.a.jit_register(p.id,1),0);
 });
 
+test('cached runs retain live carry/overflow across immediate shifts and every early prefix',async()=>{
+  const p=await pair([
+    0xb0,0x81,0x04,0x7f,0xc0,0xe0,4,0xb4,0x81,0x9e,0xc0,0xc8,9,
+    0x14,1,0xd0,0xd8,0xfe,0xc4,0xc1,0xe8,0,0x9f,0xf5,0x83,0xd0,0,0x7e,1,
+  ]);
+  for(let cap=1;cap<=p.plan[1];cap++)for(let n=0;n<16;n++){
+    execute(p,Array.from({length:8},()=>random()&65535),(random()&0xcd5)|2,cap);
+  }
+});
+
 test('self-modified code exits before the stale operation and executes the replacement',async()=>{
   // Guest CS:MOV changes INC AX at offset 2 into DEC AX, then jumps to the loop.
   const p=await pair([0x40],[0x2e,0xc6,0x06,2,0,0x48,0xe9,0xf8,0xfe]);
@@ -280,7 +290,8 @@ test('generated memory operations preserve GRCG writes across all four video pla
   const setup=[0xb8,0,0xa8,0x8e,0xd8,0xb0,0xc0,0xe6,0x7c];
   for(const tile of [0xf0,0x0f,0xaa,0x55])setup.push(0xb0,tile,0xe6,0x7e);
   setup.push(0x90);setup.length=0x40;setup.fill(0,26);setup.push(0xb0,0,0xe6,0x7c);
-  for(const code of [[0x89,0x07],[0x01,0x07],[0x87,0x07],[0xf7,0x17],[0xf7,0x1f]]){
+  for(const code of [[0x89,0x07],[0x01,0x07],[0x87,0x07],[0xf7,0x17],[0xf7,0x1f],
+    [0xd1,0x27],[0xc1,0x2f,4],[0xfe,0x07]]){
     const p=await pair(code,setup);
     for(const core of [p.a,p.b]){const s=state(core);setState(core,s.r,2,0x100);core.step(13);}
     execute(p,[0x81c3,0,0,3,0x8000,0,0,0],0x807);
@@ -367,14 +378,37 @@ test('single-bit shifts and rotations preserve all flags and byte aliases',async
   }
 });
 
-test('memory shifts retain the interpreter bus path',async()=>{
-  const p=await pair([0xd1,0x26,0,0x80],[0xb8,1,0x80,0xa3,0,0x80]);
-  assert.equal(p.plan[1],1); // The leading NOP ends before unsupported memory SHL.
-  for(const core of [p.a,p.b]){const s=state(core);setState(core,s.r,2,0x100);core.step(2);setState(core,s.r,2,1);}
-  p.a.jit_begin_slice(80000,2);assert.equal(p.a.jit_start(p.id),1);p.run(...layout(p.a));p.b.step(1);
-  assert.equal(p.a.jit_done(),1);assert.deepEqual(state(p.a),state(p.b));
-  p.a.jit_dispatch(0);p.b.step(1);assert.deepEqual(state(p.a),state(p.b));
-  for(const at of [0x8000,0x8001])assert.equal(p.a.peek(at),p.b.peek(at));
+test('immediate shifts preserve masked counts, aliases, carry and undefined-flag policy',async()=>{
+  for(const wide of [false,true])for(const group of [0,1,4,5,6,7])for(const count of [...Array(34).keys(),255]){
+    const dst=(count%3)*3%8,p=await pair([wide?0xc1:0xc0,0xc0|group<<3|dst,count]);
+    for(const value of [0,1,0x7f,0x80,0x7fff,0x8000,0x8001,0xffff])for(const carry of [0,1]){
+      const regs=Array.from({length:8},()=>random()&65535);
+      if(wide)regs[dst]=value;
+      else {const r=dst&3,shift=dst<4?0:8;regs[r]=(regs[r]&~(255<<shift))|(value&255)<<shift;}
+      execute(p,regs,(random()&0xcd4)|2|carry,count%2?2:4);
+    }
+  }
+});
+
+test('memory shifts and group increments preserve bus writes, timing and carry',async()=>{
+  const cases=[];
+  for(const wide of [0,1]){
+    for(let group=0;group<8;group++)cases.push([0xd0+wide,0x06|group<<3,0,0x80]);
+    for(const group of [0,1,4,5,6,7])for(const count of [0,1,4,8,16,31,32,255])cases.push([0xc0+wide,0x06|group<<3,0,0x80,count]);
+    for(const group of [0,1])cases.push([0xfe+wide,0x06|group<<3,0,0x80]);
+  }
+  for(const code of cases){
+    const p=await pair(code,[0xa3,0,0x80]);
+    for(const value of [0,1,0x7fff,0x8000,0xffff])for(const carry of [0,1]){
+      for(const core of [p.a,p.b]){setState(core,[value,0,0,0,0x8000,0,0,0],2,0x100);core.step(1);}
+      execute(p,[0,0,0,0,0x8000,0,0,0],0x8d6|carry,4);
+      for(const at of [0x8000,0x8001])assert.equal(p.a.peek(at),p.b.peek(at));
+    }
+  }
+  for(const op of [0xfe,0xff])for(const dst of [0,4,7])for(const group of [0,1]){
+    const p=await pair([op,0xc0|group<<3|dst]);
+    for(let n=0;n<32;n++)execute(p,Array.from({length:8},()=>random()&65535),(random()&0xcd5)|2,4);
+  }
 });
 
 test('all segment overrides preserve memory selection, stack rules and full instruction lengths',async()=>{
@@ -383,7 +417,8 @@ test('all segment overrides preserve memory selection, stack rules and full inst
   for(const s of [0,2,3,4,5])patch.push(0xb8,selectors[s]&255,selectors[s]>>8,0x8e,0xc0|s<<3);
   for(let s=0;s<6;s++)patch.push(prefixes[s],0xc7,6,0,0x80,s,0x12);
   const cases=[[0x8b,7],[0x8b,0x46,0],[0x8a,0x27],[0xa1,0,0x80],[0x89,7],
-    [0xc7,6,0,0x80,0x34,0x12],[0x50],[0x58],[0xc3],[0xe8,0,0],[0x74,1],[0xd0,0xe8]];
+    [0xc7,6,0,0x80,0x34,0x12],[0x50],[0x58],[0xc3],[0xe8,0,0],[0x74,1],[0xd0,0xe8],
+    [0xc1,0x67,0,4],[0xfe,0x07]];
   for(const prefix of prefixes)for(const code of cases){
     const p=await pair([prefix,...code],patch);
     for(const core of [p.a,p.b]){const s=state(core);setState(core,s.r,2,0x100);core.step(16);}
@@ -396,7 +431,7 @@ test('all segment overrides preserve memory selection, stack rules and full inst
 });
 
 test('unsupported prefix combinations and opcodes retain interpreter decoding',async()=>{
-  for(const code of [[0x26,0x2e,0x8b,7],[0x66,0x40],[0x67,0x40],[0x26,0xcd,0x18]]){
+  for(const code of [[0x26,0x2e,0x8b,7],[0x66,0x40],[0x67,0x40],[0x26,0xcd,0x18],[0xc0,0xd0,4],[0xc1,0xd8,4],[0xff,0xe0],[0xff,0xd0],[0xfe,0xd0]]){
     const p=await pair(code);assert.equal(p.plan[1],1);
     p.a.jit_begin_slice(80000,2);assert.equal(p.a.jit_start(p.id),1);p.run(...layout(p.a));p.b.step(1);
     assert.equal(p.a.jit_done(),1);assert.deepEqual(state(p.a),state(p.b));

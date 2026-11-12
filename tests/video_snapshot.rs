@@ -78,6 +78,35 @@ fn malformed_snapshots_are_rejected_before_reading_vram_or_touching_pixels() {
 }
 
 #[test]
+fn retained_scanout_tracks_blink_boundaries_and_restores_arbitrary_output_buffers() {
+    let mut renderer = SnapshotRenderer::default();
+    let mut machine = Machine::new(Profile::Pc9821ApDos);
+    let mut snapshot = Vec::new();
+    let mut pixels = vec![0; 640 * 400 * 4];
+    machine.bus.gdcs[0].enabled = true;
+    machine.bus.gdcs[0].cursor_visible = true;
+    machine.bus.gdcs[0].cursor_blink = true;
+    machine.bus.gdcs[0].blink_rate = 1;
+    machine.bus.mem[0xa0000] = b'A';
+    machine.bus.mem[0xa2000] = 0xf3; // Visible blinking text.
+    for frame in [0, 0, 1, 5, 6, 7, 8, 8, 9, 15, 16] {
+        machine.bus.cycles = frame * 133_333;
+        machine.bus.video().snapshot(&mut snapshot);
+        pixels.fill(0x55); // The caller need not retain the previous pixels.
+        assert!(renderer.render(&snapshot, &mut pixels));
+        assert_eq!(pixels, machine.render(), "frame {frame}");
+    }
+    // A failed render must not poison the last valid cached result.
+    let valid = snapshot.clone();
+    snapshot[3] ^= 1;
+    pixels.fill(0xaa);
+    assert!(!renderer.render(&snapshot, &mut pixels));
+    assert!(pixels.iter().all(|&v| v == 0xaa));
+    assert!(renderer.render(&valid, &mut pixels));
+    assert_eq!(pixels, machine.render());
+}
+
+#[test]
 fn interleaved_snapshots_do_not_change_guest_execution_devices_or_audio() {
     for profile in [Profile::Pc9801Vm, Profile::Pc9821ApDos] {
         let mut plain = Machine::new(profile);
@@ -96,5 +125,26 @@ fn interleaved_snapshots_do_not_change_guest_execution_devices_or_audio() {
         assert_eq!(plain.bus.audio, captured.bus.audio);
         assert_eq!(plain.bus.beep_edges, captured.bus.beep_edges);
         assert_eq!(plain.bus.sound_irq_edges, captured.bus.sound_irq_edges);
+    }
+}
+
+#[test]
+fn owned_snapshots_recycle_input_storage_without_changing_pixels_or_invalidating_cache() {
+    let mut renderer = SnapshotRenderer::default();
+    let mut machine = Machine::new(Profile::Pc9821ApDos);
+    let mut transfer = Vec::new();
+    for n in 0..8 {
+        machine.bus.cycles = n * 133_333;
+        if n % 3 == 0 {
+            machine.bus.graphics[n as usize] ^= 0xff;
+        }
+        machine.bus.video().snapshot(&mut transfer);
+        let expected = machine.render().to_vec();
+        assert_eq!(renderer.frame_owned(&mut transfer).unwrap(), expected);
+        let mut unchanged = Vec::new();
+        machine.bus.video().snapshot(&mut unchanged);
+        assert_eq!(renderer.frame(&unchanged).unwrap(), expected);
+        assert!(renderer.frame_owned(&mut vec![0; 12]).is_none());
+        assert_eq!(renderer.frame(&unchanged).unwrap(), expected);
     }
 }
