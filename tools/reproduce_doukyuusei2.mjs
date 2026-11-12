@@ -10,6 +10,9 @@ import os from 'node:os';
 const options=Object.fromEntries(process.argv.slice(2).map(v=>v.replace(/^--/,'').split('=')));
 options.jit??='0';
 const engine=options.browser, clicks=Number(options.clicks??48);
+for(const name of ['headless','noSandbox','samplePatches'])if(options[name]!==undefined&&!['0','1'].includes(options[name]))throw Error('Expected --'+name+'=0|1');
+const headless=options.headless==='1',noSandbox=options.noSandbox==='1',samplePatches=options.samplePatches!=='0';
+if(engine==='firefox'&&(headless||noSandbox))throw Error('Headless/container flags apply only to Chromium controls');
 if(options.jit!==undefined&&!['0','1'].includes(options.jit))throw Error('Expected --jit=0|1');
 if(!['chrome','firefox'].includes(engine) || !Number.isInteger(clicks) || clicks<1 || clicks>240)
   throw Error('Expected --browser=chrome|firefox and --clicks=1..240');
@@ -59,7 +62,7 @@ async function sample(){
   if(pending)return;pending=true;
   try{
     const s=await pc98.stats(),context=document.querySelector('#screen').getContext('2d'),patches=[];
-    for(const y of [30,140,250])for(const x of [70,310,550]){
+    if(${samplePatches})for(const y of [30,140,250])for(const x of [70,310,550]){
       let hash=2166136261;for(const byte of context.getImageData(x,y,16,16).data)hash=Math.imul(hash^byte,16777619)>>>0;
       patches.push(hash);
     }
@@ -69,7 +72,11 @@ async function sample(){
       overflows:s.overflows,droppedSamples:s.droppedSamples,sequenceErrors:s.sequenceErrors,checksumErrors:s.checksumErrors,
       frames:s.presentationStats.frames,guestSlices:s.videoStats.guestSlices,guestSliceMs:s.videoStats.guestSliceMs,
       hddReads:s.hddReads,fmKeyEdges:s.fmKeyEdges,soundIrqEdges:s.soundIrqEdges,
+      cpuCycles:s.cpuCycles,completedInstructions:s.completedInstructions,repElements:s.repElements,
       videoMode:s.videoMode,rendererFailure:s.rendererFailure,error:s.error,hidden:document.hidden,
+      underflowRun:s.underflowRun,maxUnderflowRun:s.maxUnderflowRun,outstandingSamples:s.outstandingSamples,
+      scheduledSamples:s.scheduledSamples,deviceSampleRate:s.deviceSampleRate,
+      sliceHistogram:s.sliceHistogram,videoStats:s.videoStats,renderStats:s.renderStats,presentationStats:s.presentationStats,
       output:reproductionAudio(),patches,jit:s.jit});
     if(s.error || !s.running || s.audioState!=='running')throw Error('Playback stopped or faulted');
   }finally{pending=false;}
@@ -135,6 +142,7 @@ if(engine==='firefox') await writeFile(path.join(profile,'user.js'),[
   'user_pref("media.autoplay.default", 0);','user_pref("media.autoplay.blocking_policy", 0);','',
 ].join('\n'));
 let finish,child;
+const cgroups=async()=>Object.fromEntries(await Promise.all(['cpu.max','cpu.stat','cpuset.cpus.effective'].map(async name=>[name,await readFile('/sys/fs/cgroup/'+name,'utf8').catch(()=>null)])));
 const completed=new Promise(resolve=>{finish=resolve;});
 const server=createServer(async(request,response)=>{
   try{
@@ -167,7 +175,8 @@ try{
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(8079,'127.0.0.1',resolve);});
   const url='http://127.0.0.1:8079/?diagnostics&jit='+(options.jit==='0'?'0':'1');
   const args=engine==='firefox'?['-no-remote','-profile',profile,url]:
-    ['--user-data-dir='+profile,'--no-first-run','--no-default-browser-check','--autoplay-policy=no-user-gesture-required',url];
+    [...(headless?['--headless']:[]),...(noSandbox?['--no-sandbox']:[]),'--user-data-dir='+profile,'--no-first-run','--no-default-browser-check','--autoplay-policy=no-user-gesture-required',url];
+  const cgroupBefore=await cgroups();
   child=spawn(options.executable,args,{stdio:['ignore','ignore','pipe']});
   let stderr='';child.stderr.on('data',chunk=>{stderr=(stderr+chunk).slice(-1500);});
   const result=await Promise.race([completed,
@@ -177,12 +186,13 @@ try{
   const missing=names.filter(name=>!counts[name] && !(name==='jit.js'&&options.jit==='0'));
   if(missing.length && !result.error)result.error='Selected runtime assets were not served: '+missing.join(', ');
   await writeFile(options.output,JSON.stringify({context:{date:new Date().toISOString(),engine,
-    automationProtocol:false,manualGuestAdvance:false,headless:false,automaticAudioActivation:true,
+    automationProtocol:false,manualGuestAdvance:false,headless,noSandbox,samplePatches,automaticAudioActivation:true,
     os:os.type()+' '+os.release()+' '+os.arch(),cpu:os.cpus()[0].model,node:process.version,
-    sourceHashes,servedHashes,harnessHash,mediaSha256:sha(await readFile(options.media)),counts,clicks,jit:options.jit!=='0'},...result},null,2)+'\n',{flag:'wx'});
+    sourceHashes,servedHashes,harnessHash,mediaSha256:sha(await readFile(options.media)),counts,clicks,jit:options.jit!=='0',
+    cgroupBefore,cgroupAfter:await cgroups()},...result},null,2)+'\n',{flag:'wx'});
   const a=result.rows[0],b=result.rows.at(-1);
   console.log(JSON.stringify({error:result.error,rows:result.rows.length,
     guestSecondsPerWallSecond:a?(b.guestSeconds-a.guestSeconds)*1000/(b.wallMs-a.wallMs):null,
-    missingSourceSamples:a?b.underflows-a.underflows:null,output:b?.output,hddReads:b?.hddReads,fmKeyEdges:b?.fmKeyEdges}));
+    missingDeviceSamples:a?b.underflows-a.underflows:null,output:b?.output,hddReads:b?.hddReads,fmKeyEdges:b?.fmKeyEdges}));
   if(result.error)process.exitCode=1;
 }finally{child?.kill('SIGTERM');server.closeAllConnections();server.close();}
