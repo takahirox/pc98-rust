@@ -1,5 +1,9 @@
 # Reproduce before further optimization — Issue #146
 
+For the later Worker-calibrated CPU-budget reproduction, see
+[CPU-budget evaluation](cpu-budget-evaluation.md). It preserves the production
+startup/input path below and records the limits of quota-based hardware simulation.
+
 This investigation starts from `0e8d502`, after PR #148. The user explicitly
 requests reproducing the slow image changes and unstable audio before choosing
 another optimization. The installed base-game HDD, original floppies, captured
