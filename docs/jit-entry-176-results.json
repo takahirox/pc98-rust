@@ -1,0 +1,164 @@
+{
+  "issue": 176,
+  "baselineCommit": "13fb77018ca8c5c5639c94c0a3cac2105c3c9d74",
+  "context": {
+    "date": "2026-11-13T16:05:49.598Z",
+    "browser": "157.0.8103.52",
+    "os": "27.2.0",
+    "arch": "arm64",
+    "cpu": "Apple M4 Max",
+    "hashes": {
+      "base.wasm": "7f9ddb5d7f03268799152108beb92b7df0edb0d4492fee3a535d801b75d09078",
+      "candidate.wasm": "f4fb5d3bdb8c880363764cb7ffa52c1d937469c1255aadeb5768ef5fe130bacb",
+      "jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+      "bench.js": "1134159b1f31c19ee97de9ec3aa1683d89987df63ea11976002a70bfdedfe96e"
+    },
+    "mediaSha256": "1e7fd7e612a6eb7a6ade8c592ae9e0a5ff3cb1a199214bf9fefb1cf8e186b5b6",
+    "harnessSha256": "a14d561954ae2accfdf93d56f712bc19e7b3bd1c2b0fe07af058a67cce60ef5c"
+  },
+  "artifacts": {
+    "baselineBytes": 574117,
+    "candidateBytes": 574687,
+    "rustVersion": "1.100.0",
+    "build": "release opt-level 2/LTO, Wasm SIMD, Binaryen 132 -O3 -g"
+  },
+  "scope": "Alternating identical fixed game work in one Worker; CPU/device execution plus PCM hashing. Excludes renderer, AudioWorklet, GPU, timer yields and compilation tasks. Shared current jit.js uses the legacy dispatcher on the baseline core. No profiler or concurrent build/tests.",
+  "diagnostic": {
+    "totalSamples": 6453,
+    "idleSamples": 2126,
+    "inclusiveCounts": {
+      "jit_dispatch": 1712,
+      "Engine::prepare": 960,
+      "jit_enter": 639
+    },
+    "note": "Separate baseline profile in static bell scene; inclusive counts overlap and profiled timings are not benchmark results."
+  },
+  "pairs": [
+    {
+      "repeat": 0,
+      "baselineActiveMs": 5567.299999982119,
+      "candidateActiveMs": 5414.300000041723,
+      "reductionPercent": 2.748190324589783,
+      "guestSeconds": 24.0002795,
+      "metrics": {
+        "0": 118663329,
+        "1": 0,
+        "2": 0,
+        "5": 192002236,
+        "6": 15164,
+        "7": 1464,
+        "9": 131,
+        "10": 0,
+        "14": 0,
+        "15": 0,
+        "19": 0,
+        "20": 6214,
+        "23": 934,
+        "26": 1584018440,
+        "27": 118102981,
+        "28": 640824,
+        "30": 118663329
+      },
+      "pcmSamples": 1152013,
+      "pcmFnv32": 3284892698,
+      "frameFnv32": 1013578406,
+      "cpuStateSha256": "092f423551f606af4d9dfbf5263c24f3ce17651058a45f02103e202ad3abed56",
+      "checkpointSha256": [
+        "a1aa9a4de75ea04b1f72949ba39dac6a9f00444839b2ace0a03c86549a99f640",
+        "2c5a5c1413ebc987c7c18052d3c7bab0773b3394cea8f206ca7fdec34bfc54e7",
+        "eb3f6ccb3c5cbade7acc00fb515029cea0866081cd4bb0ee3abd47994b725618"
+      ],
+      "translatedInstructions": 93107752
+    },
+    {
+      "repeat": 1,
+      "baselineActiveMs": 5695.800000034273,
+      "candidateActiveMs": 5547.0999999418855,
+      "reductionPercent": 2.610695601873181,
+      "guestSeconds": 24.0002795,
+      "metrics": {
+        "0": 118663329,
+        "1": 0,
+        "2": 0,
+        "5": 192002236,
+        "6": 15164,
+        "7": 1464,
+        "9": 131,
+        "10": 0,
+        "14": 0,
+        "15": 0,
+        "19": 0,
+        "20": 6214,
+        "23": 934,
+        "26": 1584018440,
+        "27": 118102981,
+        "28": 640824,
+        "30": 118663329
+      },
+      "pcmSamples": 1152013,
+      "pcmFnv32": 3284892698,
+      "frameFnv32": 1013578406,
+      "cpuStateSha256": "092f423551f606af4d9dfbf5263c24f3ce17651058a45f02103e202ad3abed56",
+      "checkpointSha256": [
+        "a1aa9a4de75ea04b1f72949ba39dac6a9f00444839b2ace0a03c86549a99f640",
+        "2c5a5c1413ebc987c7c18052d3c7bab0773b3394cea8f206ca7fdec34bfc54e7",
+        "eb3f6ccb3c5cbade7acc00fb515029cea0866081cd4bb0ee3abd47994b725618"
+      ],
+      "translatedInstructions": 93107752
+    },
+    {
+      "repeat": 2,
+      "baselineActiveMs": 5768.300000056624,
+      "candidateActiveMs": 5619.199999958277,
+      "reductionPercent": 2.5848170188250252,
+      "guestSeconds": 24.0002795,
+      "metrics": {
+        "0": 118663329,
+        "1": 0,
+        "2": 0,
+        "5": 192002236,
+        "6": 15164,
+        "7": 1464,
+        "9": 131,
+        "10": 0,
+        "14": 0,
+        "15": 0,
+        "19": 0,
+        "20": 6214,
+        "23": 934,
+        "26": 1584018440,
+        "27": 118102981,
+        "28": 640824,
+        "30": 118663329
+      },
+      "pcmSamples": 1152013,
+      "pcmFnv32": 3284892698,
+      "frameFnv32": 1013578406,
+      "cpuStateSha256": "092f423551f606af4d9dfbf5263c24f3ce17651058a45f02103e202ad3abed56",
+      "checkpointSha256": [
+        "a1aa9a4de75ea04b1f72949ba39dac6a9f00444839b2ace0a03c86549a99f640",
+        "2c5a5c1413ebc987c7c18052d3c7bab0773b3394cea8f206ca7fdec34bfc54e7",
+        "eb3f6ccb3c5cbade7acc00fb515029cea0866081cd4bb0ee3abd47994b725618"
+      ],
+      "translatedInstructions": 93107752
+    }
+  ],
+  "summary": {
+    "baselineMedianActiveMs": 5695.800000034273,
+    "candidateMedianActiveMs": 5547.0999999418855,
+    "medianTimeReductionPercent": 2.610695601873181,
+    "allSetupAndCheckpointFingerprintsMatch": true,
+    "allJitWorkCountersMatch": true
+  },
+  "screening": {
+    "simpleFusedEntry": {
+      "baselineActiveMs": 5535.499999769032,
+      "candidateActiveMs": 5409.800000205636
+    },
+    "integratedEntryAndLookup": {
+      "baselineActiveMs": 5679.799999773502,
+      "candidateActiveMs": 5576.000000193715
+    },
+    "note": "Single-pair candidate selection only; retained results use the three fresh pairs."
+  }
+}

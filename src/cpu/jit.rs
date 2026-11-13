@@ -442,6 +442,12 @@ impl Engine {
         }
         u32::from(self.prepare(m, id, 0, None, false))
     }
+    /// Combine discovery and guarded entry within one core call. The low word
+    /// is the full plan ID; bit 32 marks a compilation offer instead of an
+    /// already prepared block. Zero still means that this slice has ended.
+    pub fn dispatch_entry(&mut self, m: &mut Machine, compile: bool) -> u64 {
+        self.dispatch_inner(m, compile, true)
+    }
     pub fn register(&mut self, id: u32, ready: bool) -> bool {
         if let Some(p) = self.plans[id as usize % SLOTS]
             .as_mut()
@@ -459,6 +465,9 @@ impl Engine {
     }
     /// Interpreter execution stops only at a ready block or one compilation offer.
     pub fn dispatch(&mut self, m: &mut Machine, compile: bool) -> u32 {
+        self.dispatch_inner(m, compile, false) as u32
+    }
+    fn dispatch_inner(&mut self, m: &mut Machine, compile: bool, enter: bool) -> u64 {
         while self.runnable(m) {
             let mut hot_fallback = false;
             // Cold/unsupported addresses pay only a mode/key probe. Full IRQ,
@@ -480,15 +489,23 @@ impl Engine {
                 } else {
                     let p = &mut self.probes[index];
                     p.hits = p.hits.saturating_add(1);
-                    let id = p.id;
-                    if id != 0 && self.plan(id).is_none() {
+                    let mut id = p.id;
+                    let plan = self.plan(id).map(|p| (p.key, p.ready));
+                    if id != 0 && plan.is_none() {
                         self.probes[index].id = 0;
                         self.probes[index].hits = HEAT - 1;
+                        id = 0;
                     }
-                    let id = self.probes[index].id;
-                    if let Some(plan) = self.plan(id).filter(|p| p.key == key) {
-                        if plan.ready {
-                            return id;
+                    if let Some((_, ready)) = plan.filter(|p| p.0 == key) {
+                        if ready {
+                            // No CPU state changed since the loop's runnable
+                            // check and this ready-plan lookup. Guard/fetch
+                            // once, without another exported entry call.
+                            if !enter || self.prepare(m, id, 0, None, false) {
+                                return u64::from(id);
+                            }
+                            self.fallback(m);
+                            continue;
                         }
                     } else if id == 0 && self.probes[index].hits == HEAT && compile && eligible(m) {
                         let mut ops = Vec::new();
@@ -530,7 +547,7 @@ impl Engine {
                             });
                             self.probes[index].id = id;
                             self.counters[0] += 1;
-                            return id;
+                            return (1_u64 << 32) | u64::from(id);
                         }
                     } else if id == 0 && self.probes[index].hits == HEAT && !compile {
                         self.probes[index].hits -= 1;
@@ -913,6 +930,89 @@ mod tests {
         assert_ne!(id, 0);
         assert!(e.register(id, true));
         id
+    }
+    #[test]
+    fn fused_dispatch_preserves_full_ids_and_unexecuted_offers() {
+        let mut m = machine();
+        let mut e = Engine {
+            serial: u32::MAX - 1,
+            ..Engine::default()
+        };
+        let k = key(&m.cpu);
+        e.probes[probe(k)] = Probe {
+            key: k,
+            hits: HEAT - 1,
+            id: 0,
+        };
+        e.begin_slice(&m, 80_000, 1);
+        let before = format!("{:?}", m.cpu);
+        assert_eq!(
+            e.dispatch_entry(&mut m, true),
+            (1_u64 << 32) | u64::from(u32::MAX)
+        );
+        assert_eq!(format!("{:?}", m.cpu), before);
+        assert_eq!(e.done(), 0);
+        assert!(e.register(u32::MAX, true));
+        assert_eq!(e.dispatch_entry(&mut m, true), u64::from(u32::MAX));
+        assert_eq!(m.cpu.ip, 0x101); // Prepared exactly once, not yet executed.
+        assert_eq!(m.cpu.retired, 1);
+        assert_eq!(e.done(), 0);
+    }
+    #[test]
+    fn fused_dispatch_matches_separate_entry_at_guards_and_slice_boundaries() {
+        for scenario in 0..8 {
+            let mut actual = machine();
+            let mut reference = machine();
+            let mut fused = Engine::default();
+            let mut separate = Engine::default();
+            offered(&mut actual, &mut fused);
+            offered(&mut reference, &mut separate);
+            for m in [&mut actual, &mut reference] {
+                m.cpu.ip = 0x100;
+                match scenario {
+                    3 => m.bus.mem[0x100] = 0x48, // Invalidate a ready plan.
+                    4 => m.cpu.flags |= TF,
+                    5 => {
+                        m.cpu.flags |= IF;
+                        m.bus.pics[0].mask &= !2;
+                        m.bus.key(0x1d, true);
+                    }
+                    6 => {
+                        m.cpu.segment_caches[CS] = Some(SegmentCache {
+                            base: 0,
+                            limit: 0xff,
+                            access: 0x9b,
+                            attributes: 0,
+                        })
+                    }
+                    7 => m.cpu.halted = true,
+                    _ => {}
+                }
+            }
+            let clocks = if scenario == 0 { 0 } else { 80_000 };
+            let cap = if scenario == 1 { 0 } else { 1 };
+            fused.begin_slice(&actual, clocks, cap);
+            separate.begin_slice(&reference, clocks, cap);
+            let expected = loop {
+                let id = separate.dispatch(&mut reference, false);
+                if id == 0 {
+                    break 0;
+                }
+                match separate.enter(&mut reference, id) {
+                    1 => break u64::from(id),
+                    2 => panic!("unexpected compilation offer"),
+                    _ => separate.fallback(&mut reference),
+                }
+            };
+            assert_eq!(fused.dispatch_entry(&mut actual, false), expected);
+            assert_eq!(format!("{:?}", actual.cpu), format!("{:?}", reference.cpu));
+            assert_eq!(actual.bus.cycles, reference.bus.cycles);
+            assert_eq!(actual.bus.mem, reference.bus.mem);
+            assert_eq!(actual.bus.audio, reference.bus.audio);
+            assert_eq!(actual.error, reference.error);
+            assert_eq!(fused.counters, separate.counters);
+            assert_eq!(fused.done(), separate.done());
+        }
     }
     #[test]
     fn batch_retirement_preserves_deadlines_and_interrupt_boundaries() {

@@ -361,24 +361,31 @@ export function compileBlock(packet,{batch=false}={}){
 
 // Keep hot block dispatch inside Wasm. The core still guards/ticks every
 // instruction; JavaScript regains control at a compilation offer or slice end.
-function dispatchModule(){
-  const types=[4,0x60,1,0x7f,1,0x7f,0x60,0,0,0x60,4,0x7f,0x7f,0x7f,0x7f,0,0x60,5,0x7f,0x7f,0x7f,0x7f,0x7f,1,0x7f];
-  const imports=[4,...text('core'),...text('dispatch'),0,0,...text('core'),...text('enter'),0,0,
-    ...text('core'),...text('fallback'),0,1,...text('core'),...text('table'),1,0x70,0,...uleb(CACHE_SIZE)];
+function dispatchModule(fused){
+  const types=[4,0x60,1,0x7f,1,fused?0x7e:0x7f,0x60,0,0,0x60,4,0x7f,0x7f,0x7f,0x7f,0,0x60,5,0x7f,0x7f,0x7f,0x7f,0x7f,1,0x7f];
+  const imports=[fused?2:4,...text('core'),...text('dispatch'),0,0,
+    ...(fused?[]:[...text('core'),...text('enter'),0,0,...text('core'),...text('fallback'),0,1]),
+    ...text('core'),...text('table'),1,0x70,0,...uleb(CACHE_SIZE)];
   // Parameters: four layout addresses and compilation permission. Locals: id, entry status.
-  const body=[1,2,0x7f,0x03,0x40,...get(4),0x10,0,0x22,5,0x45,0x04,0x40,...c(0),0x0f,0x0b,
+  // A fused core returns a packed i64 so all 32 ID bits remain available.
+  // Only compilation offers leave this loop; prepared blocks call the table.
+  const body=fused?[2,1,0x7e,1,0x7f,0x03,0x40,...get(4),0x10,0,0x22,5,0x50,0x04,0x40,...c(0),0x0f,0x0b,
+    ...get(5),0xa7,0x21,6,...get(5),0x42,32,0x88,0xa7,0x04,0x40,...get(6),0x0f,0x0b,
+    ...get(0),...get(1),...get(2),...get(3),...and(get(6),c(CACHE_SIZE-1)),0x11,2,0,0x0c,0,0x0b,...c(0),0x0b]
+    :[1,2,0x7f,0x03,0x40,...get(4),0x10,0,0x22,5,0x45,0x04,0x40,...c(0),0x0f,0x0b,
     ...get(5),0x10,1,0x22,6,...c(2),0x46,0x04,0x40,...get(5),0x0f,0x0b,
     ...get(6),0x04,0x40,...get(0),...get(1),...get(2),...get(3),...and(get(5),c(CACHE_SIZE-1)),0x11,2,0,
     0x05,0x10,2,0x0b,0x0c,0,0x0b,...c(0),0x0b];
   return new WebAssembly.Module(new Uint8Array([0,97,115,109,1,0,0,0,...section(1,types),...section(2,imports),
-    ...section(3,[1,3]),...section(7,[1,...text('run'),0,3]),...section(10,[1,...uleb(body.length),...body])]));
+    ...section(3,[1,3]),...section(7,[1,...text('run'),0,fused?1:3]),...section(10,[1,...uleb(body.length),...body])]));
 }
 
 export class WasmJit {
   constructor(core,{compile=bytes=>WebAssembly.compile(bytes)}={}){
     this.core=core;this.compile=compile;this.cache=new Map();this.pending=null;this.layout=null;
     this.table=new WebAssembly.Table({element:'anyfunc',initial:CACHE_SIZE});
-    this.dispatch=new WebAssembly.Instance(dispatchModule(),{core:{table:this.table,dispatch:core.jit_dispatch,
+    const fused=typeof core.jit_dispatch_entry==='function';
+    this.dispatch=new WebAssembly.Instance(dispatchModule(fused),{core:{table:this.table,dispatch:fused?core.jit_dispatch_entry:core.jit_dispatch,
       enter:core.jit_enter,fallback:core.jit_fallback}}).exports.run;
     this.failed=false;this.compiled=0;this.compilationMs=0;this.bytes=0;this.failures=0;
   }

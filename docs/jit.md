@@ -80,8 +80,13 @@ deadline and the 100,000-unit cap remain effective inside compiled blocks.
 
 A small Wasm dispatcher calls ready modules through a bounded function table,
 avoiding a JavaScript round trip between short blocks. It returns at a compilation
-offer or slice end. Entry distinguishes an offer from a stale plan invalidated by
-its byte guard; stale entries fall back without resubmitting an old packet.
+offer or slice end. On current cores, discovery and guarded entry share one
+Rust call through `jit_dispatch_entry`; the low 32 return bits retain the full
+plan ID and bit 32 distinguishes a compilation offer from a prepared block.
+The Wasm dispatcher decodes that value without a JavaScript BigInt round trip.
+Older cores retain the separate dispatch/entry/fallback imports. Entry
+distinguishes an offer from a stale plan invalidated by its byte guard; stale
+entries fall back without resubmitting an old packet.
 
 Memory address forms, widths and access directions are decoded once. Validated
 segment overrides select the current hidden descriptor; stack references keep
@@ -623,3 +628,106 @@ copy. Palette, GDC, glyph, mode, page and VRAM changes still invalidate the cach
 
 [The evaluation record](emulator-optimization-169.md) distinguishes adopted
 improvements, neutral coverage changes, rejected experiments and remaining limits.
+
+
+## CPU entry optimization informed by NP2kai — Issue #176
+
+The portable native core in
+[NP2kai at 5939e0c6](https://github.com/AZO234/NP2kai/tree/5939e0c6d5985c4c08fc70f289a83290e5d3e6f7)
+provides three useful comparisons:
+
+- [CPU execution](https://github.com/AZO234/NP2kai/blob/5939e0c6d5985c4c08fc70f289a83290e5d3e6f7/i386c/ia32/cpu.c)
+  selects opcode handlers inside a continuous native loop until its remaining
+  clock budget expires. Our Wasm JIT already avoids JavaScript between blocks,
+  but formerly called separate Rust discovery and entry exports for every block.
+  Combining those calls removes a module crossing, repeated ownership borrowing,
+  and redundant runnable/ready-plan checks. The discovery path also reuses its
+  first plan lookup when checking the cache identity.
+- [Event scheduling](https://github.com/AZO234/NP2kai/blob/5939e0c6d5985c4c08fc70f289a83290e5d3e6f7/nevent.c)
+  and [the machine loop](https://github.com/AZO234/NP2kai/blob/5939e0c6d5985c4c08fc70f289a83290e5d3e6f7/pccore.c)
+  run CPU work between device deadlines. We already defer device materialization
+  to the next observable event in synchronous slices. Coarser audio batching is
+  not adopted here: exact PCM, short PIT pulses and PCM IRQ boundaries must remain
+  intact, and this change has no evidence supporting a different event policy.
+- [Physical memory access](https://github.com/AZO234/NP2kai/blob/5939e0c6d5985c4c08fc70f289a83290e5d3e6f7/i386c/cpumem.c)
+  checks ordinary RAM before mapped handlers. Our real-mode and guarded word
+  accesses already have conventional-RAM paths. Speculative stores, bulk REP,
+  native x86 assembly and hardware virtualization are not introduced by this
+  portable Wasm change.
+
+These are architectural comparisons, not copied upstream implementation. The
+native/Wasm comparison that motivated this work measured approximately 2.42 versus
+5.26 host seconds per equivalent 24 guest seconds in a visually matched static
+input-wait scene. Different BIOS implementations, CPU clock models and pixel
+formats prevent assigning that whole difference to any one technique. That
+comparison omitted GPU presentation and audio-device output.
+
+A separate baseline Chrome Worker diagnostic in that static scene collected
+6,453 samples, including 2,126 idle samples. Inclusive counts were 1,712 for
+`jit_dispatch`, 960 for `Engine::prepare`, and 639 for `jit_enter`; they overlap
+and are not additive CPU shares. The diagnostic selected recurring entry work
+for investigation. Profiled timings, idle samples and asynchronous compilation
+latency are excluded from the performance result below. Earlier
+[negative clock-conversion experiments](runtime-performance.md#rejected-experiment)
+also argue against assuming that a simpler timing formula alone improves throughput.
+
+The retained path performs the same full entry guard and original instruction
+preparation before calling generated code. Rejected entries run the original
+interpreter fallback and resume discovery inside Rust. Every code-byte check,
+IRQ/TF/shadow boundary, timing/cache effect, memory transaction and work/deadline
+limit remains in place. Offers preserve all 32 identity bits, including
+`0x80000000` and `0xffffffff`, without reusing IDs. Old JIT callers retain the
+separate exports, and new callers detect older cores and use the legacy dispatcher.
+
+Three fresh pairs of frozen artifacts run the same 24.0002795 guest seconds of
+prologue processing using the existing local game setup and guest-input sequence.
+This is a progressing prologue workload with clicks, rather than the static scene
+used for the NP2kai comparison and host diagnostic. Each pair starts from a fresh
+installed HDD image in memory. Two independent cores alternate 10 ms slices in
+one owned stock Chrome Worker; initial order reverses between pairs. Compilation
+settles between slices, outside the timer. Active time includes CPU/device work
+and hashing every PCM sample's bits, and excludes rendering, AudioWorklet, GPU,
+compiler tasks and asynchronous timer waits. No profiler, build or regression
+suite runs concurrently.
+
+| Pair | Baseline active ms | Selected active ms | Reduction |
+| --- | ---: | ---: | ---: |
+| 1 | 5,567.3 | 5,414.3 | 2.75% |
+| 2 | 5,695.8 | 5,547.1 | 2.61% |
+| 3 | 5,768.3 | 5,619.2 | 2.58% |
+| Median | 5,695.8 | 5,547.1 | 2.61% |
+
+The low GPR bank, FLAGS, IP, CS, exposed CPU/device counters, final-frame
+fingerprints and complete PCM-bit fingerprints match at setup and every eight
+guest seconds. Each pair completes 118,102,981 instructions,
+1,584,018,440 CPU clocks and 1,152,013 samples.
+This preserves measured guest work; it does not prove identical hidden CPU state
+from fingerprints alone, faster visible transitions, healthy playback on every
+CPU budget, or resolution of #172/#146. Focused native differential regressions
+add exact CPU-debug-state, memory, clock and PCM comparisons at entry boundaries.
+
+The baseline is main `13fb770`, built with the same Rust 1.100.0 toolchain and
+release opt-level 2/LTO, Wasm SIMD and Binaryen 132 `-O3 -g`. The selected Wasm is
+574,687 bytes versus 574,117 bytes before the change.
+Both sides use the same current block compiler; the older core automatically
+selects the byte-identical legacy dispatcher. Source/runtime/harness hashes,
+platform identity, aggregate fingerprints and all three pairs are recorded in
+[the sanitized results](jit-entry-176-results.json). Private media, guest bytes,
+raw register reports, profiles, images and PCM stay outside Git and publication.
+
+Regression coverage compares fused discovery/entry with the separate reference
+API at zero-work/time limits, ordinary entry, changed code, TF, pending IRQs,
+hidden CS bounds and halted execution. It also checks that a maximum-ID offer
+executes nothing and prepares exactly once after registration. Actual-Wasm
+Node tests exercise compilation and prepared table calls for both dispatcher
+protocols at `0x80000000` and `0xffffffff`; the fused test rejects any separate
+entry call. Existing memory, reset, compilation-failure and invalidation controls
+continue to exercise the production dispatcher.
+
+Reproduce acceptance with the native, release-Wasm, Node and actual-browser
+commands in [README](../README.md#reproduce-the-checks), including the legal guest
+fixtures and both serving roots. Run the two wall-clock audio cases serially,
+as in the acceptance workflow, separately from accelerated functional probes.
+Validation outcomes are recorded in the implementation PR linked to
+[Issue #176](https://github.com/takahirox/pc98-rust/issues/176). Required post-merge
+verification: None.
