@@ -700,6 +700,6 @@
     "previousCandidateWasmSha256": "fda47094aad0e5ab2161ee8fdcfbcb6c494c35867a58a9c2d9889b50a3ad0c87",
     "candidateBytes": 574356,
     "baselineBytes": 572042,
-    "change": "Use mutable iterators for existing sound timer and VM86 fixture loops; preserve all assertions and warning checks."
+    "change": "Use mutable iterators for existing sound timer and VM86 fixture loops, then iterator loops in six FDC/paging/VM86 integration-test helpers; preserve all assertions and warning checks."
   }
 }
