@@ -343,17 +343,24 @@ test('Wasm dispatcher falls back after entry invalidation without compiling a st
 });
 
 test('Wasm dispatcher preserves unsigned identities across the JavaScript boundary',async()=>{
-  const memory=new WebAssembly.Memory({initial:1}),id=0x80000000;
+  for(const fused of [false,true])for(const id of [0x80000000,0xffffffff]){
+  const memory=new WebAssembly.Memory({initial:1});
   new Uint32Array(memory.buffer,0,4).set([0x100,0x120,0x124,0x130]);
   new Uint32Array(memory.buffer,32,6).set([id,1,1,1,0x90,0]);
-  let offers=0,registered=0;
+  let calls=0,registered=0,ready=false,executed=0;
   const core={memory,metric:()=>66000000,jit_layout:()=>0,jit_begin_slice:()=>{},
-    jit_dispatch:()=>offers++===0?id:0,jit_enter:()=>2,jit_fallback:()=>assert.fail('unexpected fallback'),
-    jit_done:()=>0,jit_packet:()=>32,jit_packet_len:()=>6,jit_next:()=>0,jit_metric:()=>0,
+    jit_dispatch:()=>calls++%2===0?id:0,jit_enter:()=>ready?1:2,jit_fallback:()=>assert.fail('unexpected fallback'),
+    jit_done:()=>0,jit_packet:()=>32,jit_packet_len:()=>6,jit_next:()=>{executed++;return 0;},jit_metric:()=>0,
     jit_register:value=>{registered=value;return 1;},jit_clear:()=>{}};
+  if(fused){
+    core.jit_dispatch_entry=()=>calls++%2===0?(ready?BigInt(id):(1n<<32n)|BigInt(id)):0n;
+    core.jit_enter=()=>assert.fail('fused dispatcher called the separate entry export');
+  }
   const jit=new WasmJit(core);jit.step(80000,100);
   for(let n=0;jit.pending;n++){assert(n<100);await new Promise(resolve=>setTimeout(resolve,0));}
   assert.equal(registered,id);assert(jit.cache.has(id));assert.equal(jit.stats().failures,0);
+  ready=true;jit.step(80000,100);assert.equal(executed,1);
+  }
 });
 
 test('predecoded register-change policies preserve the next memory address dependency clocks',async()=>{

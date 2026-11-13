@@ -180,6 +180,15 @@ mod wasm {
         MACHINE.with(|m| JIT.with(|j| j.borrow_mut().dispatch(&mut m.borrow_mut(), compile != 0)))
     }
     #[no_mangle]
+    pub extern "C" fn jit_dispatch_entry(compile: u32) -> u64 {
+        MACHINE.with(|m| {
+            JIT.with(|j| {
+                j.borrow_mut()
+                    .dispatch_entry(&mut m.borrow_mut(), compile != 0)
+            })
+        })
+    }
+    #[no_mangle]
     pub extern "C" fn jit_packet() -> *const u32 {
         JIT.with(|j| j.borrow().packet().as_ptr())
     }
