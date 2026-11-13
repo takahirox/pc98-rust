@@ -1,6 +1,52 @@
 use pc98_rust::{video::SnapshotRenderer, Machine, Profile};
 
 #[test]
+fn planar_pixels_match_bit_reference_at_pages_wraps_and_doubled_rows() {
+    for profile in [Profile::Pc9801Vm, Profile::Pc9821ApDos] {
+        let mut machine = Machine::new(profile);
+        for (start, page, doubled, columns40, analog) in [
+            (0, 0, false, false, false),
+            (0x3fff, 1, true, true, true),
+            (0x3ffe, 0, false, false, true),
+            (42, 1, true, true, false),
+        ] {
+            let b = &mut machine.bus;
+            b.gdcs[0].enabled = false;
+            b.gdcs[1].enabled = true;
+            b.gdcs[1].start = start;
+            b.display_page = page;
+            b.graphics_200 = doubled;
+            b.analog = analog && profile == Profile::Pc9821ApDos;
+            b.output(0x68, u8::from(columns40));
+            for (i, byte) in b.graphics.iter_mut().enumerate() {
+                *byte = (i ^ (i >> 3) ^ (i >> 15)) as u8;
+            }
+            for (i, rgb) in b.palette.iter_mut().enumerate() {
+                *rgb = [i as u8 * 13, i as u8 * 7, i as u8 * 3];
+            }
+            let mut pixels = vec![0; 640 * 400 * 4];
+            b.frame(&mut pixels);
+            let planes = if b.analog { profile.planes() } else { 3 };
+            for y in 0..400 {
+                for x in 0..640 {
+                    let line = if doubled { y / 2 } else { y };
+                    let a = ((start as usize * 2 + line * 80 + x / 8) & 0x7fff)
+                        + usize::from(page) * profile.planes() * 0x8000;
+                    let mut color = 0;
+                    for plane in 0..planes {
+                        color |= usize::from((b.graphics[a + plane * 0x8000] >> (7 - x % 8)) & 1)
+                            << plane;
+                    }
+                    let at = (y * 640 + x) * 4;
+                    assert_eq!(&pixels[at..at + 3], &b.palette[color]);
+                    assert_eq!(pixels[at + 3], 255);
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn full_snapshots_match_inline_scanout_after_mode_palette_page_glyph_and_blink_changes() {
     let mut renderer = SnapshotRenderer::default();
     let mut snapshot = Vec::new();

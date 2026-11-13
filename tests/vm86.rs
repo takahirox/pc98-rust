@@ -55,8 +55,8 @@ fn setup(code: &[u8], pg: bool, flags: u32) -> (Cpu, Bus) {
         }),
         ..Cpu::default()
     };
-    for s in 0..6 {
-        c.segment_caches[s] = Some(SegmentCache {
+    for (s, cache) in c.segment_caches.iter_mut().enumerate() {
+        *cache = Some(SegmentCache {
             base: 0,
             limit: u32::MAX,
             access: if s == CS { 0x9b } else { 0x93 },

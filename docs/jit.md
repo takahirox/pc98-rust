@@ -94,12 +94,16 @@ actual-change comparison; fixed masks avoid rewriting or copying it through the
 active transaction. Each entry
 computes the current offset and validates the complete operand against the current
 hidden segment bounds. A two-word scratch area carries the bus-read value and
-generated write result across the instruction boundary. Rust retains byte-level cache/wait accounting and video-device effects.
+generated write result across the instruction boundary. Rust retains byte-level
+cache/wait accounting and video-device effects. A guarded instruction fetch groups
+repeated hits in the same timing-cache line, preserving ordered fills, uncached
+four-byte beat clocks and the final fetch byte. The
+[scanout and fetch evaluation](emulator-optimization-174.md) records the controls.
 A preflighted word wholly inside conventional RAM uses one decoded span;
 wrapping/boundary and mapped accesses retain the byte bus path. Bus
 writes commit before the next instruction's byte guard, including self-modifying
 stores. Complete preflight avoids duplicate segment/paging checks during these
-real-mode bus accesses; code fetches likewise keep each original bus access.
+real-mode bus accesses; code fetches retain the same timing-cache effects.
 Word stack operations decline big stacks. RET target peeks are restricted to
 ordinary RAM; mapped stacks or invalid targets return to the interpreter before
 fetching/popping. Other mapped data operands retain the actual bus path.

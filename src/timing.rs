@@ -163,6 +163,36 @@ impl TimingState {
         self.fetch_word = None;
         self.previous_writes = previous_writes;
     }
+    /// A guarded JIT instruction occupies at most two conventional-RAM cache
+    /// lines. Repeated four-byte fetch beats in one line cannot evict it.
+    #[inline(always)]
+    pub(crate) fn jit_fetch(&mut self, address: usize, length: usize, last_byte: u8) {
+        debug_assert!(self.active && !self.rep_fetch && (1..=7).contains(&length));
+        let last = address + length - 1;
+        self.approximated = true;
+        self.fetch_word = Some(last / 4);
+        self.last_byte = last_byte;
+        if self.cache_enabled {
+            self.read_cache_line(address / 16);
+            if address / 16 != last / 16 {
+                self.read_cache_line(last / 16);
+            }
+        } else {
+            self.penalty += ((last / 4 - address / 4 + 1) * 4) as u32;
+        }
+    }
+    #[inline(always)]
+    fn read_cache_line(&mut self, line: usize) {
+        let set = line % 128;
+        if !self.cache[set].contains(&line) {
+            let way = self.victim[set];
+            self.cache[set][way] = line;
+            self.cache_populated = true;
+            self.victim[set] = (way + 1) % 4;
+            // DX2 external 2-1-1-1 fill, two core clocks per bus clock.
+            self.penalty += 10;
+        }
+    }
     pub fn invalidate(&mut self, address: usize) {
         if !self.cache_populated {
             return;
@@ -228,16 +258,8 @@ impl TimingState {
             return;
         }
         if ram && self.cache_enabled {
-            let line = address / 16;
-            let set = line % 128;
-            let hit = self.cache[set].contains(&line);
-            if !hit && !write {
-                let way = self.victim[set];
-                self.cache[set][way] = line;
-                self.cache_populated = true;
-                self.victim[set] = (way + 1) % 4;
-                // DX2 external 2-1-1-1 fill, two core clocks per bus clock.
-                self.penalty += 10;
+            if !write {
+                self.read_cache_line(address / 16);
             }
             // Write-through, no write allocate; serialize a 2-bus-clock write.
             if write {
@@ -1079,6 +1101,75 @@ impl TimingState {
 #[cfg(test)]
 mod cache_tests {
     use super::*;
+
+    #[test]
+    fn guarded_fetch_matches_beats_through_alignment_cache_conflicts_and_invalidation() {
+        for cr0 in [0, 0x4000_0000] {
+            for address in [0, 1, 3, 12, 13, 14, 15, 16, 0x9fff9] {
+                for length in 1..=7 {
+                    for warm in [0, 1, 5] {
+                        let mut actual = TimingState::default();
+                        let mut reference = TimingState::default();
+                        for timing in [&mut actual, &mut reference] {
+                            timing.begin(cr0);
+                            for conflict in 0..warm {
+                                timing.memory(
+                                    Profile::Pc9821ApDos,
+                                    address + conflict * 2048,
+                                    0,
+                                    1,
+                                    false,
+                                    false,
+                                    true,
+                                    false,
+                                );
+                            }
+                            timing.begin(cr0);
+                        }
+                        actual.jit_fetch(address, length, 0xa5);
+                        let last = address + length - 1;
+                        for beat in address / 4..=last / 4 {
+                            reference.memory(
+                                Profile::Pc9821ApDos,
+                                beat * 4,
+                                0,
+                                1,
+                                false,
+                                true,
+                                true,
+                                false,
+                            );
+                        }
+                        reference.last_byte = 0xa5;
+                        assert_eq!(actual.penalty, reference.penalty);
+                        assert_eq!(actual.fetch_word, reference.fetch_word);
+                        assert_eq!(actual.last_byte, reference.last_byte);
+                        assert_eq!(actual.cache, reference.cache);
+                        assert_eq!(actual.victim, reference.victim);
+                        assert_eq!(actual.cache_populated, reference.cache_populated);
+                        assert_eq!(actual.finish_jit(1), reference.finish_jit(1));
+                        for timing in [&mut actual, &mut reference] {
+                            timing.invalidate(address);
+                            timing.begin(cr0);
+                            timing.memory(
+                                Profile::Pc9821ApDos,
+                                last,
+                                0,
+                                1,
+                                false,
+                                false,
+                                true,
+                                false,
+                            );
+                        }
+                        assert_eq!(actual.penalty, reference.penalty);
+                        assert_eq!(actual.cache, reference.cache);
+                        assert_eq!(actual.victim, reference.victim);
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn compact_cache_tags_preserve_cold_hits_replacement_and_invalidation() {

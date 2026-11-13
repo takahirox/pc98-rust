@@ -684,8 +684,8 @@ fn nd_write_clocked_full_images_both_drives_heads_sizes_and_geometries() {
                     } else {
                         "original.hdm"
                     };
-                    for d in 0..2 {
-                        b.disks[d] = Some(Disk::parse(image.clone(), name).unwrap());
+                    for disk in &mut b.disks {
+                        *disk = Some(Disk::parse(image.clone(), name).unwrap());
                     }
                     let payload: Vec<_> = (0..len).map(|i| (i * 29 + 71) as u8).collect();
                     // Independent fixture layout calculation, never a sector lookup.
@@ -710,8 +710,8 @@ fn nd_write_clocked_full_images_both_drives_heads_sizes_and_geometries() {
                         results(&mut b),
                         [0x40 | h << 2 | drive, 0x80, 0, 0, h, 2, n]
                     );
-                    for d in 0..2 {
-                        let disk = b.disks[d].as_ref().unwrap();
+                    for (d, disk) in b.disks.iter().enumerate() {
+                        let disk = disk.as_ref().unwrap();
                         assert_eq!(
                             disk.bytes,
                             if d == drive as usize {
@@ -1265,8 +1265,8 @@ fn nd_write_multi_full_images_ranges_seek_and_physical_eot() {
                                 results(&mut b),
                                 [0x40 | drive | h << 2, 0x80, 0, c, h, eot, n]
                             );
-                            for d in 0..2 {
-                                let disk = b.disks[d].as_ref().unwrap();
+                            for (d, disk) in b.disks.iter().enumerate() {
+                                let disk = disk.as_ref().unwrap();
                                 assert_eq!(
                                     disk.bytes,
                                     if d == drive as usize {

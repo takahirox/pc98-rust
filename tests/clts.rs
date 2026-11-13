@@ -32,14 +32,14 @@ fn cpu(code: &[u8], protected: bool, big: bool) -> (Cpu, Bus) {
     });
     if protected {
         c.s = [16, 8, 16, 16];
-        for s in 0..6 {
+        for (s, cache) in c.segment_caches.iter_mut().enumerate() {
             let d = SegmentCache {
                 base: if s == CS { 0x1000 } else { 0 },
                 limit: 0xffff,
                 access: if s == CS { 0x9b } else { 0x93 },
                 attributes: if big { 0x40 } else { 0 },
             };
-            c.segment_caches[s] = Some(d);
+            *cache = Some(d);
         }
         // Fault delivery reloads CS from this GDT descriptor, base 1000h.
         b.mem[0x5008..0x5010].copy_from_slice(&[

@@ -1804,16 +1804,13 @@ fn mode0_rewrite_reset_clears_partial_pending_latches_and_fraction() {
                     m.bus.output(base + 2 * channel as u16, 0);
                 }
                 m.bus.tick(5);
-                for channel in 0..3 {
-                    assert_eq!(
-                        (m.bus.pit.c[channel].remaining, m.bus.pit.c[channel].output),
-                        (1, false)
-                    );
+                for channel in &m.bus.pit.c {
+                    assert_eq!((channel.remaining, channel.output), (1, false));
                 }
                 m.bus.tick(4);
                 assert_eq!(m.bus.pics[0].irr & 1, 1);
-                for channel in 0..3 {
-                    assert!(m.bus.pit.c[channel].output);
+                for channel in &m.bus.pit.c {
+                    assert!(channel.output);
                 }
             }
         }
@@ -2397,11 +2394,8 @@ fn mode3_rewrite_machine_reset_cancels_deferred_partial_latch_and_fraction() {
                 program(&mut m.bus.pit, channel, 3, 3, 4);
             }
             m.bus.tick(5);
-            for channel in 0..3 {
-                assert_eq!(
-                    (m.bus.pit.c[channel].remaining, m.bus.pit.c[channel].output),
-                    (4, true)
-                );
+            for channel in &m.bus.pit.c {
+                assert_eq!((channel.remaining, channel.output), (4, true));
             }
         }
     }
@@ -3393,11 +3387,8 @@ fn mode4_reset_all_channels_partial_pending_countdown_low_and_completed() {
                     program(&mut m.bus.pit, channel, 3, 4, 2);
                 }
                 m.bus.tick(5);
-                for channel in 0..3 {
-                    assert_eq!(
-                        (m.bus.pit.c[channel].remaining, m.bus.pit.c[channel].output),
-                        (2, true)
-                    );
+                for channel in &m.bus.pit.c {
+                    assert_eq!((channel.remaining, channel.output), (2, true));
                 }
             }
         }
