@@ -1,7 +1,9 @@
 # Development flow
 
 The default flow for pc98-rust is Issue → implementation → PR → review → revision
-as needed → merge. Perform post-merge verification only when required by the Issue.
+as needed → merge and close the implemented Issue → required post-merge verification.
+Perform post-merge verification only when the actual change needs it and the Issue
+requires it.
 The default branch is `main`.
 
 ## Collaboration language
@@ -66,9 +68,10 @@ front matter, verify relative links and heading anchors, and check whitespace wi
 created files too, since unstaged Git diffs omit untracked files. Use available
 Markdown tooling if present and check that the templates and guidance agree.
 
-A templates/documentation-only change requires no new runtime tests, hardware/device
-checks, or deployed-site verification. For future changes, inspect the tooling then
-available and run applicable checks. Report actual results and limitations.
+A templates/documentation-only change requires no new runtime tests, routine manual
+approval, hardware/device checks, heavyweight model downloads, or deployed-site
+verification. For future changes, inspect the tooling then available and run
+applicable checks. Report actual results and limitations.
 
 ### Test and CI performance principles
 
@@ -137,10 +140,12 @@ resulting behavior, focused changes and their purpose, related Issues, and valid
 actually performed. Accurately report failures, skipped checks, and unperformed
 checks with reasons. Do not require unrelated runtime suites for documentation.
 
-Only claim to close an Issue when the PR fully addresses it. State intentionally
-partial scope clearly and leave that Issue open. Record any required post-merge
-checks separately as pending until performed; these checks do not make an otherwise
-complete implementation partial.
+Use and preserve the normal `Closes #N` reference when the PR fully implements the
+Issue and satisfies applicable mandatory pre-merge acceptance. State intentionally
+partial scope and its remaining work clearly, use a non-closing reference, and
+leave the parent Issue open. Record any required post-merge-only checks separately
+as pending until performed; these checks do not make an otherwise complete
+implementation partial or require removing its closing reference.
 
 ## 4. Review and revise
 
@@ -157,10 +162,34 @@ path for the answer, as described in the review guidelines.
 
 Approve and merge when the implementation and mandatory pre-merge checks are
 sufficient and no blocking review findings remain. Follow applicable repository
-permissions and branch protections.
+permissions and branch protections. Missing implementation, mandatory pre-merge
+tests, required protections, and genuinely necessary pre-merge human acceptance
+remain blockers; this lifecycle does not bypass them or change existing
+verification requirements.
 
-If the Issue requires post-merge verification, perform it after merge and report
-the actual results, failures, and follow-up needed. Keep it pending until performed.
-Pre-merge validation does not prove deployment or publication succeeded. No
+After successful merge, close the original fully implemented Issue, then perform
+any required post-merge verification. Record the checked revision, environment,
+checks, actual results and evidence in the merged PR, closed Issue, or a linked
+validation report. Report unperformed, pending, or environment-blocked checks
+honestly with their reasons; keep them pending until performed. Issue closure does
+not claim those checks passed, and pre-merge validation does not prove deployment
+or publication succeeded. An unavailable test environment alone is not evidence
+of a product defect.
+
+If verification finds an actual defect, first check for an existing equivalent
+Issue. Reuse it or create a new linked Issue with reproduction steps, the affected
+revision, expected and actual behavior, and links to the original Issue and PR.
+Do not keep or reopen the original Issue solely for post-merge follow-up.
+
+ProjectWeave publication adds `Closes #N`, and its merge/close stages close the
+source Issue. Review must not remove that reference, require keeping the Issue
+open, or withhold approval solely for pending post-merge-only checks. Doing so
+makes review and publication undo each other in a repeated Review → Fix → Publish
+→ Review loop.
+
+This lifecycle supersedes older instructions to keep an implemented Issue open
+solely for post-merge verification. Preserve historical test outcomes, evidence,
+and recorded limitations; do not rewrite them as passing or completed. Actual
+remaining implementation scope still requires a non-closing reference. No
 post-merge verification is required for the collaboration templates and guidance
-introduced in Issue #1.
+in Issues #1 and #178.
