@@ -1,11 +1,41 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
+import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
+import {fileURLToPath} from 'node:url';
+import os from 'node:os';
+import path from 'node:path';
 import {budgetOptions,calibrationModule,expectedCalibration,percentile,playbackSummary} from '../tools/lib/cpu-budget.mjs';
 
 test('CPU budgets reject invalid controls and retain the 1 ms minimum quota',()=>{
   assert.deepEqual(budgetOptions('unlimited'),{label:'unlimited',quota:-1,period:4000});
   assert.equal(budgetOptions('0.25').quota,1000);assert.equal(budgetOptions('1.5').quota,6000);
   for(const bad of ['0','0.249','2.1','NaN','Infinity','1e0','-1','0.5;echo','0.25001','--privileged'])assert.throws(()=>budgetOptions(bad));
+});
+
+test('budget CLI protects active Unicode worktrees when a deleted worktree record remains',async()=>{
+  const folder=await mkdtemp(path.join(os.tmpdir(),'pc98-budget-paths-'));
+  const execute=promisify(execFile),primary=path.join(folder,'primary');
+  const foreign=path.join(folder,'別の作業ツリー'),deleted=path.join(folder,'deleted');
+  const config=path.join(folder,'gitconfig');
+  try{
+    await mkdir(primary);await writeFile(config,'');
+    const env={...process.env,GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:config};
+    const git=args=>execute('git',args,{cwd:primary,env});
+    await git(['init','-q']);
+    await git(['-c','user.name=Path Test','-c','user.email=path-test@example.invalid','-c','commit.gpgsign=false','commit','--allow-empty','-qm','Path fixture']);
+    for(const target of [foreign,deleted])await git(['worktree','add','--detach',target]);
+    await rm(deleted,{recursive:true});
+    const outside=path.join(folder,'outside.hdi'),inside=path.join(foreign,'inside.hdi');
+    await writeFile(outside,'');await writeFile(inside,'');
+    const tool=fileURLToPath(new URL('../tools/measure_cpu_budget.mjs',import.meta.url));
+    for(const [media,output,message] of [
+      [inside,path.join(folder,'result.json'),'--media must stay outside every checkout'],
+      [outside,path.join(foreign,'result.json'),'--output must stay outside every checkout'],
+    ])await assert.rejects(execute(process.execPath,[tool,'--media='+media,'--output='+output],{cwd:primary,env,timeout:10000}),
+      error=>error.code===1&&error.stderr.includes(message));
+  }finally{await rm(folder,{recursive:true,force:true});}
 });
 
 test('calibration Wasm matches an independent recurrence and modular exponentiation',async()=>{

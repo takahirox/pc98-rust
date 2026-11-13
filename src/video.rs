@@ -8,6 +8,22 @@ pub const GRAPHICS: usize = TEXT + 0x4000;
 pub const MAX_SNAPSHOT: usize = GRAPHICS + 0x80000;
 const MAGIC: &[u8; 4] = b"V98\x01";
 
+// One byte expands to eight palette-index bytes, in left-to-right pixel order.
+// Plane shifts combine these lanes without carrying between pixels.
+const PLANE_DOTS: [u64; 256] = {
+    let mut table = [0; 256];
+    let mut byte = 0;
+    while byte < 256 {
+        let mut pixel = 0;
+        while pixel < 8 {
+            table[byte] |= (((byte >> (7 - pixel)) & 1) as u64) << (pixel * 8);
+            pixel += 1;
+        }
+        byte += 1;
+    }
+    table
+};
+
 pub struct VideoView<'a> {
     pub profile: Profile,
     pub cg_dot: bool,
@@ -88,6 +104,15 @@ impl VideoView<'_> {
             frame % (8 * u64::from(gdc.blink_rate.max(1))) >= 6 * u64::from(gdc.blink_rate.max(1));
         let cursor_on = gdc.cursor_on(frame);
         let cell_pixels = if self.text_40 { 16 } else { 8 };
+        let mut colors = [[0; 4]; 256];
+        let palette = if self.pegc {
+            &self.pegc_palette[..]
+        } else {
+            &self.palette[..]
+        };
+        for (color, rgb) in colors.iter_mut().zip(palette) {
+            *color = [rgb[0], rgb[1], rgb[2], 255];
+        }
         for y in 0..400 {
             for left in (0..640).step_by(cell_pixels) {
                 // Address, glyph and attributes are shared by a character row.
@@ -152,7 +177,9 @@ impl VideoView<'_> {
                     if text_color & 2 != 0 { 255 } else { 0 },
                     if text_color & 4 != 0 { 255 } else { 0 },
                     if text_color & 1 != 0 { 255 } else { 0 },
+                    255,
                 ];
+                let mut planar = 0;
                 for x in left..left + cell_pixels {
                     let mut color = 0;
                     if graphics && self.pegc {
@@ -161,19 +188,23 @@ impl VideoView<'_> {
                         let a = (start + y * self.gdcs[1].pitch as usize * 8 + x) & 0x7ffff;
                         color = self.graphics[a];
                     } else if graphics {
-                        let line = if self.graphics_200 { y / 2 } else { y };
-                        let a =
-                            ((self.gdcs[1].start as usize * 2 + line * 80 + x / 8) & 0x7fff) + page;
-                        let mask = 0x80 >> (x & 7);
-                        for plane in 0..if self.analog {
-                            self.profile.planes()
-                        } else {
-                            3
-                        } {
-                            if self.graphics[a + plane * 0x8000] & mask != 0 {
-                                color |= 1 << plane
+                        if x & 7 == 0 {
+                            let line = if self.graphics_200 { y / 2 } else { y };
+                            let a = ((self.gdcs[1].start as usize * 2 + line * 80 + x / 8)
+                                & 0x7fff)
+                                + page;
+                            planar = 0;
+                            for plane in 0..if self.analog {
+                                self.profile.planes()
+                            } else {
+                                3
+                            } {
+                                planar |=
+                                    PLANE_DOTS[self.graphics[a + plane * 0x8000] as usize] << plane;
                             }
                         }
+                        color = planar as u8;
+                        planar >>= 8;
                     }
                     let dot = if self.text_40 { x / 2 } else { x };
                     let text_ink = ink & (128 >> (dot % 8)) != 0;
@@ -183,15 +214,10 @@ impl VideoView<'_> {
                         if text_ink {
                             color = text_color;
                         }
-                        if self.pegc {
-                            &self.pegc_palette[color as usize]
-                        } else {
-                            &self.palette[color as usize]
-                        }
+                        &colors[color as usize]
                     };
                     let idx = (y * 640 + x) * 4;
-                    out[idx..idx + 3].copy_from_slice(rgb);
-                    out[idx + 3] = 255;
+                    out[idx..idx + 4].copy_from_slice(rgb);
                 }
             }
         }

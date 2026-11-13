@@ -813,20 +813,11 @@ impl Engine {
 impl Cpu {
     #[inline(always)]
     fn jit_fetch(&mut self, b: &mut Bus, op: Op, physical: u32) {
-        let last = physical + u32::from(op.len) - 1;
-        for beat in (physical / 4)..=(last / 4) {
-            b.timing.memory(
-                b.profile,
-                (beat * 4) as usize,
-                0,
-                1,
-                false,
-                true,
-                true,
-                false,
-            );
-        }
-        b.timing.last_byte = op.bytes[usize::from(op.len) - 1];
+        b.timing.jit_fetch(
+            physical as usize,
+            usize::from(op.len),
+            op.bytes[usize::from(op.len) - 1],
+        );
         self.ip += u32::from(op.len);
         self.instruction_bytes = op.len;
     }

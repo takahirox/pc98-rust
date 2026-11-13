@@ -149,6 +149,24 @@ test('cached runs retain live carry/overflow across immediate shifts and every e
   }
 });
 
+test('mixed memory runs preserve aliases, address dependencies and every committed prefix',async()=>{
+  // Read, change the next address, store, consume carry, reload the store,
+  // change the address again and update an overlapping word in place.
+  const code=[0xa1,0,0x80,0x43,0x89,0x07,0x83,0xd0,0,0x8b,0x17,0x4b,0xd1,0x27,0x9f];
+  for(const cached of [false,true]){
+    const patch=cached?[0x0f,0x20,0xc0,0x66,0x25,0xff,0xff,0xff,0x9f,0x0f,0x22,0xc0,0xa3,0,0x80]:[0xa3,0,0x80];
+    const p=await pair(code,patch);
+    for(let cap=1;cap<=p.plan[1];cap++)for(const bx of [0x7fff,0x8000,0x8001]){
+      for(const core of [p.a,p.b]){
+        setState(core,[0x8181,0,0,0,0x8000,0,0,0],2,0x100);
+        core.step(cached?4:1);
+      }
+      execute(p,[0x8181,0,0,bx,0x8000,0,0,0],0x803,cap);
+      for(let at=0x7fff;at<=0x8004;at++)assert.equal(p.a.peek(at),p.b.peek(at));
+    }
+  }
+});
+
 test('self-modified code exits before the stale operation and executes the replacement',async()=>{
   // Guest CS:MOV changes INC AX at offset 2 into DEC AX, then jumps to the loop.
   const p=await pair([0x40],[0x2e,0xc6,0x06,2,0,0x48,0xe9,0xf8,0xfe]);

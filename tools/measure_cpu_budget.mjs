@@ -11,7 +11,11 @@ const execute=promisify(execFile),root=await realpath('.');
 const harnessHash=createHash('sha256').update(await readFile(new URL(import.meta.url))).digest('hex');
 const options=Object.fromEntries(process.argv.slice(2).map(v=>v.replace(/^--/,'').split('=')));
 const budgets=(options.budgets??'unlimited,1,0.5,0.25').split(',').map(budgetOptions);
-const worktrees=await Promise.all((await execute('git',['worktree','list','--porcelain'],{cwd:root})).stdout.split('\n').filter(s=>s.startsWith('worktree ')).map(s=>realpath(s.slice(9))));
+// Git can retain prunable records after temporary worktrees disappear. Those
+// paths cannot contain media; existing checkouts still require canonical checks.
+const worktrees=(await Promise.all((await execute('git',['worktree','list','--porcelain','-z'],{cwd:root})).stdout.split('\0').filter(s=>s.startsWith('worktree ')).map(s=>realpath(s.slice(9)).catch(error=>{
+ if(error.code==='ENOENT')return null;throw error;
+})))).filter(Boolean);
 const repeat=Number(options.repeat??1),clicks=Number(options.clicks??24);
 const samplePatches=options.samplePatches??'0';
 if(!['0','1'].includes(samplePatches))throw Error('Expected --samplePatches=0|1');
