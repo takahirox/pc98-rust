@@ -1,7 +1,7 @@
 # Planar scanout and fetch optimization
 
-The synthetic changing-snapshot controls use 23–45% less raster/copy time with byte expansion
-and packed RGBA output. A separate fixed-work game control uses 1.2% less active
+The synthetic changing-snapshot controls use 24–40% less raster/copy time with byte expansion
+and packed RGBA output. A separate fixed-work game control uses 1.3% less active
 execution time by the median. These are different workloads and their percentages are
 not additive. This implements [Issue #174](https://github.com/takahirox/pc98-rust/issues/174)
 and makes a small contribution to the CPU work in
@@ -36,15 +36,22 @@ This applies the state specialization principle described in
 to the existing bounded RAM fetch path. Generated RAM runs, direct successor
 links and broader flag deferral remain separate experiments under #172.
 
-The 574,197-byte Wasm is 2,155 bytes larger than the 572,042-byte baseline
-(0.38%). Baseline main is `01ba6eb4d25aae3e63e84941c078009a4ae6d9f5`.
+The 574,356-byte Wasm is 2,314 bytes larger than the 572,042-byte baseline
+(0.40%). Baseline main is `01ba6eb4d25aae3e63e84941c078009a4ae6d9f5`.
 Baseline Wasm SHA-256 is
 `6d9d2c74eb9bb56278dd041c224a3535ce016fda3bd61077d16c5838531aea57`;
 selected Wasm SHA-256 is
-`fda47094aad0e5ab2161ee8fdcfbcb6c494c35867a58a9c2d9889b50a3ad0c87`.
+`7491fb290f287e5eba5295cc2ca5a4ac5f19f0896bca6c3a679230557ef3d8ff`.
 Artifacts use Rust 1.99.0, release opt-level 2/LTO, Wasm SIMD and Binaryen 132
 `-O3 -g` through the existing build script. The generated-block compiler
 `web/jit.js` is unchanged.
+
+The first GitHub acceptance run used Rust 1.100.0 and failed Clippy's
+`needless_range_loop` check on two existing sound-timer and VM86 test-helper loops.
+Both now use mutable iterators, retaining warning denial and every assertion.
+The final-artifact scanout and fixed-work controls were repeated after
+this cleanup, and all intermediate/final game states match the earlier artifact.
+The production matrix uses that earlier artifact, explicitly identified below.
 
 ## Scanout controls
 
@@ -64,11 +71,11 @@ microseconds per frame, not visible presentation latency:
 
 | Workload | Baseline | Selected | Reduction | Reversed-artifact reduction |
 | --- | ---: | ---: | ---: | ---: |
-| VM planar | 1,021.5 | 641.7 | 37.2% | 39.3% |
-| Ap planar | 1,105.6 | 611.8 | 44.7% | 40.3% |
-| Ap planar with 40-column text | 351.4 | 270.1 | 23.1% | 31.4% |
-| Ap identical snapshot | 157.9 | 155.9 | 1.2% | −1.4% |
-| Ap PEGC | 731.9 | 551.4 | 24.7% | 21.9% |
+| VM planar | 1,043.8 | 641.0 | 38.6% | 38.4% |
+| Ap planar | 1,056.3 | 638.9 | 39.5% | 41.5% |
+| Ap planar with 40-column text | 383.3 | 272.9 | 28.8% | 22.5% |
+| Ap identical snapshot | 159.7 | 160.8 | −0.7% | 0.8% |
+| Ap PEGC | 736.1 | 559.0 | 24.1% | 22.7% |
 
 The static differences change sign and are within trial variation; they do not
 establish an identical-frame improvement or regression. PEGC benefits from packed
@@ -101,18 +108,18 @@ the measured intervals.
 
 | Control | Baseline active ms | Selected active ms |
 | --- | ---: | ---: |
-| 1 | 5,602.6 | 5,523.5 |
-| 2 | 5,523.7 | 5,440.3 |
-| 3 | 5,562.1 | 5,494.9 |
-| Median | 5,562.1 | 5,494.9 |
+| 1 | 5,503.1 | 5,445.8 |
+| 2 | 5,547.7 | 5,481.8 |
+| 3 | 5,515.6 | 5,433.5 |
+| Median | 5,515.6 | 5,445.8 |
 
-The median reduction is 1.2%. All six controls preserve 118,102,981 completed
+The median reduction is 1.3%. All six controls preserve 118,102,981 completed
 instructions, 1,584,018,440 CPU clocks, 131 disk reads, 1,464 FM key edges,
 934 sound IRQ edges and 1,152,013 PCM samples. Each translates 93,107,752
 instructions. CPU, final-frame and complete PCM-bit fingerprints match, including
 at the intermediate eight-guest-second boundaries. The CPU fingerprint covers
 the low GPR bank, FLAGS, IP and CS. This is modest execution
-headroom; it does not establish a 1.2% reduction in visible scene-transition time.
+headroom; it does not establish a 1.3% reduction in visible scene-transition time.
 
 The [sanitized numeric report](emulator-optimization-174-results.json) retains
 artifact/harness hashes, timing trials and aggregate fingerprints. Private media,
@@ -138,6 +145,13 @@ evidence or additive gains. No code-page generation tracking, speculative RAM
 stores, bulk REP conversion or general interpreter checkpoint change is retained.
 
 ## Production playback
+
+These captures use the pre-cleanup 574,197-byte candidate with SHA-256
+`fda47094aad0e5ab2161ee8fdcfbcb6c494c35867a58a9c2d9889b50a3ad0c87`,
+before the two iterator changes required by Rust 1.100 Clippy. They characterize
+that artifact's production behavior; they are not final-binary playback captures.
+The final artifact is covered by the repeated scanout/game controls and acceptance
+checks. The numeric report records both artifact identities.
 
 Ten additional controls use the cached arm64 Playwright 1.56.1 Linux image,
 Chromium 141 and Node 22.20.0. Each starts from normal audio-enabled boot with
@@ -227,5 +241,10 @@ reject media and report destinations inside an existing checkout. The captured
 wrapper hash and the hash after this path-only hardening are both recorded; the
 frozen playback/calibration scripts and runtime assets are unchanged. Three invalid scanout CLI cases fail before browser startup.
 The change leaves Git's stale worktree metadata untouched.
+
+After the iterator cleanup, the native library, sound, Ap, music and PIC focused
+checks pass again, as do the release build/publication audit and all 56 Node
+checks. The final artifact repeats both complete scanout controls and all three
+fixed-work pairs with matching output/state fingerprints.
 
 Required post-merge verification: None.

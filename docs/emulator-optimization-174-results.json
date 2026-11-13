@@ -2,9 +2,9 @@
   "scope": "Sanitized timing aggregates and fingerprints only; no media, guest code, pixels or PCM.",
   "baselineRevision": "01ba6eb4d25aae3e63e84941c078009a4ae6d9f5",
   "baselineWasmSha256": "6d9d2c74eb9bb56278dd041c224a3535ce016fda3bd61077d16c5838531aea57",
-  "candidateWasmSha256": "fda47094aad0e5ab2161ee8fdcfbcb6c494c35867a58a9c2d9889b50a3ad0c87",
+  "candidateWasmSha256": "7491fb290f287e5eba5295cc2ca5a4ac5f19f0896bca6c3a679230557ef3d8ff",
   "context": {
-    "date": "2026-11-13T07:42:07.751Z",
+    "date": "2026-11-13T08:51:58.356Z",
     "browser": "157.0.8103.52",
     "node": "v26.12.1",
     "os": "27.2.0",
@@ -17,86 +17,86 @@
         "workload": "vm-planar",
         "framesPerTrial": 144,
         "baselineMs": [
-          148.8,
-          145.9,
-          147.1
+          150.6,
+          150.3,
+          145.2
         ],
         "candidateMs": [
-          93.3,
           92.4,
-          90.3
+          92.3,
+          85.9
         ],
-        "baselineMedianUsPerFrame": 1021.53,
-        "candidateMedianUsPerFrame": 641.67,
-        "reductionPercent": 37.19
+        "baselineMedianUsPerFrame": 1043.75,
+        "candidateMedianUsPerFrame": 640.97,
+        "reductionPercent": 38.59
       },
       {
         "workload": "ap-planar",
         "framesPerTrial": 144,
         "baselineMs": [
-          159.2,
-          160.0,
-          152.5
+          150.8,
+          160.3,
+          152.1
         ],
         "candidateMs": [
-          86.1,
-          88.1,
-          92.1
+          93.5,
+          92.0,
+          91.5
         ],
-        "baselineMedianUsPerFrame": 1105.56,
-        "candidateMedianUsPerFrame": 611.81,
-        "reductionPercent": 44.66
+        "baselineMedianUsPerFrame": 1056.25,
+        "candidateMedianUsPerFrame": 638.89,
+        "reductionPercent": 39.51
       },
       {
         "workload": "ap-planar40",
         "framesPerTrial": 144,
         "baselineMs": [
-          52.8,
-          48.4,
-          50.6
+          54.6,
+          55.2,
+          55.2
         ],
         "candidateMs": [
-          38.9,
+          39.3,
           39.6,
-          38.7
+          39.1
         ],
-        "baselineMedianUsPerFrame": 351.39,
-        "candidateMedianUsPerFrame": 270.14,
-        "reductionPercent": 23.12
+        "baselineMedianUsPerFrame": 383.33,
+        "candidateMedianUsPerFrame": 272.92,
+        "reductionPercent": 28.8
       },
       {
         "workload": "ap-static",
         "framesPerTrial": 1440,
         "baselineMs": [
-          229.0,
-          225.6,
-          227.3
+          230.0,
+          226.7,
+          230.9
         ],
         "candidateMs": [
-          232.3,
-          224.5,
-          223.8
+          228.7,
+          231.6,
+          232.4
         ],
-        "baselineMedianUsPerFrame": 157.85,
-        "candidateMedianUsPerFrame": 155.9,
-        "reductionPercent": 1.23
+        "baselineMedianUsPerFrame": 159.72,
+        "candidateMedianUsPerFrame": 160.83,
+        "reductionPercent": -0.7
       },
       {
         "workload": "ap-pegc",
         "framesPerTrial": 144,
         "baselineMs": [
-          105.4,
-          105.4,
-          98.3
+          107.3,
+          106,
+          102.5
         ],
         "candidateMs": [
-          80.2,
-          79.4,
-          79.3
+          80.5,
+          82.6,
+          79.7
         ],
-        "baselineMedianUsPerFrame": 731.94,
-        "candidateMedianUsPerFrame": 551.39,
-        "reductionPercent": 24.67
+        "baselineMedianUsPerFrame": 736.11,
+        "candidateMedianUsPerFrame": 559.03,
+        "reductionPercent": 24.06
       }
     ],
     "reversedArtifacts": [
@@ -104,86 +104,86 @@
         "workload": "vm-planar",
         "framesPerTrial": 144,
         "baselineMs": [
-          151.1,
-          150.9,
-          149.8
+          149.7,
+          149.3,
+          138.8
         ],
         "candidateMs": [
-          88.7,
-          91.6,
-          92.0
+          92.0,
+          92.3,
+          88.5
         ],
-        "baselineMedianUsPerFrame": 1047.92,
-        "candidateMedianUsPerFrame": 636.11,
-        "reductionPercent": 39.3
+        "baselineMedianUsPerFrame": 1036.81,
+        "candidateMedianUsPerFrame": 638.89,
+        "reductionPercent": 38.38
       },
       {
         "workload": "ap-planar",
         "framesPerTrial": 144,
         "baselineMs": [
-          166.5,
-          163.2,
-          160.4
+          150.8,
+          153.7,
+          149.1
         ],
         "candidateMs": [
-          97.5,
-          97.2,
-          97.8
+          88.2,
+          88.8,
+          87.7
         ],
-        "baselineMedianUsPerFrame": 1133.33,
-        "candidateMedianUsPerFrame": 677.08,
-        "reductionPercent": 40.26
+        "baselineMedianUsPerFrame": 1047.22,
+        "candidateMedianUsPerFrame": 612.5,
+        "reductionPercent": 41.51
       },
       {
         "workload": "ap-planar40",
         "framesPerTrial": 144,
         "baselineMs": [
-          55.7,
-          57.0,
-          57.0
+          53.9,
+          50.6,
+          48.1
         ],
         "candidateMs": [
-          40.5,
-          39.1,
-          38.0
+          39.8,
+          38.6,
+          39.2
         ],
-        "baselineMedianUsPerFrame": 395.83,
-        "candidateMedianUsPerFrame": 271.53,
-        "reductionPercent": 31.4
+        "baselineMedianUsPerFrame": 351.39,
+        "candidateMedianUsPerFrame": 272.22,
+        "reductionPercent": 22.53
       },
       {
         "workload": "ap-static",
         "framesPerTrial": 1440,
         "baselineMs": [
-          239.3,
-          233.6,
-          230.8
+          233.0,
+          226.9,
+          230.3
         ],
         "candidateMs": [
-          243.1,
-          230.5,
-          236.8
+          236.0,
+          227.0,
+          228.4
         ],
-        "baselineMedianUsPerFrame": 162.22,
-        "candidateMedianUsPerFrame": 164.44,
-        "reductionPercent": -1.37
+        "baselineMedianUsPerFrame": 159.93,
+        "candidateMedianUsPerFrame": 158.61,
+        "reductionPercent": 0.83
       },
       {
         "workload": "ap-pegc",
         "framesPerTrial": 144,
         "baselineMs": [
-          103.5,
-          103.8,
-          108.4
+          106.1,
+          102.2,
+          103.6
         ],
         "candidateMs": [
-          82.3,
-          80.3,
-          81.1
+          80.7,
+          78.3,
+          80.1
         ],
-        "baselineMedianUsPerFrame": 720.83,
-        "candidateMedianUsPerFrame": 563.19,
-        "reductionPercent": 21.87
+        "baselineMedianUsPerFrame": 719.44,
+        "candidateMedianUsPerFrame": 556.25,
+        "reductionPercent": 22.68
       }
     ],
     "completePixelComparisonsPerControl": 6240,
@@ -193,8 +193,8 @@
     "rows": [
       {
         "run": 0,
-        "baselineMs": 5602.6,
-        "candidateMs": 5523.5,
+        "baselineMs": 5503.1,
+        "candidateMs": 5445.8,
         "instructions": 118102981,
         "cpuClocks": 1584018440,
         "repElements": 640824,
@@ -209,8 +209,8 @@
       },
       {
         "run": 1,
-        "baselineMs": 5523.7,
-        "candidateMs": 5440.3,
+        "baselineMs": 5547.7,
+        "candidateMs": 5481.8,
         "instructions": 118102981,
         "cpuClocks": 1584018440,
         "repElements": 640824,
@@ -225,8 +225,8 @@
       },
       {
         "run": 2,
-        "baselineMs": 5562.1,
-        "candidateMs": 5494.9,
+        "baselineMs": 5515.6,
+        "candidateMs": 5433.5,
         "instructions": 118102981,
         "cpuClocks": 1584018440,
         "repElements": 640824,
@@ -690,6 +690,16 @@
       }
     ],
     "currentHarnessSha256": "c99181551fe48b4898d6ec5519f8a13badfd59cf526ff0dd5e8e86e34faff553",
-    "pathValidationChange": "After capture, Git worktree records use NUL delimiters; frozen calibration/playback scripts and runtime assets are unchanged."
+    "pathValidationChange": "After capture, Git worktree records use NUL delimiters; frozen calibration/playback scripts and runtime assets are unchanged.",
+    "candidateWasmSha256": "fda47094aad0e5ab2161ee8fdcfbcb6c494c35867a58a9c2d9889b50a3ad0c87",
+    "artifactNote": "Production captures precede the Rust 1.100 Clippy compatibility cleanup; final-artifact scanout and fixed-work pairs were repeated separately."
+  },
+  "compilerCompatibility": {
+    "ciRust": "1.100.0",
+    "measuredRust": "1.99.0",
+    "previousCandidateWasmSha256": "fda47094aad0e5ab2161ee8fdcfbcb6c494c35867a58a9c2d9889b50a3ad0c87",
+    "candidateBytes": 574356,
+    "baselineBytes": 572042,
+    "change": "Use mutable iterators for existing sound timer and VM86 fixture loops; preserve all assertions and warning checks."
   }
 }

@@ -122,9 +122,9 @@ impl Opn {
             }
             0x27 => {
                 self.status &= !((value >> 4) & 3);
-                for t in 0..2 {
+                for (t, timer) in self.timer.iter_mut().enumerate() {
                     if old & (1 << t) == 0 && value & (1 << t) != 0 {
-                        self.timer[t] = 0;
+                        *timer = 0;
                     }
                 }
             }

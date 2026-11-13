@@ -365,8 +365,8 @@ mod tests {
             flags: 2,
             ..Cpu::default()
         };
-        for s in 0..6 {
-            c.segment_caches[s] = Some(SegmentCache {
+        for (s, cache) in c.segment_caches.iter_mut().enumerate() {
+            *cache = Some(SegmentCache {
                 base: 0,
                 limit: 0xffff,
                 access: if s == CS { 0x9b } else { 0x93 },

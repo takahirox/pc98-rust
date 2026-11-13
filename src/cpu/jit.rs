@@ -842,8 +842,8 @@ impl Cpu {
         self.address32 = false;
         self.lock_prefix = false;
         self.trap_suppressed = false;
-        // The guard matched the bytes in conventional RAM. Account for each
-        // four-byte fetch beat in order and retain the final byte for timing.
+        // The guard matched the bytes in conventional RAM. Account for the
+        // same fetch clocks/cache fills and retain the final byte for timing.
         self.jit_fetch(b, op, physical);
         if op
             .memory
