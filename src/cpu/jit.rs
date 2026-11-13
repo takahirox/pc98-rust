@@ -813,20 +813,11 @@ impl Engine {
 impl Cpu {
     #[inline(always)]
     fn jit_fetch(&mut self, b: &mut Bus, op: Op, physical: u32) {
-        let last = physical + u32::from(op.len) - 1;
-        for beat in (physical / 4)..=(last / 4) {
-            b.timing.memory(
-                b.profile,
-                (beat * 4) as usize,
-                0,
-                1,
-                false,
-                true,
-                true,
-                false,
-            );
-        }
-        b.timing.last_byte = op.bytes[usize::from(op.len) - 1];
+        b.timing.jit_fetch(
+            physical as usize,
+            usize::from(op.len),
+            op.bytes[usize::from(op.len) - 1],
+        );
         self.ip += u32::from(op.len);
         self.instruction_bytes = op.len;
     }
@@ -851,8 +842,8 @@ impl Cpu {
         self.address32 = false;
         self.lock_prefix = false;
         self.trap_suppressed = false;
-        // The guard matched the bytes in conventional RAM. Account for each
-        // four-byte fetch beat in order and retain the final byte for timing.
+        // The guard matched the bytes in conventional RAM. Account for the
+        // same fetch clocks/cache fills and retain the final byte for timing.
         self.jit_fetch(b, op, physical);
         if op
             .memory
