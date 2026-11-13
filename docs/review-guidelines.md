@@ -13,9 +13,12 @@ diff, and the validation evidence. The central review question is:
 Check both directions:
 
 - **No missing work:** required behavior and acceptance criteria the PR claims to
-  resolve are implemented and appropriately validated. Do not approve a PR as
-  closing an Issue while requirements remain unresolved. An intentionally partial
-  PR must say so and leave the Issue open.
+  resolve are implemented and meet mandatory pre-merge acceptance. Missing
+  implementation, mandatory pre-merge tests, required protections, and genuinely
+  necessary pre-merge human acceptance remain blockers. An intentionally partial
+  PR must state its remaining scope, use a non-closing reference, and leave the
+  parent Issue open. Pending post-merge-only verification does not make a complete
+  implementation partial.
 - **No unnecessary work:** reject unnecessary abstractions, speculative extensibility,
   unrelated refactoring, frameworks/subsystems, or extra policies/configuration
   without a demonstrated need tied to the Issue.
@@ -55,6 +58,15 @@ necessary post-merge work separately, or state None. Report it as pending until
 performed; pre-merge evidence does not prove deployment or publication succeeded.
 This distinction does not waive required implementation or applicable pre-merge checks.
 
+Preserve `Closes #N` for a fully implemented Issue whose applicable mandatory
+pre-merge checks are satisfied. Do not request its removal, keep the source Issue
+open, or withhold approval solely because post-merge-only verification is pending.
+ProjectWeave publication restores that closing reference; requesting its removal
+for this reason creates a repeated Review → Fix → Publish → Review loop. Follow the
+[merge and verification lifecycle](development-flow.md#5-merge-and-report-verification),
+which supersedes older keep-open instructions for this reason while preserving
+historical evidence.
+
 ## Choose an actionable review outcome
 
 - **Agent-fixable findings:** request changes. Identify each finding, its location,
@@ -73,7 +85,11 @@ This distinction does not waive required implementation or applicable pre-merge 
   no blocking review findings remain. Follow repository permissions and protections.
 
 Record nonblocking suggestions as optional. Required checks possible only after
-merge do not prevent approval of an otherwise complete PR. After merge, perform
-any required verification and report actual results, failures, and needed follow-up;
-keep unperformed checks pending. No post-merge verification is required for the
-templates/documentation-only work in Issue #1.
+merge do not prevent approval of an otherwise complete PR. After successful merge,
+close the fully implemented Issue, then perform required verification and record accurate
+evidence under the linked lifecycle. Keep unperformed or environment-blocked checks
+pending; closure does not claim they passed. For actual defects, check for an
+equivalent Issue before creating a new linked Issue; do not reopen the original
+solely for this follow-up. An unavailable environment alone is not a product defect.
+No post-merge verification is required for the templates/documentation-only work
+in Issues #1 and #178.

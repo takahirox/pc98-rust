@@ -41,3 +41,7 @@ State None unless this Issue genuinely requires checks possible only after merge
 If required, describe the checks and expected results separately from pre-merge
 acceptance. Keep them pending until performed; pre-merge validation does not prove
 deployment or publication succeeded.
+Follow the [merge and verification lifecycle](../../docs/development-flow.md#5-merge-and-report-verification):
+close the fully implemented Issue after successful merge, then record required
+verification evidence. Pending post-merge-only checks do not prevent closure;
+actual defects belong in an existing equivalent or new linked Issue.
