@@ -52,9 +52,10 @@ Both now use mutable iterators, retaining warning denial and every assertion.
 The final-artifact scanout and fixed-work controls were repeated after
 this cleanup, and all intermediate/final game states match the earlier artifact.
 The production matrix uses that earlier artifact, explicitly identified below.
-The next CI pass exposed the same lint in six integration-test helper loops
-(FDC, paging and VM86). Those also use iterators, with unchanged assertions and
-no further runtime change. All-target Clippy passes locally with Rust 1.100.0.
+The same lint also required iterator cleanup in existing FDC, paging, VM86,
+CLTS and PIT integration-test helpers, with unchanged assertions and no further
+runtime change. All-target Clippy passes locally using the explicit Rust 1.100.0
+Clippy binary; the shell's `cargo clippy` otherwise selects Homebrew's older tool.
 
 ## Scanout controls
 
