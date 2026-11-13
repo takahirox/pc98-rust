@@ -3,8 +3,10 @@ https://github.com/takahirox/pc98-rust/blob/main/docs/development-flow.md -->
 
 ## Problem and related Issues
 
-Describe the source problem and link the related Issues. Use Closes #NUMBER only
-when this PR fully addresses that Issue; state any intentionally partial scope.
+Describe the source problem and link the related Issues. Use and preserve
+`Closes #NUMBER` when this PR fully implements that Issue and satisfies mandatory
+pre-merge acceptance, even if required post-merge-only checks are pending. For
+intentional partial work, state the remaining scope and use a non-closing reference.
 
 ## Outcome
 
@@ -27,3 +29,6 @@ and existing tooling; see the
 State None unless the Issue requires it. List necessary checks possible only after
 merge as pending until performed; do not claim deployment or publication succeeded
 based on pre-merge validation.
+Follow the [merge and verification lifecycle](../docs/development-flow.md#5-merge-and-report-verification)
+for evidence recording after merge and Issue closure, and linked Issues for actual
+defects. Pending post-merge-only verification must not cause a review/publication loop.
