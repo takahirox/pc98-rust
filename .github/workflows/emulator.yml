@@ -78,8 +78,8 @@ jobs:
       - run: python3 tools/prepare_device_fixture.py
       - run: python3 tools/build_font.py --check
       - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test --locked
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --all-features
         env:
           # Guest-time probes execute more CPU units with instruction timing.
           # Optimize the interpreter while retaining every debug-time check.
@@ -87,6 +87,9 @@ jobs:
           CARGO_PROFILE_TEST_DEBUG_ASSERTIONS: "true"
           CARGO_PROFILE_TEST_OVERFLOW_CHECKS: "true"
       - run: npm ci
+      # The experiment stays outside the published core. npm test below builds
+      # the default artifact and retains its existing browser acceptance.
+      - run: python3 tools/check_ram_blocks.py
       - run: npx playwright install --with-deps chromium
       # Give wall-clock audio one emulator's host CPU budget, separately from
       # accelerated guest probes. Preserve both serving roots and all assertions.

@@ -1,0 +1,186 @@
+{
+  "issue": 180,
+  "baselineCommit": "62315e2c41f294f3eceafad478c9d24368c58f4f",
+  "host": {
+    "browser": "157.0.8103.52",
+    "os": "27.2.0",
+    "arch": "arm64",
+    "cpu": "Apple M4 Max"
+  },
+  "artifactSha256": {
+    "base.wasm": "f4fb5d3bdb8c880363764cb7ffa52c1d937469c1255aadeb5768ef5fe130bacb",
+    "candidate.wasm": "379487a8cdbc77a931f51bbc001772c2bad21f9693baef196574cc9885ddbde3",
+    "jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+    "tools/lib/block-jit.mjs": "b383bfd8ed6e048d2f97aee020467df9829c9bac8cbd596909d72ad19fca93ef",
+    "tools/lib/block-compiler.mjs": "5c611ce05476a2dc099e68d374d3a294845e0d146780768440b19948065d4ea4",
+    "web/jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+    "bench.js": "cc53c752eed77690bc9ca02caad618009b1757844595a68bb503fcd4c0413186"
+  },
+  "progressingScene": {
+    "guestSeconds": 24.0002795,
+    "repetitions": 3,
+    "scope": "active CPU/JIT calls and PCM hash consumption; excludes asynchronous compilation waits, checkpoint comparisons, raster and presentation",
+    "baselineMs": [
+      5400.300000116229,
+      5448.599999755621,
+      5398.899999842048
+    ],
+    "candidateMs": [
+      5027.999999940395,
+      5042.800000324845,
+      5040.999999940395
+    ],
+    "baselineMedianMs": 5400.300000116229,
+    "candidateMedianMs": 5040.999999940395,
+    "reductionPercent": 6.653334077145723,
+    "pairedReductionPercent": [
+      6.894061444138677,
+      7.447784741933273,
+      6.629128154107744
+    ],
+    "setupActiveMs": [
+      [
+        16494.799999147654,
+        16495.89999999106,
+        16493.100000172853
+      ],
+      [
+        15092.700000658631,
+        14967.600000217557,
+        15067.599999830127
+      ]
+    ],
+    "generatedBytes": [
+      1178683,
+      1995592
+    ],
+    "measuredInstructions": 118663329,
+    "directInstructions": 39502175,
+    "directCalls": 22030040,
+    "zeroPrefixFallbacks": 425373,
+    "checkpointEquality": {
+      "cpuAndTiming": true,
+      "conventionalRamHash": true,
+      "frameHash": true,
+      "pcmHashAndCount": true,
+      "checkpointsSeconds": [
+        0,
+        8,
+        16,
+        24
+      ]
+    }
+  },
+  "adoption": {
+    "requiredReductionPercent": 30,
+    "passed": false,
+    "publishedRuntime": "existing WasmJit; experiment requires Cargo block-experiment plus tools/lib/block-jit.mjs"
+  },
+  "np2kaiBrowser": {
+    "sourceRevision": "5939e0c6d5985c4c08fc70f289a83290e5d3e6f7",
+    "wasmSha256": "e0f5235b9fc254a7be9480c7975268cce30cedcdcf89e06a1feadbfdae586b08",
+    "browser": "157.0.8103.52",
+    "cpuHz": 65894400,
+    "sourceSampleRate": 48000,
+    "scene": "prologue-bell-idle",
+    "guestSeconds": 24.014471442,
+    "wallMs": [
+      1406.3,
+      1427.8,
+      1436.4
+    ],
+    "audioFrames": 1153105,
+    "videoFrames": 1355,
+    "pcmDiagnostic": {
+      "separateRun": true,
+      "nonzeroSamples": 1250582,
+      "energy": 48138918234
+    },
+    "excludedRuns": [
+      "initial screen",
+      "separate PCM diagnostic",
+      "first final-harness run concurrent with fixture preparation"
+    ],
+    "fontSha256": "3015a77dfc85dc5e840087f9157a655e2c55664c86156653586fa17c62ef61c0",
+    "configSha256": "95f44428a836e57a3633c61dc23a115712833390d95b88c41c9379c8daaca350"
+  },
+  "bellScene": {
+    "scope": "separate fresh Chrome runs, alternating order; core plus software raster and PCM consumption; excludes GPU/audio-device output",
+    "sceneAnchorFnv32": 854969663,
+    "guestSeconds": 24,
+    "sourceSampleRate": 48000,
+    "audioFrames": 1152000,
+    "videoFrames": 1354,
+    "baseline": {
+      "wallMs": [
+        4939.099999979138,
+        5052.599999964237,
+        5113
+      ],
+      "loopMs": [
+        5044.5,
+        5140.5999999940395,
+        5201.79999999702
+      ],
+      "cpuMs": [
+        4702.299999430776,
+        4805.899999782443,
+        4866.800000056624
+      ],
+      "rasterMs": [
+        236.80000054836273,
+        246.70000018179417,
+        246.1999999433756
+      ],
+      "setupWallMs": [
+        31443.19999998808,
+        29659.60000000894,
+        29705.80000001192
+      ],
+      "generatedBytes": 829706,
+      "measuredNewCompilations": 17
+    },
+    "candidate": {
+      "wallMs": [
+        4643.500000029802,
+        4639.499999940395,
+        4728.199999958277
+      ],
+      "loopMs": [
+        4777.899999991059,
+        4775.20000000298,
+        4864.70000000298
+      ],
+      "cpuMs": [
+        4407.100000336766,
+        4399.299999907613,
+        4482.000000178814
+      ],
+      "rasterMs": [
+        236.39999969303608,
+        240.20000003278255,
+        246.19999977946281
+      ],
+      "setupWallMs": [
+        33730.29999999702,
+        32300.5,
+        32454.90000000596
+      ],
+      "generatedBytes": 1547230,
+      "measuredNewCompilations": 26
+    },
+    "activeReductionPercent": 8.096821437226986,
+    "baselineToNp2kaiGuestSecondNormalizedHostTimeRatio": 3.540864687134939
+  },
+  "validation": {
+    "nativeTestsPassed": 639,
+    "newActualWasmTestsPassed": 14,
+    "defaultNodeTestsPassed": 56,
+    "fixtureAndCheckCommandsPassed": 57,
+    "defaultPublicationAssets": 28,
+    "defaultWasmBytes": 574690,
+    "experimentalWasmBytes": 582149,
+    "defaultWasmExecutableCodeSectionMatchesFrozenBaseline": true,
+    "defaultExperimentalExportsAbsent": true
+  }
+}

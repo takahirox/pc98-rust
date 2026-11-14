@@ -28,6 +28,15 @@ pub struct ClockConverter {
     remainder: u64,
 }
 impl ClockConverter {
+    #[cfg(feature = "block-experiment")]
+    pub(crate) fn before_deadline(&self, clocks: u64, profile: Profile) -> u32 {
+        // Largest CPU budget whose converted scheduler time stays strictly
+        // before the event. Preserve the fraction accumulated by prior units.
+        let scaled = clocks
+            .saturating_mul(profile.cpu_hz())
+            .saturating_sub(1 + self.remainder);
+        (scaled / SCHEDULER_HZ).min(u64::from(u32::MAX)) as u32
+    }
     pub fn advance(&mut self, profile: Profile, cycles: u32) -> u32 {
         let scaled = self.remainder + u64::from(cycles) * SCHEDULER_HZ;
         let hz = profile.cpu_hz();
@@ -134,6 +143,12 @@ impl Default for TimingState {
     }
 }
 impl TimingState {
+    #[cfg(feature = "block-experiment")]
+    pub(crate) fn block_fetch_end(&mut self, last: usize, byte: u8) {
+        self.fetch_word = Some(last / 4);
+        self.last_byte = byte;
+        self.approximated = true;
+    }
     pub fn begin(&mut self, cr0: u32) {
         self.active = true;
         self.untimed = None;
@@ -1101,6 +1116,31 @@ impl TimingState {
 #[cfg(test)]
 mod cache_tests {
     use super::*;
+
+    #[cfg(feature = "block-experiment")]
+    #[test]
+    fn block_budget_stays_before_events_at_every_fraction() {
+        for profile in [Profile::Pc9801Vm, Profile::Pc9821ApDos] {
+            // Obtain fractions through real conversions, not a copy of the
+            // inverse formula. Verify both safety and maximality independently.
+            for prefix in 0..128 {
+                let mut converter = ClockConverter::default();
+                converter.advance(profile, prefix);
+                for clocks in 1..500 {
+                    let budget = converter.before_deadline(clocks, profile);
+                    let mut at = ClockConverter {
+                        remainder: converter.remainder,
+                    };
+                    let mut next = ClockConverter {
+                        remainder: converter.remainder,
+                    };
+                    assert!(u64::from(at.advance(profile, budget)) < clocks);
+                    assert!(u64::from(next.advance(profile, budget + 1)) >= clocks);
+                }
+                assert_eq!(converter.before_deadline(0, profile), 0);
+            }
+        }
+    }
 
     #[test]
     fn guarded_fetch_matches_beats_through_alignment_cache_conflicts_and_invalidation() {

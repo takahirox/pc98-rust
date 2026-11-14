@@ -850,6 +850,8 @@ or troubleshooting; `?jit=1` remains supported. Native/headless and synchronous
 observer APIs retain the reference interpreter.
 The JIT report documents coverage, bounded compilation, correctness checks and
 fixed-work measurements separately from real-time game playback.
+An opt-in [browser block-core experiment](docs/browser-block-core.md) evaluates
+direct Wasm RAM/timing execution; it is not enabled in the published runtime.
 
 HDD replacement/eject first pauses at a Worker boundary, then checks dirty pages
 and retains the discard confirmation. Import stages acknowledged transferable

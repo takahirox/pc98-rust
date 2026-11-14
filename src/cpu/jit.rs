@@ -3,6 +3,8 @@
 use super::*;
 use crate::{Machine, Profile};
 use std::num::NonZeroU8;
+#[cfg(feature = "block-experiment")]
+mod block;
 
 const HEAT: u8 = 32;
 const SLOTS: usize = 4096;
@@ -147,6 +149,8 @@ struct Plan {
     id: u32,
     key: u64,
     ready: bool,
+    #[cfg(feature = "block-experiment")]
+    block: Option<block::Plan>,
     ops: Vec<Op>,
 }
 #[derive(Clone, Copy, Default)]
@@ -162,6 +166,8 @@ struct Scratch {
     operand: [u32; 2],
     committed: u32,
     register_writes: [u32; BLOCK],
+    #[cfg(feature = "block-experiment")]
+    block: block::Context,
 }
 const _: () = assert!(std::mem::offset_of!(Scratch, committed) == 8);
 const _: () = assert!(std::mem::offset_of!(Scratch, register_writes) == 12);
@@ -193,6 +199,14 @@ pub struct Engine {
     sample_phase: u32,
     /// Offers, committed units, invalidations, batch calls and batched units.
     pub counters: [u64; 5],
+    #[cfg(feature = "block-experiment")]
+    block_mode: bool,
+    #[cfg(feature = "block-experiment")]
+    block_packet: Vec<u32>,
+    #[cfg(feature = "block-experiment")]
+    block_active: Option<u32>,
+    #[cfg(feature = "block-experiment")]
+    pub block_counters: [u64; 3],
 }
 impl Default for Engine {
     fn default() -> Self {
@@ -210,6 +224,14 @@ impl Default for Engine {
             done: 0,
             sample_phase: 0,
             counters: [0; 5],
+            #[cfg(feature = "block-experiment")]
+            block_mode: false,
+            #[cfg(feature = "block-experiment")]
+            block_packet: Vec::new(),
+            #[cfg(feature = "block-experiment")]
+            block_active: None,
+            #[cfg(feature = "block-experiment")]
+            block_counters: [0; 3],
         }
     }
 }
@@ -415,11 +437,21 @@ impl Engine {
         self.counters = [0; 5];
         self.sample_phase = 0;
         self.packet.clear();
+        #[cfg(feature = "block-experiment")]
+        {
+            self.block_active = None;
+            self.block_counters = [0; 3];
+            self.block_packet.clear();
+        }
     }
     pub fn begin_slice(&mut self, m: &Machine, clocks: u32, cap: u32) {
         self.deadline = m.bus.cycles + u64::from(clocks.min(80_000));
         self.remaining = cap.min(100_000);
         self.done = 0;
+        #[cfg(feature = "block-experiment")]
+        {
+            self.block_mode = false;
+        }
     }
     fn runnable(&self, m: &Machine) -> bool {
         self.remaining != 0 && m.bus.cycles < self.deadline && m.error.is_none()
@@ -501,7 +533,7 @@ impl Engine {
                             // No CPU state changed since the loop's runnable
                             // check and this ready-plan lookup. Guard/fetch
                             // once, without another exported entry call.
-                            if !enter || self.prepare(m, id, 0, None, false) {
+                            if !enter || self.prepare_entry(m, id) {
                                 return u64::from(id);
                             }
                             self.fallback(m);
@@ -543,8 +575,16 @@ impl Engine {
                                 id,
                                 key,
                                 ready: false,
+                                #[cfg(feature = "block-experiment")]
+                                block: if self.block_mode && m.cpu.cr0 & 0x4000_0000 != 0 {
+                                    block::Plan::new(m, &ops)
+                                } else {
+                                    None
+                                },
                                 ops,
                             });
+                            #[cfg(feature = "block-experiment")]
+                            self.make_block_packet(id);
                             self.probes[index].id = id;
                             self.counters[0] += 1;
                             return (1_u64 << 32) | u64::from(id);
@@ -592,6 +632,13 @@ impl Engine {
     pub fn start(&mut self, m: &mut Machine, id: u32) -> bool {
         if !self.runnable(m) || !self.plan(id).is_some_and(|p| p.ready) {
             return false;
+        }
+        self.prepare(m, id, 0, None, false)
+    }
+    fn prepare_entry(&mut self, m: &mut Machine, id: u32) -> bool {
+        #[cfg(feature = "block-experiment")]
+        if self.block_mode && self.plan(id).is_some_and(|p| p.block.is_some()) {
+            return self.prepare_block(m, id);
         }
         self.prepare(m, id, 0, None, false)
     }

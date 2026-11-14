@@ -188,6 +188,61 @@ mod wasm {
             })
         })
     }
+    #[cfg(feature = "block-experiment")]
+    #[no_mangle]
+    pub extern "C" fn block_begin_slice(clocks: u32, cap: u32) {
+        MACHINE.with(|m| JIT.with(|j| j.borrow_mut().begin_block_slice(&m.borrow(), clocks, cap)));
+    }
+    #[cfg(feature = "block-experiment")]
+    #[no_mangle]
+    pub extern "C" fn block_packet() -> *const u32 {
+        JIT.with(|j| j.borrow().block_packet().as_ptr())
+    }
+    #[cfg(feature = "block-experiment")]
+    #[no_mangle]
+    pub extern "C" fn block_packet_len() -> usize {
+        JIT.with(|j| j.borrow().block_packet().len())
+    }
+    #[cfg(feature = "block-experiment")]
+    #[no_mangle]
+    pub extern "C" fn block_start(id: u32) -> u32 {
+        MACHINE
+            .with(|m| JIT.with(|j| u32::from(j.borrow_mut().start_block(&mut m.borrow_mut(), id))))
+    }
+    #[cfg(feature = "block-experiment")]
+    #[no_mangle]
+    pub extern "C" fn block_finish() {
+        MACHINE.with(|m| JIT.with(|j| j.borrow_mut().finish_block(&mut m.borrow_mut())));
+    }
+    #[cfg(feature = "block-experiment")]
+    #[no_mangle]
+    pub extern "C" fn block_metric(index: usize) -> f64 {
+        JIT.with(|j| j.borrow().block_counters.get(index).copied().unwrap_or(0) as f64)
+    }
+    #[cfg(feature = "block-experiment")]
+    #[no_mangle]
+    pub extern "C" fn block_ram_ptr() -> *const u8 {
+        MACHINE.with(|m| m.borrow().bus.mem.as_ptr())
+    }
+    #[cfg(feature = "block-experiment")]
+    #[no_mangle]
+    pub extern "C" fn block_debug(index: u32) -> u32 {
+        MACHINE.with(|m| {
+            let m = m.borrow();
+            match index {
+                0 => m.cpu.cr0,
+                1 => u32::from(m.cpu.timing_writes),
+                2 => m.cpu.last_timing.execution,
+                3 => m.cpu.last_timing.bus,
+                4 => u32::from(m.cpu.instruction_bytes),
+                5 => u32::from(m.cpu.operand32),
+                6 => u32::from(m.cpu.address32),
+                7 => u32::from(m.cpu.flags_upper),
+                8 => u32::from(m.cpu.last_timing.approximated),
+                _ => 0,
+            }
+        })
+    }
     #[no_mangle]
     pub extern "C" fn jit_packet() -> *const u32 {
         JIT.with(|j| j.borrow().packet().as_ptr())
