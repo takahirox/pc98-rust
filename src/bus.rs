@@ -548,6 +548,17 @@ impl Bus {
         }
         self.cycles.saturating_add(clocks)
     }
+    #[cfg(feature = "block-experiment")]
+    pub(crate) fn block_deadline(&mut self) -> Option<u64> {
+        if !self.deferred_devices || !self.keyboard.fifo.is_empty() {
+            return None;
+        }
+        if self.device_deadline == 0 {
+            self.sync_devices();
+            self.device_deadline = self.next_device_event();
+        }
+        Some(self.device_deadline)
+    }
     pub fn tick(&mut self, cycles: u32) {
         self.cycles += cycles as u64;
         if self.deferred_devices {
