@@ -9,8 +9,10 @@ function state(c){const[r,f,p]=layout(c),v=new DataView(c.memory.buffer);return 
 function setState(c,regs,flags=2,ip=1){const[r,f,p]=layout(c),v=new DataView(c.memory.buffer);new Uint16Array(c.memory.buffer,r,8).set(regs);v.setUint16(f,flags,true);v.setUint32(p,ip,true);}
 function equal(a,b){assert.deepEqual(state(a),state(b));const frame=c=>Buffer.from(c.memory.buffer,c.frame()>>>0,1024000);assert(frame(a).equals(frame(b)),'rendered frame differs');const ram=c=>Buffer.from(c.memory.buffer,c.block_ram_ptr()>>>0,0xa0000);assert(ram(a).equals(ram(b)),'conventional RAM differs');const pcm=c=>Buffer.from(c.memory.buffer,c.audio_ptr()>>>0,c.audio_len()*4);assert(pcm(a).equals(pcm(b)),'PCM bits differ');}
 async function boot(code,patch=[]){const c=new WebAssembly.Instance(module,{}).exports;c.set_profile(1);c.set_boot_source(0);const disk=new Uint8Array(1261568);disk.set([0xfa,...code]);disk.set(patch,0x100);const p=c.input_buffer(disk.length)>>>0;new Uint8Array(c.memory.buffer,p,disk.length).set(disk);assert.equal(c.insert(0,0),1);c.reset();for(let n=0;c.metric(17)!==0x1fc0||c.metric(18)!==1;n++){assert(n<2000);assert.equal(c.metric(4),0);c.step(1);}return c;}
-async function pair(code,patch=[],initial=null){const a=await boot(code,patch),b=await boot(code,patch);if(initial)for(const c of[a,b])setState(c,initial);let id=0;for(let n=0;!id;n++){assert(n<64);for(const c of[a,b]){const s=state(c);setState(c,s.regs,s.flags,1);}a.jit_devices_begin();a.block_begin_slice(80000,1);id=a.jit_dispatch(1);a.jit_devices_end();b.step(a.jit_done());}const packet=new Uint32Array(a.memory.buffer,a.jit_packet()>>>0,a.jit_packet_len()).slice(),meta=new Uint32Array(a.memory.buffer,a.block_packet()>>>0,a.block_packet_len()).slice();assert.equal(meta[0],1,'probe is not a direct RAM plan');const bytes=compileRamBlock(packet,meta);assert(WebAssembly.validate(bytes));const run=new WebAssembly.Instance(await WebAssembly.compile(bytes),{core:{memory:a.memory,finish:a.block_finish}}).exports.run;assert.equal(a.jit_register(id,1),1);equal(a,b);return {a,b,id,run,packet,meta};}
-function execute(p,regs,flags=2,cap=100,clocks=80000){for(const c of[p.a,p.b])setState(c,regs,flags,1);p.a.jit_devices_begin();p.a.block_begin_slice(clocks,cap);if(p.a.block_start(p.id))p.run(...layout(p.a));else p.a.jit_fallback();p.a.jit_devices_end();const done=p.a.jit_done();p.b.step(done);equal(p.a,p.b);return done;}
+async function translate(a,b,ip=1){let id=0;for(let n=0;!id;n++){assert(n<64);for(const c of[a,b]){const s=state(c);setState(c,s.regs,s.flags,ip);}a.jit_devices_begin();a.block_begin_slice(80000,1);id=a.jit_dispatch(1);a.jit_devices_end();b.step(a.jit_done());}const packet=new Uint32Array(a.memory.buffer,a.jit_packet()>>>0,a.jit_packet_len()).slice(),meta=new Uint32Array(a.memory.buffer,a.block_packet()>>>0,a.block_packet_len()).slice();assert.equal(meta[0],1,'probe is not a direct RAM plan');const bytes=compileRamBlock(packet,meta);assert(WebAssembly.validate(bytes));const run=new WebAssembly.Instance(await WebAssembly.compile(bytes),{core:{memory:a.memory,finish:a.block_finish}}).exports.run;assert.equal(a.jit_register(id,1),1);equal(a,b);return {a,b,id,run,packet,meta,ip};}
+async function pair(code,patch=[],initial=null){const a=await boot(code,patch),b=await boot(code,patch);if(initial)for(const c of[a,b])setState(c,initial);return translate(a,b);}
+
+function execute(p,regs,flags=2,cap=100,clocks=80000){for(const c of[p.a,p.b])setState(c,regs,flags,p.ip);p.a.jit_devices_begin();p.a.block_begin_slice(clocks,cap);if(p.a.block_start(p.id))p.run(...layout(p.a));else p.a.jit_fallback();p.a.jit_devices_end();const done=p.a.jit_done();p.b.step(done);equal(p.a,p.b);return done;}
 
 test('RAM loop executes loads, stores, arithmetic and a direct back edge without instruction callbacks',async()=>{
  const p=await pair([0x8b,0x07,0x40,0x89,0x07,0xeb,0xf9]); // MOV AX,[BX]; INC AX; MOV [BX],AX; JMP start
@@ -55,11 +57,18 @@ test('pending IRQ, trap and zero budgets reject admission without a fetch',async
 });
 
 test('the experimental owner runs mixed direct and guarded plans with exact guest time',async()=>{
- const code=[0x8b,0x07,0x40,0x89,0x07,...Array(13).fill(0x40),0xd1,0xe0,0xeb,0xea]; // shift remains guarded
+ const code=[0x8b,0x07,0x40,0x89,0x07,...Array(13).fill(0x40),0xd1,0xe0,0x8d,0x3f,0xeb,0xe8]; // Shift coverage plus a later timing-mode transition.
  const a=await boot(code),b=await boot(code),j=new BlockJit(a);
  for(const c of[a,b])setState(c,[0,0,0,0x8000,0,0,0,0]);
  for(let n=0;n<40;n++){const done=j.step(8000,1000);b.step(done);while(j.pending)await new Promise(r=>setTimeout(r,0));assert(!j.failed,j.compileError);equal(a,b);a.audio_clear();b.audio_clear();}
- assert(j.stats().blockInstructions>0);assert(a.jit_metric(1)>j.stats().blockInstructions);
+ assert(j.stats().blockInstructions>0);
+ // Cached timing retains the guarded tier after invalidating direct plans.
+ for(const c of[a,b]){
+  new Uint8Array(c.memory.buffer,(c.block_ram_ptr()>>>0)+0x1fd00,12).set([0x0f,0x20,0xc0,0x66,0x25,0xff,0xff,0xff,0x9f,0x0f,0x22,0xc0]);
+  const s=state(c);setState(c,s.regs,s.flags,0x100);c.step(3);assert.equal(c.block_debug(0)&0x40000000,0);assert.equal(c.metric(4),0);setState(c,s.regs,s.flags,1);
+ }
+ for(let n=0;n<20;n++){const done=j.step(8000,1000);b.step(done);while(j.pending)await new Promise(r=>setTimeout(r,0));assert(!j.failed,j.compileError);equal(a,b);a.audio_clear();b.audio_clear();}
+ assert(a.jit_metric(1)>j.stats().blockInstructions);
 });
 
 // Literal arithmetic/branch expectations complement differential timing checks.
@@ -138,4 +147,111 @@ test('reset cancels an experimental compilation without registering stale RAM co
  j.step(80000,10000);await turn();assert.equal(resolvers.length,2);
  await resolvers[1]();for(let n=0;j.pending;n++){assert(n<100);await turn();}
  assert.equal(j.stats().compiled,1);assert.equal(j.stats().failures,0);
+});
+
+
+test('direct PUSH/POP preserve stack aliases, word wrapping and exact early-exit timing',async()=>{
+ for(let op=0x50;op<=0x5f;op++){
+  for(const sp of [0x8000,0x8001,0,1,0xfffe,0xffff]){
+   const p=await pair([op,0xeb,0xfd],[],[0,0,0,0,0x8000,0,0,0]);
+   for(const c of[p.a,p.b]){const off=op<0x58?(sp-2)&0xffff:sp;if(off<0xffff)new DataView(c.memory.buffer).setUint16((c.block_ram_ptr()>>>0)+off,0x9876,true);}
+   execute(p,[0x1234,2,3,4,sp,6,7,8],3,1);
+   if(sp===0x8000&&op===0x54){assert.equal(state(p.a).regs[4],0x7ffe);assert.equal(p.a.peek(0x7fff),0x80);}
+   if(sp===0x8000&&op===0x5c)assert.equal(state(p.a).regs[4],0x9876);
+  }
+ }
+});
+
+test('direct POP SP identity preserves the actual register-change mask',async()=>{
+ const p=await pair([0x5c,0xeb,0xfd],[],[0,0,0,0,0x8000,0,0,0]);
+ for(const c of[p.a,p.b])new DataView(c.memory.buffer).setUint16((c.block_ram_ptr()>>>0)+0x8000,0x8000,true);
+ execute(p,[0,0,0,0,0x8000,0,0,0],2,1);assert.equal(state(p.a).regs[4],0x8000);assert.equal(p.a.block_debug(1),0);
+});
+
+test('direct near CALL/RET preserve return words and decline a mapped return before SP/IP effects',async()=>{
+ const call=await pair([0xe8,3,0,0x90,0xeb,0xfa,0xc3],[],[0,0,0,0,0x8000,0,0,0]);
+ execute(call,[0,0,0,0,0x8000,0,0,0],2,1);assert.equal(state(call.a).ip,7);assert.equal(state(call.a).regs[4],0x7ffe);assert.equal(call.a.peek(0x7ffe),4);
+ const a=await boot([0x90]),b=await boot([0x90]);
+ for(const c of[a,b]){
+  const ptr=c.block_ram_ptr()>>>0;new Uint8Array(c.memory.buffer,ptr+0x98100,1)[0]=0xc3;
+  new Uint8Array(c.memory.buffer,ptr+0x1fd00,5).set([0xea,0,1,0,0x98]);
+  setState(c,[0,0,0,0,0x8000,0,0,0],2,0x100);c.step(1);
+ }
+ const ret=await translate(a,b,0x100);
+ for(const target of [0x100,0x9000]){
+  for(const c of[a,b])new DataView(c.memory.buffer).setUint16((c.block_ram_ptr()>>>0)+0x8000,target,true);
+  execute(ret,[0,0,0,0,0x8000,0,0,0],2,1);assert.equal(state(a).ip,target);assert.equal(state(a).regs[4],0x8002);
+ }
+ assert(a.block_metric(2)>0);
+});
+
+
+test('direct shifts and rotations preserve byte aliases, RAM, carries, count masking and partial exits',async()=>{
+ for(const wide of [0,1])for(let kind=0;kind<8;kind++)for(const memory of [false,true]){
+  for(const count of [0,1,2,7,8,9,15,16,17,31,32,33,255]){
+   if(count!==1&&(kind===2||kind===3))continue; // Unsupported immediate carry rotates stay interpreted.
+   const code=count===1?[0xd0+wide,(kind<<3)|(memory?7:0xc4)]:[0xc0+wide,(kind<<3)|(memory?7:0xc4),count];
+   const p=await pair([...code,0xeb,(-code.length-2)&255],[],[0,0,0,0x8001,0,0,0,0]);
+   for(const value of [0,0x80ff,0xffff]){
+    for(const c of[p.a,p.b])new DataView(c.memory.buffer).setUint16((c.block_ram_ptr()>>>0)+0x8001,value,true);
+    execute(p,[value,0,0,0x8001,value,0,0,0],0xcd7,1);
+   }
+  }
+ }
+});
+
+
+test('direct jump traces retain register locals across noncontiguous spans and invalidate later spans',async()=>{
+ const code=[0x40,0xeb,5,...Array(5).fill(0x90),0x43,0xeb,0xf5];
+ for(const cap of [1,2,3,4,5,17]){
+  const p=await pair(code);assert.deepEqual(Array.from({length:p.packet[1]},(_,i)=>p.packet[2+i*4]),[1,2,9,10]);
+  const done=execute(p,[0,0,0,0,0,0,0,0],2,cap);assert(done<=cap);
+ }
+ const p=await pair(code);
+ for(const c of[p.a,p.b])new Uint8Array(c.memory.buffer)[(c.block_ram_ptr()>>>0)+0x1fc09]=0x4b;
+ const before=state(p.a);p.a.jit_devices_begin();p.a.block_begin_slice(80000,10);assert.equal(p.a.block_start(p.id),0);p.a.jit_devices_end();assert.deepEqual(state(p.a),before);equal(p.a,p.b);assert.equal(p.a.jit_metric(2),1);
+});
+
+test('a direct CALL/callee/RET/caller trace commits in one completion',async()=>{
+ const p=await pair([0xe8,3,0,0x90,0xeb,0xfa,0x40,0xc3],[],[0,0,0,0,0x8000,0,0,0]);
+ assert.equal(p.packet[1],5);
+ // Start immediately after an actual audio deadline so this control exercises
+ // the full trace; the separate prefix tests deliberately stop before events.
+ const samples=p.a.audio_len();
+ for(let n=0;p.a.audio_len()===samples;n++){
+  assert(n<2000);for(const c of[p.a,p.b]){new Uint8Array(c.memory.buffer)[(c.block_ram_ptr()>>>0)+0x1fd00]=0x90;const s=state(c);setState(c,s.regs,s.flags,0x100);c.step(1);}
+ }
+ assert.equal(execute(p,[7,0,0,0,0x8000,0,0,0],2,5),5);
+ assert.equal(state(p.a).regs[0],8);assert.equal(state(p.a).regs[4],0x8000);assert.equal(state(p.a).ip,1);assert.equal(p.a.block_metric(0),1);
+});
+
+test('direct LEA preserves wrapped addresses, flags and dependencies without reading mapped memory',async()=>{
+ for(const prefix of [[],[0x26],[0x36],[0x3e],[0x64],[0x65]])for(const mode of [0,1,2])for(let rm=0;rm<8;rm++){
+  const disp=mode===1?[0xff]:mode===2||rm===6?[0xff,0xff]:[];
+  const code=[...prefix,0x8d,(mode<<6)|0x18|rm,...disp];
+  const p=await pair([...code,0xeb,(-code.length-2)&255]);
+  for(const c of[p.a,p.b]){
+   new Uint8Array(c.memory.buffer,(c.block_ram_ptr()>>>0)+0x1fd00,5).set([0xb8,0,0xa8,0x8e,0xd8]);
+   const s=state(c);setState(c,s.regs,s.flags,0x100);c.step(2);
+  }
+  execute(p,[0,3,0,0xffff,0,0xffff,0xffff,0xffff],0xcd7,3);
+ }
+ const p=await pair([0x8d,0x1e,0xff,0xff,0xeb,0xfa]);execute(p,[0,0,0,0,0,0,0,0],3,1);assert.equal(state(p.a).regs[3],0xffff);assert.equal(state(p.a).flags,3);
+});
+
+test('a traced write to later code or a gap exits before memory effects',async()=>{
+ for(const target of [11,13]){
+  const p=await pair([0x40,0x2e,0xc6,0x06,target,0,0x48,0xeb,3,0x90,0x90,0x90,0x40,0xeb,0xf1]);
+  const before=p.a.peek(0x1fc00+target);assert.equal(execute(p,[0,0,0,0,0,0,0,0],2,10),1);assert.equal(p.a.peek(0x1fc00+target),before);
+  p.a.jit_devices_begin();p.a.block_begin_slice(80000,1);p.a.jit_fallback();p.a.jit_devices_end();p.b.step(1);equal(p.a,p.b);assert.equal(p.a.peek(0x1fc00+target),0x48);
+ }
+});
+
+
+test('a changed predicted return commits the actual RET and skips the predicted caller span',async()=>{
+ const p=await pair([0xe8,5,0,0x40,0xeb,0xfa,0x90,0x90,0x5b,0xbb,16,0,0x53,0xc3,0x90,0x42,0xeb,0xee],[],[0,0,0,0,0x8000,0,0,0]);
+ const samples=p.a.audio_len();
+ for(let n=0;p.a.audio_len()===samples;n++){assert(n<2000);for(const c of[p.a,p.b]){new Uint8Array(c.memory.buffer)[(c.block_ram_ptr()>>>0)+0x1fd00]=0x90;const s=state(c);setState(c,s.regs,s.flags,0x100);c.step(1);}}
+ assert.equal(execute(p,[7,0,0,0,0x8000,0,0,0],2,100),5);
+ assert.equal(state(p.a).ip,16);assert.equal(state(p.a).regs[0],7);assert.equal(state(p.a).regs[2],0);assert.equal(state(p.a).regs[4],0x8000);
 });

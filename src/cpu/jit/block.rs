@@ -24,33 +24,90 @@ pub(super) struct Context {
 const _: () = assert!(std::mem::size_of::<Context>() == 80);
 
 pub(super) struct Plan {
-    bytes: Vec<u8>,
+    spans: Vec<CodeSpan>,
     segments: u8,
 }
+struct CodeSpan {
+    ip: u32,
+    bytes: Vec<u8>,
+}
 impl Plan {
+    pub(super) fn supports(m: &Machine, op: Op) -> bool {
+        ordinary(m.cpu.segment_cache(CS))
+            && op.memory.is_none_or(|memory| {
+                memory.flags & (Memory::READ | Memory::WRITE) == 0
+                    || ordinary(m.cpu.segment_cache(memory.segment as usize))
+            })
+    }
     pub(super) fn new(m: &Machine, ops: &[Op]) -> Option<Self> {
-        let mut bytes = Vec::new();
+        let mut spans: Vec<CodeSpan> = Vec::new();
         let mut segments = 1 << CS;
         for op in ops {
-            // Shifts and stack transactions retain the guarded tier.
-            if matches!(
-                op.opcode,
-                0x50..=0x5f | 0xc0 | 0xc1 | 0xc3 | 0xd0 | 0xd1 | 0xe8
-            ) {
-                return None;
-            }
-            if let Some(memory) = op.memory {
+            if let Some(memory) = op
+                .memory
+                .filter(|mem| mem.flags & (Memory::READ | Memory::WRITE) != 0)
+            {
                 segments |= 1 << memory.segment;
             }
-            bytes.extend_from_slice(&op.bytes[..usize::from(op.len)]);
+            if spans
+                .last()
+                .is_none_or(|span| span.ip + span.bytes.len() as u32 != op.ip)
+            {
+                spans.push(CodeSpan {
+                    ip: op.ip,
+                    bytes: Vec::new(),
+                });
+            }
+            spans
+                .last_mut()?
+                .bytes
+                .extend_from_slice(&op.bytes[..usize::from(op.len)]);
         }
         for i in 0..6 {
             if segments & (1 << i) != 0 && !ordinary(m.cpu.segment_cache(i)) {
                 return None;
             }
         }
-        Some(Self { bytes, segments })
+        Some(Self { spans, segments })
     }
+}
+// LEA is offered only by this direct tier. The guarded production compiler
+// keeps its existing opcode contract, including on feature-enabled test cores.
+pub(super) fn decode(m: &Machine, ip: u32) -> Option<Op> {
+    let at = code(m, ip, 1)?;
+    let prefix = matches!(m.bus.mem[at], 0x26 | 0x2e | 0x36 | 0x3e | 0x64 | 0x65);
+    let skip = u32::from(prefix);
+    let at = code(m, ip + skip, 1)?;
+    if m.bus.mem[at] != 0x8d {
+        return super::decode(m, ip);
+    }
+    if !ordinary(m.cpu.segment_cache(CS)) {
+        return None;
+    }
+    code(m, ip + skip, 2)?;
+    let modrm = m.bus.mem[at + 1];
+    if modrm >= 0xc0 {
+        return None;
+    }
+    let len = skip + 2 + displacement_len(modrm);
+    let at = code(m, ip, len)?;
+    let mut bytes = [0; 7];
+    bytes[..len as usize].copy_from_slice(&m.bus.mem[at..at + len as usize]);
+    let mut op = Op {
+        ip,
+        bytes,
+        opcode: 0x8d,
+        len: len as u8,
+        prefix_len: skip as u8,
+        modrm,
+        memory: None,
+        register_writes: 0xff,
+        execution: m.bus.timing.jit_execution(0x8d, modrm, skip),
+    };
+    let mut memory = memory_spec(op)?;
+    memory.flags = Memory::ADDRESS; // No read, write, segment or physical-span effect.
+    op.memory = Some(memory);
+    Some(op)
 }
 fn ordinary(d: SegmentCache) -> bool {
     d.limit == 0xffff && !d.big() && matches!(d.access & 0x1f, 0x13 | 0x1b)
@@ -143,21 +200,28 @@ impl Engine {
                 *base = descriptor.base;
             }
         }
-        let Some(at) = code(m, m.cpu.ip, block.bytes.len() as u32) else {
+        // Materialize any deferred device work before validating code bytes
+        // or pending interrupts. The resulting event budget then owns the run.
+        let Some(event) = m.bus.block_deadline() else {
             return false;
         };
-        if m.bus.mem[at..at + block.bytes.len()] != block.bytes {
-            self.invalidate_block(id);
-            return false;
-        }
-        let end = at + block.bytes.len();
         m.bus.sync_cascade();
         if m.cpu.flags & IF != 0 && m.bus.pics[0].pending().is_some() {
             return false;
         }
-        let Some(event) = m.bus.block_deadline() else {
-            return false;
-        };
+        let mut at = usize::MAX;
+        let mut end = 0;
+        for span in &block.spans {
+            let Some(start) = code(m, span.ip, span.bytes.len() as u32) else {
+                return false;
+            };
+            if m.bus.mem[start..start + span.bytes.len()] != span.bytes {
+                self.invalidate_block(id);
+                return false;
+            }
+            at = at.min(start);
+            end = end.max(start + span.bytes.len());
+        }
         let clocks = event.min(self.deadline).saturating_sub(m.bus.cycles);
         let budget = m.clock_converter.before_deadline(clocks, m.bus.profile);
         if budget == 0 {
@@ -311,6 +375,111 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn direct_stack_admission_defers_unusual_hidden_stack_descriptors() {
+        for (limit, attributes) in [(0x7fff, 0), (0xffff, 0x40), (0xffff_ffff, 0)] {
+            let mut m = Machine::new(Profile::Pc9821ApDos);
+            m.cpu.s = [0; 4];
+            m.cpu.flags = 2;
+            m.cpu.r[SP] = 0x8000;
+            m.bus.mem[0x100..0x105].copy_from_slice(&[0x50, 0x5b, 0xd1, 0xe0, 0xc3]);
+            let mut e = Engine::default();
+            let mut id = 0;
+            for _ in 0..HEAT {
+                m.cpu.ip = 0x100;
+                e.begin_block_slice(&m, 80_000, 1);
+                id = e.dispatch(&mut m, true);
+            }
+            assert_ne!(id, 0);
+            assert_eq!(e.block_packet()[0], 1);
+            assert!(e.register(id, true));
+            m.cpu.ip = 0x100;
+            m.cpu.r[SP] = 0x8000;
+            m.cpu.segment_caches[SS] = Some(SegmentCache {
+                base: 0,
+                limit,
+                access: 0x93,
+                attributes,
+            });
+            m.bus.begin_device_run();
+            e.begin_block_slice(&m, 80_000, 10);
+            let before = format!("{:?}", m.cpu);
+            let cycles = m.bus.cycles;
+            assert!(!e.start_block(&mut m, id));
+            assert!(e.plan(id).is_none());
+            assert_eq!(format!("{:?}", m.cpu), before);
+            assert_eq!(m.bus.cycles, cycles);
+            m.bus.end_device_run();
+        }
+    }
+
+    #[test]
+    fn lea_is_exclusive_to_direct_offers_and_ignores_data_segment_access() {
+        let mut m = Machine::new(Profile::Pc9821ApDos);
+        m.cpu.s = [0; 4];
+        m.cpu.flags = 2;
+        m.bus.mem[0x100..0x106].copy_from_slice(&[0x8d, 0x1e, 0xff, 0xff, 0xeb, 0xfa]);
+        assert!(super::super::decode(&m, 0x100).is_none());
+        m.cpu.segment_caches[DS] = Some(SegmentCache {
+            base: 0xa8000,
+            limit: 0,
+            access: 0,
+            attributes: 0x40,
+        });
+        let op = decode(&m, 0x100).unwrap();
+        assert!(Plan::supports(&m, op));
+        assert!(Plan::new(&m, &[op]).is_some());
+        assert_eq!(op.memory.unwrap().flags, Memory::ADDRESS);
+        m.cpu.segment_caches[CS] = Some(SegmentCache {
+            base: 0,
+            limit: 0xffff,
+            access: 0x9b,
+            attributes: 0x40,
+        });
+        assert!(decode(&m, 0x100).is_none());
+    }
+
+    #[test]
+    fn trace_collection_keeps_unusual_data_segments_on_the_guarded_contract() {
+        for unsupported_first in [false, true] {
+            let mut m = Machine::new(Profile::Pc9821ApDos);
+            m.cpu.s = [0; 4];
+            m.cpu.flags = 2;
+            m.cpu.r[BX] = 0x8000;
+            m.cpu.segment_caches[DS] = Some(SegmentCache {
+                base: 0,
+                limit: 0xffff_ffff,
+                access: 0x93,
+                attributes: 0,
+            });
+            if unsupported_first {
+                m.bus.mem[0x100..0x105].copy_from_slice(&[0x8b, 0x07, 0xe9, 0xfb, 0]);
+                m.bus.mem[0x200..0x204].copy_from_slice(&[0x8d, 0x1e, 0, 0]);
+            } else {
+                m.bus.mem[0x100..0x103].copy_from_slice(&[0xe9, 0xfd, 0]);
+                m.bus.mem[0x200..0x202].copy_from_slice(&[0x8b, 0x07]);
+            }
+            let mut e = Engine::default();
+            let mut id = 0;
+            for _ in 0..HEAT {
+                m.cpu.ip = 0x100;
+                e.begin_block_slice(&m, 80_000, 1);
+                id = e.dispatch(&mut m, true);
+            }
+            assert_ne!(id, 0);
+            let plan = e.plan(id).unwrap();
+            assert_eq!(plan.block.is_some(), !unsupported_first);
+            assert_eq!(
+                plan.ops.iter().map(|op| op.ip).collect::<Vec<_>>(),
+                if unsupported_first {
+                    vec![0x100, 0x102]
+                } else {
+                    vec![0x100]
+                }
+            );
+        }
+    }
+
     #[test]
     fn unsupported_timing_mode_rewarms_into_the_guarded_tier() {
         let (mut m, mut e, id) = plan();
