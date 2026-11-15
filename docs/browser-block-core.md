@@ -1,5 +1,7 @@
 # Browser-first CPU block experiment — Issue #180
 
+[Round 2](browser-block-round2.md) continues the coverage and trace experiments.
+
 This experiment tests a replacement execution boundary: generated Wasm owns
 registers, ordinary RAM accesses and instruction timing until the next event or
 work limit. Rust resumes once per run. It is an opt-in Cargo feature and tooling,

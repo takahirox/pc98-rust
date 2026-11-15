@@ -275,6 +275,7 @@ fn memory_modrm(op: u8) -> bool {
         0x80 | 0x81 | 0x83
             ..=0x8b | 0xc0 | 0xc1 | 0xc6 | 0xc7 | 0xd0 | 0xd1 | 0xf6 | 0xf7 | 0xfe | 0xff
     ) || op <= 0x3d && op & 7 < 4
+        || cfg!(feature = "block-experiment") && op == 0x8d
 }
 fn memory_spec(op: Op) -> Option<Memory> {
     let opcode = op.opcode;
@@ -542,13 +543,57 @@ impl Engine {
                     } else if id == 0 && self.probes[index].hits == HEAT && compile && eligible(m) {
                         let mut ops = Vec::new();
                         let mut ip = m.cpu.ip;
+                        #[cfg(feature = "block-experiment")]
+                        let mut returns = Vec::new();
                         while ops.len() < BLOCK {
-                            let Some(op) = decode(m, ip) else {
+                            #[cfg(feature = "block-experiment")]
+                            let decoded = if self.block_mode
+                                && m.cpu.cr0 & 0x4000_0000 != 0
+                                && ops.iter().all(|op| block::Plan::supports(m, *op))
+                            {
+                                block::decode(m, ip)
+                            } else {
+                                decode(m, ip)
+                            };
+                            #[cfg(not(feature = "block-experiment"))]
+                            let decoded = decode(m, ip);
+                            let Some(op) = decoded else {
                                 break;
                             };
+                            #[cfg(feature = "block-experiment")]
+                            if self.block_mode
+                                && m.cpu.cr0 & 0x4000_0000 != 0
+                                && !ops.is_empty()
+                                && block::Plan::supports(m, ops[0])
+                                && !block::Plan::supports(m, op)
+                            {
+                                break;
+                            }
                             ip += u32::from(op.len);
                             ops.push(op);
                             if op.branch() {
+                                #[cfg(feature = "block-experiment")]
+                                if self.block_mode
+                                    && m.cpu.cr0 & 0x4000_0000 != 0
+                                    && ops.iter().all(|op| block::Plan::supports(m, *op))
+                                {
+                                    let target = match op.opcode {
+                                        0xe8 | 0xe9 | 0xeb => Some(op.target()),
+                                        0xc3 => returns.last().copied(),
+                                        _ => None,
+                                    };
+                                    if let Some(target) = target.filter(|target| {
+                                        !ops.iter().any(|previous| previous.ip == *target)
+                                    }) {
+                                        if op.opcode == 0xe8 {
+                                            returns.push((op.ip + u32::from(op.len)) & 0xffff);
+                                        } else if op.opcode == 0xc3 {
+                                            returns.pop();
+                                        }
+                                        ip = target;
+                                        continue;
+                                    }
+                                }
                                 break;
                             }
                         }
