@@ -191,6 +191,13 @@ fn font_read_len(code: u16) -> ExecResult<u16> {
         _ => Err("unsupported CRT font code".into()),
     }
 }
+/// The keyboard services 00..05 touch only registers, their queue and low RAM.
+/// With paging and protected mode disabled, their existing preflight and body
+/// cannot fault. This predicate never executes a service or consumes input.
+pub(crate) fn infallible_keyboard_trap(c: &Cpu, next_ip: u32) -> bool {
+    c.cr0 & 0x80000001 == 0 && c.s[CS] == 0xf000 && next_ip == 0x1002 + 0x18 * 4 && c.byte(4) <= 5
+}
+
 pub(crate) fn execute_service(c: &mut Cpu, b: &mut Bus) -> ExecResult<()> {
     if c.protected_mode() && !c.vm86() {
         return Err("synthetic real-mode firmware requested from protected mode".into());
@@ -203,6 +210,18 @@ pub(crate) fn execute_service(c: &mut Cpu, b: &mut Bus) -> ExecResult<()> {
     }
     let int = ((c.ip - 0x1002) / 4) as u8;
     let ah = c.byte(4);
+    // This read-only query has no output preflight. Keep its ordinary paging
+    // translation, but avoid the general service/preflight switches on polls.
+    if int == 0x18 && ah == 4 {
+        let group = usize::from(c.byte(0));
+        let value = if group < 16 {
+            read(c, b, 0x52a + group)?
+        } else {
+            0
+        };
+        c.set_byte(4, value);
+        return Ok(());
+    }
     preflight(c, b, int, ah)?;
     match int {
         8 => {
@@ -276,17 +295,6 @@ pub(crate) fn execute_service(c: &mut Cpu, b: &mut Bus) -> ExecResult<()> {
             3 => {
                 b.keyboard.bios.clear();
                 sync_keys(c, b)?;
-            }
-            4 => {
-                let group = c.byte(0) as usize;
-                c.set_byte(
-                    4,
-                    if group < 16 {
-                        read(c, b, 0x52a + group)?
-                    } else {
-                        0
-                    },
-                )
             }
             0x0a..=0x13 | 0x1b..=0x1e => crt::service(c, b, ah)?,
             0x14 => {
@@ -789,4 +797,46 @@ fn hdd_service(c: &mut Cpu, b: &mut Bus) -> ExecResult<()> {
     c.set_byte(4, if ok { 0 } else { 0x40 });
     carry(c, b, !ok)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod polling_tests {
+    use super::*;
+    use crate::{Machine, Profile};
+
+    #[test]
+    fn keyboard_groups_keep_vm86_translation_permissions_and_read_only_access_bits() {
+        for group in [3, 255] {
+            for flags in [0_u32, 1, 5, 7] {
+                let mut m = Machine::new(Profile::Pc9821ApDos);
+                m.cpu.cr0 = 0x80000011;
+                m.cpu.cr3 = 0x1000;
+                m.cpu.cpl = 3;
+                m.cpu.flags_upper = 2;
+                m.cpu.s[CS] = 0xf000;
+                m.cpu.ip = 0x1062;
+                m.cpu.r[AX] = 0x0400 | group;
+                m.bus.mem[0x1000..0x1004].copy_from_slice(&0x2007_u32.to_le_bytes());
+                m.bus.mem[0x2000..0x2004].copy_from_slice(&(0x3000 | flags).to_le_bytes());
+                m.bus.mem[0x52d] = 0x11;
+                m.bus.mem[0x352d] = 0xa5;
+                let result = execute_service(&mut m.cpu, &mut m.bus);
+                if group == 255 {
+                    result.unwrap();
+                    assert_eq!(m.cpu.r[AX], 255);
+                    assert_eq!(m.bus.mem[0x1000], 7); // No page walk for an invalid group.
+                    assert_eq!(m.bus.mem[0x2000], flags as u8);
+                } else if flags & 5 == 5 {
+                    result.unwrap();
+                    assert_eq!(m.cpu.r[AX], 0xa503);
+                    assert_eq!(m.bus.mem[0x1000] & 0x60, 0x20);
+                    assert_eq!(m.bus.mem[0x2000] & 0x60, 0x20); // A, never D.
+                    assert_eq!(m.bus.mem[0x352d], 0xa5);
+                } else {
+                    assert!(result.is_err());
+                    assert_eq!(m.cpu.r[AX], 0x0403);
+                }
+            }
+        }
+    }
 }
