@@ -396,6 +396,12 @@ impl Cpu {
     }
     fn read_mem(&self, b: &mut Bus, s: usize, off: u32, bytes: u32) -> ExecResult<u32> {
         self.check_mem(b, s, off, bytes)?;
+        if bytes == 2
+            && !self.paging_enabled()
+            && (b.profile == crate::Profile::Pc9821ApDos || off < 0xffff)
+        {
+            return Ok(u32::from(b.cpu_read_word(self.linear(s, off) as u32)));
+        }
         let mut v = 0;
         for i in 0..bytes {
             let a = if b.profile == crate::Profile::Pc9801Vm {
@@ -411,6 +417,13 @@ impl Cpu {
     }
     fn write_mem(&self, b: &mut Bus, s: usize, off: u32, v: u32, bytes: u32) -> ExecResult<()> {
         self.check_access(b, s, off, bytes, true, false)?;
+        if bytes == 2
+            && !self.paging_enabled()
+            && (b.profile == crate::Profile::Pc9821ApDos || off < 0xffff)
+        {
+            b.cpu_write_word(self.linear(s, off) as u32, v as u16);
+            return Ok(());
+        }
         for i in 0..bytes {
             let a = if b.profile == crate::Profile::Pc9801Vm {
                 (off + i) & 0xffff
@@ -476,19 +489,17 @@ impl Cpu {
         };
         // Wrap each linear byte address at 32 bits before Bus mapping, on both
         // native and Wasm hosts (usize has different widths on those targets).
-        let vector: [u8; 4] = std::array::from_fn(|i| {
-            let physical = base.wrapping_add(entry).wrapping_add(i as u32);
-            b.cpu_read(physical, (i % 2) as u32, 2, false)
-        });
+        let vector = [
+            b.cpu_read_word(base.wrapping_add(entry)),
+            b.cpu_read_word(base.wrapping_add(entry).wrapping_add(2)),
+        ];
         // Real-mode entry always saves FLAGS, CS and IP as words, even for 66 INT.
         let start = u32::from(self.r[SP]).wrapping_sub(6);
         if let Some(base) = self.real_word_frame(b, start) {
             // Push FLAGS, CS, then IP. Preserve each word's byte order and bus timing.
             for (delta, value) in [(4, self.flags), (2, self.s[CS]), (0, self.ip as u16)] {
                 let physical = base.wrapping_add(delta);
-                let [lo, hi] = value.to_le_bytes();
-                b.cpu_write(physical, 0, 2, lo);
-                b.cpu_write(physical.wrapping_add(1), 1, 2, hi);
+                b.cpu_write_word(physical, value);
             }
             self.r[SP] = start as u16;
         } else {
@@ -509,8 +520,8 @@ impl Cpu {
         self.flags &= !(IF | TF);
         self.flags_upper &= !4; // Real-mode interrupt/exception entry clears AC.
         self.trap_suppressed = true;
-        self.ip = u16::from_le_bytes([vector[0], vector[1]]) as u32;
-        self.reload_real_code(u16::from_le_bytes([vector[2], vector[3]]));
+        self.ip = u32::from(vector[0]);
+        self.reload_real_code(vector[1]);
         self.halted = false;
         Ok(())
     }
@@ -2555,5 +2566,100 @@ impl Cpu {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod word_access_tests {
+    use super::*;
+    use crate::Profile;
+
+    // Preserve an explicit per-byte bus oracle for the complete operand. This
+    // also checks timing and journals, which a final word value alone misses.
+    fn bytes(c: &Cpu, b: &mut Bus, offset: u32, write: Option<u16>) -> ExecResult<u32> {
+        c.check_access(b, DS, offset, 2, write.is_some(), false)?;
+        let mut value = 0;
+        for i in 0..2 {
+            let at = if b.profile == Profile::Pc9801Vm {
+                (offset + i) & 0xffff
+            } else {
+                offset + i
+            };
+            let physical = c.translate(
+                b,
+                c.linear(DS, at) as u32,
+                write.is_some(),
+                c.cpl == 3,
+                write.is_some(),
+            )?;
+            if let Some(word) = write {
+                b.cpu_write(physical, i, 2, (word >> (i * 8)) as u8);
+            } else {
+                value |= u32::from(b.cpu_read(physical, i, 2, false)) << (i * 8);
+            }
+        }
+        Ok(value)
+    }
+
+    #[test]
+    fn preflighted_words_preserve_offset_wrap_limits_a20_timing_and_rollback() {
+        for (profile, base, offset, limit) in [
+            (Profile::Pc9801Vm, 0x10000, 0xffff, 0xffff),
+            (Profile::Pc9801Vm, 0x10000, 0x10000, 0xffff),
+            (Profile::Pc9821ApDos, 0x10000, 1, 0xffff),
+            (Profile::Pc9821ApDos, 0x10000, 0xffff, 0xffff),
+            (Profile::Pc9821ApDos, 0x10000, 0xffff, 0x1ffff),
+            (Profile::Pc9821ApDos, 0xffff0001, 0xffff, 0x1ffff),
+            (Profile::Pc9821ApDos, 0xf0000, 0xffff, 0x1ffff),
+            (Profile::Pc9821ApDos, 0x9ffff, 0, 0xffff),
+            (Profile::Pc9821ApDos, 0xa8000, 0, 0xffff),
+        ] {
+            for a20 in [false, true] {
+                for cr0 in [0x10, 0x11, 0x40000010] {
+                    let mut c = Cpu {
+                        cr0,
+                        ..Cpu::default()
+                    };
+                    c.segment_caches[DS] = Some(SegmentCache {
+                        base,
+                        limit,
+                        access: 0x93,
+                        attributes: 0,
+                    });
+                    let mut actual = Bus::new(profile);
+                    let mut reference = Bus::new(profile);
+                    actual.a20 = a20;
+                    reference.a20 = a20;
+                    for b in [&mut actual, &mut reference] {
+                        b.timing.begin(cr0);
+                        b.begin_cpu_memory();
+                    }
+                    assert_eq!(
+                        format!("{:?}", c.read_mem(&mut actual, DS, offset, 2)),
+                        format!("{:?}", bytes(&c, &mut reference, offset, None))
+                    );
+                    assert_eq!(
+                        format!("{:?}", c.write_mem(&mut actual, DS, offset, 0x98ab, 2)),
+                        format!(
+                            "{:?}",
+                            bytes(&c, &mut reference, offset, Some(0x98ab)).map(|_| ())
+                        )
+                    );
+                    assert_eq!(
+                        format!("{:?}", c.read_mem(&mut actual, DS, offset, 2)),
+                        format!("{:?}", bytes(&c, &mut reference, offset, None))
+                    );
+                    assert_eq!(
+                        actual.timing.finish(profile, false, 0),
+                        reference.timing.finish(profile, false, 0)
+                    );
+                    assert_eq!(actual.mem, reference.mem);
+                    actual.finish_cpu_memory(false);
+                    reference.finish_cpu_memory(false);
+                    assert_eq!(actual.mem, reference.mem);
+                    assert_eq!(actual.graphics, reference.graphics);
+                }
+            }
+        }
     }
 }

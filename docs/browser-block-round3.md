@@ -1,5 +1,7 @@
 # Browser block performance round 3
 
+[Round 4](browser-block-round4.md) continues with core fallback optimization.
+
 This continues [round 2](browser-block-round2.md) for Issue #184. The selected
 direct tier follows forward conditional fallthroughs and loads only registers
 used by a trace. It is now enabled in the normal browser build. It retains the

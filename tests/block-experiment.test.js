@@ -8,7 +8,7 @@ const layout=c=>Array.from(new Uint32Array(c.memory.buffer,c.jit_layout()>>>0,4)
 function state(c){const[r,f,p]=layout(c),v=new DataView(c.memory.buffer);return {regs:Array.from(new Uint16Array(c.memory.buffer,r,8)),flags:v.getUint16(f,true),ip:v.getUint32(p,true),cs:c.metric(17),metrics:[0,1,2,5,6,7,9,10,14,15,19,20,23,26,27,28,30].map(i=>c.metric(i)),debug:Array.from({length:9},(_,i)=>c.block_debug(i)),fault:c.metric(4)};}
 function setState(c,regs,flags=2,ip=1){const[r,f,p]=layout(c),v=new DataView(c.memory.buffer);new Uint16Array(c.memory.buffer,r,8).set(regs);v.setUint16(f,flags,true);v.setUint32(p,ip,true);}
 function equal(a,b){assert.deepEqual(state(a),state(b));const frame=c=>Buffer.from(c.memory.buffer,c.frame()>>>0,1024000);assert(frame(a).equals(frame(b)),'rendered frame differs');const ram=c=>Buffer.from(c.memory.buffer,c.block_ram_ptr()>>>0,0xa0000);assert(ram(a).equals(ram(b)),'conventional RAM differs');const pcm=c=>Buffer.from(c.memory.buffer,c.audio_ptr()>>>0,c.audio_len()*4);assert(pcm(a).equals(pcm(b)),'PCM bits differ');}
-async function boot(code,patch=[]){const c=new WebAssembly.Instance(module,{}).exports;c.set_profile(1);c.set_boot_source(0);const disk=new Uint8Array(1261568);disk.set([0xfa,...code]);disk.set(patch,0x100);const p=c.input_buffer(disk.length)>>>0;new Uint8Array(c.memory.buffer,p,disk.length).set(disk);assert.equal(c.insert(0,0),1);c.reset();for(let n=0;c.metric(17)!==0x1fc0||c.metric(18)!==1;n++){assert(n<2000);assert.equal(c.metric(4),0);c.step(1);}return c;}
+async function boot(code,patch=[],profile=1){const c=new WebAssembly.Instance(module,{}).exports;c.set_profile(profile);c.set_boot_source(0);const disk=new Uint8Array(1261568);disk.set([0xfa,...code]);disk.set(patch,0x100);const p=c.input_buffer(disk.length)>>>0;new Uint8Array(c.memory.buffer,p,disk.length).set(disk);assert.equal(c.insert(0,0),1);c.reset();for(let n=0;c.metric(17)!==0x1fc0||c.metric(18)!==1;n++){assert(n<2000);assert.equal(c.metric(4),0);c.step(1);}return c;}
 async function translate(a,b,ip=1){let id=0;for(let n=0;!id;n++){assert(n<64);for(const c of[a,b]){const s=state(c);setState(c,s.regs,s.flags,ip);}a.jit_devices_begin();a.block_begin_slice(80000,1);id=a.jit_dispatch(1);a.jit_devices_end();b.step(a.jit_done());}const packet=new Uint32Array(a.memory.buffer,a.jit_packet()>>>0,a.jit_packet_len()).slice(),meta=new Uint32Array(a.memory.buffer,a.block_packet()>>>0,a.block_packet_len()).slice();assert.equal(meta[0],1,'probe is not a direct RAM plan');const bytes=compileRamBlock(packet,meta);assert(WebAssembly.validate(bytes));const run=new WebAssembly.Instance(await WebAssembly.compile(bytes),{core:{memory:a.memory,finish:a.block_finish}}).exports.run;assert.equal(a.jit_register(id,1),1);equal(a,b);return {a,b,id,run,packet,meta,ip};}
 async function pair(code,patch=[],initial=null){const a=await boot(code,patch),b=await boot(code,patch);if(initial)for(const c of[a,b])setState(c,initial);return translate(a,b);}
 
@@ -282,4 +282,37 @@ test('a taken forward branch leaves fallthrough RAM stores unexecuted',async()=>
  assert.equal(execute(p,[1,2,3,0x8000,0,6,7,8],3,100),2);
  assert.equal(state(p.a).ip,10);assert.equal(p.a.peek(0x8000),0xaa);assert.equal(p.a.peek(0x8001),0xbb);
  execute(p,[0,2,3,0x8000,0,6,7,8],3,3);assert.equal(p.a.peek(0x8000),0);assert.equal(p.a.peek(0x8001),0);
+});
+
+
+test('hot native interrupt fallback preserves work deadlines and rechecks changed vectors and code',async()=>{
+ const a=await boot([0xcd,0x30,0xeb,0xfc],[0x40,0xcf]),b=await boot([0xcd,0x30,0xeb,0xfc],[0x40,0xcf]),j=new BlockJit(a);
+ for(const c of[a,b]){setState(c,[7,0,0,0,0x8001,0,0,0],3);new Uint8Array(c.memory.buffer).set([0,1,0xc0,0x1f],(c.block_ram_ptr()>>>0)+0xc0);}
+ async function step(clocks,cap){const done=j.step(clocks,cap);assert(done>0&&done<=cap);b.step(done);while(j.pending)await new Promise(r=>setTimeout(r,0));assert(!j.failed,j.compileError);equal(a,b);a.audio_clear();b.audio_clear();}
+ for(let n=0;n<12;n++)await step(8000,1000);
+ assert(state(a).regs[0]>7);assert.equal(state(a).fault,0);
+ for(const clocks of [1,20,80000])for(const cap of [1,2,3,4,17])await step(clocks,cap);
+ // The hot hint must consult the current vector and opcode on every unit.
+ for(const c of[a,b])new Uint8Array(c.memory.buffer)[(c.block_ram_ptr()>>>0)+0xc0]=1;
+ for(let n=0;n<8;n++)await step(8000,1000);
+ for(const c of[a,b])new Uint8Array(c.memory.buffer).set([0x40,0x90],(c.block_ram_ptr()>>>0)+0x1fc01);
+ for(let n=0;n<8;n++)await step(8000,1000);
+});
+
+test('reference interrupt words retain odd and wrapping real-mode stack frames in release Wasm',async()=>{
+ for(const sp of [0,2,4,0x8000,0x8001,0xfffe]){
+  const c=await boot([0xb8,0,0x30,0x8e,0xd0,0xbc,sp&255,sp>>8,0xcd,0x30,0x90,0xeb,0xfd],[0xcf]);
+  const ram=c.block_ram_ptr()>>>0;new Uint8Array(c.memory.buffer).set([0,1,0xc0,0x1f],ram+0xc0);
+  c.step(3);let s=state(c);setState(c,s.regs,3,s.ip);assert.equal(s.ip,9);
+  c.step(1);s=state(c);assert.equal(s.cs,0x1fc0);assert.equal(s.ip,0x100);assert.equal(s.regs[4],(sp-6)&65535);
+  for(const [delta,value] of [[2,3],[4,0x1fc0],[6,11]]){const at=0x30000+((sp-delta)&65535);assert.equal(c.peek(at)|(c.peek(at+1)<<8),value);}
+  c.step(1);s=state(c);assert.equal(s.ip,11);assert.equal(s.regs[4],sp);assert.equal(s.flags,3);assert.equal(s.fault,0);
+ }
+});
+
+test('reference V30 word operands wrap their segment offset before physical bus decoding',async()=>{
+ const c=await boot([0xb8,0,0x30,0x8e,0xd8,0xa1,0xff,0xff,0xa3,0xff,0xff,0xeb,0xfe],[],0),ram=c.block_ram_ptr()>>>0;
+ const mem=new Uint8Array(c.memory.buffer);mem[ram+0x30000]=0xaa;mem[ram+0x3ffff]=0x55;mem[ram+0x40000]=0xcc;
+ c.step(3);let s=state(c);assert.equal(s.regs[0],0xaa55);s.regs[0]=0x1234;setState(c,s.regs,s.flags,s.ip);
+ c.step(1);assert.equal(c.peek(0x3ffff),0x34);assert.equal(c.peek(0x30000),0x12);assert.equal(c.peek(0x40000),0xcc);assert.equal(c.metric(4),0);
 });
