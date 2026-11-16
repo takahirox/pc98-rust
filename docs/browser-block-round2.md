@@ -1,5 +1,8 @@
 # Browser block performance, round 2 — Issue #182
 
+[Round 3](browser-block-round3.md) continues these measurements and enables the
+selected direct tier after the repeated adoption checks pass.
+
 This continues the [first experiment](browser-block-core.md) with successive
 implementation and measurement iterations. The direct tier remains opt-in and
 outside the published application. The guest CPU clock, instruction tables,

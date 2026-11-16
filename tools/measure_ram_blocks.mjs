@@ -22,8 +22,19 @@ for(const key of ['media', 'output']){
 const sha=b=>createHash('sha256').update(b).digest('hex');
 const paths={'base.wasm':base,'candidate.wasm':candidate,'jit.js':opts.jitSource??root+'/web/jit.js','game.hdi':opts.media};
 const assets=new Map(await Promise.all(Object.entries(paths).map(async([k,p])=>[k,await readFile(p)])));
-for(const name of ['block-jit.mjs','block-compiler.mjs'])assets.set('tools/lib/'+name,await readFile((opts.candidateRuntime??root+'/tools/lib')+'/'+name));assets.set('web/jit.js',assets.get('jit.js'));
-for(const name of ['block-jit.mjs','block-compiler.mjs'])assets.set('baseline/tools/lib/'+name,await readFile((opts.baselineRuntime??root+'/tools/lib')+'/'+name));assets.set('baseline/web/jit.js',assets.get('jit.js'));
+// Older snapshots contain standalone .mjs files; current snapshots also need
+// their canonical .js modules. An explicit snapshot must supply its own copies.
+async function freezeBlocks(runtime,prefix=''){
+ let canonical=false;
+ for(const name of ['block-jit.mjs','block-compiler.mjs']){
+  const bytes=await readFile((runtime??root+'/tools/lib')+'/'+name);
+  assets.set(prefix+'tools/lib/'+name,bytes);canonical ||= bytes.includes('../../web/block-');
+ }
+ if(canonical)for(const name of ['block-jit.js','block-compiler.js'])
+  assets.set(prefix+'web/'+name,await readFile((runtime??root+'/web')+'/'+name));
+ assets.set(prefix+'web/jit.js',assets.get('jit.js'));
+}
+await freezeBlocks(opts.candidateRuntime);await freezeBlocks(opts.baselineRuntime,'baseline/');
 const worker=`
 import {WasmJit} from '/jit.js';import {BlockJit} from '/tools/lib/block-jit.mjs';import {BlockJit as BaselineBlockJit} from '/baseline/tools/lib/block-jit.mjs';
 const sleep=()=>new Promise(r=>setTimeout(r,0));

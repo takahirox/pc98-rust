@@ -259,6 +259,13 @@ async function command(type, data) {
       try {
         const {WasmJit} = await import(new URL('jit.js',import.meta.url));
         jit = new WasmJit(core);
+        if (typeof core.block_begin_slice === 'function') {
+          // Keep the guarded owner if the optional direct module cannot load.
+          try {
+            const {BlockJit} = await import(new URL('block-jit.js',import.meta.url));
+            jit = new BlockJit(core);
+          } catch { /* The already-created guarded JIT remains available. */ }
+        }
       } catch { jitUnavailable = true; }
     }
     diagnostics = !!data.diagnostics;

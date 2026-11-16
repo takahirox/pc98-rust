@@ -6,6 +6,7 @@ test('default production Worker JIT matches interpreter clocks, registers, pixel
     const enabled=mode!=='&jit=0';
     await page.goto(`./?diagnostics&manual${mode}`);
     await expect(page.locator('#profile')).toBeEnabled();
+    await page.locator('#profile').selectOption('1');await expect(page.locator('#file')).toBeEnabled();
     const disk=Buffer.alloc(1261568);
     // Original MIT loop with a CS memory override, stack, TEST/NOT/NEG and SHR/RCL.
     // CLI keeps external input outside this fixed-work probe.
@@ -28,7 +29,7 @@ test('default production Worker JIT matches interpreter clocks, registers, pixel
         metrics:[0,1,2,5,19,20,26,27,28,30].map(i=>core.metric(i)),frameHash,pcmHash,samples,error:pc98.stats().error},jit:pc98.stats().jit};
     });
     expect(result.state.error).toBe('');
-    if(enabled){expect(result.jit.compiled).toBeGreaterThan(0);expect(result.jit.instructions).toBeGreaterThan(10000);expect(result.jit.failures).toBe(0);}
+    if(enabled){expect(result.jit.compiled).toBeGreaterThan(0);expect(result.jit.instructions).toBeGreaterThan(10000);expect(result.jit.failures).toBe(0);expect(result.jit.tier).toBe('ram-block');expect(result.jit.blockInstructions).toBeGreaterThan(0);}
     else expect(result.jit.mode).toBe('interpreter');
     results.push(result.state);
     await page.locator('#reset').click();
@@ -53,4 +54,17 @@ test('an unavailable JIT module retains a working interpreter',async({page},test
   expect(requests).toBe(1);
   expect(result.completedInstructions).toBeGreaterThan(0);expect(result.error).toBe('');
   await expect(page.locator('#error')).toBeHidden();
+});
+
+
+test('an unavailable direct module retains the guarded JIT',async({page},testInfo)=>{
+  test.skip(testInfo.project.name==='pages','Failure path is covered once; both asset roots exercise the direct tier above.');
+  let requests=0;
+  await page.route('**/block-jit.js',route=>{requests++;return route.abort();});
+  await page.goto('./?diagnostics&manual&jit=0');await expect(page.locator('#profile')).toBeEnabled();
+  expect(requests).toBe(0);
+  await page.goto('./?diagnostics&manual');await expect(page.locator('#profile')).toBeEnabled();
+  const result=await inspect(page,()=>{pc98.core.step_scheduler(80000,10000);return pc98.stats();});
+  expect(requests).toBe(1);expect(result.jit.mode).toBe('jit');expect(result.jit.tier).toBeUndefined();
+  expect(result.completedInstructions).toBeGreaterThan(0);expect(result.error).toBe('');
 });

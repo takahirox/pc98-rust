@@ -842,16 +842,17 @@ uses stock browsers without an automation protocol and starts the local game
 with sound enabled, without advancing guest time manually.
 
 The browser's default [x86-to-Wasm JIT](docs/jit.md) compiles hot Ap real-mode
-blocks, including guarded memory operands and word stack operations, while
-retaining instruction-level timing and interrupts.
-Unsupported operations use the interpreter automatically, as do unavailable
-JIT modules or compilation failures. Add `?jit=0` for an interpreter comparison
-or troubleshooting; `?jit=1` remains supported. Native/headless and synchronous
+code. Uncached ordinary 16-bit RAM traces keep registers, memory operations and
+timing in generated Wasm until a work/event boundary. The guarded tier handles
+other supported blocks; unsupported operations use the reference interpreter.
+All tiers retain the original guest clocks and interrupts. An unavailable direct
+module retains the guarded JIT; an unavailable JIT module or compilation failure
+retains interpreter execution. Add `?jit=0` for an interpreter comparison or
+troubleshooting; `?jit=1` remains supported. Native/headless and synchronous
 observer APIs retain the reference interpreter.
-The JIT report documents coverage, bounded compilation, correctness checks and
-fixed-work measurements separately from real-time game playback.
-An opt-in [browser block-core experiment](docs/browser-block-core.md) evaluates
-direct Wasm RAM/timing execution; it is not enabled in the published runtime.
+The [third browser comparison](docs/browser-block-round3.md) records the selected
+trace design, fixed-work controls, startup/code-size tradeoffs and acceptance.
+These measurements are separate from calibrated real-time game playback.
 
 HDD replacement/eject first pauses at a Worker boundary, then checks dirty pages
 and retains the discard confirmation. Import stages acknowledged transferable

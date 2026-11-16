@@ -1,4 +1,4 @@
-// Opt-in actual-Wasm conformance for the non-published block experiment.
+// Actual release-Wasm conformance for the browser RAM trace tier.
 import {test} from 'node:test';import assert from 'node:assert/strict';import {readFile} from 'node:fs/promises';
 import {compileRamBlock} from '../tools/lib/block-compiler.mjs';
 import {BlockJit} from '../tools/lib/block-jit.mjs';

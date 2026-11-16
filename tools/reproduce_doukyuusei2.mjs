@@ -36,6 +36,8 @@ await access(options.output).then(()=>{throw Error('Output already exists');},()
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 const names=['app.js','emulator-worker.js','audio-worklet.js','render-worker.js','core.wasm','jit.js'];
 const assets=new Map(await Promise.all(names.map(async name=>[name,await readFile(path.join(root,'web',name))])));
+if(assets.get('emulator-worker.js').includes("new URL('block-jit.js'"))
+  for(const name of ['block-jit.js','block-compiler.js']){names.push(name);assets.set(name,await readFile(path.join(root,'web',name)));}
 const sourceHashes=Object.fromEntries([...assets].map(([name,body])=>[name,sha(body)]));
 // These bounded input/audio getters exist only in the served local control.
 // The emulator Worker, renderer, worklet and Wasm bytes remain unchanged.
@@ -183,7 +185,7 @@ try{
     new Promise((_,reject)=>child.once('error',reject).once('exit',code=>reject(Error('Browser exited '+code)))),
     new Promise((_,reject)=>setTimeout(()=>reject(Error('Reproduction deadline; '+stderr)),240000+clicks*600).unref()),
   ]);
-  const missing=names.filter(name=>!counts[name] && !(name==='jit.js'&&options.jit==='0'));
+  const missing=names.filter(name=>!counts[name] && !(['jit.js','block-jit.js','block-compiler.js'].includes(name)&&options.jit==='0'));
   if(missing.length && !result.error)result.error='Selected runtime assets were not served: '+missing.join(', ');
   await writeFile(options.output,JSON.stringify({context:{date:new Date().toISOString(),engine,
     automationProtocol:false,manualGuestAdvance:false,headless,noSandbox,samplePatches,automaticAudioActivation:true,

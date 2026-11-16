@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the opt-in block tier without replacing the published web/core.wasm."""
+"""Check the direct RAM tier without overwriting web/core.wasm."""
 import os
 import shutil
 import subprocess
