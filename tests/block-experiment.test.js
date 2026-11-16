@@ -299,6 +299,21 @@ test('hot native interrupt fallback preserves work deadlines and rechecks change
  for(let n=0;n<8;n++)await step(8000,1000);
 });
 
+test('hot keyboard polling reads current BIOS groups and keeps literal interrupt/OUT/IRET boundaries',async()=>{
+ const code=[0xb4,4,0xb0,3,0xcd,0x18,0xeb,0xf8],a=await boot(code),b=await boot(code),j=new BlockJit(a);
+ for(const c of[a,b]){setState(c,[0,0,0,0,0x8001,0,0,0],3);new Uint8Array(c.memory.buffer)[(c.block_ram_ptr()>>>0)+0x52d]=0xa5;}
+ async function step(clocks,cap){const done=j.step(clocks,cap);assert(done>0&&done<=cap);b.step(done);while(j.pending)await new Promise(r=>setTimeout(r,0));assert(!j.failed,j.compileError);equal(a,b);a.audio_clear();b.audio_clear();}
+ for(let n=0;n<12;n++)await step(8000,1000);
+ for(const clocks of [1,20,80000])for(const cap of [1,2,3,4,17])await step(clocks,cap);
+ for(const group of [3,15,16,255])for(const value of [0xa5,0x80]){
+  for(let n=0;a.metric(17)!==0x1fc0;n++){assert(n<16);await step(80000,1);}
+  for(const c of[a,b]){const s=state(c);s.regs[0]=0x0400|group;setState(c,s.regs,3,5);if(group<16)new Uint8Array(c.memory.buffer)[(c.block_ram_ptr()>>>0)+0x52a+group]=value;}
+  await step(80000,1);assert.equal(a.metric(17),0xf000);assert.equal(a.metric(18),0x1060);
+  await step(80000,1);assert.equal(a.metric(18),0x1062);assert.equal(state(a).regs[0],((group<16?value:0)<<8)|group);
+  await step(80000,1);assert.equal(a.metric(17),0x1fc0);assert.equal(a.metric(18),7);assert.equal(state(a).regs[4],0x8001);assert.equal(state(a).flags,3);
+ }
+});
+
 test('reference interrupt words retain odd and wrapping real-mode stack frames in release Wasm',async()=>{
  for(const sp of [0,2,4,0x8000,0x8001,0xfffe]){
   const c=await boot([0xb8,0,0x30,0x8e,0xd0,0xbc,sp&255,sp>>8,0xcd,0x30,0x90,0xeb,0xfd],[0xcf]);

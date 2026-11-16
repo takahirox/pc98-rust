@@ -157,7 +157,7 @@ struct Plan {
 struct Probe {
     key: u64,
     hits: u8,
-    interrupt: bool,
+    simple: bool,
     id: u32,
 }
 
@@ -504,7 +504,7 @@ impl Engine {
     fn dispatch_inner(&mut self, m: &mut Machine, compile: bool, enter: bool) -> u64 {
         while self.runnable(m) {
             let mut hot_fallback = false;
-            let mut interrupt_fallback = false;
+            let mut simple_fallback = false;
             // Cold/unsupported addresses pay only a mode/key probe. Full IRQ,
             // descriptor and trap guards belong at a translation/entry boundary.
             if m.bus.profile == Profile::Pc9821ApDos
@@ -519,7 +519,7 @@ impl Engine {
                     self.probes[index] = Probe {
                         key,
                         hits: 1,
-                        interrupt: false,
+                        simple: false,
                         id: 0,
                     };
                 } else {
@@ -641,16 +641,16 @@ impl Engine {
                             self.counters[0] += 1;
                             return (1_u64 << 32) | u64::from(id);
                         } else {
-                            self.probes[index].interrupt = m.cpu.s[CS] == 0xf000
-                                && m.cpu.ip & 3 == 0
-                                || code(m, m.cpu.ip, 1)
-                                    .is_some_and(|at| matches!(m.bus.mem[at], 0xcd | 0xcf));
+                            self.probes[index].simple = m.cpu.s[CS] == 0xf000 && m.cpu.ip & 3 == 0
+                                || code(m, m.cpu.ip, 1).is_some_and(|at| {
+                                    matches!(m.bus.mem[at], 0xcd | 0xcf | 0xe6 | 0xee)
+                                });
                         }
                     } else if id == 0 && self.probes[index].hits == HEAT && !compile {
                         self.probes[index].hits -= 1;
                     }
                     hot_fallback = id == 0 && self.probes[index].hits >= HEAT;
-                    interrupt_fallback = hot_fallback && self.probes[index].interrupt;
+                    simple_fallback = hot_fallback && self.probes[index].simple;
                 }
             }
             // Bound discovery work in cold code. Vary the short
@@ -671,12 +671,12 @@ impl Engine {
             };
             let cap = self.remaining.min(stride);
             self.sample_phase = self.sample_phase.wrapping_add(1);
-            if interrupt_fallback {
+            if simple_fallback {
                 for _ in 0..cap {
                     if !self.runnable(m) {
                         break;
                     }
-                    if let Some(timing) = m.cpu.try_jit_interrupt(&mut m.bus) {
+                    if let Some(timing) = m.cpu.try_jit_simple(&mut m.bus) {
                         let clocks = m
                             .clock_converter
                             .advance(m.bus.profile, timing.cpu_cycles());
@@ -951,9 +951,9 @@ impl Engine {
     }
 }
 impl Cpu {
-    // A native JIT fallback specialization, never used by observer/reference APIs.
+    // A core JIT fallback specialization, never used by observer/reference APIs.
     // Preflight excludes every fallible/mapped/frame-wrap case before fetches.
-    fn try_jit_interrupt(&mut self, b: &mut Bus) -> Option<crate::timing::StepTiming> {
+    fn try_jit_simple(&mut self, b: &mut Bus) -> Option<crate::timing::StepTiming> {
         if !matches!(b.profile, Profile::Pc9821ApDos)
             || self.cr0 & 0x80000001 != 0
             || self.flags & TF != 0
@@ -975,25 +975,37 @@ impl Cpu {
             return None;
         }
         let op = b.mem[at];
-        if !matches!(op, 0xcd | 0xcf) {
+        if !matches!(op, 0xcd | 0xcf | 0xe6 | 0xee) {
             return None;
         }
-        let len = if op == 0xcd { 2 } else { 1 };
+        let len = if matches!(op, 0xcd | 0xe6) { 2 } else { 1 };
         if !cs.contains(self.ip, len) || self.ip.checked_add(len)? > 0x10000 {
             return None;
         }
         if op == 0xcd && at.checked_add(1)? >= 0xa0000 {
             return None;
         }
-        let sp = self.r[SP];
-        let start = if op == 0xcd {
-            u32::from(sp).wrapping_sub(6)
-        } else {
-            u32::from(sp)
+        let port = match op {
+            0xe6 if at != 0x9ffff && at != 0xfffff => Some(u16::from(b.mem[at + 1])),
+            0xe6 => return None,
+            0xee => Some(self.r[DX]),
+            _ => None,
         };
-        let stack = self.real_word_frame(b, start)?;
-        if stack > 0x9fffa {
-            return None;
+        if let Some(port) = port {
+            if port == 0xf0 && !crate::firmware::infallible_keyboard_trap(self, self.ip + len) {
+                return None;
+            }
+        } else {
+            let sp = self.r[SP];
+            let start = if op == 0xcd {
+                u32::from(sp).wrapping_sub(6)
+            } else {
+                u32::from(sp)
+            };
+            let stack = self.real_word_frame(b, start)?;
+            if stack > 0x9fffa {
+                return None;
+            }
         }
         let vector = if op == 0xcd {
             let vector = b.mem[at + 1];
@@ -1015,6 +1027,7 @@ impl Cpu {
             }
             b.sync_cascade();
         }
+        let registers = port.map(|_| (self.r, self.upper));
         let before = b.cycles;
         b.timing.begin(self.cr0);
         b.timing.previous_writes = self.timing_writes;
@@ -1024,19 +1037,35 @@ impl Cpu {
         self.lock_prefix = false;
         self.trap_suppressed = false;
         self.instruction_bytes = 0;
-        self.fetch(b).expect("preflighted interrupt opcode");
+        self.fetch(b).expect("preflighted simple opcode");
         b.timing.instruction = Some(crate::timing::Instruction::new(self, op, 0, 0));
         self.retired += 1;
         if op == 0xcd {
             self.fetch(b).expect("preflighted interrupt immediate");
             self.deliver_interrupt(b, vector)
                 .expect("preflighted real interrupt frame");
+        } else if let Some(port) = port {
+            if op == 0xe6 {
+                self.fetch(b).expect("preflighted OUT immediate");
+            }
+            self.output_width(b, port, u32::from(self.byte(0)), false);
+            if port == 0xf0 {
+                b.firmware_request = false;
+                b.timing.approximated = true;
+                b.sync_devices();
+                crate::firmware::execute_service(self, b)
+                    .expect("preflighted real keyboard service");
+                b.sync_devices();
+                b.timing.flush();
+            }
         } else {
             self.iret(b).expect("preflighted real return frame");
         }
         b.finish_cpu_memory(true);
         let timing = b.timing.finish(b.profile, false, b.cycles - before);
-        self.timing_writes = 1 << SP;
+        self.timing_writes = registers.map_or(1 << SP, |(before, upper)| {
+            changed_registers(&before, &upper, &self.r, &self.upper)
+        });
         self.last_timing = timing;
         self.cycles += u64::from(timing.cpu_cycles());
         self.completed_instructions += u64::from(timing.instructions);
@@ -1174,7 +1203,7 @@ mod tests {
                         };
                         let mut actual = make();
                         let mut reference = make();
-                        let fast = actual.cpu.try_jit_interrupt(&mut actual.bus).unwrap();
+                        let fast = actual.cpu.try_jit_simple(&mut actual.bus).unwrap();
                         let (slow, result) = reference.cpu.step_timed(&mut reference.bus);
                         result.unwrap();
                         assert_eq!(fast, slow, "op={op:02x} sp={sp:04x}");
@@ -1185,6 +1214,130 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn byte_out_and_infallible_keyboard_services_match_reference_transactions() {
+        let mut cases = Vec::new();
+        for op in [0xe6, 0xee] {
+            for ah in 0..=5 {
+                for queued in [false, true] {
+                    for cr0 in [0x10, 0x60000010] {
+                        cases.push((op, 0xf0, ah, 3, queued, cr0));
+                    }
+                }
+            }
+        }
+        for group in [0, 15, 16, 255] {
+            cases.push((0xe6, 0xf0, 4, group, false, 0x10));
+        }
+        for port in [0x35, 0x43, 0x188, 0xffff] {
+            cases.push((0xee, port, 4, 8, false, 0x60000010));
+        }
+        for (op, port, ah, al, queued, cr0) in cases {
+            let make = || {
+                let mut m = machine();
+                m.cpu.cr0 = cr0;
+                m.cpu.flags = 3;
+                m.cpu.flags_upper = 5;
+                m.cpu.r[AX] = (ah as u16) << 8 | al as u16;
+                m.cpu.r[DX] = port;
+                m.cpu.r[SP] = 0xffff; // OUT needs no interrupt frame.
+                m.cpu.upper[AX] = 0x8765;
+                if port == 0xf0 {
+                    m.cpu.s[CS] = 0xf000;
+                    m.cpu.ip = if op == 0xe6 { 0x1060 } else { 0x1061 };
+                }
+                let at = m.cpu.segment_cache(CS).base as usize + m.cpu.ip as usize;
+                m.bus.mem[at..at + 2].copy_from_slice(&[op, port as u8]);
+                m.bus.mem[0x52a..0x53a].fill(0xa5);
+                m.bus.keyboard.modifiers = 0x13;
+                if queued {
+                    m.bus.keyboard.bios.extend([0x1234, 0x5678]);
+                }
+                m
+            };
+            let mut actual = make();
+            let mut reference = make();
+            let fast = actual.cpu.try_jit_simple(&mut actual.bus).unwrap();
+            let (slow, result) = reference.cpu.step_timed(&mut reference.bus);
+            result.unwrap();
+            assert_eq!(fast, slow, "port={port:x} ah={ah:x} op={op:x}");
+            assert_eq!(format!("{:?}", actual.cpu), format!("{:?}", reference.cpu));
+            assert_eq!(actual.bus.mem, reference.bus.mem);
+            assert_eq!(actual.bus.keyboard.bios, reference.bus.keyboard.bios);
+            assert_eq!(
+                actual.bus.keyboard.modifiers,
+                reference.bus.keyboard.modifiers
+            );
+            assert_eq!(actual.bus.keyboard.pressed, reference.bus.keyboard.pressed);
+            assert_eq!(actual.bus.firmware_request, reference.bus.firmware_request);
+            assert_eq!(actual.bus.beep, reference.bus.beep);
+            assert_eq!(actual.bus.beep_edges, reference.bus.beep_edges);
+            assert_eq!(actual.bus.opn.address, reference.bus.opn.address);
+            assert_eq!(actual.bus.unknown_ports, reference.bus.unknown_ports);
+            assert_eq!(actual.bus.timing.last_byte, reference.bus.timing.last_byte);
+            assert_eq!(actual.bus.timing.value, reference.bus.timing.value);
+            assert_eq!(actual.bus.cycles, reference.bus.cycles);
+            // A following reference instruction also checks retained cache state.
+            for m in [&mut actual, &mut reference] {
+                m.cpu.ip = if port == 0xf0 {
+                    if op == 0xe6 {
+                        0x1060
+                    } else {
+                        0x1061
+                    }
+                } else {
+                    0x100
+                };
+                m.cpu.r[AX] = (ah as u16) << 8 | al as u16;
+                m.cpu.step_timed(&mut m.bus).1.unwrap();
+            }
+            assert_eq!(format!("{:?}", actual.cpu), format!("{:?}", reference.cpu));
+        }
+    }
+
+    #[test]
+    fn byte_out_defers_faulting_fetches_and_unproven_firmware_without_effects() {
+        for scenario in 0..7 {
+            let mut m = machine();
+            m.cpu.s[CS] = 0xf000;
+            m.cpu.ip = 0x1060;
+            m.cpu.r[AX] = 0x0403;
+            match scenario {
+                0 => m.cpu.r[AX] = 0x0603,
+                1 => m.cpu.ip = 0x1064,
+                2 => {
+                    m.cpu.s[CS] = 0;
+                    m.cpu.ip = 0x100;
+                    m.bus.mem[0x100..0x102].copy_from_slice(&[0xe6, 0xf0]);
+                }
+                3 => m.bus.mem[0xf1060] = 0x66,
+                4 => m.cpu.inhibit = 1,
+                5 => m.cpu.flags |= TF,
+                _ => {
+                    m.cpu.s[CS] = 0;
+                    m.cpu.ip = 0x100;
+                    m.cpu.segment_caches[CS] = Some(SegmentCache {
+                        base: 0x9feff,
+                        limit: 0xffff,
+                        access: 0x9b,
+                        attributes: 0,
+                    });
+                    m.bus.mem[0x9ffff] = 0xe6;
+                }
+            }
+            let before = format!("{:?}", m.cpu);
+            let memory = m.bus.mem.clone();
+            assert!(
+                m.cpu.try_jit_simple(&mut m.bus).is_none(),
+                "scenario {scenario}"
+            );
+            assert_eq!(format!("{:?}", m.cpu), before);
+            assert_eq!(m.bus.mem, memory);
+            assert_eq!(m.bus.cycles, 0);
+            assert!(!m.bus.firmware_request);
         }
     }
 
@@ -1229,7 +1382,7 @@ mod tests {
             let before = format!("{:?}", m.cpu);
             let memory = m.bus.mem.clone();
             assert!(
-                m.cpu.try_jit_interrupt(&mut m.bus).is_none(),
+                m.cpu.try_jit_simple(&mut m.bus).is_none(),
                 "scenario {scenario}"
             );
             assert_eq!(format!("{:?}", m.cpu), before);
@@ -1249,7 +1402,7 @@ mod tests {
         e.probes[probe(k)] = Probe {
             key: k,
             hits: HEAT - 1,
-            interrupt: false,
+            simple: false,
             id: 0,
         };
         e.begin_slice(&m, 80_000, 1);
@@ -1421,7 +1574,7 @@ mod tests {
             e.probes[probe(key)] = Probe {
                 key,
                 hits,
-                interrupt: false,
+                simple: false,
                 id: 0,
             };
         }
@@ -1454,7 +1607,7 @@ mod tests {
             e.probes[probe(key)] = Probe {
                 key,
                 hits,
-                interrupt: false,
+                simple: false,
                 id: 0,
             };
         }

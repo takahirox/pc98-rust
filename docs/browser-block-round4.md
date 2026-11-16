@@ -1,5 +1,7 @@
 # Browser block performance round 4
 
+[Round 5](browser-block-round5.md) continues with byte-OUT and BIOS polling costs.
+
 This continues [round 3](browser-block-round3.md) for Issue #187. The selected
 change shortens word transfers and adds a preflighted INT/IRET fallback inside
 the Rust core. That core is compiled to Wasm for the existing browser Worker.
