@@ -135,9 +135,7 @@ impl Cpu {
         let (off, seg, flags) = if let Some(base) = base {
             let mut read_word = |delta| {
                 let physical = base.wrapping_add(delta);
-                let lo = b.cpu_read(physical, 0, 2, false);
-                let hi = b.cpu_read(physical.wrapping_add(1), 1, 2, false);
-                u16::from_le_bytes([lo, hi])
+                b.cpu_read_word(physical)
             };
             (
                 u32::from(read_word(0)),

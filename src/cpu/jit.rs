@@ -157,6 +157,7 @@ struct Plan {
 struct Probe {
     key: u64,
     hits: u8,
+    interrupt: bool,
     id: u32,
 }
 
@@ -503,6 +504,7 @@ impl Engine {
     fn dispatch_inner(&mut self, m: &mut Machine, compile: bool, enter: bool) -> u64 {
         while self.runnable(m) {
             let mut hot_fallback = false;
+            let mut interrupt_fallback = false;
             // Cold/unsupported addresses pay only a mode/key probe. Full IRQ,
             // descriptor and trap guards belong at a translation/entry boundary.
             if m.bus.profile == Profile::Pc9821ApDos
@@ -517,6 +519,7 @@ impl Engine {
                     self.probes[index] = Probe {
                         key,
                         hits: 1,
+                        interrupt: false,
                         id: 0,
                     };
                 } else {
@@ -637,11 +640,17 @@ impl Engine {
                             self.probes[index].id = id;
                             self.counters[0] += 1;
                             return (1_u64 << 32) | u64::from(id);
+                        } else {
+                            self.probes[index].interrupt = m.cpu.s[CS] == 0xf000
+                                && m.cpu.ip & 3 == 0
+                                || code(m, m.cpu.ip, 1)
+                                    .is_some_and(|at| matches!(m.bus.mem[at], 0xcd | 0xcf));
                         }
                     } else if id == 0 && self.probes[index].hits == HEAT && !compile {
                         self.probes[index].hits -= 1;
                     }
                     hot_fallback = id == 0 && self.probes[index].hits >= HEAT;
+                    interrupt_fallback = hot_fallback && self.probes[index].interrupt;
                 }
             }
             // Bound discovery work in cold code. Vary the short
@@ -662,13 +671,31 @@ impl Engine {
             };
             let cap = self.remaining.min(stride);
             self.sample_phase = self.sample_phase.wrapping_add(1);
-            let done = m.step_scheduler_with_observer(
-                (self.deadline - m.bus.cycles) as u32,
-                cap,
-                |_, _| {},
-            );
-            self.remaining -= done;
-            self.done += done;
+            if interrupt_fallback {
+                for _ in 0..cap {
+                    if !self.runnable(m) {
+                        break;
+                    }
+                    if let Some(timing) = m.cpu.try_jit_interrupt(&mut m.bus) {
+                        let clocks = m
+                            .clock_converter
+                            .advance(m.bus.profile, timing.cpu_cycles());
+                        m.bus.tick(clocks);
+                        self.remaining -= 1;
+                        self.done += 1;
+                    } else {
+                        self.fallback(m);
+                    }
+                }
+            } else {
+                let done = m.step_scheduler_with_observer(
+                    (self.deadline - m.bus.cycles) as u32,
+                    cap,
+                    |_, _| {},
+                );
+                self.remaining -= done;
+                self.done += done;
+            }
         }
         0
     }
@@ -924,6 +951,100 @@ impl Engine {
     }
 }
 impl Cpu {
+    // A native JIT fallback specialization, never used by observer/reference APIs.
+    // Preflight excludes every fallible/mapped/frame-wrap case before fetches.
+    fn try_jit_interrupt(&mut self, b: &mut Bus) -> Option<crate::timing::StepTiming> {
+        if !matches!(b.profile, Profile::Pc9821ApDos)
+            || self.cr0 & 0x80000001 != 0
+            || self.flags & TF != 0
+            || self.inhibit != 0
+            || self.halted
+            || self.shutdown
+            || self.rep_resume.is_some()
+            || b.firmware_request
+        {
+            return None;
+        }
+        let cs = self.segment_cache(CS);
+        if cs.big() || !cs.contains(self.ip, 1) {
+            return None;
+        }
+        let physical = cs.base.checked_add(self.ip)?;
+        let at = b.address(physical as usize);
+        if !(at < 0xa0000 || (0xf0000..=0xfffff).contains(&at)) {
+            return None;
+        }
+        let op = b.mem[at];
+        if !matches!(op, 0xcd | 0xcf) {
+            return None;
+        }
+        let len = if op == 0xcd { 2 } else { 1 };
+        if !cs.contains(self.ip, len) || self.ip.checked_add(len)? > 0x10000 {
+            return None;
+        }
+        if op == 0xcd && at.checked_add(1)? >= 0xa0000 {
+            return None;
+        }
+        let sp = self.r[SP];
+        let start = if op == 0xcd {
+            u32::from(sp).wrapping_sub(6)
+        } else {
+            u32::from(sp)
+        };
+        let stack = self.real_word_frame(b, start)?;
+        if stack > 0x9fffa {
+            return None;
+        }
+        let vector = if op == 0xcd {
+            let vector = b.mem[at + 1];
+            let entry = u32::from(vector) * 4;
+            if entry + 3 > u32::from(self.idtr_limit) {
+                return None;
+            }
+            let address = self.idtr_base.checked_add(entry)?;
+            if address > 0x9fffc {
+                return None;
+            }
+            vector
+        } else {
+            0
+        };
+        if self.flags & IF != 0 {
+            if b.pics[0].pending().is_some() || b.pics[1].pending().is_some() {
+                return None;
+            }
+            b.sync_cascade();
+        }
+        let before = b.cycles;
+        b.timing.begin(self.cr0);
+        b.timing.previous_writes = self.timing_writes;
+        self.flags_upper &= !1;
+        self.operand32 = false;
+        self.address32 = false;
+        self.lock_prefix = false;
+        self.trap_suppressed = false;
+        self.instruction_bytes = 0;
+        self.fetch(b).expect("preflighted interrupt opcode");
+        b.timing.instruction = Some(crate::timing::Instruction::new(self, op, 0, 0));
+        self.retired += 1;
+        if op == 0xcd {
+            self.fetch(b).expect("preflighted interrupt immediate");
+            self.deliver_interrupt(b, vector)
+                .expect("preflighted real interrupt frame");
+        } else {
+            self.iret(b).expect("preflighted real return frame");
+        }
+        b.finish_cpu_memory(true);
+        let timing = b.timing.finish(b.profile, false, b.cycles - before);
+        self.timing_writes = 1 << SP;
+        self.last_timing = timing;
+        self.cycles += u64::from(timing.cpu_cycles());
+        self.completed_instructions += u64::from(timing.instructions);
+        self.rep_elements += u64::from(timing.rep_elements);
+        self.approximated_units += u64::from(timing.approximated);
+        Some(timing)
+    }
+
     #[inline(always)]
     fn jit_fetch(&mut self, b: &mut Bus, op: Op, physical: u32) {
         b.timing.jit_fetch(
@@ -1028,6 +1149,96 @@ mod tests {
         id
     }
     #[test]
+    fn native_interrupt_steps_match_reference_state_memory_and_timing() {
+        for op in [0xcd, 0xcf] {
+            for sp in [6, 0x8000, 0x8001, 0xfff8, 0xfffa] {
+                for cr0 in [0x10, 0x60000010] {
+                    for flags in [3, 0x203] {
+                        let make = || {
+                            let mut m = machine();
+                            m.cpu.r[SP] = sp;
+                            m.cpu.flags = flags;
+                            m.cpu.flags_upper = 5;
+                            m.cpu.cr0 = cr0;
+                            m.cpu.cpl = 1;
+                            m.cpu.operand32 = true;
+                            m.cpu.address32 = true;
+                            m.cpu.lock_prefix = true;
+                            m.cpu.instruction_bytes = 7;
+                            m.cpu.idtr_base = 0x6001;
+                            m.bus.mem[0x100..0x102].copy_from_slice(&[op, 0x30]);
+                            m.bus.mem[0x60c1..0x60c5].copy_from_slice(&[0x23, 1, 0x45, 0]);
+                            let at = usize::from(sp);
+                            m.bus.mem[at..at + 6].copy_from_slice(&[0x23, 1, 0x45, 0, 3, 3]);
+                            m
+                        };
+                        let mut actual = make();
+                        let mut reference = make();
+                        let fast = actual.cpu.try_jit_interrupt(&mut actual.bus).unwrap();
+                        let (slow, result) = reference.cpu.step_timed(&mut reference.bus);
+                        result.unwrap();
+                        assert_eq!(fast, slow, "op={op:02x} sp={sp:04x}");
+                        assert_eq!(format!("{:?}", actual.cpu), format!("{:?}", reference.cpu));
+                        assert_eq!(actual.bus.mem, reference.bus.mem);
+                        assert_eq!(actual.bus.timing.last_byte, reference.bus.timing.last_byte);
+                        assert_eq!(actual.bus.timing.value, reference.bus.timing.value);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn native_interrupt_preflight_defers_unusual_or_interruptible_states_without_effects() {
+        for scenario in 0..12 {
+            let mut m = machine();
+            m.cpu.r[SP] = 0x8000;
+            m.bus.mem[0x100..0x102].copy_from_slice(&[0xcd, 0x30]);
+            match scenario {
+                0 => m.cpu.flags |= TF,
+                1 => m.cpu.inhibit = 1,
+                2 => m.cpu.cr0 |= 1,
+                3 => m.cpu.cr0 |= 0x80000000,
+                4 => m.cpu.r[SP] = 0,
+                5 => m.cpu.idtr_limit = 0,
+                6 => m.cpu.idtr_base = 0xfffffff0,
+                7 => m.bus.mem[0x100] = 0x66,
+                8 => m.bus.firmware_request = true,
+                9 => {
+                    m.cpu.segment_caches[SS] = Some(SegmentCache {
+                        base: 0xa8000,
+                        limit: 0xffff,
+                        access: 0x93,
+                        attributes: 0,
+                    })
+                }
+                10 => {
+                    m.cpu.segment_caches[CS] = Some(SegmentCache {
+                        base: 0,
+                        limit: 0xffff,
+                        access: 0x9b,
+                        attributes: 0x40,
+                    })
+                }
+                _ => {
+                    m.cpu.flags |= IF;
+                    m.bus.pics[0].mask &= !2;
+                    m.bus.key(0x1d, true);
+                }
+            }
+            let before = format!("{:?}", m.cpu);
+            let memory = m.bus.mem.clone();
+            assert!(
+                m.cpu.try_jit_interrupt(&mut m.bus).is_none(),
+                "scenario {scenario}"
+            );
+            assert_eq!(format!("{:?}", m.cpu), before);
+            assert_eq!(m.bus.mem, memory);
+            assert_eq!(m.bus.cycles, 0);
+        }
+    }
+
+    #[test]
     fn fused_dispatch_preserves_full_ids_and_unexecuted_offers() {
         let mut m = machine();
         let mut e = Engine {
@@ -1038,6 +1249,7 @@ mod tests {
         e.probes[probe(k)] = Probe {
             key: k,
             hits: HEAT - 1,
+            interrupt: false,
             id: 0,
         };
         e.begin_slice(&m, 80_000, 1);
@@ -1206,7 +1418,12 @@ mod tests {
         let successor = unsupported + 1;
         assert_ne!(probe(unsupported), probe(successor));
         for (key, hits) in [(unsupported, HEAT), (successor, HEAT - 1)] {
-            e.probes[probe(key)] = Probe { key, hits, id: 0 };
+            e.probes[probe(key)] = Probe {
+                key,
+                hits,
+                interrupt: false,
+                id: 0,
+            };
         }
         e.begin_slice(&actual, 80_000, 10);
         let id = e.dispatch(&mut actual, true);
@@ -1234,7 +1451,12 @@ mod tests {
         let caller = 0x101;
         assert_ne!(probe(rom), probe(caller));
         for (key, hits) in [(rom, HEAT), (caller, HEAT - 1)] {
-            e.probes[probe(key)] = Probe { key, hits, id: 0 };
+            e.probes[probe(key)] = Probe {
+                key,
+                hits,
+                interrupt: false,
+                id: 0,
+            };
         }
         e.begin_slice(&actual, 80_000, 10);
         assert_ne!(e.dispatch(&mut actual, true), 0);

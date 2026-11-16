@@ -468,7 +468,7 @@ impl Bus {
             self.write(physical as usize, value);
         }
     }
-    /// A preflighted JIT word can avoid decoding the same ordinary RAM span
+    /// A preflighted CPU word can avoid decoding the same ordinary RAM span
     /// twice. Boundary/device accesses keep byte ordering and bus side effects.
     pub(crate) fn cpu_read_word(&mut self, physical: u32) -> u16 {
         if physical < 0x9ffff {

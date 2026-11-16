@@ -852,6 +852,8 @@ troubleshooting; `?jit=1` remains supported. Native/headless and synchronous
 observer APIs retain the reference interpreter.
 The [third browser comparison](docs/browser-block-round3.md) records the selected
 trace design, fixed-work controls, startup/code-size tradeoffs and acceptance.
+The [fourth comparison](docs/browser-block-round4.md) measures word-transfer and
+interrupt fallback improvements against that runtime and the pinned NP2kai core.
 These measurements are separate from calibrated real-time game playback.
 
 HDD replacement/eject first pauses at a Worker boundary, then checks dirty pages
