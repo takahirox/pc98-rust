@@ -85,6 +85,38 @@ class FixtureFetchTests(unittest.TestCase):
         self.assertEqual(self.path.read_bytes(), b'corrupt')
 
 
+class VendoredAdv98Tests(unittest.TestCase):
+    def test_existing_binary_pin_is_usable_offline(self):
+        with patch.object(fixtures.urllib.request, 'urlopen') as network:
+            data = fixtures.adv98_executable()
+        self.assertEqual(len(data), 75776)
+        self.assertEqual(fixtures.sha(data),
+                         '904f476516bf009b6d25d0a2738ddf649af05bcafac72cbb703c73d7159e5954')
+        network.assert_not_called()
+
+    def test_corrupt_binary_fails_without_network_or_overwrite(self):
+        data = bytearray(fixtures.adv98_executable())
+        data[0] ^= 1
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'fixtures/adv98/ADV98.EXE'
+            path.parent.mkdir(parents=True)
+            path.write_bytes(data)
+            with patch.object(fixtures, 'ROOT', Path(directory)), \
+                    patch.object(fixtures.urllib.request, 'urlopen') as network:
+                with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
+                    fixtures.adv98_executable()
+            network.assert_not_called()
+            self.assertEqual(path.read_bytes(), data)
+
+    def test_missing_binary_fails_without_network(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(fixtures, 'ROOT', Path(directory)), \
+                patch.object(fixtures.urllib.request, 'urlopen') as network:
+            with self.assertRaises(FileNotFoundError):
+                fixtures.adv98_executable()
+            network.assert_not_called()
+
+
 class HimemXFetchTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()

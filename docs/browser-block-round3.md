@@ -55,7 +55,7 @@ The normal publication audit now checks 30 assets and the direct exports.
 | Configuration | Change from the preceding configuration | Exploratory reduction against frozen production |
 | --- | --- | ---: |
 | A | Direct immediate word/sign-extended byte PUSH | 25.94% |
-| B | Sparse initial register loads | 25.34% |
+| B | Sparse initial register loads | 25.35% |
 | C | Increase direct translation limit from 16 to 32 | 26.24% |
 | D | Exact code-span store guards instead of conservative gap exits | 26.59% |
 | E | Remove D; follow forward conditional fallthroughs | 29.68% |
@@ -166,3 +166,12 @@ runtime files. The temporary local Playwright configuration also needed an
 explicit repository working directory; its initial server launch ran no tests.
 Both corrected controls passed. Required post-merge verification is None.
 Broader playback Issues #172/#146 remain separate.
+
+
+The first PR CI attempt stopped before emulator tests because upstream replaced
+its mutable ADV98 release archive. [Issue #186](https://github.com/takahirox/pc98-rust/issues/186)
+records that prerequisite separately. The existing 75,776-byte MIT executable is
+now pinned in `fixtures/adv98` with its matching license and provenance. All seven
+existing generated disk hashes and every application pin remain unchanged. The
+13 offline fixture-fetch checks pass, including missing/corrupt executable cases;
+a fresh fetch of all remaining pinned source/program assets also passes.

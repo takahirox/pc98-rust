@@ -471,6 +471,33 @@
     "publishedAssets": 30,
     "nativeDebugChecksRetained": true,
     "compilerFunctionMatchesMeasured": true,
-    "publishedWasmMatchesMeasured": true
+    "publishedWasmMatchesMeasured": true,
+    "fixtureFetchTests": 13,
+    "unchangedGeneratedGuestDisks": 7,
+    "initialCiFailure": {
+      "runId": 43805689465,
+      "stage": "prepare_dos_apps.py before emulator tests",
+      "reason": "mutable ADV98 release replaced upstream; existing executable retained under Issue #186"
+    }
+  },
+  "canonicalModuleEquivalence": {
+    "checkpointEquality": true,
+    "artifactSha256": {
+      "base.wasm": "eb09b060d98bbb58b390d9a3513a7b4cab76013cf04938aa7a8626c753ed5785",
+      "candidate.wasm": "eb09b060d98bbb58b390d9a3513a7b4cab76013cf04938aa7a8626c753ed5785",
+      "jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+      "tools/lib/block-jit.mjs": "a23200d88426cd475c2f517d7a68c1ff832e4483613ef9ee331cde8ca01b78f1",
+      "tools/lib/block-compiler.mjs": "ffdd8063383a5cdadc72bc178d9ffd0ecbbca0c48dbad7eb5310a4a9bc45cbd5",
+      "web/block-jit.js": "97aa7190100bae365e248b32145b44d5a2bd4249175c03ce21aab97f901f1bb1",
+      "web/block-compiler.js": "9c5ba3ecfe640264c1a4c7d9055fbe6c3adc57640fd0f8aa3f227a465fb8dbbb",
+      "web/jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+      "baseline/tools/lib/block-jit.mjs": "b383bfd8ed6e048d2f97aee020467df9829c9bac8cbd596909d72ad19fca93ef",
+      "baseline/tools/lib/block-compiler.mjs": "6a70e3ff9a99885fcc0939ebe9022756ac51b58841ff2f07d8bab3bf98e6545f",
+      "baseline/web/jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+      "bench.js": "389b75eb3376d4e1932ddb5ac280f7bfe2e05102a89b8af532e3744f8e360c27"
+    },
+    "generatedBytes": 4747747,
+    "directInstructions": 339815526,
+    "directCalls": 94909871
   }
 }
