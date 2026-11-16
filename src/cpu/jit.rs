@@ -580,6 +580,10 @@ impl Engine {
                                     let target = match op.opcode {
                                         0xe8 | 0xe9 | 0xeb => Some(op.target()),
                                         0xc3 => returns.last().copied(),
+                                        // Follow the not-taken path of a forward conditional.
+                                        // The generated trace exits after a taken branch;
+                                        // backward branches retain the existing loop boundary.
+                                        0x70..=0x7f | 0xe0..=0xe3 if op.target() > ip => Some(ip),
                                         _ => None,
                                     };
                                     if let Some(target) = target.filter(|target| {

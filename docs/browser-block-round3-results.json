@@ -1,0 +1,503 @@
+{
+  "issue": 184,
+  "frozenProductionCommit": "62315e2c41f294f3eceafad478c9d24368c58f4f",
+  "previousExperimentCommit": "be0a5d28ee7bc554df6c40b77005931a1e36928d",
+  "exploratoryScreens": [
+    {
+      "configuration": "push",
+      "repetitions": 1,
+      "baselineMs": 5527.699999094009,
+      "candidateMs": 4093.70000064373,
+      "reductionPercent": 25.94207353303023,
+      "generatedBytes": 3357182,
+      "directInstructions": 90390016,
+      "directCalls": 31850431,
+      "artifactSha256": {
+        "base.wasm": "f4fb5d3bdb8c880363764cb7ffa52c1d937469c1255aadeb5768ef5fe130bacb",
+        "candidate.wasm": "a8ab716bc795aa4d91d66e8c5f2cf207b6dfd57181d0a9b26f6169a0971bed58",
+        "jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+        "tools/lib/block-jit.mjs": "b383bfd8ed6e048d2f97aee020467df9829c9bac8cbd596909d72ad19fca93ef",
+        "tools/lib/block-compiler.mjs": "0a9d14e9451dd4931fd6ff7cb5cd17a943eb0e667bd36c09e374390c107cca33",
+        "web/jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+        "baseline/tools/lib/block-jit.mjs": "b383bfd8ed6e048d2f97aee020467df9829c9bac8cbd596909d72ad19fca93ef",
+        "baseline/tools/lib/block-compiler.mjs": "77c4b04c322a815ff2bae523e1b97b651bb7ddc30f0442682da6a64633b088cc",
+        "baseline/web/jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+        "bench.js": "28cd998f336b1436f9961d753f2be349986462acef8a699e71a6a8d32309d289"
+      },
+      "checkpointEquality": true
+    },
+    {
+      "configuration": "sparse",
+      "repetitions": 1,
+      "baselineMs": 5521.899999558926,
+      "candidateMs": 4122.300000578165,
+      "reductionPercent": 25.346348160824295,
+      "generatedBytes": 3213108,
+      "directInstructions": 90390016,
+      "directCalls": 31850431,
+      "artifactSha256": {
+        "base.wasm": "f4fb5d3bdb8c880363764cb7ffa52c1d937469c1255aadeb5768ef5fe130bacb",
+        "candidate.wasm": "a8ab716bc795aa4d91d66e8c5f2cf207b6dfd57181d0a9b26f6169a0971bed58",
+        "jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+        "tools/lib/block-jit.mjs": "b383bfd8ed6e048d2f97aee020467df9829c9bac8cbd596909d72ad19fca93ef",
+        "tools/lib/block-compiler.mjs": "77c4b04c322a815ff2bae523e1b97b651bb7ddc30f0442682da6a64633b088cc",
+        "web/jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+        "baseline/tools/lib/block-jit.mjs": "b383bfd8ed6e048d2f97aee020467df9829c9bac8cbd596909d72ad19fca93ef",
+        "baseline/tools/lib/block-compiler.mjs": "fcc37d6862c45243307f9eef4a92b02ef4e3bfdde4113f4cd3560ce87ed5ea70",
+        "baseline/web/jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+        "bench.js": "28cd998f336b1436f9961d753f2be349986462acef8a699e71a6a8d32309d289"
+      },
+      "checkpointEquality": true
+    },
+    {
+      "configuration": "long",
+      "repetitions": 1,
+      "baselineMs": 5511.699999719858,
+      "candidateMs": 4065.5000002384186,
+      "reductionPercent": 26.238728514885523,
+      "generatedBytes": 3197702,
+      "directInstructions": 90370512,
+      "directCalls": 31813875,
+      "artifactSha256": {
+        "base.wasm": "f4fb5d3bdb8c880363764cb7ffa52c1d937469c1255aadeb5768ef5fe130bacb",
+        "candidate.wasm": "65c56a4ceec65083b257bce454615d93f5b0efbbc8d6869203ad8d0fef4824c6",
+        "jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+        "tools/lib/block-jit.mjs": "b383bfd8ed6e048d2f97aee020467df9829c9bac8cbd596909d72ad19fca93ef",
+        "tools/lib/block-compiler.mjs": "fcc37d6862c45243307f9eef4a92b02ef4e3bfdde4113f4cd3560ce87ed5ea70",
+        "web/jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+        "baseline/tools/lib/block-jit.mjs": "b383bfd8ed6e048d2f97aee020467df9829c9bac8cbd596909d72ad19fca93ef",
+        "baseline/tools/lib/block-compiler.mjs": "fcc37d6862c45243307f9eef4a92b02ef4e3bfdde4113f4cd3560ce87ed5ea70",
+        "baseline/web/jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+        "bench.js": "28cd998f336b1436f9961d753f2be349986462acef8a699e71a6a8d32309d289"
+      },
+      "checkpointEquality": true
+    },
+    {
+      "configuration": "precise",
+      "repetitions": 1,
+      "baselineMs": 5576.400001257658,
+      "candidateMs": 4093.4999994039536,
+      "reductionPercent": 26.59242524781692,
+      "generatedBytes": 3234130,
+      "directInstructions": 90370512,
+      "directCalls": 31813875,
+      "artifactSha256": {
+        "base.wasm": "f4fb5d3bdb8c880363764cb7ffa52c1d937469c1255aadeb5768ef5fe130bacb",
+        "candidate.wasm": "65c56a4ceec65083b257bce454615d93f5b0efbbc8d6869203ad8d0fef4824c6",
+        "jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+        "tools/lib/block-jit.mjs": "b383bfd8ed6e048d2f97aee020467df9829c9bac8cbd596909d72ad19fca93ef",
+        "tools/lib/block-compiler.mjs": "27c2f4f67b8a54a9722e858fcd2bafb9f8759448d21f4d3ff2d8b7f68d0d6fff",
+        "web/jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+        "baseline/tools/lib/block-jit.mjs": "b383bfd8ed6e048d2f97aee020467df9829c9bac8cbd596909d72ad19fca93ef",
+        "baseline/tools/lib/block-compiler.mjs": "27c2f4f67b8a54a9722e858fcd2bafb9f8759448d21f4d3ff2d8b7f68d0d6fff",
+        "baseline/web/jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+        "bench.js": "28cd998f336b1436f9961d753f2be349986462acef8a699e71a6a8d32309d289"
+      },
+      "checkpointEquality": true
+    },
+    {
+      "configuration": "fallthrough",
+      "repetitions": 1,
+      "baselineMs": 5576.99999961257,
+      "candidateMs": 3921.6000008285046,
+      "reductionPercent": 29.682625047499812,
+      "generatedBytes": 5194448,
+      "directInstructions": 91098406,
+      "directCalls": 26671800,
+      "artifactSha256": {
+        "base.wasm": "f4fb5d3bdb8c880363764cb7ffa52c1d937469c1255aadeb5768ef5fe130bacb",
+        "candidate.wasm": "a1b4dfb88c223e90bae9084f5a6eccdabb6cabde5792a81ea64849bc41daa46a",
+        "jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+        "tools/lib/block-jit.mjs": "b383bfd8ed6e048d2f97aee020467df9829c9bac8cbd596909d72ad19fca93ef",
+        "tools/lib/block-compiler.mjs": "b1b6eb60f3c9436ffecc99028a943282eefba926b516c830bde8b05be86c75a5",
+        "web/jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+        "baseline/tools/lib/block-jit.mjs": "b383bfd8ed6e048d2f97aee020467df9829c9bac8cbd596909d72ad19fca93ef",
+        "baseline/tools/lib/block-compiler.mjs": "b1b6eb60f3c9436ffecc99028a943282eefba926b516c830bde8b05be86c75a5",
+        "baseline/web/jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+        "bench.js": "28cd998f336b1436f9961d753f2be349986462acef8a699e71a6a8d32309d289"
+      },
+      "checkpointEquality": true
+    },
+    {
+      "configuration": "compact",
+      "repetitions": 1,
+      "baselineMs": 5520.499999672174,
+      "candidateMs": 3809.9000003933907,
+      "reductionPercent": 30.986323691338914,
+      "generatedBytes": 4747747,
+      "directInstructions": 91056703,
+      "directCalls": 26707703,
+      "artifactSha256": {
+        "base.wasm": "f4fb5d3bdb8c880363764cb7ffa52c1d937469c1255aadeb5768ef5fe130bacb",
+        "candidate.wasm": "eb09b060d98bbb58b390d9a3513a7b4cab76013cf04938aa7a8626c753ed5785",
+        "jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+        "tools/lib/block-jit.mjs": "b383bfd8ed6e048d2f97aee020467df9829c9bac8cbd596909d72ad19fca93ef",
+        "tools/lib/block-compiler.mjs": "6251f257e5f7434de7bae9b641427cb690830023c68ef4879357d2512ae3c662",
+        "web/jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+        "baseline/tools/lib/block-jit.mjs": "b383bfd8ed6e048d2f97aee020467df9829c9bac8cbd596909d72ad19fca93ef",
+        "baseline/tools/lib/block-compiler.mjs": "6251f257e5f7434de7bae9b641427cb690830023c68ef4879357d2512ae3c662",
+        "baseline/web/jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+        "bench.js": "28cd998f336b1436f9961d753f2be349986462acef8a699e71a6a8d32309d289"
+      },
+      "checkpointEquality": true
+    }
+  ],
+  "heldOutVsProduction": {
+    "host": {
+      "browser": "157.0.8103.52",
+      "os": "27.2.0",
+      "arch": "arm64",
+      "cpu": "Apple M4 Max"
+    },
+    "artifactSha256": {
+      "base.wasm": "f4fb5d3bdb8c880363764cb7ffa52c1d937469c1255aadeb5768ef5fe130bacb",
+      "candidate.wasm": "eb09b060d98bbb58b390d9a3513a7b4cab76013cf04938aa7a8626c753ed5785",
+      "jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+      "tools/lib/block-jit.mjs": "b383bfd8ed6e048d2f97aee020467df9829c9bac8cbd596909d72ad19fca93ef",
+      "tools/lib/block-compiler.mjs": "6a70e3ff9a99885fcc0939ebe9022756ac51b58841ff2f07d8bab3bf98e6545f",
+      "web/jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+      "baseline/tools/lib/block-jit.mjs": "b383bfd8ed6e048d2f97aee020467df9829c9bac8cbd596909d72ad19fca93ef",
+      "baseline/tools/lib/block-compiler.mjs": "6a70e3ff9a99885fcc0939ebe9022756ac51b58841ff2f07d8bab3bf98e6545f",
+      "baseline/web/jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+      "bench.js": "6cd9dc0a13ef65a1b8b7eef41891b493c4e63669f4abc34192487f5a8993e129"
+    },
+    "baselineMs": [
+      5426.400000154972,
+      5424.099999696016,
+      5413.399999856949
+    ],
+    "candidateMs": [
+      3763.499999731779,
+      3728.2000000476837,
+      3769.7000004649162
+    ],
+    "baselineMedianMs": 5424.099999696016,
+    "candidateMedianMs": 3763.499999731779,
+    "reductionPercent": 30.61521727212445,
+    "pairedReductionPercent": [
+      30.644626278484854,
+      31.266016477265836,
+      30.363542310478962
+    ],
+    "generatedBytes": [
+      1178683,
+      4747747
+    ],
+    "setupActiveMs": [
+      [
+        16517.399998813868,
+        16457.09999883175,
+        16521.799998551607
+      ],
+      [
+        12117.3000010252,
+        11943.000001072884,
+        12122.700002074242
+      ]
+    ],
+    "checkpointEquality": true,
+    "checkpointsGuestSeconds": [
+      0,
+      8,
+      16,
+      24
+    ],
+    "measuredInstructions": 118663329,
+    "directInstructions": 91056703,
+    "directCalls": 26707703
+  },
+  "heldOutVsPrevious": {
+    "host": {
+      "browser": "157.0.8103.52",
+      "os": "27.2.0",
+      "arch": "arm64",
+      "cpu": "Apple M4 Max"
+    },
+    "artifactSha256": {
+      "base.wasm": "fa464b71f1bcd747c023f8222233bcb5cf1fcb94d7d8d9061ec9667ca4fcc53a",
+      "candidate.wasm": "eb09b060d98bbb58b390d9a3513a7b4cab76013cf04938aa7a8626c753ed5785",
+      "jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+      "tools/lib/block-jit.mjs": "b383bfd8ed6e048d2f97aee020467df9829c9bac8cbd596909d72ad19fca93ef",
+      "tools/lib/block-compiler.mjs": "6a70e3ff9a99885fcc0939ebe9022756ac51b58841ff2f07d8bab3bf98e6545f",
+      "web/jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+      "baseline/tools/lib/block-jit.mjs": "b383bfd8ed6e048d2f97aee020467df9829c9bac8cbd596909d72ad19fca93ef",
+      "baseline/tools/lib/block-compiler.mjs": "a1568f3fdc3b9cc4a717a87c20eb61f5421bc72d59ff9ba983458cd0854cec63",
+      "baseline/web/jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+      "bench.js": "6d327d6669db747f08923db4af90e34e2b4ecccd08e3153faf8b717cf9f6b792"
+    },
+    "baselineMs": [
+      3975.599999576807,
+      3972.100000143051,
+      3951.900000423193
+    ],
+    "candidateMs": [
+      3781.2000004649162,
+      3744.900000691414,
+      3756.4000006616116
+    ],
+    "baselineMedianMs": 3972.100000143051,
+    "candidateMedianMs": 3756.4000006616116,
+    "reductionPercent": 5.430376865478492,
+    "pairedReductionPercent": [
+      4.889827928679546,
+      5.719896262517432,
+      4.946987518425217
+    ],
+    "generatedBytes": [
+      3357182,
+      4747747
+    ],
+    "setupActiveMs": [
+      [
+        12715.799999594688,
+        12693.799999713898,
+        12817.299999386072
+      ],
+      [
+        12186.599999964237,
+        12007.799999505281,
+        12279.000000447035
+      ]
+    ],
+    "checkpointEquality": true,
+    "checkpointsGuestSeconds": [
+      0,
+      8,
+      16,
+      24
+    ],
+    "measuredInstructions": 118663329,
+    "directInstructions": 91056703,
+    "directCalls": 26707703
+  },
+  "stationary": {
+    "production": {
+      "wallMs": [
+        5194.299999922514,
+        5076.6000000834465,
+        5096.799999952316
+      ],
+      "setupWallMs": [
+        29381.90000000596,
+        29099.5,
+        29161.19999998808
+      ],
+      "guestSeconds": [
+        24,
+        24,
+        24
+      ],
+      "audioFrames": [
+        1152000,
+        1152000,
+        1152000
+      ],
+      "videoFrames": [
+        1354,
+        1354,
+        1354
+      ],
+      "cpuMs": [
+        4941.200000554323,
+        4834.400000572205,
+        4855.399999886751
+      ],
+      "rasterMs": [
+        253.09999936819077,
+        242.1999995112419,
+        241.4000000655651
+      ],
+      "loopMs": [
+        5284.4000000059605,
+        5165.100000023842,
+        5186.200000017881
+      ],
+      "wasmSha256": "f4fb5d3bdb8c880363764cb7ffa52c1d937469c1255aadeb5768ef5fe130bacb",
+      "generatedBytes": [
+        829706,
+        829706,
+        829706
+      ]
+    },
+    "previous": {
+      "wallMs": [
+        3458.700000077486,
+        3440.0999999046326,
+        3485.7999999523163
+      ],
+      "setupWallMs": [
+        29112.09999999404,
+        28872.399999976158,
+        29057.5
+      ],
+      "guestSeconds": [
+        24,
+        24,
+        24
+      ],
+      "audioFrames": [
+        1152000,
+        1152000,
+        1152000
+      ],
+      "videoFrames": [
+        1354,
+        1354,
+        1354
+      ],
+      "cpuMs": [
+        3217.3999996483326,
+        3199.600000202656,
+        3242.800000220537
+      ],
+      "rasterMs": [
+        241.30000042915344,
+        240.49999970197678,
+        242.9999997317791
+      ],
+      "loopMs": [
+        3677,
+        3656.899999976158,
+        3701.7999999821186
+      ],
+      "wasmSha256": "fa464b71f1bcd747c023f8222233bcb5cf1fcb94d7d8d9061ec9667ca4fcc53a",
+      "generatedBytes": [
+        2603797,
+        2603797,
+        2603797
+      ]
+    },
+    "compact": {
+      "wallMs": [
+        3368.2999998927116,
+        3328.8999999165535,
+        3341.4000001251698
+      ],
+      "setupWallMs": [
+        28199.19999998808,
+        28143.5,
+        28328.5
+      ],
+      "guestSeconds": [
+        24,
+        24,
+        24
+      ],
+      "audioFrames": [
+        1152000,
+        1152000,
+        1152000
+      ],
+      "videoFrames": [
+        1354,
+        1354,
+        1354
+      ],
+      "cpuMs": [
+        3124.899999588728,
+        3088.699999809265,
+        3092.699999421835
+      ],
+      "rasterMs": [
+        243.4000003039837,
+        240.20000010728836,
+        248.7000007033348
+      ],
+      "loopMs": [
+        3634.199999988079,
+        3593.9000000059605,
+        3605.7999999821186
+      ],
+      "wasmSha256": "eb09b060d98bbb58b390d9a3513a7b4cab76013cf04938aa7a8626c753ed5785",
+      "generatedBytes": [
+        3594065,
+        3594065,
+        3594065
+      ]
+    },
+    "np2": {
+      "wallMs": [
+        1478.9,
+        1464.2,
+        1486.7
+      ],
+      "setupWallMs": [
+        null,
+        null,
+        null
+      ],
+      "guestSeconds": [
+        24.014471442,
+        24.014471442,
+        24.014471442
+      ],
+      "audioFrames": [
+        1153105,
+        1153105,
+        1153105
+      ],
+      "videoFrames": [
+        1355,
+        1355,
+        1355
+      ],
+      "buildSha256": "e0f5235b9fc254a7be9480c7975268cce30cedcdcf89e06a1feadbfdae586b08"
+    }
+  },
+  "selectedArtifacts": {
+    "wasmSha256": "eb09b060d98bbb58b390d9a3513a7b4cab76013cf04938aa7a8626c753ed5785",
+    "wasmBytes": 586714,
+    "compilerSha256": "6a70e3ff9a99885fcc0939ebe9022756ac51b58841ff2f07d8bab3bf98e6545f",
+    "ownerSha256": "b383bfd8ed6e048d2f97aee020467df9829c9bac8cbd596909d72ad19fca93ef"
+  },
+  "publishedArtifacts": {
+    "wasmSha256": "eb09b060d98bbb58b390d9a3513a7b4cab76013cf04938aa7a8626c753ed5785",
+    "wasmBytes": 586714,
+    "compilerSha256": "9c5ba3ecfe640264c1a4c7d9055fbe6c3adc57640fd0f8aa3f227a465fb8dbbb",
+    "ownerSha256": "97aa7190100bae365e248b32145b44d5a2bd4249175c03ce21aab97f901f1bb1",
+    "workerSha256": "918dee70389f7d71071324448e0157cb0b643f4096441e55727cb9d09df92031"
+  },
+  "decision": {
+    "enableDefault": true,
+    "reason": "Repeated progressing and stationary reductions exceed 30%, cold setup improves, and guarded/interpreter fallbacks are preserved. Accept the measured code-volume increase with the existing 4096-module bound; full enabled browser acceptance is required before merge.",
+    "generatedBytesIncreaseVsPreviousPercent": 41.42060215978758,
+    "wasmBytesIncreaseVsFrozenProduction": 12027
+  },
+  "validation": {
+    "nativeTests": 643,
+    "optimizedWasmTests": 26,
+    "nodeTests": 56,
+    "legalFixtureCommands": 57,
+    "publishedAssets": 30,
+    "nativeDebugChecksRetained": true,
+    "compilerFunctionMatchesMeasured": true,
+    "publishedWasmMatchesMeasured": true,
+    "fixtureFetchTests": 13,
+    "unchangedGeneratedGuestDisks": 7,
+    "initialCiFailure": {
+      "runId": 43805689465,
+      "stage": "prepare_dos_apps.py before emulator tests",
+      "reason": "mutable ADV98 release replaced upstream; existing executable retained under Issue #186"
+    }
+  },
+  "canonicalModuleEquivalence": {
+    "checkpointEquality": true,
+    "artifactSha256": {
+      "base.wasm": "eb09b060d98bbb58b390d9a3513a7b4cab76013cf04938aa7a8626c753ed5785",
+      "candidate.wasm": "eb09b060d98bbb58b390d9a3513a7b4cab76013cf04938aa7a8626c753ed5785",
+      "jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+      "tools/lib/block-jit.mjs": "a23200d88426cd475c2f517d7a68c1ff832e4483613ef9ee331cde8ca01b78f1",
+      "tools/lib/block-compiler.mjs": "ffdd8063383a5cdadc72bc178d9ffd0ecbbca0c48dbad7eb5310a4a9bc45cbd5",
+      "web/block-jit.js": "97aa7190100bae365e248b32145b44d5a2bd4249175c03ce21aab97f901f1bb1",
+      "web/block-compiler.js": "9c5ba3ecfe640264c1a4c7d9055fbe6c3adc57640fd0f8aa3f227a465fb8dbbb",
+      "web/jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+      "baseline/tools/lib/block-jit.mjs": "b383bfd8ed6e048d2f97aee020467df9829c9bac8cbd596909d72ad19fca93ef",
+      "baseline/tools/lib/block-compiler.mjs": "6a70e3ff9a99885fcc0939ebe9022756ac51b58841ff2f07d8bab3bf98e6545f",
+      "baseline/web/jit.js": "6b5466200d1fda7bff561745aa069e0b7f2ab60c3323deef6885ec7e77c3cac0",
+      "bench.js": "389b75eb3376d4e1932ddb5ac280f7bfe2e05102a89b8af532e3744f8e360c27"
+    },
+    "generatedBytes": 4747747,
+    "directInstructions": 339815526,
+    "directCalls": 94909871
+  }
+}

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Prepare independently authored, MIT DOS guests, with complete provenance.
 
-Only guest programs are downloaded, never emulator source. The ADV98 release's
-artwork/music are excluded: use its MIT source scenario and original test art.
+Only guest programs are downloaded, never emulator source. The pinned ADV98
+executable is vendored; its release artwork/music are excluded. Use its MIT
+source scenario and original test art.
 Preserve this entire directory and fixtures/freedos if redistributing these disks.
 """
 import hashlib
@@ -13,15 +14,11 @@ import struct
 import sys
 import tarfile
 import urllib.request
-import zipfile
 
 from prepare_freedos import ROOT, extract_fat_file, image_with_files
 
 DEST = ROOT / 'fixtures/dos-apps'
 ASSETS = {
-    'adv98.zip': (
-        'https://github.com/yarufu/pc98/releases/download/v0.1/ADV98.zip',
-        '9aa590f53b331ec04fa1a2352f7ed6190407756d1f552c9c0bf76f9a05eb2d3d'),
     'adv98-engine-source.tar.gz': (
         'https://codeload.github.com/yarufu/pc98/tar.gz/11a9f1c59c6fd8169439d477d5276ee7c0f27566',
         'cd5fb3506518c959c625dbdb62b08e9b60fa1548f7f8e6a8a7a6a24943738977'),
@@ -64,6 +61,15 @@ def fetch(name, url, checksum, *, fallback_urls=()):
             # Cache only bytes verified against the same pin at every mirror.
             path.write_bytes(data)
             return data
+
+
+def adv98_executable():
+    # The upstream release URL is mutable. Keep the existing independently
+    # authored MIT guest byte-identical, with its license/provenance beside it.
+    data = (ROOT / 'fixtures/adv98/ADV98.EXE').read_bytes()
+    if sha(data) != '904f476516bf009b6d25d0a2738ddf649af05bcafac72cbb703c73d7159e5954':
+        raise ValueError('checksum mismatch: vendored ADV98.EXE')
+    return data
 
 
 def source_file(data, name):
@@ -125,7 +131,7 @@ def main():
         b'KERNEL  SYS', b'COMMAND COM', b'FDCONFIGSYS', b'COPYING    ']}
     scenario = source_file(blobs['adv98-scenario-source.tar.gz'], 'script_サンプル2.txt')
     adv_files = {
-        b'ADV98   EXE': zipfile.ZipFile(io.BytesIO(blobs['adv98.zip'])).read('ADV98.EXE'),
+        b'ADV98   EXE': adv98_executable(),
         b'SCRIPT  TXT': scenario,
         b'ADV     PAL': source_file(blobs['adv98-scenario-source.tar.gz'], 'adv.pal'),
         b'CLASS   G98': background(),
@@ -148,6 +154,8 @@ def main():
         ('fm98', fm_files, 'adv98-scenario-source.tar.gz'),
     ]:
         license_data = source_file(blobs[source], 'LICENSE')
+        if name == 'adv98' and (ROOT / 'fixtures/adv98/LICENSE').read_bytes() != license_data:
+            raise ValueError('vendored ADV98 license differs from pinned source')
         (DEST / f'{name}-LICENSE').write_bytes(license_data)
         image = image_with_files(base[:1024], {**common, **files, b'APP     LIC': license_data})
         (DEST / f'{name}.hdm').write_bytes(image)
@@ -176,6 +184,14 @@ def main():
     })
     manifest = {
         'assets': {k: {'url': v[0], 'sha256': v[1]} for k, v in ASSETS.items()},
+        'vendored_assets': {
+            'ADV98.EXE': {
+                'path': '../adv98/ADV98.EXE',
+                'sha256': sha(adv_files[b'ADV98   EXE']),
+                'license': '../adv98/LICENSE',
+                'provenance': '../adv98/README.md',
+            },
+        },
         'applications': manifests,
         'os_manifest': '../freedos/manifest.json',
         'firmware': 'original synthetic BIOS, guest/firmware.asm',

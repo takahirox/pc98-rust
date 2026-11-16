@@ -1,9 +1,5 @@
 {
   "assets": {
-    "adv98.zip": {
-      "url": "https://github.com/yarufu/pc98/releases/download/v0.1/ADV98.zip",
-      "sha256": "9aa590f53b331ec04fa1a2352f7ed6190407756d1f552c9c0bf76f9a05eb2d3d"
-    },
     "adv98-engine-source.tar.gz": {
       "url": "https://codeload.github.com/yarufu/pc98/tar.gz/11a9f1c59c6fd8169439d477d5276ee7c0f27566",
       "sha256": "cd5fb3506518c959c625dbdb62b08e9b60fa1548f7f8e6a8a7a6a24943738977"
@@ -19,6 +15,14 @@
     "98videop-source.tar.gz": {
       "url": "https://codeload.github.com/maxotaku11niku/98VIDEOP/tar.gz/c46b5f3cdcae83c81cf829adb900da400357bbc0",
       "sha256": "0bff1983e0560be65e110851b87b0e6f82405e46fe893a1b4bdfa6b83476e68d"
+    }
+  },
+  "vendored_assets": {
+    "ADV98.EXE": {
+      "path": "../adv98/ADV98.EXE",
+      "sha256": "904f476516bf009b6d25d0a2738ddf649af05bcafac72cbb703c73d7159e5954",
+      "license": "../adv98/LICENSE",
+      "provenance": "../adv98/README.md"
     }
   },
   "applications": {

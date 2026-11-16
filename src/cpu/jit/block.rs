@@ -414,6 +414,44 @@ mod tests {
     }
 
     #[test]
+    fn conditional_fallthrough_is_exclusive_to_direct_trace_collection() {
+        for direct in [true, false] {
+            let mut m = Machine::new(Profile::Pc9821ApDos);
+            m.cpu.s = [0; 4];
+            m.cpu.flags = 2;
+            m.bus.mem[0x100..0x10b].copy_from_slice(&[
+                0x8b, 0x07, 0x75, 3, 0x43, 0xeb, 0xf9, 0x42, 0xeb, 0xf6, 0x90,
+            ]);
+            if !direct {
+                m.cpu.segment_caches[DS] = Some(SegmentCache {
+                    base: 0,
+                    limit: 0xffff_ffff,
+                    access: 0x93,
+                    attributes: 0,
+                });
+            }
+            let mut e = Engine::default();
+            let mut id = 0;
+            for _ in 0..HEAT {
+                m.cpu.ip = 0x100;
+                e.begin_block_slice(&m, 80_000, 1);
+                id = e.dispatch(&mut m, true);
+            }
+            assert_ne!(id, 0);
+            let plan = e.plan(id).unwrap();
+            assert_eq!(plan.block.is_some(), direct);
+            assert_eq!(
+                plan.ops.iter().map(|op| op.ip).collect::<Vec<_>>(),
+                if direct {
+                    vec![0x100, 0x102, 0x104, 0x105]
+                } else {
+                    vec![0x100, 0x102]
+                }
+            );
+        }
+    }
+
+    #[test]
     fn lea_is_exclusive_to_direct_offers_and_ignores_data_segment_access() {
         let mut m = Machine::new(Profile::Pc9821ApDos);
         m.cpu.s = [0; 4];

@@ -16,7 +16,7 @@ env = os.environ.copy()
 env['RUSTFLAGS'] = env.get('RUSTFLAGS', '') + ' -C target-feature=+simd128'
 if shutil.which('rustup') and not env.get('RUSTC'):
     env['RUSTC'] = subprocess.check_output(['rustup', 'which', 'rustc'], text=True).strip()
-subprocess.run(['cargo', 'build', '--locked', '--release', '--target', 'wasm32-unknown-unknown', '--lib'], cwd=ROOT, env=env, check=True)
+subprocess.run(['cargo', 'build', '--locked', '--release', '--target', 'wasm32-unknown-unknown', '--lib', '--features', 'block-experiment'], cwd=ROOT, env=env, check=True)
 # Optimize the complete linked interpreter for host execution, preserving names
 # for failure-only CPU profiles. npm's lockfile pins the same tool in CI/Pages.
 # Guest instruction tables, scheduler clocks and PCM production are unchanged.

@@ -10,7 +10,14 @@ for(const key of ['media','output']){if(!isAbsolute(opt[key]))throw Error('--'+k
 await mkdir(opt.output);
 const paths={'core.wasm':opt.wasm,'jit.js':fileURLToPath(new URL('web/jit.js',root)),'game.hdi':opt.media};
 const assets=new Map(await Promise.all(Object.entries(paths).map(async([k,p])=>[k,await readFile(p)])));
-for(const name of ['block-jit.mjs','block-compiler.mjs'])assets.set('tools/lib/'+name,await readFile(opt.blockRuntime?opt.blockRuntime+'/'+name:new URL('tools/lib/'+name,root)));assets.set('web/jit.js',assets.get('jit.js'));
+let canonical=false;
+for(const name of ['block-jit.mjs','block-compiler.mjs']){
+ const bytes=await readFile(opt.blockRuntime?opt.blockRuntime+'/'+name:new URL('tools/lib/'+name,root));
+ assets.set('tools/lib/'+name,bytes);canonical ||= bytes.includes('../../web/block-');
+}
+if(canonical)for(const name of ['block-jit.js','block-compiler.js'])
+ assets.set('web/'+name,await readFile(opt.blockRuntime?opt.blockRuntime+'/'+name:new URL('web/'+name,root)));
+assets.set('web/jit.js',assets.get('jit.js'));
 const worker=`import {WasmJit} from '/jit.js';import {BlockJit} from '/tools/lib/block-jit.mjs';
 const coldStart=performance.now();
 const mod=await WebAssembly.compile(await(await fetch('/core.wasm')).arrayBuffer()),disk=new Uint8Array(await(await fetch('/game.hdi')).arrayBuffer());

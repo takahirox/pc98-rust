@@ -40,6 +40,8 @@ const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 // AudioWorklet. Later source edits cannot mix revisions within a long run.
 const runtime = await Promise.all(['app.js','emulator-worker.js','audio-worklet.js','render-worker.js',...(options.jit==='0'?[]:['jit.js'])]
   .map(async name => [name,await readFile(options.runtime ? path.join(options.runtime,name) : new URL('../web/'+name,import.meta.url))]));
+if(options.jit!=='0'&&runtime.find(([name])=>name==='emulator-worker.js')[1].includes("new URL('block-jit.js'"))
+  for(const name of ['block-jit.js','block-compiler.js'])runtime.push([name,await readFile(options.runtime?path.join(options.runtime,name):new URL('../web/'+name,import.meta.url))]);
 const runtimeSha256 = Object.fromEntries(runtime.map(([name,body]) => [name,sha(body)]));
 const harnessSha256 = sha(await readFile(new URL(import.meta.url)));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -226,7 +228,7 @@ try {
     result.jit = presented.jit;
     result.videoMode = presented.videoMode; result.rendererFailure = presented.rendererFailure;
     result.routedAssets = routedAssets;
-    for (const name of ['core.wasm','app.js','emulator-worker.js','render-worker.js',...(options.jit==='0'?[]:['jit.js']),...(playback ? ['audio-worklet.js'] : [])]) {
+    for (const name of ['core.wasm','app.js','emulator-worker.js','render-worker.js',...(options.jit==='0'?[]:['jit.js',...(assets.has('block-jit.js')?['block-jit.js','block-compiler.js']:[])]),...(playback ? ['audio-worklet.js'] : [])]) {
       if (!routedAssets[name]) throw Error(`Selected runtime asset was not intercepted: ${name}`);
     }
     if (profile) {

@@ -1,6 +1,7 @@
 # Browser-first CPU block experiment — Issue #180
 
 [Round 2](browser-block-round2.md) continues the coverage and trace experiments.
+[Round 3](browser-block-round3.md) records the subsequent default adoption.
 
 This experiment tests a replacement execution boundary: generated Wasm owns
 registers, ordinary RAM accesses and instruction timing until the next event or
