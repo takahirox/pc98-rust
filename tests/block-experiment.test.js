@@ -255,3 +255,31 @@ test('a changed predicted return commits the actual RET and skips the predicted 
  assert.equal(execute(p,[7,0,0,0,0x8000,0,0,0],2,100),5);
  assert.equal(state(p.a).ip,16);assert.equal(state(p.a).regs[0],7);assert.equal(state(p.a).regs[2],0);assert.equal(state(p.a).regs[4],0x8000);
 });
+
+test('sparse register reloads preserve untouched and future-write registers on partial exits',async()=>{
+ const p=await pair([0xba,0x34,0x12,0xbe,0x78,0x56,0xeb,0xf8]);
+ execute(p,[1,2,3,4,0x8000,6,7,8],3,1);assert.equal(state(p.a).regs[2],0x1234);assert.equal(state(p.a).regs[6],7);
+ const q=await pair([0x2e,0xc6,0x06,1,0,0x2e,0xbe,0x34,0x12,0xeb,0xf5]);
+ execute(q,[1,2,3,4,0x8000,6,7,8],3,1);assert.equal(state(q.a).regs[6],7);assert(q.a.block_metric(2)>0);
+});
+
+test('a forward conditional follows only its decoded fallthrough and exits on a taken branch',async()=>{
+ // CMP AX,0; JNZ target; INC BX; JMP entry; target: INC DX; JMP entry.
+ for(const ax of [0,1])for(const cap of [1,2,3,4,19]){
+  const p=await pair([0x3d,0,0,0x75,3,0x43,0xeb,0xf8,0x42,0xeb,0xf5]);
+  assert.equal(p.packet[1],4);assert.deepEqual(Array.from({length:4},(_,i)=>p.packet[2+i*4]),[1,4,6,7]);
+  const done=execute(p,[ax,2,3,4,0x8000,6,7,8],3,cap);
+  assert.equal(state(p.a).regs[2],3);
+  if(ax&&cap>=2){assert.equal(done,2);assert.equal(state(p.a).ip,9);assert.equal(state(p.a).regs[3],4);}
+  if(!ax&&cap>=3)assert(state(p.a).regs[3]>4);
+ }
+});
+
+
+test('a taken forward branch leaves fallthrough RAM stores unexecuted',async()=>{
+ const p=await pair([0x3d,0,0,0x75,4,0x89,0x07,0xeb,0xf7,0x42,0xeb,0xf4]);
+ for(const c of[p.a,p.b])new Uint8Array(c.memory.buffer,(c.block_ram_ptr()>>>0)+0x8000,2).set([0xaa,0xbb]);
+ assert.equal(execute(p,[1,2,3,0x8000,0,6,7,8],3,100),2);
+ assert.equal(state(p.a).ip,10);assert.equal(p.a.peek(0x8000),0xaa);assert.equal(p.a.peek(0x8001),0xbb);
+ execute(p,[0,2,3,0x8000,0,6,7,8],3,3);assert.equal(p.a.peek(0x8000),0);assert.equal(p.a.peek(0x8001),0);
+});
