@@ -1,10 +1,36 @@
+import {Presenter} from './presenter.js';
 const $ = (id) => document.getElementById(id);
-const screen = $('screen'), context = screen.getContext('2d', { alpha: false });
+const screen = $('screen');
+const presenter = new Presenter(screen,$('crt-screen'),$('screen-surface'),
+  text => { $('presentation-status').textContent = text; },new URLSearchParams(location.search).has('diagnostics'));
+try {
+  const saved = JSON.parse(localStorage.getItem('pc98-presentation') || 'null');
+  if (saved && ['off','sharp','soft','strong'].includes(saved.preset)) {
+    $('presentation').value = saved.preset; $('phosphor-mask').checked = Boolean(saved.mask);
+  }
+} catch { /* Storage is optional in private/embedded browsers. */ }
+function presentationSettings() {
+  presenter.setPreset($('presentation').value,$('phosphor-mask').checked);
+  try { localStorage.setItem('pc98-presentation',JSON.stringify({preset:presenter.preset,mask:presenter.mask})); } catch { /* Optional. */ }
+}
+$('presentation').onchange = presentationSettings;
+$('phosphor-mask').onchange = presentationSettings;
+presenter.setPreset($('presentation').value,$('phosphor-mask').checked);
+$('fullscreen').onclick = async () => {
+  try { await $('drop').requestFullscreen(); }
+  catch { $('drop').classList.add('full-window'); }
+  screen.focus();
+};
+document.addEventListener('keydown',event => {
+  if (event.key === 'Escape' && $('drop').classList.contains('full-window')) {
+    event.preventDefault(); event.stopPropagation(); $('drop').classList.remove('full-window'); screen.focus();
+  }
+},true);
 let core, worker, running = false, audio, outputGain, audioNode, audioSetup, muted = true, loading = false;
 let contextLost = false;
 let renderWorker, videoEpoch = 0, presentedSequence = 0;
 let rendererStartupMs = 0, rendererFailure = null;
-let renderStats = {}, presentationStats = {frames:0, stale:0, putMs:0, latencyMs:0, maxLatencyMs:0};
+let renderStats = {}, presentationStats = {frames:0, stale:0, putMs:0, latencyMs:0, maxLatencyMs:0, coalesced:0, missedSlots:0};
 let generation = 0, pendingFrame, presenting = false, workerFailed = false;
 const framePeriod = 1000/60;
 const presentationTolerance = 2;
@@ -14,6 +40,7 @@ const pending = new Map(); let requestId = 0;
 const metrics = new Map(); let bootByte = 0;
 const mounted = [null, null, null], held = new Set();
 let pointerPosition;
+new ResizeObserver(() => { pointerPosition = undefined; }).observe(screen);
 let lastDrive = null;
 const driveNames = ['Floppy 1', 'Floppy 2', 'IDE HDD'];
 const controls = ['game', 'hello', 'pause', 'reset', 'sound', 'eject', 'export', 'profile', 'boot', 'default-hdd'];
@@ -61,12 +88,13 @@ function render(timestamp) {
     if (frame.generation === generation && frame.videoEpoch === videoEpoch && frame.sequence > presentedSequence && !contextLost) {
       presentedSequence = frame.sequence;
       const began = performance.now();
-      context.putImageData(new ImageData(new Uint8ClampedArray(frame.buffer),640,400),0,0);
+      presenter.present(new ImageData(new Uint8ClampedArray(frame.buffer),640,400));
       presentationStats.putMs += performance.now()-began;
       const latency = performance.timeOrigin+performance.now()-frame.captured;
       presentationStats.latencyMs += latency;
       presentationStats.maxLatencyMs = Math.max(presentationStats.maxLatencyMs,latency);
       presentationStats.frames++;
+      if (running && nextPresentation) presentationStats.missedSlots += Math.max(0,Math.floor((timestamp-nextPresentation)/framePeriod));
       nextPresentation = (nextPresentation && timestamp-nextPresentation < framePeriod
         ? nextPresentation : timestamp) + framePeriod;
       // Start capture before the next presentation slot. Use the actual
@@ -89,7 +117,7 @@ function queueFrame(frame) {
     videoEpoch = frame.videoEpoch;
     acceptState(frame);
   }
-  if (pendingFrame) recycleFrame(pendingFrame);
+  if (pendingFrame) { presentationStats.coalesced++; recycleFrame(pendingFrame); }
   pendingFrame = frame;
   if (!presenting) { presenting = true; requestAnimationFrame(render); }
 }
@@ -458,7 +486,7 @@ for (const [name,down] of [['keydown',true],['keyup',false]]) screen.addEventLis
 for (const name of ['pointermove', 'pointerdown', 'pointerup', 'pointercancel']) screen.addEventListener(name, (event) => {
   if (!core || !running || !$('mouse').checked || $('profile').value !== '1') return;
   const bounds = screen.getBoundingClientRect();
-  const point = [event.clientX * 640 / bounds.width, event.clientY * 400 / bounds.height];
+  const point = [(event.clientX-bounds.left) * screen.width / bounds.width, (event.clientY-bounds.top) * screen.height / bounds.height];
   const delta = pointerPosition ? point.map((n, i) => Math.max(-127, Math.min(127, Math.round(n - pointerPosition[i])))) : [0, 0];
   pointerPosition = point;
   if (name === 'pointerdown') { screen.focus(); screen.setPointerCapture(event.pointerId); }
@@ -503,7 +531,7 @@ try {
   core = new Proxy({}, {get:(_,name) => name === 'metric' ? id => metrics.get(id) :
     (...args) => rpc('call',{name,args})});
   await selectProfile();
-  window.pc98 = {text:() => rpc('text'), read:addr => rpc('read',addr), stats:async () => ({...await rpc('stats'),rendererStartupMs,rendererFailure,renderStats:{...renderStats},presentationStats:{...presentationStats}}),
+  window.pc98 = {text:() => rpc('text'), read:addr => rpc('read',addr), stats:async () => ({...await rpc('stats'),rendererStartupMs,rendererFailure,renderStats:{...renderStats},presentationStats:{...presentationStats},presenterStats:presenter.diagnosticsState()}),
     exportBlob:async (drive=2) => {
       if (loading) throw Error('Media operation already in progress');
       loading = true; mediaBusy(true);
