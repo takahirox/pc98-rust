@@ -7,7 +7,7 @@ const site = new URL('../web/', import.meta.url);
 const desktop = JSON.parse(await readFile(new URL('../fixtures/desktop-publication.json', import.meta.url)));
 const expected = [
   ...Object.keys(desktop).map(name => `freedos/${name}`),
-  'index.html', 'app.js', 'emulator-worker.js', 'render-worker.js', 'audio-worklet.js', 'jit.js', 'block-jit.js', 'block-compiler.js', 'style.css', 'core.wasm',
+  'index.html', 'app.js', 'presenter.js', 'emulator-worker.js', 'render-worker.js', 'audio-worklet.js', 'jit.js', 'block-jit.js', 'block-compiler.js', 'style.css', 'core.wasm',
   'licenses.html', 'LICENSE.txt', 'hello98-LICENSE.txt', 'shinonome-LICENSE.txt',
   'media/hello98.tfd', 'media/startrail.hdm',
 ].sort();

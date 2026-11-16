@@ -60,6 +60,10 @@ test('ADV98 production playback remains continuous through scene changes', async
     for(let i=0;i<90;i++) {pc98.advance(100000);pc98.core.audio_clear();}
   });
   expect((await stats(page)).fmKeyEdges).toBe(0);
+  if(process.env.PC98_PRESENTATION_CPU_RATE) {
+    const session=await page.context().newCDPSession(page);
+    await session.send('Emulation.setCPUThrottlingRate',{rate:Number(process.env.PC98_PRESENTATION_CPU_RATE)});
+  }
   await page.locator('#sound').click(); await page.locator('#pause').click();
   await enter(page);
   await expect.poll(async()=> (await stats(page)).fmKeyEdges).toBeGreaterThan(16);
@@ -67,8 +71,15 @@ test('ADV98 production playback remains continuous through scene changes', async
   const first=await picture(page), observations=[], fmPitches=new Set(), ssgPeriods=new Set();
   let previous=await stats(page);
   const start=previous;
+  const presentationWindows=[]; let windowStart=previous, windowTime=performance.now();
   expect(start.deviceSampleRate).toBe(testInfo.project.name==='pages' ? 44100 : 48000);
   for(let i=0;i<16;i++) {
+    if(i%4===0) {
+      const preset=['off','sharp','soft','strong'][i/4];
+      await page.locator('#presentation').selectOption(preset);
+      windowStart=await stats(page); windowTime=performance.now();
+      expect(windowStart.presenterStats.active).toBe(preset!=='off');
+    }
     if(i===7) {
       await enter(page);
       // The DOM event loop remains responsive during guest bitmap/DOS work.
@@ -108,8 +119,24 @@ test('ADV98 production playback remains continuous through scene changes', async
     expect(Math.abs(source-rendered)).toBeLessThan(3360);
     observations.push({source,rendered,missed,queued:current.queuedSamples,edges:current.fmKeyEdges-previous.fmKeyEdges,
       soundIrqs:current.soundIrqEdges-previous.soundIrqEdges,fmPitch:current.fmPitch,ssgPeriod:current.ssgPeriod});
+    if(i%4===3) {
+      const wallMs=performance.now()-windowTime, frames=current.presentationStats.frames-windowStart.presentationStats.frames;
+      const uploads=current.presenterStats.uploads-windowStart.presenterStats.uploads;
+      presentationWindows.push({preset:['off','sharp','soft','strong'][Math.floor(i/4)],wallMs,
+        fps:frames*1000/wallMs,guestWall:(current.cycles-windowStart.cycles)/8000000/(wallMs/1000),
+        uploadMs:uploads?(current.presenterStats.uploadMs-windowStart.presenterStats.uploadMs)/uploads:0,
+        submitMs:uploads?(current.presenterStats.submitMs-windowStart.presenterStats.submitMs)/uploads:0,
+        gpuMs:current.presenterStats.gpuSamples>windowStart.presenterStats.gpuSamples
+          ? (current.presenterStats.gpuMs-windowStart.presenterStats.gpuMs)/(current.presenterStats.gpuSamples-windowStart.presenterStats.gpuSamples):null,
+        latencyMs:(current.presentationStats.latencyMs-windowStart.presentationStats.latencyMs)/frames,
+        missed:current.presentationStats.missedSlots-windowStart.presentationStats.missedSlots,
+        coalesced:current.videoStats.coalesced-windowStart.videoStats.coalesced,
+        underflows:current.underflows-windowStart.underflows,drops:current.droppedSamples-windowStart.droppedSamples,
+        fmEdges:current.fmKeyEdges-windowStart.fmKeyEdges});
+    }
     previous=current;
   }
+  console.log('CRT presentation A/B',JSON.stringify(presentationWindows));
   console.log('ADV98 continuity',JSON.stringify(observations));
   expect(await picture(page)).not.toEqual(first);
   expect(previous.reads).toBeGreaterThan(start.reads+100); // Actual DOS bitmap/sprite reads.
