@@ -9,7 +9,13 @@ async function ready(page) {
 
 test('live presets preserve raw frames, guest state and input across VM/Ap and context restoration',async({page})=>{
   await ready(page);
-  expect(await page.locator('#presentation').inputValue()).toBe('off');
+  expect(await page.evaluate(()=>localStorage.getItem('pc98-presentation'))).toBeNull();
+  await expect(page.locator('#presentation')).toHaveValue('sharp');
+  await expect(page.locator('#presentation option[value="sharp"]')).toHaveJSProperty('defaultSelected',true);
+  await expect(page.locator('#phosphor-mask')).not.toBeChecked();
+  await expect(page.locator('#crt-screen')).toBeVisible();
+  await expect(page.locator('#presentation-status')).toContainText('RGB CRT');
+  expect((await stats(page)).presenterStats).toMatchObject({preset:'sharp',active:true,fallback:false});
   for (const profile of ['0','1']) {
     await page.locator('#profile').selectOption(profile); await expect(page.locator('#profile')).toBeEnabled();
     if ((await stats(page)).running) await page.locator('#pause').click();
@@ -33,6 +39,7 @@ test('live presets preserve raw frames, guest state and input across VM/Ap and c
     });
     await expect(page.locator('#crt-screen')).toBeHidden();
     await expect(page.locator('#presentation-status')).toContainText('context lost');
+    await expect(page.locator('#presentation-status')).toContainText('showing original pixels');
     expect(await rawHash(page)).toEqual(hash);
     await page.evaluate(()=>crtLoss.restoreContext());
     await expect(page.locator('#crt-screen')).toBeVisible();
@@ -63,6 +70,64 @@ test('live presets preserve raw frames, guest state and input across VM/Ap and c
   await expect.poll(()=>stats(page).then(s=>s.presentationStats.frames)).toBeGreaterThan(live.presentationStats.frames+2);
   expect((await stats(page)).generation).toBe(live.generation);
   await page.evaluate(()=>liveLoss.restoreContext());
+  await expect(page.locator('#crt-screen')).toBeVisible();
+  await expect(page.locator('#error')).toBeHidden();
+});
+
+for (const preset of ['off','sharp','soft','strong']) test(`saved ${preset} and mask preferences survive reloads and manual changes`,async({page})=>{
+  await page.addInitScript(preset=>{
+    if (localStorage.getItem('pc98-presentation') === null)
+      localStorage.setItem('pc98-presentation',JSON.stringify({preset,mask:true}));
+  },preset);
+  await ready(page);
+  await expect(page.locator('#presentation')).toHaveValue(preset);
+  await expect(page.locator('#phosphor-mask')).toBeChecked();
+  expect((await stats(page)).presenterStats).toMatchObject({preset,active:preset!=='off',fallback:false});
+  await page.reload(); await expect(page.locator('#profile')).toBeEnabled();
+  await expect(page.locator('#presentation')).toHaveValue(preset);
+  await expect(page.locator('#phosphor-mask')).toBeChecked();
+  await page.locator('#phosphor-mask').uncheck();
+  // Persist a newly selected Original pixels choice as well as restoring it.
+  await page.locator('#presentation').selectOption('off');
+  await page.reload(); await expect(page.locator('#profile')).toBeEnabled();
+  await expect(page.locator('#presentation')).toHaveValue('off');
+  await expect(page.locator('#phosphor-mask')).not.toBeChecked();
+  await expect(page.locator('#crt-screen')).toBeHidden();
+  expect(await page.evaluate(()=>JSON.parse(localStorage.getItem('pc98-presentation')))).toEqual({preset:'off',mask:false});
+});
+
+test('invalid or corrupt saved settings use Sharp CRT with the mask off',async({page})=>{
+  await ready(page);
+  // Cover JSON parse errors, wrong shapes/types, inherited names and bad mask
+  // values without multiplying these storage-only branches by guest profiles.
+  for (const saved of ['{','null','[]','"off"','{}',
+    '{"preset":"unknown","mask":true}','{"preset":"toString","mask":true}',
+    '{"preset":["off"],"mask":true}','{"preset":"off","mask":"false"}',
+    '{"preset":"off"}']) {
+    await page.evaluate(saved=>localStorage.setItem('pc98-presentation',saved),saved);
+    await page.reload(); await expect(page.locator('#profile')).toBeEnabled();
+    await expect(page.locator('#presentation')).toHaveValue('sharp');
+    await expect(page.locator('#phosphor-mask')).not.toBeChecked();
+    await expect(page.locator('#crt-screen')).toBeVisible();
+  }
+});
+
+test('blocked storage still defaults to Sharp CRT and permits live switching',async({page})=>{
+  await page.addInitScript(()=>{
+    Object.defineProperty(window,'localStorage',{get(){throw new DOMException('Storage blocked','SecurityError');}});
+  });
+  await ready(page);
+  await expect(page.locator('#presentation')).toHaveValue('sharp');
+  await expect(page.locator('#phosphor-mask')).not.toBeChecked();
+  await expect(page.locator('#crt-screen')).toBeVisible();
+  for (const preset of ['off','soft','strong','sharp']) {
+    await page.locator('#presentation').selectOption(preset);
+    expect((await stats(page)).presenterStats).toMatchObject({preset,active:preset!=='off'});
+  }
+  await page.locator('#phosphor-mask').check();
+  await page.reload(); await expect(page.locator('#profile')).toBeEnabled();
+  await expect(page.locator('#presentation')).toHaveValue('sharp');
+  await expect(page.locator('#phosphor-mask')).not.toBeChecked();
   await expect(page.locator('#crt-screen')).toBeVisible();
   await expect(page.locator('#error')).toBeHidden();
 });
@@ -107,20 +172,24 @@ test.describe('touch fullscreen fallback',()=>{
   });
 });
 
-for (const fault of ['unsupported','compile','allocation']) test(`GPU ${fault} falls back while presentation credits and keyboard keep working`,async({page})=>{
+for (const fault of ['unsupported','compile','link','allocation','render']) test(`GPU ${fault} falls back while presentation credits and keyboard keep working`,async({page})=>{
   await page.addInitScript(fault=>{
     const get = HTMLCanvasElement.prototype.getContext;
     HTMLCanvasElement.prototype.getContext = function(type,...args) {
       if (type === 'webgl2' && fault === 'unsupported') return null;
       const result = get.call(this,type,...args);
       if (type === 'webgl2' && result && fault === 'compile') result.getShaderParameter = () => false;
+      if (type === 'webgl2' && result && fault === 'link') result.getProgramParameter = () => false;
       if (type === 'webgl2' && result && fault === 'allocation') result.getError = () => result.OUT_OF_MEMORY;
+      if (type === 'webgl2' && result && fault === 'render') result.drawArrays = () => {throw Error('Injected draw failure');};
       return result;
     };
   },fault);
   await ready(page); const before = await stats(page);
-  await page.locator('#presentation').selectOption('sharp');
+  await expect(page.locator('#presentation')).toHaveValue('sharp');
   await expect(page.locator('#crt-screen')).toBeHidden();
+  await expect(page.locator('#screen')).toBeVisible();
+  expect(await page.locator('#screen').evaluate(c=>c.clientWidth/c.clientHeight)).toBeCloseTo(1.6,2);
   await expect(page.locator('#presentation-status')).toContainText('showing original pixels');
   await expect.poll(()=>stats(page).then(s=>s.presentationStats.frames)).toBeGreaterThan(before.presentationStats.frames+2);
   expect((await stats(page)).presenterStats.fallback).toBe(true);
@@ -143,6 +212,12 @@ test('shader pixels stay upright, retain black/white and single-pixel edges, and
       frame.data.set([y<100?255:0,x===320?255:0,y>=300?255:0,255],i);
     }
     const original = [...frame.data];
+    // A standalone Presenter uses the same default even before setPreset is
+    // called, and invalid values cannot disable CRT accidentally.
+    const defaultPreset=p.preset; p.present(frame);
+    const defaultActive=!output.hidden;
+    const defaultTuning=Object.fromEntries(['scan','softness','mask'].map(name=>[name,p.gl.getUniform(p.gl.getParameter(p.gl.CURRENT_PROGRAM),p.uniforms[name])]));
+    p.setPreset('invalid'); const invalidPreset=p.preset;
     function sample(x,y) {
       const bytes = new Uint8Array(4); p.gl.readPixels(Math.floor(x*output.width),Math.floor((1-y)*output.height),1,1,p.gl.RGBA,p.gl.UNSIGNED_BYTE,bytes); return [...bytes];
     }
@@ -162,8 +237,10 @@ test('shader pixels stay upright, retain black/white and single-pixel edges, and
     p.present(new ImageData(320,200));
     const futureAspect=surface.style.getPropertyValue('--crt-aspect');
     surface.remove(); p.observer.disconnect();
-    return {top,bottom,black,line,neighbor,unchanged,futureAspect,largePlain,largeMask,stable:a.every((v,i)=>v===b[i]),smallMaskEqual:small.every((v,i)=>v===masked[i])};
+    return {defaultPreset,defaultActive,defaultTuning,invalidPreset,top,bottom,black,line,neighbor,unchanged,futureAspect,largePlain,largeMask,stable:a.every((v,i)=>v===b[i]),smallMaskEqual:small.every((v,i)=>v===masked[i])};
   });
+  expect(result.defaultPreset).toBe('sharp'); expect(result.defaultActive).toBe(true); expect(result.invalidPreset).toBe('sharp');
+  expect(result.defaultTuning.scan).toBeCloseTo(.06); expect(result.defaultTuning.softness).toBeCloseTo(.035); expect(result.defaultTuning.mask).toBe(0);
   expect(result.top[0]).toBeGreaterThan(220); expect(result.top[2]).toBe(0);
   expect(result.bottom[2]).toBeGreaterThan(220); expect(result.bottom[0]).toBe(0);
   expect(result.black).toEqual([0,0,0,255]);

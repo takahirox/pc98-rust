@@ -1,8 +1,9 @@
-# Optional RGB CRT presentation (#191)
+# RGB CRT presentation (#191, #195)
 
-The Display selector switches immediately without resetting the guest. **LCD /
-Original pixels (off)** is the default and preserves the existing square-pixel
-8:5 presentation. **Sharp CRT** is the recommended CRT profile; **Soft CRT**
+The Display selector switches immediately without resetting the guest. **Sharp
+CRT** is the default for new visitors, with the RGB mask disabled. **LCD /
+Original pixels (off)** remains an explicit choice with square-pixel
+8:5 presentation and the safety fallback when CRT is unavailable. **Soft CRT**
 increases horizontal spot softness, and **Strong CRT** increases line structure
 conservatively. CRT profiles present the current 640×400 framebuffer at 4:3,
 including in full screen (Escape exits). If the browser rejects the Fullscreen
@@ -34,8 +35,12 @@ restrains highlights, preserves palette differences, and avoids extra render
 passes. There are no composite, noise, fringing, flicker or VHS effects.
 
 Only the preset name and mask preference are saved under `pc98-presentation` in
-localStorage. Storage failures are harmless. No guest, disk, game, pixel or audio
-data is saved by this feature.
+localStorage. A saved `off`, `sharp`, `soft` or `strong` preset with a boolean mask
+choice is restored on reload, including an intentional Original pixels choice.
+Absent, malformed or invalid settings use Sharp CRT with the mask off. Storage
+failures are harmless: the same default and live controls work without persistence.
+Preferences are applied before the first guest frame. No guest, disk, game, pixel
+or audio data is saved by this feature.
 
 ## Presentation and fallback
 
@@ -50,10 +55,11 @@ pointer-transparent GPU canvas. Keyboard focus, pointer capture and relative
 mouse coordinates belong to the original screen, using its displayed dimensions.
 Changing a preset redraws even a paused guest. Unsupported WebGL2, shader compile
 or link failure, and context loss immediately reveal the latest raw canvas and
-its original geometry. Restoration rebuilds GPU resources and reuploads the raw
-canvas. A GPU failure does not stop frame acknowledgments or restart either
-Worker, the guest, or audio. Context loss of the original 2D canvas retains the
-existing refresh/credit recovery behavior.
+its original geometry. The status explicitly reports original pixels during
+fallback; the selector retains the requested preference. Restoration rebuilds
+GPU resources and reuploads the raw canvas. A GPU failure does not stop frame
+acknowledgments or restart either Worker, the guest, or audio. Context loss of
+the original 2D canvas retains the existing refresh/credit recovery behavior.
 
 The production upload uses the incoming transferable view with `texSubImage2D`,
 allocating texture storage only on source-size changes. No CPU pixel-filter loop
@@ -113,12 +119,14 @@ an optional Chromium DevTools host stress setting, not a change to guest clocks.
 Compare within each case; do not interpret different scene windows as a precise
 GPU benchmark or compare interpreter and JIT as identical workloads.
 
-`presentation.spec.js` covers raw/guest invariance, both profiles, preset
-persistence, small and noninteger display sizes, full screen, actual context
-loss/restoration, unsupported/compile failure, credit progress and input, upright
-shader pixels, black levels, single-pixel edge retention, stable repeated draws,
-undersampled mask suppression and unknown-size geometry. Existing CRT/GDC tests
-retain their exact glyph/palette/blink/PEGC assertions.
+`presentation.spec.js` covers fresh-visit Sharp CRT defaults, all saved presets
+and mask choices, invalid/corrupt and blocked storage, raw/guest invariance, both
+profiles, small and noninteger display sizes, full screen, actual context
+loss/restoration, unsupported/compile/link/allocation/render failure, credit
+progress and input, upright shader pixels, black levels, single-pixel edge
+retention, stable repeated draws, undersampled mask suppression and unknown-size
+geometry. Existing CRT/GDC tests retain their exact glyph/palette/blink/PEGC
+assertions.
 
 ## Local validation, 2026-11-17
 
@@ -176,7 +184,8 @@ The constrained 48 kHz CRT windows increased capture-to-submit latency from abou
 8 ms to 14 ms and combined more capture requests, while retaining 60 fps and
 real-time guest/audio progress. This is a host stress sample, not a simulation of
 a particular low-end CPU/GPU. Use Original pixels on devices where filtering
-competes with gameplay; keep it as the default.
+competes with gameplay. These historical measurements preceded the Sharp CRT
+default introduced in #195.
 
 Validation performed in this worktree:
 
@@ -214,3 +223,68 @@ exit were exercised; both routes share the same aspect/containment rules.
 Firefox, Safari, physical displays, mobile and long-duration GPU memory behavior
 were not separately measured. No deployment or post-merge check is required for
 this static presentation feature.
+
+## Sharp CRT default validation (#195), 2026-11-17
+
+Validated on Apple M4 Max, macOS 27.2.1, Playwright 1.56.1 and its pinned
+Chromium 141.0.7390.37 headless shell, using Node 22.23.5 to match CI's Node 22
+major version. The normal browser installer stalled; downloading the same pinned
+headless archive from Playwright's official CDN with curl completed successfully.
+The checked-in Playwright configuration is unchanged. All browser checks used
+the actual release Wasm at both `/` and `/pc98-rust/`.
+
+Initial runs used installed production Chrome 157.0.8103.52. The 32 focused
+presentation cases and both audio cases passed under Node 26.12.1, but the full
+suite stalled between projects. A Node 22 retry reported 291 passed cases and
+five existing skips, then stalled during shutdown. Both stalled runners were
+stopped; these attempts do not count as successfully completed suite commands.
+Final acceptance uses pinned Chromium below.
+
+Checks performed:
+
+- `npm ci` and `npm run build` passed, including reproducible media/font checks,
+  release Wasm compilation/optimization and all 31 approved publication assets.
+- The acceptance workflow's legal fixtures were prepared and manifest-verified.
+  CPULEVEL used its documented mirror via curl after Python certificate-chain
+  validation failed; its existing SHA-256 pin was verified. Certificate
+  verification remained enabled.
+- `node --test tests/audio-worker.test.js tests/audio-worklet.test.js
+  tests/render-worker.test.js tests/jit.test.js tests/cpu-budget.test.js`:
+  56 passed under Node 26.12.1.
+- `npx --yes --package=node@22 node node_modules/playwright/cli.js test
+  tests/browser/audio-continuity.spec.js --workers=1`: both cases passed
+  (59.2 s), with no competing test workload during playback.
+- `npx --yes --package=node@22 node node_modules/playwright/cli.js test
+  --grep-invert 'ADV98 production playback remains continuous through scene changes'
+  --workers=4`: 291 passed, five existing Pages duplicates skipped (5.1 min).
+  This includes all 32 presentation cases for fresh defaults, saved choices,
+  malformed/blocked storage, GPU failures, raw pixels, input and geometry.
+- `git diff --check` passed. The temporary Chrome configuration was removed;
+  no browser setup or test-runner changes are included in this change.
+
+The existing ADV98 workload measured consecutive approximately 4.1-second
+windows for every preset. Representative off/Sharp comparisons on pinned
+Chromium:
+
+| Root / execution | Preset | fps | Guest/wall | CPU upload ms | CPU submit ms | PCM underflows / drops |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| `/`, 48 kHz / JIT | off | 60.06 | 0.998 | 0 | 0 | 0 / 0 |
+| `/`, 48 kHz / JIT | sharp | 59.97 | 0.999 | 0.018 | 0.006 | 0 / 0 |
+| `/pc98-rust/`, 44.1 kHz / interpreter | off | 59.92 | 1.000 | 0 | 0 | 0 / 0 |
+| `/pc98-rust/`, 44.1 kHz / interpreter | sharp | 59.87 | 1.001 | 0.018 | 0.007 | 0 / 0 |
+
+All eight windows, including Soft and Strong, had zero underflows, drops and
+missed presentation slots. Throughput was 59.85–60.06 fps, guest/wall speed was
+0.998–1.001, and CRT CPU upload/submission costs were consistent with the earlier
+#191 measurements above. GPU timer samples were unavailable in this pinned
+headless browser; production Chrome's separate run measured 0.093–0.098 ms per
+CRT frame. Guest sample accounting, audio epochs, tempo and scene changes passed
+the existing assertions. These observations establish no timing or throughput
+regression on this host; they do not establish mobile or low-end GPU performance.
+No shader tuning, guest timing, pixel filtering in Workers or framebuffer
+ownership changed.
+
+The release Wasm is 590,414 bytes, SHA-256
+`436e45cb1ee3dce54b23c25e4c0e5b938f387efc835a9db64fabf7ad579076ea`.
+Native Rust tests were not rerun for this browser-default-only change. No
+post-merge verification is required.
