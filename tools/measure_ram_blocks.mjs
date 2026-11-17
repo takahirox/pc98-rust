@@ -30,8 +30,10 @@ async function freezeBlocks(runtime,prefix=''){
   const bytes=await readFile((runtime??root+'/tools/lib')+'/'+name);
   assets.set(prefix+'tools/lib/'+name,bytes);canonical ||= bytes.includes('../../web/block-');
  }
- if(canonical)for(const name of ['block-jit.js','block-compiler.js'])
-  assets.set(prefix+'web/'+name,await readFile((runtime??root+'/web')+'/'+name));
+ if(canonical){
+  for(const name of ['block-jit.js','block-compiler.js'])assets.set(prefix+'web/'+name,await readFile((runtime??root+'/web')+'/'+name));
+  if(assets.get(prefix+'web/block-jit.js').includes("'./block-linker.js'"))assets.set(prefix+'web/block-linker.js',await readFile((runtime??root+'/web')+'/block-linker.js'));
+ }
  assets.set(prefix+'web/jit.js',assets.get('jit.js'));
 }
 await freezeBlocks(opts.candidateRuntime);await freezeBlocks(opts.baselineRuntime,'baseline/');
@@ -45,7 +47,17 @@ function message(c){let p=c.message(0);return new TextDecoder().decode(new Uint8
 function put(c,b){let p=c.input_buffer(b.length)>>>0;new Uint8Array(c.memory.buffer,p,b.length).set(b);}
 function make(module,index){const c=new WebAssembly.Instance(module,{}).exports;c.set_profile(1);c.set_boot_source(1);put(c,disk.subarray(0,32));if(!c.hdi_begin(disk.length))throw Error('begin');for(let at=0;at<disk.length;at+=1048576){put(c,disk.subarray(at,at+1048576));if(!c.hdi_append())throw Error('append');}if(!c.hdi_commit())throw Error('commit');c.reset();return {c,j:index===0?${opts.baselineBlock==='1'?'new BaselineBlockJit(c)':'new WasmJit(c)'}:new BlockJit(c),samples:0,pcmHash:2166136261,time:0,setupActiveMs:0};}
 const hash=bytes=>{let h=2166136261;for(const v of bytes)h=Math.imul(h^v,16777619)>>>0;return h;};
-function state(m){const c=m.c,[r,f,ip]=new Uint32Array(c.memory.buffer,c.jit_layout()>>>0,3);return {registers:Array.from(new Uint16Array(c.memory.buffer,r,8)),flags:new DataView(c.memory.buffer).getUint16(f,true),ip:new DataView(c.memory.buffer).getUint32(ip,true),cs:c.metric(17),metrics:[0,1,2,5,6,7,9,10,14,15,19,20,23,26,27,28,30].map(i=>c.metric(i)),samples:m.samples,pcmHash:m.pcmHash,ramHash:(()=>{let h=2166136261;for(let at=0;at<0xa0000;at++)h=Math.imul(h^c.peek(at),16777619)>>>0;return h;})(),frameHash:hash(new Uint8Array(c.memory.buffer,c.frame()>>>0,1024000))};}
+// Check the actual render-Worker export at checkpoints, outside timed slices.
+function scanout(c){
+ const frameHash=hash(new Uint8Array(c.memory.buffer,c.frame()>>>0,1024000));
+ const snapshot=c.video_snapshot()>>>0,length=c.video_snapshot_len();
+ const bytes=new Uint8Array(c.memory.buffer,snapshot,length).slice();
+ const input=c.input_buffer(length)>>>0;new Uint8Array(c.memory.buffer,input,length).set(bytes);
+ const pixels=c.video_render(length)>>>0;
+ if(!pixels||hash(new Uint8Array(c.memory.buffer,pixels,1024000))!==frameHash)throw Error('Snapshot raster differs from full frame');
+ return frameHash;
+}
+function state(m){const c=m.c,[r,f,ip]=new Uint32Array(c.memory.buffer,c.jit_layout()>>>0,3);return {registers:Array.from(new Uint16Array(c.memory.buffer,r,8)),flags:new DataView(c.memory.buffer).getUint16(f,true),ip:new DataView(c.memory.buffer).getUint32(ip,true),cs:c.metric(17),metrics:[0,1,2,5,6,7,9,10,14,15,19,20,23,26,27,28,30].map(i=>c.metric(i)),samples:m.samples,pcmHash:m.pcmHash,ramHash:(()=>{let h=2166136261;for(let at=0;at<0xa0000;at++)h=Math.imul(h^c.peek(at),16777619)>>>0;return h;})(),frameHash:scanout(c)};}
 function slice(m,measure){const c=m.c,begin=performance.now();m.j.step(80000,100000);const count=c.audio_len();if(measure){m.samples+=count;for(const v of new Uint32Array(c.memory.buffer,c.audio_ptr()>>>0,count))m.pcmHash=Math.imul(m.pcmHash^v,16777619)>>>0;}c.audio_clear();if(measure)m.time+=performance.now()-begin;else m.setupActiveMs+=performance.now()-begin;if(c.metric(4))throw Error(message(c));}
 async function settle(ms){while(ms.some(m=>m.j.pending))await sleep();if(ms.some(m=>m.j.failed))throw Error('compile failed '+ms.map(m=>m.j.compileError??'').join('|'));}
 const results=[];

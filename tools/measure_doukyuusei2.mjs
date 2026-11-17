@@ -50,6 +50,7 @@ for(const name of ['index.html','style.css']) {
 }
 if(options.jit!=='0'&&runtime.find(([name])=>name==='emulator-worker.js')[1].includes("new URL('block-jit.js'"))
   for(const name of ['block-jit.js','block-compiler.js'])runtime.push([name,await readFile(options.runtime?path.join(options.runtime,name):new URL('../web/'+name,import.meta.url))]);
+if(runtime.find(([name])=>name==='block-jit.js')?.[1].includes("'./block-linker.js'"))runtime.push(['block-linker.js',await readFile(options.runtime?path.join(options.runtime,'block-linker.js'):new URL('../web/block-linker.js',import.meta.url))]);
 const runtimeSha256 = Object.fromEntries(runtime.map(([name,body]) => [name,sha(body)]));
 const harnessSha256 = sha(await readFile(new URL(import.meta.url)));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -241,7 +242,7 @@ try {
       result.presentation=presented.presenterStats.preset;
     }
     result.routedAssets = routedAssets;
-    for (const name of ['index.html','style.css','core.wasm','app.js',...(assets.has('presenter.js')?['presenter.js']:[]),'emulator-worker.js','render-worker.js',...(options.jit==='0'?[]:['jit.js',...(assets.has('block-jit.js')?['block-jit.js','block-compiler.js']:[])]),...(playback ? ['audio-worklet.js'] : [])]) {
+    for (const name of ['index.html','style.css','core.wasm','app.js',...(assets.has('presenter.js')?['presenter.js']:[]),'emulator-worker.js','render-worker.js',...(options.jit==='0'?[]:['jit.js',...(assets.has('block-jit.js')?['block-jit.js','block-compiler.js',...(assets.has('block-linker.js')?['block-linker.js']:[])]:[])]),...(playback ? ['audio-worklet.js'] : [])]) {
       if (!routedAssets[name]) throw Error(`Selected runtime asset was not intercepted: ${name}`);
     }
     if (profile) {

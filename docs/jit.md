@@ -61,6 +61,21 @@ and event deadlines, and exits before mapped/wrapping operands or self-code
 stores. It commits the last instruction's exact timing and advances devices by
 the committed clocks without a Rust callback for each instruction.
 
+The [measured linking and scanout follow-up](browser-block-linking.md) records
+fixed-work equivalence, reference throughput and the remaining constrained audio
+deficit.
+
+The [RAM linker](../web/block-linker.js) can run several ready direct traces
+within that same event budget. Rust validates the first entry; every generated
+entry also checks its IP, CS base and original code bytes before effects. A
+16,384-entry table stores full CS/IP keys and plan IDs, and clears entries on
+invalidation, slot reuse and reset. Linking requires ordinary descriptors for all
+six segments. Each trace retains its own code-store guard. A miss, failed guard,
+work cap or event deadline commits the accumulated clocks and last instruction's
+timing once in Rust before normal dispatch resumes. This does not cross a device
+event or add a Wasm tail-call requirement. `blockTraces` counts entered traces;
+`blockCalls` counts the Rust completions they share.
+
 The Rust bridge lives in [`src/cpu/jit.rs`](../src/cpu/jit.rs). It observes hot
 addresses through a 16,384-entry heat table, offers blocks after 32 observed visits, and
 bounds native plans and compiled modules to 4,096 entries. Only one compilation

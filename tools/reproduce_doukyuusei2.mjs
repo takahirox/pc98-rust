@@ -38,6 +38,7 @@ const names=['app.js','emulator-worker.js','audio-worklet.js','render-worker.js'
 const assets=new Map(await Promise.all(names.map(async name=>[name,await readFile(path.join(root,'web',name))])));
 if(assets.get('emulator-worker.js').includes("new URL('block-jit.js'"))
   for(const name of ['block-jit.js','block-compiler.js']){names.push(name);assets.set(name,await readFile(path.join(root,'web',name)));}
+if(assets.get('block-jit.js')?.includes("'./block-linker.js'")){names.push('block-linker.js');assets.set('block-linker.js',await readFile(path.join(root,'web/block-linker.js')));}
 const sourceHashes=Object.fromEntries([...assets].map(([name,body])=>[name,sha(body)]));
 // These bounded input/audio getters exist only in the served local control.
 // The emulator Worker, renderer, worklet and Wasm bytes remain unchanged.
@@ -78,7 +79,7 @@ async function sample(){
       videoMode:s.videoMode,rendererFailure:s.rendererFailure,error:s.error,hidden:document.hidden,
       underflowRun:s.underflowRun,maxUnderflowRun:s.maxUnderflowRun,outstandingSamples:s.outstandingSamples,
       scheduledSamples:s.scheduledSamples,deviceSampleRate:s.deviceSampleRate,
-      sliceHistogram:s.sliceHistogram,videoStats:s.videoStats,renderStats:s.renderStats,presentationStats:s.presentationStats,
+      sliceHistogram:s.sliceHistogram,videoStats:s.videoStats,renderStats:s.renderStats,presentationStats:s.presentationStats,presenterStats:s.presenterStats,
       output:reproductionAudio(),patches,jit:s.jit});
     if(s.error || !s.running || s.audioState!=='running')throw Error('Playback stopped or faulted');
   }finally{pending=false;}
@@ -185,7 +186,7 @@ try{
     new Promise((_,reject)=>child.once('error',reject).once('exit',code=>reject(Error('Browser exited '+code)))),
     new Promise((_,reject)=>setTimeout(()=>reject(Error('Reproduction deadline; '+stderr)),240000+clicks*600).unref()),
   ]);
-  const missing=names.filter(name=>!counts[name] && !(['jit.js','block-jit.js','block-compiler.js'].includes(name)&&options.jit==='0'));
+  const missing=names.filter(name=>!counts[name] && !(['jit.js','block-jit.js','block-compiler.js','block-linker.js'].includes(name)&&options.jit==='0'));
   if(missing.length && !result.error)result.error='Selected runtime assets were not served: '+missing.join(', ');
   await writeFile(options.output,JSON.stringify({context:{date:new Date().toISOString(),engine,
     automationProtocol:false,manualGuestAdvance:false,headless,noSandbox,samplePatches,automaticAudioActivation:true,
