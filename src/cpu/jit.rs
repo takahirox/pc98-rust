@@ -224,9 +224,11 @@ pub struct Engine {
     #[cfg(feature = "block-experiment")]
     block_active: Option<u32>,
     #[cfg(feature = "block-experiment")]
-    pub block_counters: [u64; 3],
+    pub block_counters: [u64; 4],
     #[cfg(feature = "block-experiment")]
     branch_choices: Box<[BranchChoice]>,
+    #[cfg(feature = "block-experiment")]
+    links: Box<[block::Link]>,
 }
 impl Default for Engine {
     fn default() -> Self {
@@ -251,9 +253,11 @@ impl Default for Engine {
             #[cfg(feature = "block-experiment")]
             block_active: None,
             #[cfg(feature = "block-experiment")]
-            block_counters: [0; 3],
+            block_counters: [0; 4],
             #[cfg(feature = "block-experiment")]
             branch_choices: vec![BranchChoice::default(); PROBES].into_boxed_slice(),
+            #[cfg(feature = "block-experiment")]
+            links: vec![block::Link::default(); PROBES].into_boxed_slice(),
         }
     }
 }
@@ -463,9 +467,10 @@ impl Engine {
         #[cfg(feature = "block-experiment")]
         {
             self.block_active = None;
-            self.block_counters = [0; 3];
+            self.block_counters = [0; 4];
             self.block_packet.clear();
             self.branch_choices.fill(BranchChoice::default());
+            self.links.fill(block::Link::default());
         }
     }
     pub fn begin_slice(&mut self, m: &Machine, clocks: u32, cap: u32) {
@@ -505,6 +510,8 @@ impl Engine {
         self.dispatch_inner(m, compile, true)
     }
     pub fn register(&mut self, id: u32, ready: bool) -> bool {
+        #[cfg(feature = "block-experiment")]
+        self.register_link(id, ready);
         if let Some(p) = self.plans[id as usize % SLOTS]
             .as_mut()
             .filter(|p| p.id == id)
@@ -647,6 +654,10 @@ impl Engine {
                                     u32::from(u16::from_le_bytes([bytes[4], bytes[5]])),
                                 ]);
                             }
+                            #[cfg(feature = "block-experiment")]
+                            if let Some(old) = &self.plans[id as usize % SLOTS] {
+                                self.register_link(old.id, false);
+                            }
                             self.plans[id as usize % SLOTS] = Some(Plan {
                                 id,
                                 key,
@@ -739,6 +750,10 @@ impl Engine {
         #[cfg(feature = "block-experiment")]
         if self.block_mode && self.plan(id).is_some_and(|p| p.block.is_some()) {
             return self.prepare_block(m, id);
+        }
+        #[cfg(feature = "block-experiment")]
+        {
+            self.scratch.block.mode = 0;
         }
         self.prepare(m, id, 0, None, false)
     }

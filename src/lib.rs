@@ -205,6 +205,16 @@ mod wasm {
     }
     #[cfg(feature = "block-experiment")]
     #[no_mangle]
+    pub extern "C" fn block_links_ptr() -> *const u8 {
+        JIT.with(|j| j.borrow().block_links_ptr())
+    }
+    #[cfg(feature = "block-experiment")]
+    #[no_mangle]
+    pub extern "C" fn block_context_offset() -> usize {
+        JIT.with(|j| j.borrow().block_context_offset())
+    }
+    #[cfg(feature = "block-experiment")]
+    #[no_mangle]
     pub extern "C" fn block_start(id: u32) -> u32 {
         MACHINE
             .with(|m| JIT.with(|j| u32::from(j.borrow_mut().start_block(&mut m.borrow_mut(), id))))

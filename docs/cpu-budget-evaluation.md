@@ -248,3 +248,10 @@ existing PR workflow still performs its normal acceptance suite. No new heavy
 resource matrix runs in normal CI.
 
 Required post-merge verification: none.
+
+## Execution and scanout follow-up
+
+[The RAM linking and partial-scanout evaluation](browser-block-linking.md)
+repeats production controls after importing the Sharp CRT default. It separates
+fixed-work throughput parity from the remaining low-CPU PCM deficit and records
+actual Worker calibration and scene-progress differences.

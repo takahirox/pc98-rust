@@ -152,28 +152,53 @@ function writtenRegisters(op,m){
 
 export function compileRamBlock(packet,meta){
   const count=packet[1];
-  if(count<1||count>16||packet.length!==2+count*4||meta.length!==2+count*12||![1,3].includes(meta[0]))throw Error('Invalid RAM block plan');
-  const bios=meta[0]===3;
-  // Four pointer parameters. Locals 4..51 contain ALU temporaries, cached GPRs,
+  const linked=!!(meta[0]&4),header=linked?5:2,stride=linked?14:12;
+  if(count<1||count>16||packet.length!==2+count*4||meta.length!==header+count*stride||![1,3,5,7].includes(meta[0]))throw Error('Invalid RAM block plan');
+  const bios=!!(meta[0]&2);
+  // Four pointer parameters. Locals 4..52 contain ALU temporaries, cached GPRs,
   // context addresses, timing and the last committed instruction metadata.
-  const body=[1,bios?48:43,0x7f],dirty=new Set(),used=new Set();
+  // Extended packets carry raw code guards and a run-wide final plan ID.
+  const body=[1,linked?49:bios?48:43,0x7f],dirty=new Set(),used=new Set();
   const readReg=(r,wide)=>{used.add(wide?r:r&3);return wide?get(15+r):and(r&4?bin(0x76,get(15+(r&3)),c(8)):get(15+(r&3)),c(255));};
   const writeReg=(r,wide,value)=>{const word=wide?r:r&3;dirty.add(word);used.add(word);return set(15+word,wide?and(value,c(65535)):or(and(get(15+word),c(r&4?255:65280)),r&4?shl(and(value,c(255)),8):and(value,c(255))));};
   const context=i=>[...get(14),0x28,2,...uleb(i*4)];
   const save=(i,value)=>[...get(14),...value,0x36,2,...uleb(i*4)];
   const exitIf=value=>body.push(...value,0x0d,1);
   body.push(...set(14,add(get(3),c(meta[1]))),...set(7,load(1,0,2)),...set(33,[...get(2),0x28,2,0]),
-    ...(bios?set(47,c(1)):[]),...set(25,context(5)),...set(34,context(0)),...set(35,context(1)),...set(36,context(2)),...set(37,context(10)),...set(38,context(11)));
+    ...(linked?[...set(27,context(4)),...set(28,context(3)),...set(29,context(6)),...set(30,context(7)),...set(31,context(8)),...set(32,context(9)),...set(45,context(18)),...set(46,context(19)),...set(47,context(24)),...set(48,context(25)),...set(52,context(26))]:bios?set(47,c(1)):[]),
+    ...set(25,context(5)),...set(34,context(0)),...set(35,context(1)),...set(36,context(2)),...set(37,linked?c(meta[3]):context(10)),...set(38,linked?c(meta[4]):context(11)));
   const reloadAt=body.length;
-  const segments=new Set(Array.from({length:count},(_,i)=>meta[2+i*12+7]&3?meta[2+i*12+2]:-1).filter(i=>i>=0));
+  const segments=new Set(Array.from({length:count},(_,i)=>meta[header+i*stride+7]&3?meta[header+i*stride+2]:-1).filter(i=>i>=0));
   if(Array.from({length:count},(_,i)=>packet[4+i*4]&255).includes(0xc3))segments.add(1);
   for(const seg of segments)body.push(...set(39+seg,context(12+seg)));
-  body.push(0x02,0x40,0x03,0x40); // bounded run, including direct back-edge loops
+  body.push(0x02,0x40);
+  if(linked){
+    // Linked entries bypass the Rust decoder, so revalidate the complete code
+    // before effects. Adjacent bytes share loads; no load crosses a code span.
+    const reject=value=>body.push(...value,0x0d,0);
+    reject(bin(0x47,get(33),c(packet[2])));
+    reject(bin(0x47,context(13),c(meta[2])));
+    const spans=[];
+    for(let i=0;i<count;i++){
+      const ip=packet[2+i*4],length=packet[3+i*4],at=header+i*stride;
+      let span=spans.at(-1);
+      if(!span||span.ip+span.bytes.length!==ip){span={ip,bytes:[]};spans.push(span);}
+      for(let j=0;j<length;j++)span.bytes.push((meta[at+12+(j>>2)]>>>((j&3)*8))&255);
+    }
+    for(const span of spans)for(let at=0;at<span.bytes.length;){
+      const width=span.bytes.length-at>=4?4:span.bytes.length-at>=2?2:1;
+      let value=0;for(let j=0;j<width;j++)value|=span.bytes[at+j]<<(j*8);
+      reject(bin(0x47,[...get(34),width===4?0x28:width===2?0x2f:0x2d,width===4?2:width===2?1:0,...uleb(meta[2]+span.ip+at)],c(value)));
+      at+=width;
+    }
+    body.push(...save(28,add(context(28),c(1))));
+  }
+  body.push(0x03,0x40); // bounded run, including direct back-edge loops
   for(let index=0;index<count;index++){
     const ip=packet[2+index*4],length=packet[3+index*4],encoded=packet[4+index*4],tail=packet[5+index*4];
     const bytes=[encoded&255,(encoded>>>8)&255,(encoded>>>16)&255,encoded>>>24,tail&255,tail>>>8];
     const [op,m]=bytes,wide=!!(op&1),rm=m&7,r=(m>>3)&7;
-    const info=meta.subarray(2+index*12,14+index*12),[exec0,exec1,seg,base,regIndex,disp,width,access,addressConstant,baseMask,policy,fetch]=info;
+    const info=meta.subarray(header+index*stride,header+index*stride+12),[exec0,exec1,seg,base,regIndex,disp,width,access,addressConstant,baseMask,policy,fetch]=info;
     const memory=width!==0,displacement=(m>>6)===1?1:(m>>6)===2||(m>>6)===0&&rm===6?2:0;
     const imm=(at,w)=>w?bytes[at]|bytes[at+1]<<8:bytes[at];
     const loadMemory=()=>[...add(get(34),get(10)),width===1?0x2d:0x2f,width===1?0:1,0];
@@ -215,7 +240,7 @@ export function compileRamBlock(packet,meta){
         ...set(33,c(ip+2)),...set(32,bin(0x47,get(11),c(4))),...set(25,c(16)),
         ...set(27,add(get(27),add(c(exec0),get(13)))),...set(28,add(get(28),c(3))),
         ...set(29,c(exec1)),...set(30,add(c(4),get(50))),...set(31,c(0)),
-        ...set(45,c(index)),...set(46,c(0)),...set(47,c(5)),...set(48,c(1)));
+        ...set(45,c(index)),...(linked?set(52,c(packet[0])):[]),...set(46,c(0)),...set(47,c(5)),...set(48,c(1)));
       continue;
     }
     if(memory){
@@ -291,7 +316,7 @@ export function compileRamBlock(packet,meta){
       ...set(32,get(25)),...set(25,policy===255?destinations.map((r,n)=>shl(nz(xor(get(15+r),get(23+n))),r)).reduce(or,c(0)):c(policy)),
       ...set(12,add(exec0===exec1?c(exec0):[...c(exec1),...c(exec0),...get(9),0x1b],get(26))),
       ...set(27,add(get(27),add(get(12),get(13)))),...set(28,add(get(28),c(1))),
-      ...set(29,get(12)),...set(30,get(13)),...set(31,get(26)),...set(45,c(index)),...set(46,get(9)),...(bios?set(48,c(0)):[]));
+      ...set(29,get(12)),...set(30,get(13)),...set(31,get(26)),...set(45,c(index)),...(linked?set(52,c(packet[0])):[]),...set(46,get(9)),...(bios||linked?set(48,c(0)):[]));
     // Commit a conditional/return with its actual IP. A different successor
     // exits before any operation on the decoded fallthrough or caller path.
     if((op===0xc3||branch&&!unconditional)&&index+1<count)
@@ -301,7 +326,7 @@ export function compileRamBlock(packet,meta){
   body.push(0x0c,1,0x0b,0x0b);
   for(const r of dirty)body.push(...store(0,r*2,2,get(15+r)));
   body.push(...storeFlags(get(7)),...get(2),...get(33),0x36,2,0,
-    ...save(3,get(28)),...save(4,get(27)),...save(5,get(25)),...save(6,get(29)),...save(7,get(30)),...save(8,get(31)),...save(9,get(32)),...save(18,get(45)),...save(19,get(46)),...(bios?[...save(24,get(47)),...save(25,get(48))]:[]),0x10,0,0x0b);
+    ...save(3,get(28)),...save(4,get(27)),...save(5,get(25)),...save(6,get(29)),...save(7,get(30)),...save(8,get(31)),...save(9,get(32)),...save(18,get(45)),...save(19,get(46)),...(bios||linked?[...save(24,get(47)),...save(25,get(48))]:[]),...(linked?save(26,get(52)):[]),0x10,0,0x0b);
   // Potentially dirty registers also need their entry value: an early exit
   // can flush before their first write. Unused, never-written registers stay in CPU memory.
   body.splice(reloadAt,0,...[...used].sort((a,b)=>a-b).flatMap(r=>set(15+r,load(0,r*2,2))));

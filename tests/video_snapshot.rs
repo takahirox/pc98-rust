@@ -194,3 +194,76 @@ fn owned_snapshots_recycle_input_storage_without_changing_pixels_or_invalidating
         assert_eq!(renderer.frame(&unchanged).unwrap(), expected);
     }
 }
+
+#[test]
+fn partial_scanout_matches_full_frames_at_text_planar_and_pegc_wraps() {
+    for (profile, doubled, pegc, wide) in [
+        (Profile::Pc9801Vm, false, false, false),
+        (Profile::Pc9801Vm, true, false, true),
+        (Profile::Pc9821ApDos, false, false, true),
+        (Profile::Pc9821ApDos, true, false, false),
+        (Profile::Pc9821ApDos, false, true, false),
+    ] {
+        let mut machine = Machine::new(profile);
+        let b = &mut machine.bus;
+        b.gdcs[0].enabled = true;
+        b.gdcs[0].start = 4090;
+        b.gdcs[0].pitch = 80;
+        b.gdcs[0].character_lines = 16;
+        b.gdcs[0].scroll = [
+            0,
+            0,
+            0xf0,
+            if wide { 0x98 } else { 0x18 },
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ];
+        b.gdcs[1].enabled = true;
+        b.gdcs[1].start = if pegc { 0x7fff } else { 0x3fff };
+        b.gdcs[1].pitch = 79;
+        b.display_page = 1;
+        b.graphics_200 = doubled;
+        b.analog = profile == Profile::Pc9821ApDos;
+        b.pegc = pegc;
+        b.output(0x68, u8::from(wide));
+        let mut renderer = SnapshotRenderer::default();
+        let mut snapshot = Vec::new();
+        let mut pixels = vec![0; 640 * 400 * 4];
+        for n in 0..18 {
+            let b = &mut machine.bus;
+            let y = n * 23 % 400;
+            let a = if pegc {
+                (0x40000 + b.gdcs[1].start as usize * 8 + y * 79 * 8 + n * 13) & 0x7ffff
+            } else {
+                let line = if doubled { y / 2 } else { y };
+                profile.planes() * 0x8000 + n % 3 * 0x8000 + ((0x7ffe + line * 80 + n * 3) & 0x7fff)
+            };
+            b.graphics[a] ^= 0x81;
+            if let Some((cell, _)) = b.gdcs[0].text_address(y, n % 80) {
+                b.mem[0xa0000 + cell * 2] = b'A' + n as u8;
+                b.mem[0xa2000 + cell * 2] = 0xe3;
+            }
+            // Off-screen writes must update retained inputs without corrupting pixels.
+            b.graphics[n] ^= 0x3c;
+            b.cycles = (n / 8 * 6) as u64 * 133_333;
+            b.video().snapshot(&mut snapshot);
+            pixels.fill(0x55);
+            assert!(renderer.render(&snapshot, &mut pixels));
+            assert_eq!(
+                pixels,
+                machine.render(),
+                "{profile:?}, doubled={doubled}, pegc={pegc}, wide={wide}, step={n}"
+            );
+        }
+    }
+}

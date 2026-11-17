@@ -26,8 +26,23 @@ pub(super) struct Context {
     bios_valid: u32,
     upper_clear: u32,
     last_bios: u32,
+    last_plan: u32,
+    pub(super) mode: u32, // Bit 0: direct entry; bit 1: all segment bases may be linked.
+    blocks: u32,
 }
-const _: () = assert!(std::mem::size_of::<Context>() == 104);
+const _: () = assert!(std::mem::size_of::<Context>() == 116);
+
+// Full keys prevent hash collisions from entering an unrelated table slot.
+#[derive(Clone, Copy, Default)]
+#[repr(C)]
+pub(super) struct Link {
+    ip: u32,
+    cs: u32,
+    id: u32,
+}
+
+// Shared with the conventional-memory lookup in web/block-linker.js.
+const _: () = assert!(std::mem::size_of::<Link>() == 12 && PROBES == 16384 && SLOTS == 4096);
 
 pub(super) struct Plan {
     spans: Vec<CodeSpan>,
@@ -225,10 +240,10 @@ impl Engine {
         if !taken
             || !matches!(op.opcode, 0x70..=0x7f | 0xe0..=0xe3)
             || op.target() <= op.ip + u32::from(op.len)
-            || !plan
+            || plan
                 .ops
                 .get(index + 1)
-                .is_some_and(|next| next.ip != op.target())
+                .is_none_or(|next| next.ip == op.target())
         {
             return;
         }
@@ -263,15 +278,49 @@ impl Engine {
     pub fn block_packet(&self) -> &[u32] {
         &self.block_packet
     }
+    pub fn block_links_ptr(&self) -> *const u8 {
+        self.links.as_ptr().cast()
+    }
+    pub fn block_context_offset(&self) -> usize {
+        std::mem::offset_of!(Scratch, block)
+    }
+    pub(super) fn register_link(&mut self, id: u32, ready: bool) {
+        let Some(plan) = self.plan(id) else {
+            return;
+        };
+        let key = plan.key;
+        let direct = plan.block.is_some();
+        let link = &mut self.links[probe(key)];
+        if ready && direct {
+            *link = Link {
+                ip: key as u32,
+                cs: (key >> 32) as u32,
+                id,
+            };
+        } else if link.id == id {
+            *link = Link::default();
+        }
+    }
     pub(super) fn make_block_packet(&mut self, id: u32) {
         let plan = self.plan(id).unwrap();
         let mut packet = vec![
             plan.block
                 .as_ref()
-                .map_or(0, |b| 1 | (u32::from(b.bios) << 1)),
+                .map_or(0, |b| 5 | (u32::from(b.bios) << 1)),
             std::mem::offset_of!(Scratch, block) as u32,
         ];
-        if plan.block.is_some() {
+        if let Some(block) = &plan.block {
+            let cs = (plan.key >> 32) as u32;
+            packet.extend([
+                cs,
+                cs + block.spans.iter().map(|s| s.ip).min().unwrap(),
+                cs + block
+                    .spans
+                    .iter()
+                    .map(|s| s.ip + s.bytes.len() as u32)
+                    .max()
+                    .unwrap(),
+            ]);
             for op in &plan.ops {
                 let mut address = 0;
                 let mut base_mask = 0;
@@ -300,6 +349,8 @@ impl Engine {
                         - ((plan.key >> 32) as u32 + op.ip) / 4
                         + 1)
                         * 4,
+                    u32::from_le_bytes(op.bytes[..4].try_into().unwrap()),
+                    u32::from_le_bytes([op.bytes[4], op.bytes[5], op.bytes[6], 0]),
                 ]);
             }
         }
@@ -323,15 +374,17 @@ impl Engine {
             return false;
         }
         let mut bases = [0; 6];
+        let mut linkable = true;
         for (i, base) in bases.iter_mut().enumerate() {
-            if block.segments & (1 << i) != 0 {
-                let descriptor = m.cpu.segment_cache(i);
-                if !ordinary(descriptor) {
+            let descriptor = m.cpu.segment_cache(i);
+            if !ordinary(descriptor) {
+                if block.segments & (1 << i) != 0 {
                     self.invalidate_block(id);
                     return false;
                 }
-                *base = descriptor.base;
+                linkable = false;
             }
+            *base = descriptor.base;
         }
         // Materialize any deferred device work before validating code bytes
         // or pending interrupts. The resulting event budget then owns the run.
@@ -371,7 +424,9 @@ impl Engine {
             idtr_base: m.cpu.idtr_base,
             idtr_limit: u32::from(m.cpu.idtr_limit),
             cs: u32::from(m.cpu.s[CS]),
-            bios_valid: u32::from(!block.bios || bios_context(m)),
+            bios_valid: u32::from(bios_context(m)),
+            last_plan: id,
+            mode: 1 | (u32::from(linkable) << 1),
             upper_clear: 1,
             ..Context::default()
         };
@@ -384,12 +439,14 @@ impl Engine {
             && self.prepare_block(m, id)
     }
     pub fn finish_block(&mut self, m: &mut Machine) {
-        let Some(id) = self.block_active.take() else {
+        let Some(_) = self.block_active.take() else {
             return;
         };
         let ctx = &self.scratch.block;
+        let id = ctx.last_plan;
         let count = ctx.committed;
         self.block_counters[0] += 1;
+        self.block_counters[3] += u64::from(ctx.blocks);
         if count == 0 {
             self.block_counters[2] += 1;
             self.fallback(m);
@@ -477,11 +534,56 @@ mod tests {
             id = e.dispatch(&mut m, true);
         }
         assert_ne!(id, 0);
-        assert_eq!(e.block_packet()[0], 1);
+        assert_eq!(e.block_packet()[0], 5);
         assert!(e.register(id, true));
         m.cpu.ip = 0x100;
         (m, e, id)
     }
+    #[test]
+    fn links_clear_on_slot_reuse_unregistration_and_reset() {
+        let (mut m, mut e, id) = plan();
+        let old_key = e.plan(id).unwrap().key;
+        let pointer = e.block_links_ptr();
+        assert_eq!(e.links[probe(old_key)].id, id);
+        e.serial = id + SLOTS as u32 - 1;
+        m.bus.mem[0x180..0x184].copy_from_slice(&[0x43, 0x4b, 0xeb, 0xfc]);
+        let mut next = 0;
+        for _ in 0..HEAT {
+            m.cpu.ip = 0x180;
+            e.begin_block_slice(&m, 80_000, 1);
+            next = e.dispatch(&mut m, true);
+        }
+        assert_eq!(next, id + SLOTS as u32);
+        assert_eq!(e.links[probe(old_key)].id, 0);
+        let new_key = e.plan(next).unwrap().key;
+        assert!(e.register(next, true));
+        assert_eq!(e.links[probe(new_key)].id, next);
+        assert!(!e.register(id, false)); // A stale completion cannot remove the replacement.
+        assert_eq!(e.links[probe(new_key)].id, next);
+        e.clear();
+        assert_eq!(pointer, e.block_links_ptr());
+        assert!(e.links.iter().all(|link| link.id == 0));
+        let (_, mut unregistered, id) = plan();
+        assert!(unregistered.register(id, false));
+        assert!(unregistered.links.iter().all(|link| link.id == 0));
+    }
+
+    #[test]
+    fn an_unused_unusual_segment_disables_linking_without_rejecting_the_trace() {
+        let (mut m, mut e, id) = plan();
+        m.cpu.segment_caches[4] = Some(SegmentCache {
+            base: 0,
+            limit: 0xff,
+            access: 0x93,
+            attributes: 0,
+        });
+        m.bus.begin_device_run();
+        e.begin_block_slice(&m, 80_000, 100);
+        assert!(e.start_block(&mut m, id));
+        assert_eq!(e.scratch.block.mode, 1);
+        m.bus.end_device_run();
+    }
+
     #[test]
     fn learned_forward_successors_require_hot_taken_exits_and_match_current_targets() {
         let mut m = Machine::new(Profile::Pc9821ApDos);
@@ -628,7 +730,7 @@ mod tests {
                 id = e.dispatch(&mut m, true);
             }
             assert_ne!(id, 0);
-            assert_eq!(e.block_packet()[0], 1);
+            assert_eq!(e.block_packet()[0], 5);
             assert!(e.register(id, true));
             m.cpu.ip = 0x100;
             m.cpu.r[SP] = 0x8000;

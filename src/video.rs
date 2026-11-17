@@ -94,6 +94,9 @@ impl VideoView<'_> {
         out[GRAPHICS..].copy_from_slice(self.graphics);
     }
     pub fn frame(&self, out: &mut [u8]) {
+        self.frame_rows(out, &[true; 400]);
+    }
+    fn frame_rows(&self, out: &mut [u8], rows: &[bool; 400]) {
         let graphics = self.gdcs[1].enabled;
         let text = self.text_enabled && self.gdcs[0].enabled;
         let page = self.display_page as usize * self.profile.planes() * 0x8000;
@@ -113,7 +116,10 @@ impl VideoView<'_> {
         for (color, rgb) in colors.iter_mut().zip(palette) {
             *color = [rgb[0], rgb[1], rgb[2], 255];
         }
-        for y in 0..400 {
+        for (y, &changed) in rows.iter().enumerate() {
+            if !changed {
+                continue;
+            }
             for left in (0..640).step_by(cell_pixels) {
                 // Address, glyph and attributes are shared by a character row.
                 // Decode once, then composite its dots over the current bitmap.
@@ -323,6 +329,53 @@ impl SnapshotRenderer {
         {
             return Some(false);
         }
+        // Retained pixels need work only on rows whose scanout inputs changed.
+        // Any mode, GDC, palette, glyph or blink change keeps the full renderer.
+        let mut rows = [true; 400];
+        if self.previous.len() == bytes.len()
+            && self.blink_phase == blink_phase
+            && self.previous[..8] == bytes[..8]
+            && self.previous[16..TEXT] == bytes[16..TEXT]
+        {
+            let changed = |base: usize, start: usize, len: usize, size: usize| {
+                let first = len.min(size - start);
+                self.previous[base + start..base + start + first]
+                    != bytes[base + start..base + start + first]
+                    || self.previous[base..base + len - first] != bytes[base..base + len - first]
+            };
+            for (y, row) in rows.iter_mut().enumerate() {
+                *row = false;
+                if text {
+                    if let Some((cell, _)) = gdc.text_address(y, 0) {
+                        let next = gdc.text_address(y, 1).unwrap().0;
+                        let words = 79 * ((next.wrapping_sub(cell)) & 4095) + 1;
+                        *row = changed(TEXT, cell * 2, words * 2, 0x2000)
+                            || changed(TEXT + 0x2000, cell * 2, words * 2, 0x2000);
+                    }
+                }
+                if !*row && gdcs[1].enabled {
+                    if bytes[5] & 32 != 0 {
+                        let start = (usize::from(bytes[6]) * 0x40000
+                            + gdcs[1].start as usize * 8
+                            + y * usize::from(gdcs[1].pitch) * 8)
+                            & 0x7ffff;
+                        *row = changed(GRAPHICS, start, 640, 0x80000);
+                    } else {
+                        let line = if bytes[5] & 8 != 0 { y / 2 } else { y };
+                        let start = (gdcs[1].start as usize * 2 + line * 80) & 0x7fff;
+                        let page = usize::from(bytes[6]) * profile.planes() * 0x8000;
+                        let planes = if bytes[5] & 16 != 0 {
+                            profile.planes()
+                        } else {
+                            3
+                        };
+                        *row = (0..planes).any(|plane| {
+                            changed(GRAPHICS + page + plane * 0x8000, start, 80, 0x8000)
+                        });
+                    }
+                }
+            }
+        }
         let palette = std::array::from_fn(|i| {
             bytes[HEADER + i * 3..HEADER + i * 3 + 3]
                 .try_into()
@@ -353,7 +406,7 @@ impl SnapshotRenderer {
             pegc_palette: &pegc_palette,
             user_characters: &self.glyphs,
         }
-        .frame(&mut self.pixels);
+        .frame_rows(&mut self.pixels, &rows);
         self.blink_phase = blink_phase;
         Some(true)
     }

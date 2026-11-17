@@ -9,7 +9,7 @@ function state(c){const[r,f,p]=layout(c),v=new DataView(c.memory.buffer);return 
 function setState(c,regs,flags=2,ip=1){const[r,f,p]=layout(c),v=new DataView(c.memory.buffer);new Uint16Array(c.memory.buffer,r,8).set(regs);v.setUint16(f,flags,true);v.setUint32(p,ip,true);}
 function equal(a,b){assert.deepEqual(state(a),state(b));const frame=c=>Buffer.from(c.memory.buffer,c.frame()>>>0,1024000);assert(frame(a).equals(frame(b)),'rendered frame differs');const ram=c=>Buffer.from(c.memory.buffer,c.block_ram_ptr()>>>0,0xa0000);assert(ram(a).equals(ram(b)),'conventional RAM differs');const pcm=c=>Buffer.from(c.memory.buffer,c.audio_ptr()>>>0,c.audio_len()*4);assert(pcm(a).equals(pcm(b)),'PCM bits differ');}
 async function boot(code,patch=[],profile=1){const c=new WebAssembly.Instance(module,{}).exports;c.set_profile(profile);c.set_boot_source(0);const disk=new Uint8Array(1261568);disk.set([0xfa,...code]);disk.set(patch,0x100);const p=c.input_buffer(disk.length)>>>0;new Uint8Array(c.memory.buffer,p,disk.length).set(disk);assert.equal(c.insert(0,0),1);c.reset();for(let n=0;c.metric(17)!==0x1fc0||c.metric(18)!==1;n++){assert(n<2000);assert.equal(c.metric(4),0);c.step(1);}return c;}
-async function translate(a,b,ip=1,expectedMeta=1){let id=0;for(let n=0;!id;n++){assert(n<64);for(const c of[a,b]){const s=state(c);setState(c,s.regs,s.flags,ip);}a.jit_devices_begin();a.block_begin_slice(80000,1);id=a.jit_dispatch(1);a.jit_devices_end();b.step(a.jit_done());}const packet=new Uint32Array(a.memory.buffer,a.jit_packet()>>>0,a.jit_packet_len()).slice(),meta=new Uint32Array(a.memory.buffer,a.block_packet()>>>0,a.block_packet_len()).slice();assert.equal(meta[0],expectedMeta,'probe is not the expected direct RAM plan');const bytes=compileRamBlock(packet,meta);assert(WebAssembly.validate(bytes));const run=new WebAssembly.Instance(await WebAssembly.compile(bytes),{core:{memory:a.memory,finish:a.block_finish}}).exports.run;assert.equal(a.jit_register(id,1),1);equal(a,b);return {a,b,id,run,packet,meta,ip};}
+async function translate(a,b,ip=1,expectedMeta=1){let id=0;for(let n=0;!id;n++){assert(n<64);for(const c of[a,b]){const s=state(c);setState(c,s.regs,s.flags,ip);}a.jit_devices_begin();a.block_begin_slice(80000,1);id=a.jit_dispatch(1);a.jit_devices_end();b.step(a.jit_done());}const packet=new Uint32Array(a.memory.buffer,a.jit_packet()>>>0,a.jit_packet_len()).slice(),meta=new Uint32Array(a.memory.buffer,a.block_packet()>>>0,a.block_packet_len()).slice();assert.equal(meta[0],expectedMeta|4,'probe is not the expected direct RAM plan');const bytes=compileRamBlock(packet,meta);assert(WebAssembly.validate(bytes));const run=new WebAssembly.Instance(await WebAssembly.compile(bytes),{core:{memory:a.memory,finish:a.block_finish}}).exports.run;assert.equal(a.jit_register(id,1),1);equal(a,b);return {a,b,id,run,packet,meta,ip};}
 async function pair(code,patch=[],initial=null,expectedMeta=1){const a=await boot(code,patch),b=await boot(code,patch);if(initial)for(const c of[a,b])setState(c,initial);return translate(a,b,1,expectedMeta);}
 
 function execute(p,regs,flags=2,cap=100,clocks=80000){for(const c of[p.a,p.b])setState(c,regs,flags,p.ip);p.a.jit_devices_begin();p.a.block_begin_slice(clocks,cap);if(p.a.block_start(p.id))p.run(...layout(p.a));else p.a.jit_fallback();p.a.jit_devices_end();const done=p.a.jit_done();p.b.step(done);equal(p.a,p.b);return done;}
@@ -26,6 +26,27 @@ test('RAM block respects partial work/event exits and exact unaligned/dependency
   execute(p,[0,0,0,bx,0,0,0,0],0x403,cap);
  }
  const p=await pair([0x40,0x48,0xeb,0xfc]);execute(p,[65535,0,0,0,0,0,0,0],3,100,1);
+});
+
+test('linked traces retire once per event and revalidate code changed by an earlier trace',async()=>{
+ // The store is in the first trace; its eventual target lies beyond that trace.
+ const body=[0x2e,0xc6,0x07,0x48,...Array(40).fill(0x40)];
+ const code=[...body,0xeb,(-body.length-2)&255];
+ const a=await boot(code),b=await boot(code),j=new BlockJit(a);
+ for(const c of[a,b])setState(c,[0,0,0,0x8000,0,0,0,0]);
+ for(let n=0;n<50;n++){
+  const done=j.step(8000,1000);b.step(done);
+  while(j.pending)await new Promise(r=>setTimeout(r,0));
+  assert(!j.failed,j.compileError);equal(a,b);a.audio_clear();b.audio_clear();
+ }
+ const stats=j.stats();assert(stats.blockTraces>stats.blockCalls*1.2,'multiple traces must share a completion');
+ for(const [clocks,cap] of[[1,1000],[20,1000],...[1,15,16,17,31,50,1000].map(cap=>[8000,cap])]){
+  for(const c of[a,b])setState(c,[0,0,0,0x25,0,0,0,0],2,1);
+  const done=j.step(clocks,cap);b.step(done);
+  while(j.pending)await new Promise(r=>setTimeout(r,0));
+  assert(!j.failed,j.compileError);equal(a,b);a.audio_clear();b.audio_clear();
+ }
+ assert.equal(a.peek(0x1fc25),0x48);
 });
 
 test('generated RAM byte aliases, carries, identities and memory dependencies match the interpreter',async()=>{
@@ -338,13 +359,13 @@ test('a direct keyboard query retires INT, ROM OUT and IRET with the original fr
  const a=await boot(code),b=await boot(code);
  for(const c of[a,b])setState(c,[0x0403,0,0,0,0x8000,0,0,0]);
  const p=await translate(a,b,1,3);
- for(const sp of[0x8000,0x8001,0x8002,0x8003])for(const cap of[1,2,3,4,5,19,40]){
+ for(const sp of[0x8000,0x8001,0x8002,0x8003])for(const cap of[1,2,3,4,5,6,19,40]){
   for(const c of[a,b])new Uint8Array(c.memory.buffer,c.block_ram_ptr()>>>0,0xa0000)[0x52d]=0xa5;
   const before=a.metric(26);
   const done=execute(p,[0x0403,0,0,0,sp,0,0,0],0xcd7,cap);
   if(sp===0x8000&&cap===4){assert.equal(a.metric(26)-before,117);assert.equal(a.block_debug(2),15);assert.equal(a.block_debug(3),16);assert.equal(a.block_debug(4),1);}
   assert(done<=cap);
-  if(done>=4){assert.equal(state(a).regs[0],0xa503);assert.equal(state(a).regs[4],sp);
+  if(done>=4){assert([1,3,5].includes(state(a).ip));assert.equal(state(a).regs[0],state(a).ip===3?0x0403:0xa503);assert.equal(state(a).regs[4],sp);
    const v=new DataView(a.memory.buffer,(a.block_ram_ptr()>>>0)+sp-6,6);
    assert.equal(v.getUint16(0,true),5);assert.equal(v.getUint16(2,true),0x1fc0);assert.equal(v.getUint16(4,true),0xcd7);
   }
