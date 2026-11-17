@@ -1,12 +1,13 @@
-import {Presenter} from './presenter.js';
+import {Presenter,defaultPreset,presets} from './presenter.js';
 const $ = (id) => document.getElementById(id);
 const screen = $('screen');
 const presenter = new Presenter(screen,$('crt-screen'),$('screen-surface'),
   text => { $('presentation-status').textContent = text; },new URLSearchParams(location.search).has('diagnostics'));
+$('presentation').value = defaultPreset; $('phosphor-mask').checked = false;
 try {
   const saved = JSON.parse(localStorage.getItem('pc98-presentation') || 'null');
-  if (saved && ['off','sharp','soft','strong'].includes(saved.preset)) {
-    $('presentation').value = saved.preset; $('phosphor-mask').checked = Boolean(saved.mask);
+  if (saved && typeof saved.preset === 'string' && Object.hasOwn(presets,saved.preset) && typeof saved.mask === 'boolean') {
+    $('presentation').value = saved.preset; $('phosphor-mask').checked = saved.mask;
   }
 } catch { /* Storage is optional in private/embedded browsers. */ }
 function presentationSettings() {
