@@ -2,7 +2,7 @@
 // One full snapshot and one RGBA buffer circulate; a slow DOM applies backpressure.
 let core, port, snapshot, pixels = new ArrayBuffer(640*400*4);
 let lastSequence = 0, held = false, delayed;
-let totals = {frames:0, rasterMs:0, copyMs:0, transportMs:0};
+let totals = {frames:0, rasterMs:0, copyMs:0, transportMs:0, unchangedFrames:0};
 onmessage = async ({data:m}) => {
   try {
     if (m.type === 'init') {
@@ -48,6 +48,7 @@ function renderFrame(frame) {
     if (clock.getUint32(8,true)+clock.getUint32(12,true)*4294967296 !== frame.guestCycles) {
       throw Error('Snapshot guest-clock stamp mismatch');
     }
+    const previousSequence = lastSequence;
     lastSequence = frame.sequence;
     snapshot = frame;
     const began = performance.now();
@@ -57,6 +58,8 @@ function renderFrame(frame) {
     const copied = performance.now();
     const output = core.video_render(frame.length) >>> 0;
     if (!output) throw Error('Invalid video snapshot');
+    const unchanged = typeof core.video_render_changed==='function' && !core.video_render_changed();
+    if (unchanged) totals.unchangedFrames++;
     const rasterized = performance.now();
     new Uint8Array(pixels).set(new Uint8Array(core.memory.buffer,output,640*400*4));
     totals.wasmBytes = core.memory.buffer.byteLength;
@@ -64,7 +67,7 @@ function renderFrame(frame) {
     totals.rasterMs += rasterized-copied;
     totals.copyMs += copied-began+performance.now()-rasterized;
     totals.transportMs += performance.timeOrigin+began-frame.captured;
-    postMessage({...frame,event:'frame',buffer:pixels,renderStats:{...totals}},[pixels]);
+    postMessage({...frame,event:'frame',samePixelsAs:unchanged ? previousSequence : 0,buffer:pixels,renderStats:{...totals}},[pixels]);
     pixels = null;
   } catch (error) { postMessage({event:'fault',error:error.message}); }
 }

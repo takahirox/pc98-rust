@@ -267,3 +267,40 @@ fn partial_scanout_matches_full_frames_at_text_planar_and_pegc_wraps() {
         }
     }
 }
+
+#[test]
+fn scanout_change_proofs_track_visible_inputs_and_preserve_the_last_valid_cache() {
+    for profile in [Profile::Pc9801Vm, Profile::Pc9821ApDos] {
+        let mut m = Machine::new(profile);
+        m.bus.gdcs[0].enabled = false;
+        m.bus.gdcs[1].enabled = true;
+        m.bus.display_page = 0;
+        let mut renderer = SnapshotRenderer::default();
+        let mut bytes = Vec::new();
+        m.bus.video().snapshot(&mut bytes);
+        assert_eq!(renderer.frame(&bytes).unwrap(), m.render());
+        assert!(renderer.changed());
+        m.bus.cycles += 1;
+        m.bus.video().snapshot(&mut bytes);
+        assert_eq!(renderer.frame(&bytes).unwrap(), m.render());
+        assert!(!renderer.changed());
+        m.bus.graphics[profile.planes() * 0x8000] ^= 0x80; // Hidden page.
+        m.bus.video().snapshot(&mut bytes);
+        assert_eq!(renderer.frame(&bytes).unwrap(), m.render());
+        assert!(!renderer.changed());
+        m.bus.graphics[0] ^= 0x80;
+        m.bus.video().snapshot(&mut bytes);
+        assert_eq!(renderer.frame(&bytes).unwrap(), m.render());
+        assert!(renderer.changed());
+        let valid = bytes.clone();
+        bytes[0] ^= 1;
+        assert!(renderer.frame(&bytes).is_none());
+        assert!(renderer.changed());
+        assert_eq!(renderer.frame(&valid).unwrap(), m.render());
+        assert!(!renderer.changed());
+        m.bus.palette[0][0] ^= 255;
+        m.bus.video().snapshot(&mut bytes);
+        assert_eq!(renderer.frame_owned(&mut bytes).unwrap(), m.render());
+        assert!(renderer.changed());
+    }
+}
