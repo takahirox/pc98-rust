@@ -4,6 +4,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>pc98-rust · PC-9821Ap DOS</title>
+<link rel="icon" href="data:,">
 <link rel="stylesheet" href="style.css">
 <script type="module" src="app.js"></script>
 <body>
@@ -12,7 +13,8 @@
   <section class="intro"><div><h2>A little machine. A new adventure.</h2><p>Your FreeDOS desktop starts automatically. Insert a data floppy or try an original PC-98 game.</p></div><div class="demo-actions"><button id="game" disabled>▶ Play Star Trail</button><button id="hello" disabled>Hello world + BEEP</button></div></section>
   <section class="machine" aria-label="Emulator">
     <div class="toolbar"><div><span id="lamp" class="lamp"></span><span id="status" role="status">Loading WebAssembly…</span></div><div><button id="pause" disabled>Pause</button><button id="reset" disabled>Reset</button><button id="sound" disabled aria-pressed="false">Enable sound</button></div></div>
-    <div class="display" id="drop"><canvas id="screen" width="640" height="400" tabindex="0" aria-label="PC-98 screen. Click here to send keyboard input to the guest."></canvas></div>
+    <div class="display" id="drop"><button id="exit-fullscreen">Exit full screen</button><div id="screen-surface"><canvas id="screen" width="640" height="400" tabindex="0" aria-label="PC-98 screen. Click here to send keyboard input to the guest."></canvas><canvas id="crt-screen" aria-hidden="true" hidden></canvas></div></div>
+    <div class="media presentation"><label>Display <select id="presentation"><option value="off">LCD / Original pixels (off)</option><option value="sharp">Sharp CRT (recommended CRT)</option><option value="soft">Soft CRT</option><option value="strong">Strong CRT</option></select></label><label><input id="phosphor-mask" type="checkbox"> Faint RGB mask (large displays)</label><button id="fullscreen" title="Escape exits full screen">Full screen</button><span id="presentation-status" role="status">Original pixels · raw screenshots</span></div>
     <div class="screen-caption"><span id="display-mode">640 × 400 · 16 colors · Shinonome Japanese CG · approximate OPN</span><span>Click screen to type · arrows to move · R to restart</span></div>
     <div class="media"><label>Machine <select id="profile" disabled><option value="0">PC-9801VM</option><option value="1" selected>PC-9821Ap DOS · experimental</option></select></label><label>Insert into <select id="drive" disabled><option value="auto" selected>Auto</option><option value="0">Floppy 1</option><option value="1">Floppy 2</option><option value="2">IDE HDD</option></select></label><span id="media-drive">Auto</span><span id="media-name">No disk</span><span id="media-origin"></span><label class="file-button">Insert media<input id="file" disabled type="file" accept=".tfd,.hdm,.xdf,.2hd,.d88,.d98,.img,.hdi"></label><button id="eject" disabled>Eject</button><button id="export" disabled>Export disk</button></div>
     <div class="media"><label>Boot from <select id="boot" disabled><option value="1" selected>IDE HDD</option><option value="0">Floppy 1</option></select></label><span id="active-boot"></span><button id="default-hdd" disabled>Restore FreeDOS HDD</button></div>
