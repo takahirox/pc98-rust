@@ -39,6 +39,8 @@ impl Memory {
     const STACK: u8 = 4;
     const RETURN: u8 = 8;
     const ADDRESS: u8 = 16;
+    #[cfg(feature = "block-experiment")]
+    const BIOS: u8 = 32;
     fn offset(self, c: &Cpu) -> u32 {
         let base = if self.base < 8 {
             c.r[self.base as usize]
@@ -160,6 +162,21 @@ struct Probe {
     simple: bool,
     id: u32,
 }
+#[cfg(feature = "block-experiment")]
+#[derive(Clone, Copy)]
+struct BranchChoice {
+    key: u64,
+    target: u32,
+}
+#[cfg(feature = "block-experiment")]
+impl Default for BranchChoice {
+    fn default() -> Self {
+        Self {
+            key: u64::MAX,
+            target: 0,
+        }
+    }
+}
 
 #[repr(C)]
 #[derive(Default)]
@@ -208,6 +225,8 @@ pub struct Engine {
     block_active: Option<u32>,
     #[cfg(feature = "block-experiment")]
     pub block_counters: [u64; 3],
+    #[cfg(feature = "block-experiment")]
+    branch_choices: Box<[BranchChoice]>,
 }
 impl Default for Engine {
     fn default() -> Self {
@@ -233,6 +252,8 @@ impl Default for Engine {
             block_active: None,
             #[cfg(feature = "block-experiment")]
             block_counters: [0; 3],
+            #[cfg(feature = "block-experiment")]
+            branch_choices: vec![BranchChoice::default(); PROBES].into_boxed_slice(),
         }
     }
 }
@@ -444,6 +465,7 @@ impl Engine {
             self.block_active = None;
             self.block_counters = [0; 3];
             self.block_packet.clear();
+            self.branch_choices.fill(BranchChoice::default());
         }
     }
     pub fn begin_slice(&mut self, m: &Machine, clocks: u32, cap: u32) {
@@ -554,7 +576,7 @@ impl Engine {
                                 && m.cpu.cr0 & 0x4000_0000 != 0
                                 && ops.iter().all(|op| block::Plan::supports(m, *op))
                             {
-                                block::decode(m, ip)
+                                block::decode_trace(m, ip, &ops)
                             } else {
                                 decode(m, ip)
                             };
@@ -583,10 +605,12 @@ impl Engine {
                                     let target = match op.opcode {
                                         0xe8 | 0xe9 | 0xeb => Some(op.target()),
                                         0xc3 => returns.last().copied(),
-                                        // Follow the not-taken path of a forward conditional.
-                                        // The generated trace exits after a taken branch;
+                                        // Forward conditionals start on the fallthrough path.
+                                        // Hot taken exits can select a guarded taken successor;
                                         // backward branches retain the existing loop boundary.
-                                        0x70..=0x7f | 0xe0..=0xe3 if op.target() > ip => Some(ip),
+                                        0x70..=0x7f | 0xe0..=0xe3 if op.target() > ip => {
+                                            Some(self.conditional_successor(&m.cpu, op, ip))
+                                        }
                                         _ => None,
                                     };
                                     if let Some(target) = target.filter(|target| {
