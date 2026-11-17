@@ -42,7 +42,8 @@ test('live presets preserve raw frames, guest state and input across VM/Ap and c
   await page.locator('#fullscreen').click();
   await expect.poll(()=>page.evaluate(()=>Boolean(document.fullscreenElement || document.querySelector('#drop.full-window')))).toBe(true);
   expect(await page.locator('#screen').evaluate(c=>c.clientWidth/c.clientHeight)).toBeCloseTo(4/3,2);
-  await page.evaluate(()=>document.fullscreenElement ? document.exitFullscreen() : document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})));
+  await page.locator('#exit-fullscreen').click();
+  await expect(page.locator('#exit-fullscreen')).toBeHidden();
   await page.setViewportSize({width:480,height:800});
   expect(await page.locator('#screen').evaluate(c=>c.clientWidth/c.clientHeight)).toBeCloseTo(4/3,2);
   await page.reload(); await expect(page.locator('#profile')).toBeEnabled();
@@ -64,6 +65,46 @@ test('live presets preserve raw frames, guest state and input across VM/Ap and c
   await page.evaluate(()=>liveLoss.restoreContext());
   await expect(page.locator('#crt-screen')).toBeVisible();
   await expect(page.locator('#error')).toBeHidden();
+});
+
+test.describe('touch fullscreen fallback',()=>{
+  test.use({viewport:{width:390,height:844},hasTouch:true});
+  test('rejected fullscreen request leaves a tappable exit and the guest running',async({page})=>{
+    await page.addInitScript(()=>{
+      Element.prototype.requestFullscreen = () => Promise.reject(new DOMException('Fullscreen unavailable','NotAllowedError'));
+    });
+    await ready(page);
+    await page.locator('#game').tap();
+    await expect(page.locator('#game')).toBeEnabled();
+    await expect.poll(()=>stats(page).then(s=>s.running)).toBe(true);
+    const before=await stats(page);
+    await expect(page.locator('#exit-fullscreen')).toBeHidden();
+    await page.locator('#fullscreen').tap();
+    await expect(page.locator('#drop')).toHaveClass(/full-window/);
+    expect(await page.evaluate(()=>document.fullscreenElement)).toBeNull();
+    const exit=page.getByRole('button',{name:'Exit full screen',exact:true});
+    await expect(exit).toBeVisible();
+    const box=await exit.boundingBox();
+    expect(box.x).toBeGreaterThanOrEqual(0); expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.x+box.width).toBeLessThanOrEqual(390); expect(box.y+box.height).toBeLessThanOrEqual(844);
+    expect(box.height).toBeGreaterThanOrEqual(44);
+    await exit.tap();
+    await expect(page.locator('#drop')).not.toHaveClass(/full-window/);
+    await expect(exit).toBeHidden();
+    await expect(page.locator('#screen')).toBeFocused();
+    expect(await page.locator('body').evaluate(b=>getComputedStyle(b).overflow)).not.toBe('hidden');
+    await expect(page.locator('#pause')).toBeVisible();
+    await expect.poll(()=>stats(page).then(s=>s.presentationStats.frames)).toBeGreaterThan(before.presentationStats.frames+2);
+    const after=await stats(page);
+    expect(after.running).toBe(true); expect(after.generation).toBe(before.generation);
+    expect(after.audioEpoch).toBe(before.audioEpoch); expect(after.cycles).toBeGreaterThan(before.cycles);
+    await page.locator('#fullscreen').tap();
+    await expect(page.locator('#drop')).toHaveClass(/full-window/);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#drop')).not.toHaveClass(/full-window/);
+    await expect(page.locator('#screen')).toBeFocused();
+    await expect(page.locator('#error')).toBeHidden();
+  });
 });
 
 for (const fault of ['unsupported','compile','allocation']) test(`GPU ${fault} falls back while presentation credits and keyboard keep working`,async({page})=>{
