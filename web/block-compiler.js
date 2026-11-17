@@ -152,17 +152,18 @@ function writtenRegisters(op,m){
 
 export function compileRamBlock(packet,meta){
   const count=packet[1];
-  if(count<1||count>16||packet.length!==2+count*4||meta.length!==2+count*12||meta[0]!==1)throw Error('Invalid RAM block plan');
-  // Four pointer parameters. Locals 4..46 contain ALU temporaries, cached GPRs,
+  if(count<1||count>16||packet.length!==2+count*4||meta.length!==2+count*12||![1,3].includes(meta[0]))throw Error('Invalid RAM block plan');
+  const bios=meta[0]===3;
+  // Four pointer parameters. Locals 4..51 contain ALU temporaries, cached GPRs,
   // context addresses, timing and the last committed instruction metadata.
-  const body=[1,43,0x7f],dirty=new Set(),used=new Set();
+  const body=[1,bios?48:43,0x7f],dirty=new Set(),used=new Set();
   const readReg=(r,wide)=>{used.add(wide?r:r&3);return wide?get(15+r):and(r&4?bin(0x76,get(15+(r&3)),c(8)):get(15+(r&3)),c(255));};
   const writeReg=(r,wide,value)=>{const word=wide?r:r&3;dirty.add(word);used.add(word);return set(15+word,wide?and(value,c(65535)):or(and(get(15+word),c(r&4?255:65280)),r&4?shl(and(value,c(255)),8):and(value,c(255))));};
   const context=i=>[...get(14),0x28,2,...uleb(i*4)];
   const save=(i,value)=>[...get(14),...value,0x36,2,...uleb(i*4)];
   const exitIf=value=>body.push(...value,0x0d,1);
   body.push(...set(14,add(get(3),c(meta[1]))),...set(7,load(1,0,2)),...set(33,[...get(2),0x28,2,0]),
-    ...set(25,context(5)),...set(34,context(0)),...set(35,context(1)),...set(36,context(2)),...set(37,context(10)),...set(38,context(11)));
+    ...(bios?set(47,c(1)):[]),...set(25,context(5)),...set(34,context(0)),...set(35,context(1)),...set(36,context(2)),...set(37,context(10)),...set(38,context(11)));
   const reloadAt=body.length;
   const segments=new Set(Array.from({length:count},(_,i)=>meta[2+i*12+7]&3?meta[2+i*12+2]:-1).filter(i=>i>=0));
   if(Array.from({length:count},(_,i)=>packet[4+i*4]&255).includes(0xc3))segments.add(1);
@@ -181,6 +182,42 @@ export function compileRamBlock(packet,meta){
     const writeRm=value=>memory?writeMemory(value):writeReg(rm,wide,value);
     const writeFlags=value=>set(7,value);
     exitIf(bin(0x4f,get(28),get(36))); // committed >= work cap
+    if(op===0xcd&&(access&32)){
+      if(!bios)throw Error('Missing compound BIOS context');
+      // All guards precede the first push. A failed guard leaves the original
+      // INT available to the interpreter, including partial work/event budgets.
+      exitIf(bin(0x4b,add(get(28),c(3)),get(36)));
+      exitIf(not(context(23)));
+      exitIf(bin(0x47,readReg(4,false),c(4)));
+      exitIf(bin(0x49,readReg(4,true),c(6)));
+      body.push(...set(10,add(get(39+seg),sub(readReg(4,true),c(6)))));
+      exitIf(bin(0x4b,get(10),c(0x9fffa)));
+      exitIf(and(bin(0x49,get(10),get(38)),bin(0x4b,add(get(10),c(6)),get(37))));
+      const entry=bytes[1]*4;
+      exitIf(bin(0x49,context(21),c(entry+3)));
+      exitIf(bin(0x4b,context(20),c(0x9fffc-entry)));
+      body.push(...set(49,add(context(20),c(entry))));
+      const at=(value,opcode,align=0)=>[...add(get(34),value),opcode,align,0];
+      exitIf(bin(0x47,at(get(49),0x28,2),c(0xf0001060)));
+      exitIf(bin(0x47,at(c(0xf1060),0x2f,1),c(0xf0e6)));
+      exitIf(bin(0x47,at(c(0xf1062),0x2d),c(0xcf)));
+      const wordCost=address=>add(c(4),add(bin(0x6c,and(address,c(1)),c(3)),shl(bin(0x46,and(address,c(3)),c(3)),2)));
+      body.push(...set(50,add(add(wordCost(get(10)),wordCost(add(get(10),c(2)))),wordCost(add(get(10),c(4))))),
+        ...set(51,add(wordCost(get(49)),wordCost(add(get(49),c(2))))),
+        ...set(13,add(c(fetch+8),add(get(51),shl(get(50),1)))));
+      exitIf(bin(0x4b,add(get(27),add(c(exec0),get(13))),get(35)));
+      const push=(offset,value)=>[...add(get(34),get(10)),...value,0x3b,1,offset];
+      body.push(...push(4,get(7)),...push(2,context(22)),...push(0,c(ip+2)));
+      // Read after the writes: the saved frame may alias the keyboard bitmap.
+      body.push(...set(11,[...bin(0x49,readReg(0,false),c(16)),0x04,0x7f,
+        ...at(add(c(0x52a),readReg(0,false)),0x2d),0x05,...c(0),0x0b]),
+        ...writeReg(4,false,get(11)),...set(7,or(and(get(7),c(0x7fd5)),c(2))),
+        ...set(33,c(ip+2)),...set(32,bin(0x47,get(11),c(4))),...set(25,c(16)),
+        ...set(27,add(get(27),add(c(exec0),get(13)))),...set(28,add(get(28),c(3))),
+        ...set(29,c(exec1)),...set(30,add(c(4),get(50))),...set(31,c(0)),
+        ...set(45,c(index)),...set(46,c(0)),...set(47,c(5)),...set(48,c(1)));
+      continue;
+    }
     if(memory){
       if(base<8)used.add(base);if(regIndex<8)used.add(regIndex);
       body.push(...set(10,and(add(add(base<8?get(15+base):c(0),regIndex<8?get(15+regIndex):c(0)),c(disp)),c(65535))));
@@ -254,7 +291,7 @@ export function compileRamBlock(packet,meta){
       ...set(32,get(25)),...set(25,policy===255?destinations.map((r,n)=>shl(nz(xor(get(15+r),get(23+n))),r)).reduce(or,c(0)):c(policy)),
       ...set(12,add(exec0===exec1?c(exec0):[...c(exec1),...c(exec0),...get(9),0x1b],get(26))),
       ...set(27,add(get(27),add(get(12),get(13)))),...set(28,add(get(28),c(1))),
-      ...set(29,get(12)),...set(30,get(13)),...set(31,get(26)),...set(45,c(index)),...set(46,get(9)));
+      ...set(29,get(12)),...set(30,get(13)),...set(31,get(26)),...set(45,c(index)),...set(46,get(9)),...(bios?set(48,c(0)):[]));
     // Commit a conditional/return with its actual IP. A different successor
     // exits before any operation on the decoded fallthrough or caller path.
     if((op===0xc3||branch&&!unconditional)&&index+1<count)
@@ -264,7 +301,7 @@ export function compileRamBlock(packet,meta){
   body.push(0x0c,1,0x0b,0x0b);
   for(const r of dirty)body.push(...store(0,r*2,2,get(15+r)));
   body.push(...storeFlags(get(7)),...get(2),...get(33),0x36,2,0,
-    ...save(3,get(28)),...save(4,get(27)),...save(5,get(25)),...save(6,get(29)),...save(7,get(30)),...save(8,get(31)),...save(9,get(32)),...save(18,get(45)),...save(19,get(46)),0x10,0,0x0b);
+    ...save(3,get(28)),...save(4,get(27)),...save(5,get(25)),...save(6,get(29)),...save(7,get(30)),...save(8,get(31)),...save(9,get(32)),...save(18,get(45)),...save(19,get(46)),...(bios?[...save(24,get(47)),...save(25,get(48))]:[]),0x10,0,0x0b);
   // Potentially dirty registers also need their entry value: an early exit
   // can flush before their first write. Unused, never-written registers stay in CPU memory.
   body.splice(reloadAt,0,...[...used].sort((a,b)=>a-b).flatMap(r=>set(15+r,load(0,r*2,2))));

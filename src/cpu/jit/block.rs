@@ -20,12 +20,21 @@ pub(super) struct Context {
     segments: [u32; 6],
     last_index: u32,
     last_taken: u32,
+    idtr_base: u32,
+    idtr_limit: u32,
+    cs: u32,
+    bios_valid: u32,
+    upper_clear: u32,
+    last_bios: u32,
 }
-const _: () = assert!(std::mem::size_of::<Context>() == 80);
+const _: () = assert!(std::mem::size_of::<Context>() == 104);
 
 pub(super) struct Plan {
     spans: Vec<CodeSpan>,
     segments: u8,
+    bios: bool,
+    runs: u16,
+    exits: [u16; BLOCK],
 }
 struct CodeSpan {
     ip: u32,
@@ -68,8 +77,88 @@ impl Plan {
                 return None;
             }
         }
-        Some(Self { spans, segments })
+        Some(Self {
+            spans,
+            segments,
+            bios: ops.iter().any(|op| op.opcode == 0xcd),
+            runs: 0,
+            exits: [0; BLOCK],
+        })
     }
+}
+// A compound operation still retires INT, the ROM OUT and IRET separately.
+// The generated code admits all three only before the next observable event.
+fn bios_context(m: &Machine) -> bool {
+    let cs = m.cpu.segment_cache(CS);
+    m.cpu.cpl == 0
+        && cs.base == u32::from(m.cpu.s[CS]) << 4
+        && cs.access == 0x9b
+        && cs.attributes == 0
+        && !m.bus.firmware_request
+}
+pub(super) fn decode_trace(m: &Machine, ip: u32, ops: &[Op]) -> Option<Op> {
+    let at = code(m, ip, 1)?;
+    if m.bus.mem[at] != 0xcd {
+        return decode(m, ip);
+    }
+    code(m, ip, 2)?;
+    if ip + 2 >= 0x10000
+        || !bios_context(m)
+        || !ordinary(m.cpu.segment_cache(CS))
+        || !ordinary(m.cpu.segment_cache(SS))
+    {
+        return None;
+    }
+    // This is only a selection hint; the emitted code checks AH and the current
+    // vector/ROM on every execution, including after a preceding RAM store.
+    let mut ah = Some(m.cpu.byte(4));
+    for op in ops {
+        match op.opcode {
+            0xb4 => ah = Some(op.bytes[usize::from(op.prefix_len) + 1]),
+            0xb8 => ah = Some(op.bytes[usize::from(op.prefix_len) + 2]),
+            0xb0 => {}
+            _ if op.register_writes == 0xff || op.register_writes & 1 != 0 || op.opcode == 0xcd => {
+                ah = None
+            }
+            _ => {}
+        }
+    }
+    if ah != Some(4) {
+        return None;
+    }
+    let vector = m.bus.mem[at + 1];
+    let entry = u32::from(vector) * 4;
+    if entry + 3 > u32::from(m.cpu.idtr_limit) {
+        return None;
+    }
+    let address = m.cpu.idtr_base.checked_add(entry)? as usize;
+    if address > 0x9fffc
+        || m.bus.mem[address..address + 4] != [0x60, 0x10, 0, 0xf0]
+        || m.bus.mem[0xf1060..0xf1063] != [0xe6, 0xf0, 0xcf]
+    {
+        return None;
+    }
+    let mut bytes = [0; 7];
+    bytes[..2].copy_from_slice(&m.bus.mem[at..at + 2]);
+    let latency = |op| m.bus.timing.jit_execution(op, 0, 0)[0];
+    Some(Op {
+        ip,
+        bytes,
+        opcode: 0xcd,
+        len: 2,
+        prefix_len: 0,
+        modrm: 0,
+        memory: Some(Memory {
+            segment: SS as u8,
+            base: SP as u8,
+            index: 8,
+            width: NonZeroU8::new(6)?,
+            displacement: 0xfffa,
+            flags: Memory::READ | Memory::WRITE | Memory::STACK | Memory::BIOS,
+        }),
+        register_writes: 1 << SP,
+        execution: [latency(0xcd) + latency(0xe6) + latency(0xcf), latency(0xcf)],
+    })
 }
 // LEA is offered only by this direct tier. The guarded production compiler
 // keeps its existing opcode contract, including on feature-enabled test cores.
@@ -113,6 +202,48 @@ fn ordinary(d: SegmentCache) -> bool {
     d.limit == 0xffff && !d.big() && matches!(d.access & 0x1f, 0x13 | 0x1b)
 }
 impl Engine {
+    pub(super) fn conditional_successor(&self, cpu: &Cpu, op: Op, fallthrough: u32) -> u32 {
+        let key = (u64::from(cpu.segment_cache(CS).base) << 32) | u64::from(op.ip);
+        let choice = self.branch_choices[probe(key)];
+        if choice.key == key && choice.target == op.target() {
+            choice.target
+        } else {
+            fallthrough
+        }
+    }
+    fn observe_branch(&mut self, id: u32, op: Op, index: usize, taken: bool) {
+        let Some(plan) = self.plans[id as usize % SLOTS]
+            .as_mut()
+            .filter(|p| p.id == id)
+        else {
+            return;
+        };
+        let Some(block) = &mut plan.block else {
+            return;
+        };
+        block.runs = block.runs.saturating_add(1);
+        if !taken
+            || !matches!(op.opcode, 0x70..=0x7f | 0xe0..=0xe3)
+            || op.target() <= op.ip + u32::from(op.len)
+            || !plan
+                .ops
+                .get(index + 1)
+                .is_some_and(|next| next.ip != op.target())
+        {
+            return;
+        }
+        block.exits[index] = block.exits[index].saturating_add(1);
+        if block.exits[index] < 32 || u32::from(block.exits[index]) * 4 < u32::from(block.runs) * 3
+        {
+            return;
+        }
+        let key = (plan.key & !u64::from(u32::MAX)) | u64::from(op.ip);
+        self.branch_choices[probe(key)] = BranchChoice {
+            key,
+            target: op.target(),
+        };
+        self.invalidate_block(id);
+    }
     fn invalidate_block(&mut self, id: u32) {
         let Some(key) = self.plan(id).map(|p| p.key) else {
             return;
@@ -135,7 +266,9 @@ impl Engine {
     pub(super) fn make_block_packet(&mut self, id: u32) {
         let plan = self.plan(id).unwrap();
         let mut packet = vec![
-            u32::from(plan.block.is_some()),
+            plan.block
+                .as_ref()
+                .map_or(0, |b| 1 | (u32::from(b.bios) << 1)),
             std::mem::offset_of!(Scratch, block) as u32,
         ];
         if plan.block.is_some() {
@@ -235,6 +368,11 @@ impl Engine {
             code_start: at as u32,
             code_end: end as u32,
             segments: bases,
+            idtr_base: m.cpu.idtr_base,
+            idtr_limit: u32::from(m.cpu.idtr_limit),
+            cs: u32::from(m.cpu.s[CS]),
+            bios_valid: u32::from(!block.bios || bios_context(m)),
+            upper_clear: 1,
             ..Context::default()
         };
         self.block_active = Some(id);
@@ -271,6 +409,9 @@ impl Engine {
         }
         let clocks = m.clock_converter.advance(m.bus.profile, ctx.cycles);
         let b = &mut m.bus;
+        if ctx.upper_clear & 4 != 0 {
+            b.timing.flush();
+        }
         b.timing.begin(m.cpu.cr0);
         b.timing.previous_writes = ctx.last_previous_writes as u8;
         b.timing.taken = ctx.last_taken != 0;
@@ -285,18 +426,24 @@ impl Engine {
         }
         b.timing.penalty = ctx.last_bus;
         b.timing.address_execution = ctx.last_address;
-        let physical = m.cpu.segment_cache(CS).base.wrapping_add(op.ip);
-        b.timing.block_fetch_end(
-            physical as usize + usize::from(op.len) - 1,
-            op.bytes[usize::from(op.len) - 1],
-        );
+        let (physical, last_byte, len) = if ctx.last_bios != 0 {
+            (0xf1062, 0xcf, 1)
+        } else {
+            (
+                m.cpu.segment_cache(CS).base.wrapping_add(op.ip),
+                op.bytes[usize::from(op.len) - 1],
+                op.len,
+            )
+        };
+        b.timing
+            .block_fetch_end(physical as usize + usize::from(len) - 1, last_byte);
         let timing = b.timing.finish_jit(ctx.last_execution - ctx.last_address);
-        m.cpu.flags_upper &= !1;
+        m.cpu.flags_upper &= !(ctx.upper_clear as u16);
         m.cpu.operand32 = false;
         m.cpu.address32 = false;
         m.cpu.lock_prefix = false;
         m.cpu.trap_suppressed = false;
-        m.cpu.instruction_bytes = op.len;
+        m.cpu.instruction_bytes = len;
         m.cpu.retired += u64::from(count);
         m.cpu.completed_instructions += u64::from(count);
         m.cpu.approximated_units += u64::from(count);
@@ -308,6 +455,9 @@ impl Engine {
         self.done += count;
         self.counters[1] += u64::from(count);
         self.block_counters[1] += u64::from(count);
+        let index = ctx.last_index as usize;
+        let taken = ctx.last_taken != 0;
+        self.observe_branch(id, op, index, taken);
     }
 }
 
@@ -332,6 +482,93 @@ mod tests {
         m.cpu.ip = 0x100;
         (m, e, id)
     }
+    #[test]
+    fn learned_forward_successors_require_hot_taken_exits_and_match_current_targets() {
+        let mut m = Machine::new(Profile::Pc9821ApDos);
+        m.cpu.s = [0; 4];
+        m.cpu.flags = 2;
+        m.bus.mem[0x100..0x10b]
+            .copy_from_slice(&[0x3d, 0, 0, 0x75, 3, 0x43, 0xeb, 0xf8, 0x42, 0xeb, 0xf5]);
+        let mut e = Engine::default();
+        let mut id = 0;
+        for _ in 0..HEAT {
+            m.cpu.ip = 0x100;
+            e.begin_block_slice(&m, 80_000, 1);
+            id = e.dispatch(&mut m, true);
+        }
+        let op = e.plan(id).unwrap().ops[1];
+        assert_eq!(e.conditional_successor(&m.cpu, op, 0x105), 0x105);
+        for _ in 0..31 {
+            e.observe_branch(id, op, 1, false);
+        }
+        for _ in 0..92 {
+            e.observe_branch(id, op, 1, true);
+        }
+        assert!(e.plan(id).is_some()); // Hot taken exits are still below 75%.
+        e.observe_branch(id, op, 1, true);
+        assert!(e.plan(id).is_none());
+        assert_eq!(e.conditional_successor(&m.cpu, op, 0x105), 0x108);
+        let mut changed = op;
+        changed.bytes[1] = 4;
+        assert_eq!(e.conditional_successor(&m.cpu, changed, 0x105), 0x105);
+        e.clear();
+        assert_eq!(e.conditional_successor(&m.cpu, op, 0x105), 0x105);
+    }
+
+    #[test]
+    fn compound_decode_is_conservative_about_context_and_ah_selection() {
+        let mut m = Machine::new(Profile::Pc9821ApDos);
+        m.cpu.s = [0; 4];
+        m.cpu.r[AX] = 0x0403;
+        m.bus.mem[0x100..0x102].copy_from_slice(&[0xcd, 0x18]);
+        assert!(decode_trace(&m, 0x100, &[]).is_some());
+        for scenario in 0..11 {
+            let mut copy = Machine::new(Profile::Pc9821ApDos);
+            copy.cpu.s = [0; 4];
+            copy.cpu.r[AX] = 0x0403;
+            copy.bus.mem[0x100..0x102].copy_from_slice(&[0xcd, 0x18]);
+            copy.bus.mem[0x200..0x202].copy_from_slice(&[0xcd, 0x18]);
+            match scenario {
+                0 => copy.cpu.cpl = 1,
+                1 => copy.cpu.r[AX] = 0x0103,
+                2 => copy.cpu.idtr_limit = 0x60,
+                3 => copy.cpu.idtr_base = u32::MAX,
+                4 => copy.bus.mem[0x60] ^= 1,
+                5 => copy.bus.mem[0xf1060] ^= 1,
+                6 => copy.bus.firmware_request = true,
+                7 => {
+                    copy.cpu.segment_caches[CS] = Some(SegmentCache {
+                        base: 0x100,
+                        limit: 0xffff,
+                        access: 0x9b,
+                        attributes: 0,
+                    })
+                }
+                8..=10 => {
+                    let seg = if scenario == 8 { CS } else { SS };
+                    let mut d = copy.cpu.segment_cache(seg);
+                    if scenario == 10 {
+                        d.attributes = 0x40;
+                    } else {
+                        d.limit = 0x7fff;
+                    }
+                    copy.cpu.segment_caches[seg] = Some(d);
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                decode_trace(&copy, 0x100, &[]).is_none(),
+                "scenario {scenario}"
+            );
+        }
+        m.bus.mem[0x200..0x202].copy_from_slice(&[0x8b, 0xc3]);
+        let unknown_ax = decode(&m, 0x200).unwrap();
+        assert!(decode_trace(&m, 0x100, &[unknown_ax]).is_none());
+        m.bus.mem[0x200..0x202].copy_from_slice(&[0xb4, 4]);
+        let restore_ah = decode(&m, 0x200).unwrap();
+        assert!(decode_trace(&m, 0x100, &[unknown_ax, restore_ah]).is_some());
+    }
+
     #[test]
     fn block_admission_keeps_observable_cpu_state_untouched() {
         for scenario in 0..8 {

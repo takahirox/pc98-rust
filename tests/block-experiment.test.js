@@ -9,8 +9,8 @@ function state(c){const[r,f,p]=layout(c),v=new DataView(c.memory.buffer);return 
 function setState(c,regs,flags=2,ip=1){const[r,f,p]=layout(c),v=new DataView(c.memory.buffer);new Uint16Array(c.memory.buffer,r,8).set(regs);v.setUint16(f,flags,true);v.setUint32(p,ip,true);}
 function equal(a,b){assert.deepEqual(state(a),state(b));const frame=c=>Buffer.from(c.memory.buffer,c.frame()>>>0,1024000);assert(frame(a).equals(frame(b)),'rendered frame differs');const ram=c=>Buffer.from(c.memory.buffer,c.block_ram_ptr()>>>0,0xa0000);assert(ram(a).equals(ram(b)),'conventional RAM differs');const pcm=c=>Buffer.from(c.memory.buffer,c.audio_ptr()>>>0,c.audio_len()*4);assert(pcm(a).equals(pcm(b)),'PCM bits differ');}
 async function boot(code,patch=[],profile=1){const c=new WebAssembly.Instance(module,{}).exports;c.set_profile(profile);c.set_boot_source(0);const disk=new Uint8Array(1261568);disk.set([0xfa,...code]);disk.set(patch,0x100);const p=c.input_buffer(disk.length)>>>0;new Uint8Array(c.memory.buffer,p,disk.length).set(disk);assert.equal(c.insert(0,0),1);c.reset();for(let n=0;c.metric(17)!==0x1fc0||c.metric(18)!==1;n++){assert(n<2000);assert.equal(c.metric(4),0);c.step(1);}return c;}
-async function translate(a,b,ip=1){let id=0;for(let n=0;!id;n++){assert(n<64);for(const c of[a,b]){const s=state(c);setState(c,s.regs,s.flags,ip);}a.jit_devices_begin();a.block_begin_slice(80000,1);id=a.jit_dispatch(1);a.jit_devices_end();b.step(a.jit_done());}const packet=new Uint32Array(a.memory.buffer,a.jit_packet()>>>0,a.jit_packet_len()).slice(),meta=new Uint32Array(a.memory.buffer,a.block_packet()>>>0,a.block_packet_len()).slice();assert.equal(meta[0],1,'probe is not a direct RAM plan');const bytes=compileRamBlock(packet,meta);assert(WebAssembly.validate(bytes));const run=new WebAssembly.Instance(await WebAssembly.compile(bytes),{core:{memory:a.memory,finish:a.block_finish}}).exports.run;assert.equal(a.jit_register(id,1),1);equal(a,b);return {a,b,id,run,packet,meta,ip};}
-async function pair(code,patch=[],initial=null){const a=await boot(code,patch),b=await boot(code,patch);if(initial)for(const c of[a,b])setState(c,initial);return translate(a,b);}
+async function translate(a,b,ip=1,expectedMeta=1){let id=0;for(let n=0;!id;n++){assert(n<64);for(const c of[a,b]){const s=state(c);setState(c,s.regs,s.flags,ip);}a.jit_devices_begin();a.block_begin_slice(80000,1);id=a.jit_dispatch(1);a.jit_devices_end();b.step(a.jit_done());}const packet=new Uint32Array(a.memory.buffer,a.jit_packet()>>>0,a.jit_packet_len()).slice(),meta=new Uint32Array(a.memory.buffer,a.block_packet()>>>0,a.block_packet_len()).slice();assert.equal(meta[0],expectedMeta,'probe is not the expected direct RAM plan');const bytes=compileRamBlock(packet,meta);assert(WebAssembly.validate(bytes));const run=new WebAssembly.Instance(await WebAssembly.compile(bytes),{core:{memory:a.memory,finish:a.block_finish}}).exports.run;assert.equal(a.jit_register(id,1),1);equal(a,b);return {a,b,id,run,packet,meta,ip};}
+async function pair(code,patch=[],initial=null,expectedMeta=1){const a=await boot(code,patch),b=await boot(code,patch);if(initial)for(const c of[a,b])setState(c,initial);return translate(a,b,1,expectedMeta);}
 
 function execute(p,regs,flags=2,cap=100,clocks=80000){for(const c of[p.a,p.b])setState(c,regs,flags,p.ip);p.a.jit_devices_begin();p.a.block_begin_slice(clocks,cap);if(p.a.block_start(p.id))p.run(...layout(p.a));else p.a.jit_fallback();p.a.jit_devices_end();const done=p.a.jit_done();p.b.step(done);equal(p.a,p.b);return done;}
 
@@ -330,4 +330,129 @@ test('reference V30 word operands wrap their segment offset before physical bus 
  const mem=new Uint8Array(c.memory.buffer);mem[ram+0x30000]=0xaa;mem[ram+0x3ffff]=0x55;mem[ram+0x40000]=0xcc;
  c.step(3);let s=state(c);assert.equal(s.regs[0],0xaa55);s.regs[0]=0x1234;setState(c,s.regs,s.flags,s.ip);
  c.step(1);assert.equal(c.peek(0x3ffff),0x34);assert.equal(c.peek(0x30000),0x12);assert.equal(c.peek(0x40000),0xcc);assert.equal(c.metric(4),0);
+});
+
+
+test('a direct keyboard query retires INT, ROM OUT and IRET with the original frame and clocks',async()=>{
+ const code=[0xb4,4,0xcd,0x18,0xeb,0xfa];
+ const a=await boot(code),b=await boot(code);
+ for(const c of[a,b])setState(c,[0x0403,0,0,0,0x8000,0,0,0]);
+ const p=await translate(a,b,1,3);
+ for(const sp of[0x8000,0x8001,0x8002,0x8003])for(const cap of[1,2,3,4,5,19,40]){
+  for(const c of[a,b])new Uint8Array(c.memory.buffer,c.block_ram_ptr()>>>0,0xa0000)[0x52d]=0xa5;
+  const before=a.metric(26);
+  const done=execute(p,[0x0403,0,0,0,sp,0,0,0],0xcd7,cap);
+  if(sp===0x8000&&cap===4){assert.equal(a.metric(26)-before,117);assert.equal(a.block_debug(2),15);assert.equal(a.block_debug(3),16);assert.equal(a.block_debug(4),1);}
+  assert(done<=cap);
+  if(done>=4){assert.equal(state(a).regs[0],0xa503);assert.equal(state(a).regs[4],sp);
+   const v=new DataView(a.memory.buffer,(a.block_ram_ptr()>>>0)+sp-6,6);
+   assert.equal(v.getUint16(0,true),5);assert.equal(v.getUint16(2,true),0x1fc0);assert.equal(v.getUint16(4,true),0xcd7);
+  }
+ }
+ for(const group of[15,16,255]){
+  // Fresh cores leave room before the next audio event for all three units.
+  const q=await pair(code,[],[0x0400|group,0,0,0,0x8000,0,0,0],3);
+  for(const c of[q.a,q.b])new Uint8Array(c.memory.buffer)[(c.block_ram_ptr()>>>0)+0x539]=0x7f;
+  assert.equal(execute(q,[0x0400|group,0,0,0,0x8000,0,0,0],3,4),4);
+  assert.equal(state(q.a).regs[0],(group<16?0x7f00:0)|group);
+ }
+});
+
+
+test('a keyboard compound declines changed vectors, ROM, mapped and self-code frames before INT',async()=>{
+ for(const scenario of['vector','rom','wrap','self','mapped','deadline','bitmap-alias','vector-alias']){
+  const code=[0xb4,4,0xcd,0x18,0xeb,0xfa];
+  const a=await boot(code),b=await boot(code);
+  for(const c of[a,b])setState(c,[0x0403,0,0,0,0x8000,0,0,0]);
+  const p=await translate(a,b,1,3);
+  let sp=0x8000,cap=4,clocks=80000;
+  for(const c of[a,b]){
+   const ram=c.block_ram_ptr()>>>0,mem=new Uint8Array(c.memory.buffer);
+   if(scenario==='vector')mem[ram+0x60]=0x61;
+   if(scenario==='rom')mem[ram+0xf1062]=0x90;
+   if(scenario==='wrap')sp=4;
+   if(scenario==='self'){
+    // Load an ordinary SS pointing at the code segment.
+    mem.set([0xb8,0xc0,0x1f,0x8e,0xd0],ram+0x1fd00);const s=state(c);setState(c,s.regs,s.flags,0x100);c.step(2);sp=10;
+   }
+   if(scenario==='mapped'){
+    mem.set([0xb8,0,0xa0,0x8e,0xd0],ram+0x1fd00);const s=state(c);setState(c,s.regs,s.flags,0x100);c.step(2);
+   }
+   if(scenario==='deadline')clocks=1;
+   if(scenario==='bitmap-alias')sp=0x52f; // FLAGS low byte lands on queried group 3.
+   if(scenario==='vector-alias')sp=0x66; // Vector is loaded before the pushes overwrite it.
+  }
+  const done=execute(p,[0x0403,0,0,0,sp,0,0,0],0xcd7,cap,clocks);
+  assert.equal(done,['bitmap-alias','vector-alias'].includes(scenario)?4:1,scenario);
+  if(scenario==='bitmap-alias')assert.equal(state(a).regs[0],0xd703);
+ }
+});
+
+
+test('query admission checks current AH and preserves upper flag clearing across later operations',async()=>{
+ const a=await boot([0xb0,3,0xcd,0x18,0x40,0xeb,0xf9]),b=await boot([0xb0,3,0xcd,0x18,0x40,0xeb,0xf9]);
+ for(const c of[a,b])setState(c,[0x0403,0,0,0,0x8000,0,0,0]);
+ const p=await translate(a,b,1,3);
+ assert.equal(execute(p,[0x0103,0,0,0,0x8000,0,0,0],3,10),1);
+ // POPFD sets AC using the real instruction path; a committed query
+ // must clear it even if the last operation in the trace is an ordinary INC.
+ for(const c of[a,b]){
+  const ram=c.block_ram_ptr()>>>0;new Uint8Array(c.memory.buffer).set([0x66,0x9d],ram+0x1fd00);
+  new DataView(c.memory.buffer).setUint32(ram+0x9000,0x50003,true);setState(c,[0,0,0,0,0x9000,0,0,0],3,0x100);c.step(1);assert.equal(c.block_debug(7),4);
+ }
+ assert.equal(execute(p,[0x0403,0,0,0,0x8000,0,0,0],3,5),5);assert.equal(a.block_debug(7),0);
+});
+
+
+test('a query uses an unaligned relocated IVT and declines a shortened live IDT limit',async()=>{
+ const a=await boot([0xb4,4,0xcd,0x18,0xeb,0xfa]),b=await boot([0xb4,4,0xcd,0x18,0xeb,0xfa]);
+ function loadIdt(c,limit){
+  const ram=c.block_ram_ptr()>>>0,mem=new Uint8Array(c.memory.buffer),v=new DataView(c.memory.buffer);
+  mem.set([0xb8,0,0,0x8e,0xd8,0x0f,0x01,0x1e,0,0x90],ram+0x1fd00);
+  v.setUint16(ram+0x9000,limit,true);v.setUint32(ram+0x9002,0x6001,true);mem.set([0x60,0x10,0,0xf0],ram+0x6061);
+  setState(c,[0x0403,0,0,0,0x8000,0,0,0],3,0x100);c.step(3);setState(c,[0x0403,0,0,0,0x8000,0,0,0]);
+ }
+ for(const c of[a,b])loadIdt(c,0x3ff);
+ const p=await translate(a,b,1,3),before=a.metric(26);
+ assert.equal(execute(p,[0x0403,0,0,0,0x8000,0,0,0],3,4),4);assert.equal(a.metric(26)-before,127);
+ for(const c of[a,b])loadIdt(c,0x60);
+ assert.equal(execute(p,[0x0403,0,0,0,0x8000,0,0,0],3,4),1);
+});
+
+test('a learned taken successor still exits on a later fallthrough without executing the predicted path',async()=>{
+ const code=[0x3d,0,0,0x75,3,0x43,0xeb,0xf8,0x42,0xeb,0xf5];
+ const a=await boot(code),b=await boot(code),j=new BlockJit(a);
+ for(const c of[a,b])setState(c,[1,0,0,10,0x8000,0,0,0]);
+ for(let n=0;n<80;n++){
+  const done=j.step(8000,1000);b.step(done);while(j.pending)await new Promise(r=>setTimeout(r,0));assert(!j.failed,j.compileError);equal(a,b);a.audio_clear();b.audio_clear();
+ }
+ assert(a.jit_metric(2)>0,'the hot taken exit was never promoted');
+ const dx=state(a).regs[2],bx=state(a).regs[3];
+ for(const c of[a,b]){const s=state(c);s.regs[0]=0;setState(c,s.regs,3);}
+ const done=j.step(8000,30);b.step(done);while(j.pending)await new Promise(r=>setTimeout(r,0));equal(a,b);
+ assert.equal(state(a).regs[2],dx);assert(state(a).regs[3]>bx);
+});
+
+test('a preceding trace store can change the IVT and the query guard rereads it before INT',async()=>{
+ const code=[0xb4,4,0xc6,0x06,0x60,0,0x61,0xcd,0x18,0xeb,0xf5];
+ const a=await boot(code),b=await boot(code);
+ for(const c of[a,b])setState(c,[0x0403,0,0,0,0x8000,0,0,0]);
+ const p=await translate(a,b,1,3);
+ assert.equal(execute(p,[0x0403,0,0,0,0x8000,0,0,0],3,10),2);
+ assert.equal(state(a).ip,8);assert.equal(state(a).regs[4],0x8000);assert.equal(a.peek(0x60),0x61);
+});
+
+
+test('ordinary direct plans preserve the legacy 80-byte completion context boundary',async()=>{
+ const memory=new WebAssembly.Memory({initial:1}),v=new DataView(memory.buffer),scratch=512;
+ v.setUint16(300,2,true);v.setUint32(304,0x100,true);
+ v.setUint32(scratch+4,100,true);v.setUint32(scratch+8,1,true);
+ new Uint8Array(memory.buffer,scratch+80,24).fill(0xa5);
+ const packet=Uint32Array.from([1,1,0x100,1,0x40,0]);
+ const meta=Uint32Array.from([1,0,1,1,0,8,8,0,0,0,0,0,1,4]);
+ let finished=0;
+ const bytes=compileRamBlock(packet,meta),run=new WebAssembly.Instance(await WebAssembly.compile(bytes),{core:{memory,finish:()=>finished++}}).exports.run;
+ run(256,300,304,scratch);
+ assert.equal(finished,1);assert.equal(v.getUint16(256,true),1);assert.equal(v.getUint32(304,true),0x101);assert.equal(v.getUint32(scratch+12,true),1);
+ assert.deepEqual(Array.from(new Uint8Array(memory.buffer,scratch+80,24)),Array(24).fill(0xa5));
 });

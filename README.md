@@ -860,6 +860,8 @@ The [fourth comparison](docs/browser-block-round4.md) measures word-transfer and
 interrupt fallback improvements against that runtime and the pinned NP2kai core.
 The [fifth comparison](docs/browser-block-round5.md) continues with byte-OUT and
 keyboard polling overhead.
+The [parity comparison](docs/browser-block-parity.md) records learned branch
+successors and bounded BIOS query transactions against fresh NP2kai controls.
 These measurements are separate from calibrated real-time game playback.
 
 HDD replacement/eject first pauses at a Worker boundary, then checks dirty pages

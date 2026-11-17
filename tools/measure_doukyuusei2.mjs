@@ -40,6 +40,14 @@ const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 // AudioWorklet. Later source edits cannot mix revisions within a long run.
 const runtime = await Promise.all(['app.js','emulator-worker.js','audio-worklet.js','render-worker.js',...(options.jit==='0'?[]:['jit.js'])]
   .map(async name => [name,await readFile(options.runtime ? path.join(options.runtime,name) : new URL('../web/'+name,import.meta.url))]));
+if(runtime.find(([name])=>name==='app.js')[1].includes("'./presenter.js'"))
+  runtime.push(['presenter.js',await readFile(options.runtime?path.join(options.runtime,'presenter.js'):new URL('../web/presenter.js',import.meta.url))]);
+for(const name of ['index.html','style.css']) {
+  let bytes;
+  try { bytes=await readFile(options.runtime?path.join(options.runtime,name):new URL('../web/'+name,import.meta.url)); }
+  catch(error) { if(!options.runtime||error.code!=='ENOENT')throw error; bytes=await readFile(new URL('../web/'+name,import.meta.url)); }
+  runtime.push([name,bytes]);
+}
 if(options.jit!=='0'&&runtime.find(([name])=>name==='emulator-worker.js')[1].includes("new URL('block-jit.js'"))
   for(const name of ['block-jit.js','block-compiler.js'])runtime.push([name,await readFile(options.runtime?path.join(options.runtime,name):new URL('../web/'+name,import.meta.url))]);
 const runtimeSha256 = Object.fromEntries(runtime.map(([name,body]) => [name,sha(body)]));
@@ -71,6 +79,7 @@ try {
     const page = await browser.newPage();
     routedAssets = Object.fromEntries([...assets.keys()].map(name => [name,0]));
     await page.goto(`http://127.0.0.1:8077/?diagnostics${playback ? '' : '&manual'}&jit=${options.jit==='0'?'0':'1'}`);
+    if(await page.locator('#presentation').count())await page.locator('#presentation').selectOption('off');
     await page.waitForFunction(() => !document.querySelector('#profile').disabled);
     await page.locator('#drive').selectOption('2');
     await page.locator('#file').setInputFiles(options.media);
@@ -227,8 +236,12 @@ try {
     const presented = await page.evaluate(() => pc98.stats());
     result.jit = presented.jit;
     result.videoMode = presented.videoMode; result.rendererFailure = presented.rendererFailure;
+    if(presented.presenterStats) {
+      if(presented.presenterStats.preset!=='off'||presented.presenterStats.active)throw Error('Expected Original pixels presentation');
+      result.presentation=presented.presenterStats.preset;
+    }
     result.routedAssets = routedAssets;
-    for (const name of ['core.wasm','app.js','emulator-worker.js','render-worker.js',...(options.jit==='0'?[]:['jit.js',...(assets.has('block-jit.js')?['block-jit.js','block-compiler.js']:[])]),...(playback ? ['audio-worklet.js'] : [])]) {
+    for (const name of ['index.html','style.css','core.wasm','app.js',...(assets.has('presenter.js')?['presenter.js']:[]),'emulator-worker.js','render-worker.js',...(options.jit==='0'?[]:['jit.js',...(assets.has('block-jit.js')?['block-jit.js','block-compiler.js']:[])]),...(playback ? ['audio-worklet.js'] : [])]) {
       if (!routedAssets[name]) throw Error(`Selected runtime asset was not intercepted: ${name}`);
     }
     if (profile) {
