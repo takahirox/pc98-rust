@@ -21,9 +21,15 @@ $('fullscreen').onclick = async () => {
   catch { $('drop').classList.add('full-window'); }
   screen.focus();
 };
+async function exitFullscreen() {
+  if (document.fullscreenElement === $('drop')) await document.exitFullscreen();
+  $('drop').classList.remove('full-window');
+  screen.focus();
+}
+$('exit-fullscreen').onclick = () => exitFullscreen().catch(fail);
 document.addEventListener('keydown',event => {
   if (event.key === 'Escape' && $('drop').classList.contains('full-window')) {
-    event.preventDefault(); event.stopPropagation(); $('drop').classList.remove('full-window'); screen.focus();
+    event.preventDefault(); event.stopPropagation(); exitFullscreen().catch(fail);
   }
 },true);
 let core, worker, running = false, audio, outputGain, audioNode, audioSetup, muted = true, loading = false;
