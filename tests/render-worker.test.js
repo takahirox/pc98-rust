@@ -130,3 +130,46 @@ test('authoritative Worker coalesces full snapshots, rejects stale credits and r
   assert.equal(events.length,count);
   assert.equal(run('frameBuffer'),null);
 });
+
+test('unchanged raster proofs name the preceding output and retain full pixel credits',()=>{
+ const r=renderer();r.run('testCore.video_render_changed=()=>1');r.snapshot(1);
+ assert.equal(r.frames[0].samePixelsAs,0);
+ r.context.ack=r.frames[0].buffer;r.run('onmessage({data:{type:"frameAck",buffer:ack,sequence:1}})');
+ r.run('testCore.video_render_changed=()=>0');r.snapshot(2);
+ assert.equal(r.frames[1].samePixelsAs,1);assert.equal(r.frames[1].buffer.byteLength,640*400*4);
+ assert.equal(r.frames[1].renderStats.unchangedFrames,1);
+ r.context.ack=r.frames[1].buffer;r.run('onmessage({data:{type:"frameAck",buffer:ack,sequence:2}})');
+ r.run('testCore.video_render_changed=()=>1');r.snapshot(3);
+ assert.equal(r.frames[2].samePixelsAs,0);
+ r.context.ack=r.frames[2].buffer;r.run('onmessage({data:{type:"frameAck",buffer:ack,sequence:3}})');
+ r.run('testCore.memory.buffer=new ArrayBuffer(3*1024*1024);testCore.video_render_changed=()=>0');r.snapshot(4);
+ assert.equal(r.frames[3].samePixelsAs,3);assert.equal(r.frames[3].buffer.byteLength,640*400*4);
+});
+
+// Exercise the presentation consumer independently of renderer/guest mocks.
+// A proof for a discarded output must never suppress an actual canvas update.
+import {Presenter} from '../web/presenter.js';
+test('presentation only reuses its accepted lineage and redraws after barriers or raw context loss',()=>{
+ const saved=new Map(['ResizeObserver','window','matchMedia','devicePixelRatio'].map(k=>[k,Object.getOwnPropertyDescriptor(globalThis,k)]));
+ try{
+  globalThis.ResizeObserver=class {observe(){}};globalThis.window={addEventListener(){}};globalThis.devicePixelRatio=1;
+  globalThis.matchMedia=()=>({addEventListener(){}});
+  const puts=[],draws=[],raw={width:2,height:1,getContext:()=>({putImageData:f=>puts.push([...f.data])})};
+  const p=new Presenter(raw,{addEventListener(){}},{},()=>{});p.draw=bytes=>draws.push(bytes);
+  const worker={},other={},image=n=>({width:2,height:1,data:Uint8ClampedArray.of(n,0,0,255,n,0,0,255)});
+  const source=(sequence,samePixelsAs,extra={})=>({renderer:worker,sequence,samePixelsAs,generation:1,videoEpoch:1,...extra});
+  p.present(image(1),source(1,0));p.present(image(1),source(2,1));
+  assert.equal(puts.length,1);assert.equal(draws.length,1);assert.equal(p.stats.reusedFrames,1);
+  // Output 3 changed, but was discarded before presentation.
+  p.present(image(2),source(4,3));assert.equal(puts.length,2);assert.equal(puts.at(-1)[0],2);
+  p.present(image(2),source(5,4,{videoEpoch:2}));assert.equal(puts.length,3);
+  p.present(image(2),source(6,5,{videoEpoch:2}));assert.equal(puts.length,3);
+  p.present(image(2),source(7,6,{videoEpoch:2,generation:2}));assert.equal(puts.length,4);
+  p.present(image(2),source(8,7,{renderer:other,videoEpoch:2,generation:2}));assert.equal(puts.length,5);
+  p.present(image(2));p.present(image(2),source(10,9));assert.equal(puts.length,7);
+  p.invalidate();p.redraw();assert.equal(draws.length,7);
+  p.present(image(2),source(11,10));assert.equal(puts.length,8);
+  raw.width=1;p.present(image(2),source(12,11));assert.equal(puts.length,9);
+  p.setPreset('off');assert.equal(draws.length,10); // UI redraws are never suppressed.
+ }finally{for(const[k,d]of saved)d?Object.defineProperty(globalThis,k,d):delete globalThis[k];}
+});

@@ -238,8 +238,13 @@ pub struct SnapshotRenderer {
     previous: Vec<u8>,
     pixels: Vec<u8>,
     blink_phase: (bool, bool),
+    changed: bool,
 }
 impl SnapshotRenderer {
+    /// Whether the last successful snapshot required updating retained pixels.
+    pub fn changed(&self) -> bool {
+        self.changed
+    }
     pub fn render(&mut self, bytes: &[u8], out: &mut [u8]) -> bool {
         if out.len() != 640 * 400 * 4 {
             return false;
@@ -327,6 +332,7 @@ impl SnapshotRenderer {
             && self.previous[..8] == bytes[..8]
             && self.previous[16..] == bytes[16..]
         {
+            self.changed = false;
             return Some(false);
         }
         // Retained pixels need work only on rows whose scanout inputs changed.
@@ -376,6 +382,7 @@ impl SnapshotRenderer {
                 }
             }
         }
+        self.changed = rows.iter().any(|&row| row);
         let palette = std::array::from_fn(|i| {
             bytes[HEADER + i * 3..HEADER + i * 3 + 3]
                 .try_into()

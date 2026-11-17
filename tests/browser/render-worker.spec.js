@@ -144,3 +144,30 @@ test('emulation failure discards a queued image before a delayed rAF can present
   await page.evaluate(()=>flushRender());
   expect(await page.locator('#screen').evaluate(canvas=>canvas.getContext('2d').getImageData(0,0,640,400).data.some((n,i)=>i%4!==3&&n!==0))).toBe(false);
 });
+
+test('unchanged frames reuse host presentation and raw context restoration forces a fresh upload',async({page})=>{
+  await page.goto('./?diagnostics&manual');await expect(page.locator('#profile')).toBeEnabled();
+  await page.locator('#game').click();await expect(page.locator('#profile')).toBeEnabled();
+  await inspect(page,()=>{for(let i=0;i<30;i++)pc98.advance(100000);});
+  if((await stats(page)).running)await page.locator('#pause').click();
+  await expect.poll(()=>stats(page).then(s=>s.frameInFlight)).toBe(false);
+  expect(await page.locator('#screen').evaluate(c=>c.getContext('2d').getImageData(0,0,640,400).data.some((v,i)=>i%4!==3&&v!==0))).toBe(true);
+  const hash=await screenHash(page),crt=await page.locator('#crt-screen').screenshot(),before=await stats(page);
+  for(let n=0;n<3;n++){
+    await inspect(page,()=>pc98.core.peek(0x8000));
+    await expect.poll(()=>stats(page).then(s=>s.frameInFlight)).toBe(false);
+  }
+  const reused=await stats(page);
+  expect(reused.presenterStats.reusedFrames).toBeGreaterThan(before.presenterStats.reusedFrames);
+  expect(reused.presenterStats.uploads).toBe(before.presenterStats.uploads);
+  expect(await screenHash(page)).toEqual(hash);
+  expect(await page.locator('#crt-screen').screenshot()).toEqual(crt);
+  await page.locator('#screen').evaluate(canvas=>{
+    canvas.dispatchEvent(new Event('contextlost',{cancelable:true}));
+    canvas.getContext('2d').clearRect(0,0,640,400);
+    canvas.dispatchEvent(new Event('contextrestored'));
+  });
+  await expect.poll(()=>screenHash(page)).toEqual(hash);
+  await expect.poll(()=>stats(page).then(s=>s.presenterStats.uploads)).toBeGreaterThan(reused.presenterStats.uploads);
+  expect((await stats(page)).cycles).toBe(before.cycles);
+});

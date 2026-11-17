@@ -95,7 +95,7 @@ function render(timestamp) {
     if (frame.generation === generation && frame.videoEpoch === videoEpoch && frame.sequence > presentedSequence && !contextLost) {
       presentedSequence = frame.sequence;
       const began = performance.now();
-      presenter.present(new ImageData(new Uint8ClampedArray(frame.buffer),640,400));
+      presenter.present(new ImageData(new Uint8ClampedArray(frame.buffer),640,400),frame);
       presentationStats.putMs += performance.now()-began;
       const latency = performance.timeOrigin+performance.now()-frame.captured;
       presentationStats.latencyMs += latency;
@@ -168,7 +168,7 @@ async function startRenderer() {
     await rpc('videoFallback');
   }
 }
-screen.addEventListener('contextlost',event => { event.preventDefault(); contextLost = true; });
+screen.addEventListener('contextlost',event => { event.preventDefault(); contextLost = true; presenter.invalidate(); });
 screen.addEventListener('contextrestored',() => { contextLost = false; rpc('videoRefresh').catch(fail); });
 async function soundState() {
   if (outputGain) outputGain.gain.value = 0;

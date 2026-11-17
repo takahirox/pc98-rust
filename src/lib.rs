@@ -434,6 +434,10 @@ mod wasm {
         })
     }
     #[no_mangle]
+    pub extern "C" fn video_render_changed() -> u32 {
+        RENDERER.with(|r| u32::from(r.borrow().changed()))
+    }
+    #[no_mangle]
     pub extern "C" fn key(scan: u8, down: u32) {
         MACHINE.with(|m| m.borrow_mut().bus.key(scan, down != 0))
     }

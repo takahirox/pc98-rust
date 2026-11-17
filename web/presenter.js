@@ -44,7 +44,7 @@ export class Presenter {
     this.context = raw.getContext('2d', {alpha:false});
     this.notify = text => { if (text !== this.message) { this.message = text; notify(text); } }; this.diagnostics = diagnostics;
     this.preset = defaultPreset; this.mask = false; this.hasFrame = false;
-    this.stats = {uploads:0, uploadMs:0, submitMs:0, gpuMs:0, gpuSamples:0, failures:0};
+    this.stats = {uploads:0, uploadMs:0, submitMs:0, gpuMs:0, gpuSamples:0, failures:0, reusedFrames:0};
     this.queries = [];
     output.addEventListener('webglcontextlost', event => {
       event.preventDefault(); this.gl = null; this.queries = []; this.timer = null;
@@ -111,12 +111,25 @@ export class Presenter {
     this.preset = typeof value === 'string' && Object.hasOwn(presets,value) ? value : defaultPreset; this.mask = Boolean(mask);
     this.redraw();
   }
-  present(frame) {
-    if (this.raw.width !== frame.width || this.raw.height !== frame.height) {
-      this.raw.width = frame.width; this.raw.height = frame.height;
+  invalidate() { this.hasFrame = false; this.frameSource = null; }
+  present(frame, source) {
+    const previous = this.frameSource;
+    const sameSize = this.raw.width === frame.width && this.raw.height === frame.height;
+    // A renderer's equality proof refers to its previous output, which may
+    // have been discarded by the DOM. Only reuse the last accepted output.
+    const reuse = sameSize && this.hasFrame && source?.renderer && previous
+      && source.renderer === previous.renderer && source.samePixelsAs > 0
+      && source.samePixelsAs === previous.sequence && source.sequence > previous.sequence
+      && source.generation === previous.generation && source.videoEpoch === previous.videoEpoch;
+    this.frameSource = null;
+    if (reuse) this.stats.reusedFrames++;
+    else {
+      if (!sameSize) { this.raw.width = frame.width; this.raw.height = frame.height; }
+      this.context.putImageData(frame,0,0); this.hasFrame = true;
+      this.draw(frame.data);
     }
-    this.context.putImageData(frame,0,0); this.hasFrame = true;
-    this.draw(frame.data);
+    if (source?.renderer) this.frameSource = {renderer:source.renderer,sequence:source.sequence,
+      generation:source.generation,videoEpoch:source.videoEpoch};
   }
   redraw() {
     if (!this.hasFrame) return;

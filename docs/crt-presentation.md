@@ -288,3 +288,38 @@ The release Wasm is 590,414 bytes, SHA-256
 `436e45cb1ee3dce54b23c25e4c0e5b938f387efc835a9db64fabf7ad579076ea`.
 Native Rust tests were not rerun for this browser-default-only change. No
 post-merge verification is required.
+
+
+## Unchanged scanout presentation — Issue #198
+
+The scanout renderer now reports whether its last successful snapshot required
+changing retained pixels. This uses the existing exact input/visible-row
+comparisons, without a pixel-content hash. The render Worker names the preceding
+output sequence when pixels are unchanged and still transfers the complete RGBA
+buffer through the existing single-credit protocol.
+
+The presenter reuses raw-canvas/CRT contents only when that named sequence is its
+own last accepted frame, from the same renderer, generation and video epoch, at
+the same dimensions. A proof for a dropped output therefore cannot hide a changed
+frame. Inline rendering retains full presentation. Raw context loss invalidates
+the accepted image; display-setting, resize and GPU-restoration redraws remain
+independent. The current CRT shader has no time-dependent uniforms.
+
+An exploratory normal-boot game control on the cached Chromium 141 environment
+retained approximately 60 fps and zero missing PCM. Its first input window
+accepted 1,723 frames with 242 CRT uploads (1,481 reuses); the second accepted
+863 with 111 uploads (752 reuses). This is about 86–87% fewer redundant uploads,
+not frame skipping: every changed accepted image still updates the raw canvas
+and CRT. A single 0.5-CPU control advanced 0.598/0.724 guest seconds per wall
+second in its two windows, with actual Worker slowdown 2.64/2.63 times the
+unrestricted control. These are selection observations, not a repeated causal
+comparison against main. Fresh frozen-baseline/selected repetitions and final
+head acceptance are recorded in the implementation PR linked from
+[Issue #198](https://github.com/takahirox/pc98-rust/issues/198).
+
+Focused checks cover dropped-frame ancestry, renderer replacement, generation
+and epoch barriers, memory growth, raw context restoration, hidden VRAM writes,
+and conservative change detection. Native, optimized Wasm, actual-browser and
+serial-audio acceptance retain their existing guest/pixel/PCM assertions. Raw
+private game media and reports stay outside Git and publication. Required
+post-merge verification: None.
