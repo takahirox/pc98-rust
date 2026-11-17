@@ -1,5 +1,6 @@
 // Host-only RGB monitor presentation. The 2D canvas remains the raw capture
 // surface and always contains the newest frame before a transferable is acked.
+export const defaultPreset = 'sharp';
 export const presets = Object.freeze({
   off: {scan:0, softness:0},
   sharp: {scan:0.06, softness:0.035},
@@ -42,12 +43,12 @@ export class Presenter {
     this.raw = raw; this.output = output; this.surface = surface;
     this.context = raw.getContext('2d', {alpha:false});
     this.notify = text => { if (text !== this.message) { this.message = text; notify(text); } }; this.diagnostics = diagnostics;
-    this.preset = 'off'; this.mask = false; this.hasFrame = false;
+    this.preset = defaultPreset; this.mask = false; this.hasFrame = false;
     this.stats = {uploads:0, uploadMs:0, submitMs:0, gpuMs:0, gpuSamples:0, failures:0};
     this.queries = [];
     output.addEventListener('webglcontextlost', event => {
       event.preventDefault(); this.gl = null; this.queries = []; this.timer = null;
-      this.fallback('WebGL context lost; showing original pixels');
+      this.fallback('WebGL context lost');
     });
     output.addEventListener('webglcontextrestored', () => {
       this.failed = false; this.redraw();
@@ -65,11 +66,11 @@ export class Presenter {
   fallback(reason) {
     this.failed = true; this.output.hidden = true;
     this.surface.classList.remove('crt');
-    this.notify(reason);
+    this.notify(`${reason}; showing original pixels`);
   }
   initialize() {
     const gl = this.output.getContext('webgl2', {alpha:false, antialias:false, depth:false, stencil:false, preserveDrawingBuffer:false});
-    if (!gl || gl.isContextLost()) throw Error('WebGL2 unavailable; showing original pixels');
+    if (!gl || gl.isContextLost()) throw Error('WebGL2 unavailable');
     this.gl = gl;
     const shaders = [];
     let program, buffer, texture;
@@ -77,12 +78,12 @@ export class Presenter {
       for (const [type, source] of [[gl.VERTEX_SHADER,vertex],[gl.FRAGMENT_SHADER,fragment]]) {
         const shader = gl.createShader(type); shaders.push(shader);
         gl.shaderSource(shader,source); gl.compileShader(shader);
-        if (!gl.getShaderParameter(shader,gl.COMPILE_STATUS)) throw Error('CRT shader compilation failed; showing original pixels');
+        if (!gl.getShaderParameter(shader,gl.COMPILE_STATUS)) throw Error('CRT shader compilation failed');
       }
       program = gl.createProgram();
       for (const shader of shaders) gl.attachShader(program,shader);
       gl.linkProgram(program);
-      if (!gl.getProgramParameter(program,gl.LINK_STATUS)) throw Error('CRT shader linking failed; showing original pixels');
+      if (!gl.getProgramParameter(program,gl.LINK_STATUS)) throw Error('CRT shader linking failed');
       gl.useProgram(program);
       buffer = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
       gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);
@@ -107,7 +108,7 @@ export class Presenter {
     } finally { for (const shader of shaders) gl.deleteShader(shader); }
   }
   setPreset(value, mask = this.mask) {
-    this.preset = Object.hasOwn(presets,value) ? value : 'off'; this.mask = Boolean(mask);
+    this.preset = typeof value === 'string' && Object.hasOwn(presets,value) ? value : defaultPreset; this.mask = Boolean(mask);
     this.redraw();
   }
   present(frame) {
@@ -132,7 +133,7 @@ export class Presenter {
     try {
       if (!this.gl) this.initialize();
       const gl = this.gl;
-      if (gl.isContextLost()) throw Error('WebGL context lost; showing original pixels');
+      if (gl.isContextLost()) throw Error('WebGL context lost');
       this.surface.classList.add('crt');
       // Current PC-98 output is 640x400 with 1:1.2 pixels. Unknown future
       // dimensions default to square pixels rather than applying 1.2 twice.
@@ -176,7 +177,7 @@ export class Presenter {
       gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
       if (query) {gl.endQuery(timer.TIME_ELAPSED_EXT); this.queries.push(query);}
       this.stats.uploads++; this.stats.uploadMs += uploaded-start; this.stats.submitMs += performance.now()-uploaded;
-      if ((allocate || resized) && gl.getError() !== gl.NO_ERROR) throw Error('GPU allocation failed; showing original pixels');
+      if ((allocate || resized) && gl.getError() !== gl.NO_ERROR) throw Error('GPU allocation failed');
       this.output.hidden = false;
       this.notify('RGB CRT · 4:3 · screenshots of the screen include the filter');
     } catch (error) { this.stats.failures++; this.fallback(error.message); }

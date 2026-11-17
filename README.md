@@ -147,8 +147,9 @@ Japanese CG glyphs. FEP input is not implemented.
 Instruction-dependent [V30/DX2 timing](docs/cpu-timing.md) separates core clocks
 from the 8 MHz device scheduler and documents cache, bus and firmware approximations.
 
-Optional **Display** presets add a restrained GPU RGB CRT presentation without
-changing guest pixels or clocks. Original pixels remains the default. See
+**Display** presets add a restrained GPU RGB CRT presentation without
+changing guest pixels or clocks. Sharp CRT is the default for new visitors;
+saved preferences, including Original pixels, are preserved. See
 [presets, raw screenshots, fallback and validation](docs/crt-presentation.md).
 
 ## Reproduce the checks
