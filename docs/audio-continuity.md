@@ -70,19 +70,19 @@ missing frames in a window allowing fewer than 361. The test therefore detects
 the pacing defect independently of protocol/diagnostic availability; prefill
 alone cannot hide the permanent producer deficit.
 
-The Worker now uses the sink's consumed **source sample** count to target 2,880
-outstanding samples (60 ms), counting messages in transit. It executes one finite
+The Worker now uses the sink's consumed **source sample** count to target 4,800
+outstanding samples (100 ms), counting messages in transit. It executes one finite
 slice per task, yields, and stops producing when sufficiently ahead or out of
 credits. A late timer can be followed by another short task without accumulating
 unbounded wall-clock debt. Muted execution uses absolute 10 ms deadlines with
 catch-up bounded to 30 ms and cleared on control barriers. The guest's 8 MHz
 clock, instructions, sound synthesis, timer and IRQ order are unchanged.
 
-The sink prefills 2,400 source samples (50 ms) at startup/recovery. Its integer
+The sink prefills 4,320 source samples (90 ms) at startup/recovery. Its integer
 phase accumulator avoids floating-point drift in sample selection at 44.1 kHz,
 retains phase across blocks and preserves source cadence at 96 kHz. It does not
-stretch tempo or fabricate source PCM to conceal starvation. Six 1,024-sample
-transferable credits still impose the hard 128 ms transport capacity. The normal
+stretch tempo or fabricate source PCM to conceal starvation. Ten 1,024-sample
+transferable credits cap the transport at 10,240 source samples (about 213 ms). The normal
 watermark can overshoot by one finite slice; it does not grow with playback
 duration. Exceptional credit exhaustion and overflow are counted. Hosts unable
 to execute the guest in real time can still underflow; this does not guarantee
@@ -126,7 +126,7 @@ at 44.1 kHz matched the source cadence through the rational phase accumulator.
 
 The same guest also pauses/resumes, mutes/unmutes, suspends/resumes AudioContext,
 hides/shows the document with explicit resume, and resets during music. Epoch
-barriers recover all six credits; reset must stop the old song. Existing Worker
+barriers recover all credits. Reset must stop the old song. Existing Worker
 tests retain profile/VM, input, presentation, media and fault coverage. Node
 worklet tests additionally check exact rational source selection at 44.1/48/96 kHz
 for three seconds each, starvation/rebuffering, stale epochs, overflow order,
@@ -268,7 +268,7 @@ initial two-CPU Linux run with this change alone still recorded a 670-frame
 (14 ms) gap, so removing polling delay alone was insufficient; that full-suite
 attempt was stopped after the continuity failure.
 
-The fixed target is now 2,880 source samples (60 ms), with 2,400 samples (50 ms)
+That revision used 2,880 source samples (60 ms), with 2,400 samples (50 ms)
 of startup/recovery prefill. This adds 20 ms of reserve and retains the six
 existing credits and hard 128 ms transport capacity. The target plus one finite
 slice stays below 3,360 samples (70 ms); it never grows with playback duration.
@@ -359,3 +359,27 @@ The measurement tool and raw reports live outside the published `web/` assets.
 Keep private HDDs, converted fonts, setup diagnostics, captured frames, PCM and
 full reports outside Git. The compared NP2kai revision and its executable hash
 are recorded with the numeric evidence.
+
+## PCM reserve for scheduling stalls — Issue #202
+
+The 60 ms target left gaps at 0.75 CPU while guest execution remained close to
+real time. The target is now 4,800 samples (100 ms), with 4,320 samples (90 ms)
+for startup and recovery. Ten transferable blocks allow the producer to reach
+that target with the existing 10 ms execution slices. The target and one slice
+bound the ordinary queue to less than 110 ms of source audio. This adds about
+40 ms of source queue latency. Device-rate conversion, guest clocks and PCM
+ordering follow the existing paths. The live comparison uses the same reserve
+for both cores. If short slices fill all ten credits before reaching prefill,
+the sink starts the queued PCM and returns credits so playback can progress.
+To replay a frozen pre-#202 runtime, pass its asset directory as `--runtime`
+and match its Worklet with `--reserve=60`.
+
+Two production runs at 0.75 CPU with the larger reserve reach the same disk
+read milestones and complete boot through scene changes with zero missing PCM.
+Their Worker calibration slowdown ranges from 1.35 to 1.41 times. The prior
+60 ms run after #201 reports 1,745 missing frames in one gap of about 36 ms.
+Unrestricted runs sustain about 60 fps and zero missing PCM. The regression
+with isolated 70 ms scheduling stalls exercises the larger reserve and shows
+an underrun with the former 60 ms target during the same guest work. The
+severely constrained 0.5-CPU case can sustain a producer deficit and remains
+tracked in [#146](https://github.com/takahirox/pc98-rust/issues/146).

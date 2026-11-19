@@ -46,11 +46,11 @@ test('Worker progresses through DOS graphics and PCM with rAF stopped and DOM ev
   expect(state.audioEnergy).toBeGreaterThan(0.01);
   expect(state.scheduledSamples).toBeGreaterThan(1000);
   expect(state.frameInFlight).toBe(true);
-  expect(state.audioBuffers).toBeGreaterThanOrEqual(0); expect(state.audioBuffers).toBeLessThanOrEqual(6);
-  expect(state.queuedBlocks).toBeLessThanOrEqual(6);
+  expect(state.audioBuffers).toBeGreaterThanOrEqual(0); expect(state.audioBuffers).toBeLessThanOrEqual(10);
+  expect(state.queuedBlocks).toBeLessThanOrEqual(10);
   await page.evaluate(()=>document.getElementById('pause').click()); await expect(page.locator('#profile')).toBeEnabled();
   const paused=await page.evaluate(()=>pc98.stats());
-  expect(paused.queuedBlocks).toBe(0); expect(paused.audioBuffers).toBe(6);
+  expect(paused.queuedBlocks).toBe(0); expect(paused.audioBuffers).toBe(10);
   await page.waitForTimeout(50);
   expect((await page.evaluate(()=>pc98.stats())).instructions).toBe(paused.instructions);
   expect(errors).toEqual([]);
@@ -66,7 +66,7 @@ test('audio mute, pause, resume, reset and interrupted AudioContext flush the si
     const after=await page.evaluate(()=>pc98.stats());
     if (id === 'pause' && !before.running) expect(after.audioEpoch).toBe(before.audioEpoch);
     else expect(after.audioEpoch).toBeGreaterThan(before.audioEpoch);
-    expect(after.queuedBlocks).toBeLessThanOrEqual(6);
+    expect(after.queuedBlocks).toBeLessThanOrEqual(10);
     if (!after.running || after.audioGain === 0) expect(after.queuedBlocks).toBe(0);
   }
   await page.evaluate(()=>pc98.audio.suspend());
@@ -74,7 +74,7 @@ test('audio mute, pause, resume, reset and interrupted AudioContext flush the si
   await page.evaluate(()=>pc98.audio.resume());
   await page.locator('#pause').click(); await expect(page.locator('#profile')).toBeEnabled();
   const stopped=await page.evaluate(()=>pc98.stats());
-  expect(stopped.queuedBlocks).toBe(0); expect(stopped.audioBuffers).toBe(6);
+  expect(stopped.queuedBlocks).toBe(0); expect(stopped.audioBuffers).toBe(10);
 });
 
 test('frame snapshots survive memory growth, reset and delayed presentation on VM and Ap',async({page}) => {

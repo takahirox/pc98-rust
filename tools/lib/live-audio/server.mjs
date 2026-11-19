@@ -6,6 +6,7 @@ import {dirname,join} from 'node:path';
 const opts=Object.fromEntries(process.argv.slice(2).map(x=>x.slice(2).split('=')));
 const {output,executable}=opts;
 if (!['0','1'].includes(opts.reference) || !output?.startsWith('/out/') || !executable?.startsWith('/')) throw Error('Use the live audio host runner');
+if (!['60','100'].includes(opts.reserve)) throw Error('Unsupported live audio reserve');
 const dir=await mkdtemp(join(dirname(output),'live-chrome-'));
 const assets=new Map();
 for(const [n,file] of [
@@ -36,7 +37,7 @@ const server=createServer(async (req,res)=>{
 let child,stderr='';
 try{
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});
-  child=spawn(executable,['--headless','--no-sandbox','--user-data-dir='+dir,'--no-first-run','--no-default-browser-check','--autoplay-policy=no-user-gesture-required',`http://127.0.0.1:${server.address().port}/?reference=${opts.reference}`],{stdio:['ignore','ignore','pipe']});
+  child=spawn(executable,['--headless','--no-sandbox','--user-data-dir='+dir,'--no-first-run','--no-default-browser-check','--autoplay-policy=no-user-gesture-required',`http://127.0.0.1:${server.address().port}/?reference=${opts.reference}&reserve=${opts.reserve}`],{stdio:['ignore','ignore','pipe']});
   child.stderr.on('data',bytes=>{stderr=(stderr+bytes).slice(-4000);});
   const report=await Promise.race([done,new Promise((_,reject)=>child.once('error',reject).once('exit',code=>reject(Error('Browser exited '+code)))),
     new Promise((_,reject)=>setTimeout(()=>reject(Error('Live playback deadline')),210000).unref())]);

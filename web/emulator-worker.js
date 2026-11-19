@@ -16,7 +16,7 @@ function invalidateVideo() {
   clearTimeout(captureTimer);
 }
 let port, audioEnabled = false, audioState, audioEpoch = 0, flushWaiter;
-const audioBuffers = Array.from({length: 6}, () => new ArrayBuffer(1024 * 4));
+const audioBuffers = Array.from({length: 10}, () => new ArrayBuffer(1024 * 4));
 let sinkStats = {}, sinkStatsAt = 0, transaction = null;
 let producedSamples = 0, sentSamples = 0, droppedSamples = 0;
 let deadline = 0, diagnostics = false;
@@ -143,14 +143,14 @@ function presentDue() {
     // sink could consume while Wasm ran, rather than treating that stale cursor
     // as a full reserve. This estimate only gates video, never guest clocks.
     const reserve = Math.max(0, outstandingAudio() - (now-sinkStatsAt)*48);
-    // Six filled credits can leave a partially consumed block: 50 ms then
-    // suffices because refill is blocked. Otherwise refill toward 60 ms first.
+    // Ten filled credits can leave a partially consumed block: 90 ms then
+    // suffices because refill is blocked. Otherwise refill toward 100 ms first.
     // The sink reports whether its current output run is missing PCM. Delayed
     // credits can leave a positive reserve estimate even while it emits silence.
     // Bound preview refresh during that condition; recovered streams still wait
     // for their normal reserve, regardless of historical underrun totals.
     const starvedPreview = sinkStats.audioEpoch === audioEpoch && sinkStats.underflowRun > 0 && now >= previewDue;
-    if (reserve < (audioBuffers.length ? 2880 : 2400) && !starvedPreview) return;
+    if (reserve < (audioBuffers.length ? 4800 : 4320) && !starvedPreview) return;
   }
   present();
 }
@@ -175,7 +175,7 @@ function deliverAudio() {
     producedSamples += count;
     let sent = 0;
     const ptr = core.audio_ptr() >>> 0, samples = new Float32Array(core.memory.buffer,ptr,count);
-    // Six credits bound both MessagePort traffic and the sink queue. Normal
+    // Ten credits bound both MessagePort traffic and the sink queue. Normal
     // execution stops producing at the watermark, before exhausting credits.
     for (let at = 0; at < count && audioBuffers.length; at += 1024) {
       const buffer = audioBuffers.pop(), n = Math.min(1024,count-at);
@@ -224,12 +224,12 @@ function tick() {
   const started = performance.now();
   if (!running || busy || transaction) { schedule(); return; }
   try {
-    // The device consumes 48 kHz guest PCM. Target 60 ms ahead of its
+    // The device consumes 48 kHz guest PCM. Target 100 ms ahead of its
     // source cursor, including in-flight messages. Timer jitter cannot become
     // a permanent producer deficit, and a slow/suspended sink cannot lose PCM.
     // Each task still executes only one finite 10 ms slice before yielding.
     if (playingAudio()) {
-      if (outstandingAudio() < 2880 && audioBuffers.length) guestSlice();
+      if (outstandingAudio() < 4800 && audioBuffers.length) guestSlice();
     } else {
       if (!deadline) deadline = started;
       if (started >= deadline) {
@@ -245,7 +245,7 @@ function tick() {
       postMessage({event:'stopped', error:message()});
     }
   } catch (error) { running = false; postMessage({event:'fault', error:error.message}); }
-  schedule(playingAudio() ? (outstandingAudio() < 2880 && audioBuffers.length ? 0 : 5)
+  schedule(playingAudio() ? (outstandingAudio() < 4800 && audioBuffers.length ? 0 : 5)
     : (core.metric(5) < guestDeadline ? 0 : Math.max(1,deadline-performance.now())));
 }
 const calls = new Set(['key','mouse','set_boot_source','set_profile','reset','eject',
@@ -336,7 +336,7 @@ async function command(type, data) {
       const activeStarvation = m.type === 'stats' && m.epoch === audioEpoch && m.stats?.underflowRun > 0
         && playingAudio() && running && !manual && !busy && !transaction && performance.now() >= previewDue;
       if (activeStarvation) presentDue();
-      if (m.epoch === audioEpoch && playingAudio() && outstandingAudio() < 2880 && audioBuffers.length) schedule(0);
+      if (m.epoch === audioEpoch && playingAudio() && outstandingAudio() < 4800 && audioBuffers.length) schedule(0);
     };
     port.start(); await flushAudio(); return;
   }

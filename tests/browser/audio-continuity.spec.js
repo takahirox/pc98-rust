@@ -105,9 +105,9 @@ test('ADV98 production playback remains continuous through scene changes', async
     expect(current.droppedSamples).toBe(0); expect(current.overflows).toBe(0);
     expect(current.sequenceErrors).toBe(0); expect(current.checksumErrors).toBe(0);
     expect(current.sentSamples).toBe(current.producedSamples);
-    expect(current.queuedBlocks).toBeLessThanOrEqual(6);
+    expect(current.queuedBlocks).toBeLessThanOrEqual(10);
     expect(current.outstandingSamples).toBeGreaterThanOrEqual(0);
-    expect(current.outstandingSamples).toBeLessThan(3360); // Target 60 ms + one finite slice.
+    expect(current.outstandingSamples).toBeLessThan(5280); // Target 100 ms + one finite slice.
     expect(rendered,evidence).toBeGreaterThan(45000);
     // Permit isolated host scheduling noise (<0.5%), reject the baseline's
     // ~6% sustained silence. No persistent dropout may exceed 100 ms.
@@ -116,7 +116,7 @@ test('ADV98 production playback remains continuous through scene changes', async
     expect(current.audioEnergy).toBeGreaterThan(previous.audioEnergy+0.1);
     const guest=(current.cycles-previous.cycles)*48000/8000000;
     expect(Math.abs(source-guest)).toBeLessThan(2); // No guest-time/sample loss.
-    expect(Math.abs(source-rendered)).toBeLessThan(3360);
+    expect(Math.abs(source-rendered)).toBeLessThan(5280);
     observations.push({source,rendered,missed,queued:current.queuedSamples,edges:current.fmKeyEdges-previous.fmKeyEdges,
       soundIrqs:current.soundIrqEdges-previous.soundIrqEdges,fmPitch:current.fmPitch,ssgPeriod:current.ssgPeriod});
     if(i%4===3) {
@@ -152,14 +152,14 @@ test('ADV98 production playback remains continuous through scene changes', async
   if(testInfo.project.name==='local') expect(previous.jit.failures).toBe(0);
 
   // Exercise the same live guest through every stream discontinuity. Each
-  // barrier discards old PCM, recovers all six credits, then starts a fresh
+  // barrier discards old PCM, recovers all ten credits, then starts a fresh
   // sample sequence without changing the guest music clock.
   for(const id of ['pause','sound']) {
     const before=await stats(page);
     await page.locator('#'+id).click(); await expect(page.locator('#profile')).toBeEnabled();
     const stopped=await stats(page);
     expect(stopped.audioEpoch).toBeGreaterThan(before.audioEpoch);
-    expect(stopped.queuedSamples).toBe(0); expect(stopped.audioBuffers).toBe(6);
+    expect(stopped.queuedSamples).toBe(0); expect(stopped.audioBuffers).toBe(10);
     await page.locator('#'+id).click(); await advancing(page);
   }
   await page.evaluate(()=>pc98.audio.suspend());
@@ -171,7 +171,7 @@ test('ADV98 production playback remains continuous through scene changes', async
   });
   await expect(page.locator('#pause')).toHaveText('Resume');
   const hidden=await stats(page);
-  expect(hidden.queuedSamples).toBe(0); expect(hidden.audioBuffers).toBe(6);
+  expect(hidden.queuedSamples).toBe(0); expect(hidden.audioBuffers).toBe(10);
   await page.evaluate(()=>{delete document.hidden;document.dispatchEvent(new Event('visibilitychange'));});
   await page.waitForTimeout(100);
   expect((await stats(page)).cycles).toBe(hidden.cycles);

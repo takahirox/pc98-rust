@@ -11,6 +11,8 @@ import {budgetOptions,image,executable} from './lib/cpu-budget.mjs';
 const execute=promisify(execFile);
 const root=await realpath(fileURLToPath(new URL('../',import.meta.url)));
 const options=Object.fromEntries(process.argv.slice(2).map(value=>value.replace(/^--/,'').split('=')));
+const reserve=options.reserve??'100';
+if(!['60','100'].includes(reserve))throw Error('Use --reserve=60 or --reserve=100 to match the selected AudioWorklet');
 const repeat=Number(options.repeat??1);
 const budgets=(options.budgets??'unlimited,0.5').split(',').map(budgetOptions);
 if(!Number.isInteger(repeat)||repeat<1||repeat>3||budgets[0].label!=='unlimited'||new Set(budgets.map(b=>b.label)).size!==budgets.length)
@@ -53,14 +55,14 @@ const stop=async()=>{
   owned=null;
 };
 for(const signal of ['SIGINT','SIGTERM'])process.once(signal,()=>{void stop().finally(()=>process.exit(1));});
-await writeFile(join(output,'configuration.json'),JSON.stringify({identity,repeat,budgets,automationProtocol:false},null,2));
+await writeFile(join(output,'configuration.json'),JSON.stringify({identity,repeat,budgets,reserve,automationProtocol:false},null,2));
 const calibrationControls=new Map();
 for(let run=0;run<repeat;run++)for(const budget of budgets)for(const engine of run%2?['np2kai','pc98-rust']:['pc98-rust','np2kai']){
   const name=`${run}-${budget.label}-${engine}`,directory=join(output,name);
   await mkdir(directory);
   const readOnly=[[join(frozen,'runtime'),'/runtime'],[join(frozen,'reference'),'/reference'],
     [join(frozen,'runner'),'/input'],[options.media,'/private/game.hdi']];
-  const script=`node /input/calibrate_cpu_budget.mjs --executable=${executable} --output=/out/calibration.json && exec node /input/server.mjs --executable=${executable} --output=/out/result.json --reference=${engine==='np2kai'?1:0}`;
+  const script=`node /input/calibrate_cpu_budget.mjs --executable=${executable} --output=/out/calibration.json && exec node /input/server.mjs --executable=${executable} --output=/out/result.json --reference=${engine==='np2kai'?1:0} --reserve=${reserve}`;
   owned=await docker(['create','--init','--network=none','--memory=2g','--shm-size=256m','--cpuset-cpus=0,1',
     '--cpu-period='+budget.period,'--cpu-quota='+budget.quota,'--name','pc98-live-'+randomUUID(),
     ...readOnly.flatMap(([src,dst])=>['--mount',`type=bind,src=${src},dst=${dst},readonly`]),

@@ -98,7 +98,7 @@ test('authoritative Worker coalesces full snapshots, rejects stale credits and r
   cycles++;
   run("audioEnabled=true;audioState='running';port={};sentSamples=0;presentDue()");
   assert.equal(frames.length,2);
-  run('sentSamples=2880;presentDue()');
+  run('sentSamples=4800;presentDue()');
   assert.equal(frames.length,2); // The sink consumed PCM while this cursor aged.
   run('sinkStatsAt=performance.now();presentDue()');
   assert.equal(frames.length,3);
@@ -107,7 +107,7 @@ test('authoritative Worker coalesces full snapshots, rejects stale credits and r
   // credit waits until its deadline and a repeated guest clock stays idle.
   context.credit=frames[2].buffer;
   cycles++;
-  run('running=true;sentSamples=3120;testPort.onmessage({data:{sequence:3,buffer:credit,captureAt:115}})');
+  run('running=true;sentSamples=5040;testPort.onmessage({data:{sequence:3,buffer:credit,captureAt:115}})');
   assert.equal(frames.length,3);
   now=14; run('presentDue()');
   assert.equal(frames.length,3);
