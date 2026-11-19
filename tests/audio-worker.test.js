@@ -8,7 +8,7 @@ const source = readFileSync(new URL('../web/emulator-worker.js',import.meta.url)
 // Exercise the production scheduler with a 7 ms cost per 10 ms guest slice.
 // This host can produce PCM in real time, but cannot also pay a nested timer's
 // 4 ms minimum on every slice. No wall-clock sleeps or platform speed thresholds.
-function worker(code=source, {prebuffer=2400, stalls=[], frameCost=0, renderWorker=false, sliceCost=()=>7}={}) {
+function worker(code=source, {prebuffer=4320, stalls=[], frameCost=0, renderWorker=false, sliceCost=()=>7}={}) {
   let now=0, nextId=0, samples=0, started=false, missed=0, slices=0, clocks=0;
   const frames=[];
   const events=[], blocks=[], recycled=[];
@@ -103,8 +103,8 @@ test('host rendering waits for PCM reserve while preview refresh stays bounded',
   // regularly despite the independently scheduled 22 ms render job.
   const longestFrameGap=Math.max(...frames.slice(1).map((at,i)=>at-frames[i]));
   assert(longestFrameGap<=167,`frame gap ${longestFrameGap}`);
-  assert(current.result().outstanding<3360);
-  const old=worker(source.replace('if (reserve < (audioBuffers.length ? 2880 : 2400) && !starvedPreview) return;',''),{frameCost:22});
+  assert(current.result().outstanding<5280);
+  const old=worker(source.replace('if (reserve < (audioBuffers.length ? 4800 : 4320) && !starvedPreview) return;',''),{frameCost:22});
   old.run('schedule(0)'); old.until(5000);
   assert(old.result().missed>48000*0.3);
 });
@@ -117,25 +117,28 @@ test('independent rasterization waits for PCM reserve on a CPU-constrained host'
   assert(current.result().frames.length>30);
   const frames=current.result().frames;
   assert(Math.max(...frames.slice(1).map((at,i)=>at-frames[i]))<=167);
-  assert(current.result().outstanding<3360);
+  assert(current.result().outstanding<5280);
   // Negative control: the old path launched render work with a depleted sink
   // just because snapshot capture in the producer itself was inexpensive.
-  const old=worker(source.replace('if (reserve < (audioBuffers.length ? 2880 : 2400) && !starvedPreview)',
-    'if (!videoPort && reserve < (audioBuffers.length ? 2880 : 2400) && !starvedPreview)'),options);
+  const old=worker(source.replace('if (reserve < (audioBuffers.length ? 4800 : 4320) && !starvedPreview)',
+    'if (!videoPort && reserve < (audioBuffers.length ? 4800 : 4320) && !starvedPreview)'),options);
   old.run('schedule(0)'); old.until(5000);
   assert(old.result().missed>48000*0.3);
 });
 
 test('a slow guest scene cannot force render work to spend the remaining PCM reserve',()=>{
-  const options={frameCost:22,renderWorker:true,
+  // Keep the measured scene and its original reserve so the control isolates
+  // the rendering decision. The longer-reserve case below exercises new stalls.
+  const sceneSource=source.replaceAll('4800','2880').replaceAll('4320','2400').replace('length: 10','length: 6');
+  const options={frameCost:22,renderWorker:true,prebuffer:2400,
     sliceCost:slice=>slice>=95 && slice<115 ? 11 : 7};
-  const current=worker(source,options); current.run('schedule(0)'); current.until(3000);
+  const current=worker(sceneSource,options); current.run('schedule(0)'); current.until(3000);
   assert.equal(current.result().missed,0);
   assert(current.result().outstanding<3360);
   assert(current.result().frames.at(-1)>2800,'Rendering resumes after PCM catches up');
   // Same bounded scene cost, guest time, credits and reserve. The old wall
   // deadline launched a renderer while the producer was still behind.
-  const old=worker(source.replace('if (reserve < (audioBuffers.length ? 2880 : 2400) && !starvedPreview) return;',
+  const old=worker(sceneSource.replace('if (reserve < (audioBuffers.length ? 2880 : 2400) && !starvedPreview) return;',
     'if (playingAudio() && outstandingAudio() < 2880 && now < previewDue) return;'),options);
   old.run('schedule(0)'); old.until(3000);
   assert(old.result().missed>0);
@@ -216,7 +219,7 @@ test('audio catch-up yields finite tasks without the nested timer producer defic
   const current=worker(); current.run('schedule(0)'); current.until(5000);
   assert.equal(current.result().missed,0);
   assert(current.result().produced>=48000*4.95);
-  assert(current.result().outstanding<3360);
+  assert(current.result().outstanding<5280);
   // Negative control keeps the same credits, watermark, sink and guest cost;
   // only restore the previous timer yield. Prefilling cannot hide its deficit.
   const old=worker(source.replace('? 0 : 5)', '? 1 : 5)'));
@@ -225,15 +228,15 @@ test('audio catch-up yields finite tasks without the nested timer producer defic
   assert(old.result().produced<48000*4.6);
 });
 
-test('the finite reserve survives isolated 35 ms scheduling stalls without hiding a producer deficit',()=>{
-  const stalls=[[1000,35],[3000,35]];
+test('the finite reserve survives isolated 70 ms scheduling stalls without hiding a producer deficit',()=>{
+  const stalls=[[1000,70],[3000,70]];
   const current=worker(source,{stalls}); current.run('schedule(0)'); current.until(5000);
   assert.equal(current.result().missed,0);
   assert(current.result().produced>=48000*4.95);
-  assert(current.result().outstanding<3360);
-  // Same slice cost and stalls, but the former 40 ms target/30 ms prefill.
+  assert(current.result().outstanding<5280);
+  // Same slice cost and stalls, but the former 60 ms target/50 ms prefill.
   // This isolates a reserve shortfall from the sustained timer deficit above.
-  const small=worker(source.replaceAll('2880','1920'),{prebuffer:1440,stalls});
+  const small=worker(source.replaceAll('4800','2880'),{prebuffer:2400,stalls});
   small.run('schedule(0)'); small.until(5000);
   assert(small.result().missed>0);
 });
@@ -246,7 +249,7 @@ test('pause cancels a queued task, resume ignores stale tasks, and a full sink w
   w.next(); assert.equal(w.result().slices,0); // Stale task cannot run the resumed schedule.
   w.next(); assert.equal(w.result().slices,1);
   const full=worker();
-  full.run('sentSamples=2880;lastFrameCycles=testCore.metric(5);schedule(0)');
+  full.run('sentSamples=4800;lastFrameCycles=testCore.metric(5);schedule(0)');
   full.next();
   assert.equal(full.result().slices,0);
   full.next();
@@ -260,7 +263,7 @@ test('a current sink credit preempts polling, while stale and full cursors do no
   const connected=w.run("command('audioPort',testPort)");
   w.run("testPort.onmessage({data:{type:'flushed',epoch:audioEpoch,stats:{audioEpoch,consumedSamples:0}}})");
   await connected;
-  w.run('running=true;sentSamples=2880;schedule(5)');
+  w.run('running=true;sentSamples=4800;schedule(5)');
   w.run("testPort.onmessage({data:{type:'recycle',epoch:audioEpoch-1,stats:{audioEpoch:audioEpoch-1,consumedSamples:480}}})");
   w.run("testPort.onmessage({data:{type:'stats',epoch:audioEpoch,stats:{audioEpoch,consumedSamples:0}}})");
   assert.equal(w.run("timer === 'task'"),false);

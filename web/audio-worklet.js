@@ -1,4 +1,5 @@
 // First-party PCM delivery only. Guest synthesis and clocks stay in the Worker.
+const maxQueuedBlocks = 10;
 class PC98Audio extends AudioWorkletProcessor {
   constructor() {
     super();
@@ -6,7 +7,7 @@ class PC98Audio extends AudioWorkletProcessor {
     this.energy = 0; this.samples = 0; this.underflows = 0; this.overflows = 0;
     this.receivedSamples = 0; this.consumedSamples = 0; this.queuedSamples = 0;
     this.sequenceErrors = 0; this.staleBlocks = 0; this.checksumErrors = 0; this.checkedBlocks = 0;
-    this.prebufferSamples = 2400; // 50 ms, inside the six transferable credits.
+    this.prebufferSamples = 4320; // 90 ms, inside the ten transferable credits.
     this.waiting = true; this.started = false;
     this.underflowRun = 0; this.maxUnderflowRun = 0; this.reportFrames = 0;
     this.port.onmessage = ({data:m}) => {
@@ -40,7 +41,7 @@ class PC98Audio extends AudioWorkletProcessor {
       this.report('flushed');
     } else if (m.type === 'pcm') {
       if (m.epoch !== this.epoch) { this.staleBlocks++; this.release(m); return; }
-      if (this.queue.length >= 6) { this.overflows++; this.release(m); return; }
+      if (this.queue.length >= maxQueuedBlocks) { this.overflows++; this.release(m); return; }
       if (m.start !== this.receivedSamples) this.sequenceErrors++;
       this.receivedSamples = m.start + m.count;
       this.queuedSamples += m.count;
@@ -64,7 +65,9 @@ class PC98Audio extends AudioWorkletProcessor {
     const output = outputs[0][0];
     if (!output) return true;
     for (let i = 0; i < output.length; i++) {
-      if (this.waiting && this.queuedSamples >= this.prebufferSamples) {
+      // A guest slice can hit its work cap before producing 10 ms of PCM.
+      // With every credit held, play the available prefix to recycle a block.
+      if (this.waiting && (this.queuedSamples >= this.prebufferSamples || this.queue.length === maxQueuedBlocks)) {
         this.waiting = false; this.started = true;
       }
       this.advance();

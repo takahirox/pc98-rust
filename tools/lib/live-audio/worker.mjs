@@ -83,7 +83,8 @@ async function reference(disk){
   };
 }
 const task=new MessageChannel();
-const buffers=Array.from({length:6},()=>new ArrayBuffer(4096));
+const buffers=[];
+let watermark;
 let machine,pcm,timer,started=false,sink={},sent=0,produced=0,dropped=0,frames=0,frameCredit=new ArrayBuffer(pixelBytes),nextFrame=0;
 // Both implementations share the same bounded audio pump and presentation credit.
 // In the reference, one native libretro frame is the minimum unit of work.
@@ -93,7 +94,7 @@ function schedule(immediate){
   if(timer)return;
   if(immediate){timer=true;task.port2.postMessage(null);}else timer=setTimeout(tick,5);
 }
-function ready(){return buffers.length&&sent-(sink.consumedSamples??0)<2880;}
+function ready(){return buffers.length&&sent-(sink.consumedSamples??0)<watermark;}
 function tick(){
   timer=null;
   try{
@@ -131,6 +132,8 @@ task.port1.onmessage=tick;
 onmessage=async ({data:m})=>{
   try{
     if(m.type==='init'){
+      watermark=m.reserve*48;
+      for(let i=0;i<m.reserve/10;i++)buffers.push(new ArrayBuffer(4096));
       machine=await (m.reference?reference:own)(await read('game.hdi'));
       const initial=anchor(machine.pixels());
       if(initial!==854969663)throw Error('Starting scene anchor mismatch: '+initial);

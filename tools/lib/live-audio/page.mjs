@@ -1,5 +1,6 @@
 import {Presenter} from './presenter.js';
-const reference=new URL(location.href).searchParams.get('reference')==='1';
+const params=new URL(location.href).searchParams;
+const reference=params.get('reference')==='1', reserve=Number(params.get('reserve'));
 const raw=document.querySelector('#raw'),crt=document.querySelector('#crt');
 const presenter=new Presenter(raw,crt,document.querySelector('#surface'));
 const audio=new AudioContext({sampleRate:48000});
@@ -41,7 +42,7 @@ try{
   await audio.suspend();await audio.audioWorklet.addModule('./audio-worklet.js');
   const node=new AudioWorkletNode(audio,'pc98-audio',{outputChannelCount:[1]});node.connect(audio.destination);
   const link=new MessageChannel();node.port.postMessage({type:'connect',port:link.port1},[link.port1]);
-  await get('ready',()=>worker.postMessage({type:'init',reference,port:link.port2},[link.port2]));
+  await get('ready',()=>worker.postMessage({type:'init',reference,reserve,port:link.port2},[link.port2]));
   begin=performance.now();worker.postMessage({type:'start'});await audio.resume();
   // Exclude the bounded warm-up from both measurement windows.
   await sleep(3000);
