@@ -30,6 +30,7 @@ def main():
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--jobs", type=int, default=4)
+    parser.add_argument("--live", action="store_true", help="expose frame and PCM access for the live audio comparison")
     args = parser.parse_args()
     output = args.output.resolve()
     if output.is_relative_to(TOOLS.parent) or not 1 <= args.jobs <= 32:
@@ -61,14 +62,16 @@ def main():
         "NP2KAI_VERSION=0.86.0.22", "NP2KAI_HASH=5939e0c6", "SUPPORT_ASYNC_CPU=0", cwd=source / "sdl")
     # The upstream .bc target is an ar archive; em++ needs its correct extension.
     shutil.copyfile(source / "sdl/np2kai_libretro_emscripten.bc", output / "np2kai.a")
-    run("emcc", "-O2", "-std=c11", "-D_POSIX_C_SOURCE=200809L", "-I",
+    live_flags = ["-DPC98_COMPARE_LIVE"] if args.live else []
+    run("emcc", "-O2", "-std=c11", "-D_POSIX_C_SOURCE=200809L", *live_flags, "-I",
         str(source / "sdl/libretro/libretro-common/include"), "-c",
         str(TOOLS / "np2kai_browser_frontend.c"), "-o", str(output / "frontend.o"))
+    runtime = "FS,callMain,HEAPU8,HEAPF32" if args.live else "FS,callMain"
     run("em++", "-O2", str(output / "frontend.o"), str(output / "np2kai.a"),
         "-o", str(output / "np2.mjs"), "-sMODULARIZE=1", "-sEXPORT_ES6=1",
         "-sENVIRONMENT=web,worker", "-sALLOW_MEMORY_GROWTH=1", "-sSTACK_SIZE=8388608",
         "-sINITIAL_MEMORY=67108864", "-sFORCE_FILESYSTEM=1",
-        "-sEXPORTED_RUNTIME_METHODS=FS,callMain", "-sINVOKE_RUN=0", "-sEXIT_RUNTIME=0")
+        f"-sEXPORTED_RUNTIME_METHODS={runtime}", "-sINVOKE_RUN=0", "-sEXIT_RUNTIME=0")
 
 
 if __name__ == "__main__":

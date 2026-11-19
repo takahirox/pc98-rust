@@ -323,3 +323,13 @@ and conservative change detection. Native, optimized Wasm, actual-browser and
 serial-audio acceptance retain their existing guest/pixel/PCM assertions. Raw
 private game media and reports stay outside Git and publication. Required
 post-merge verification: None.
+
+## Avoid unchanged copy and inert shader work
+
+The render Worker now keeps the bytes in the returned pixel buffer when the
+exact scanout proof says the raster is unchanged. A dropped predecessor still
+has its full pixel payload available. The shader bypasses scanline and mask
+calculations when the existing smoothstep or mask setting makes their effect
+zero. The threshold tests and the full-pixel payload remain the same. See
+[Issue #200](https://github.com/takahirox/pc98-rust/issues/200) for repeated
+performance and audio comparisons.

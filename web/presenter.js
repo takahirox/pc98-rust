@@ -28,13 +28,17 @@ void main() {
   vec2 density = outputSize/sourceSize;
   // Fade modulation below two output pixels per source line, and integrate
   // the sinusoid across the output pixel footprint to suppress scale moire.
-  float a = 3.14159265 / max(density.y,0.01);
-  float attenuation = sin(a)/a * smoothstep(1.5,3.0,density.y);
-  c *= 1.0 - scan * attenuation * (0.5-0.5*cos(6.2831853*(p.y-0.5)));
+  if (scan > 0.0 && density.y > 1.5) {
+    float a = 3.14159265 / max(density.y,0.01);
+    float attenuation = sin(a)/a * smoothstep(1.5,3.0,density.y);
+    c *= 1.0 - scan * attenuation * (0.5-0.5*cos(6.2831853*(p.y-0.5)));
+  }
   // One RGB triad per source pixel, only at >= 3 device pixels per triad.
-  float enabled = mask * smoothstep(3.0,4.0,density.x) * smoothstep(2.0,3.0,density.y);
-  float m = 9.42477796 / max(density.x,0.01);
-  c *= 1.0 - enabled * (0.5-0.5*cos(vec3(0,2.0943951,4.1887902)+p.x*6.2831853)) * sin(m)/m;
+  if (mask > 0.0 && density.x > 3.0 && density.y > 2.0) {
+    float enabled = mask * smoothstep(3.0,4.0,density.x) * smoothstep(2.0,3.0,density.y);
+    float m = 9.42477796 / max(density.x,0.01);
+    c *= 1.0 - enabled * (0.5-0.5*cos(vec3(0,2.0943951,4.1887902)+p.x*6.2831853)) * sin(m)/m;
+  }
   color = vec4(c,1);
 }`;
 

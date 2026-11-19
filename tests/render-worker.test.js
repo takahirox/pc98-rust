@@ -132,18 +132,25 @@ test('authoritative Worker coalesces full snapshots, rejects stale credits and r
 });
 
 test('unchanged raster proofs name the preceding output and retain full pixel credits',()=>{
- const r=renderer();r.run('testCore.video_render_changed=()=>1');r.snapshot(1);
+ const r=renderer();
+ r.run('testCore.video_render_changed=()=>1;new Uint8Array(testCore.memory.buffer)[8]=31');
+ r.snapshot(1);
  assert.equal(r.frames[0].samePixelsAs,0);
  r.context.ack=r.frames[0].buffer;r.run('onmessage({data:{type:"frameAck",buffer:ack,sequence:1}})');
  r.run('testCore.video_render_changed=()=>0');r.snapshot(2);
  assert.equal(r.frames[1].samePixelsAs,1);assert.equal(r.frames[1].buffer.byteLength,640*400*4);
+ assert.equal(new Uint8Array(r.frames[1].buffer)[0],31);
  assert.equal(r.frames[1].renderStats.unchangedFrames,1);
  r.context.ack=r.frames[1].buffer;r.run('onmessage({data:{type:"frameAck",buffer:ack,sequence:2}})');
- r.run('testCore.video_render_changed=()=>1');r.snapshot(3);
+ r.run('testCore.video_render_changed=()=>1;new Uint8Array(testCore.memory.buffer)[8]=83');r.snapshot(3);
  assert.equal(r.frames[2].samePixelsAs,0);
  r.context.ack=r.frames[2].buffer;r.run('onmessage({data:{type:"frameAck",buffer:ack,sequence:3}})');
- r.run('testCore.memory.buffer=new ArrayBuffer(3*1024*1024);testCore.video_render_changed=()=>0');r.snapshot(4);
+ r.run(`const grown=new ArrayBuffer(3*1024*1024);
+   new Uint8Array(grown).set(new Uint8Array(testCore.memory.buffer));
+   testCore.memory.buffer=grown;testCore.video_render_changed=()=>0`);
+ r.snapshot(4);
  assert.equal(r.frames[3].samePixelsAs,3);assert.equal(r.frames[3].buffer.byteLength,640*400*4);
+ assert.equal(new Uint8Array(r.frames[3].buffer)[0],83);
 });
 
 // Exercise the presentation consumer independently of renderer/guest mocks.
