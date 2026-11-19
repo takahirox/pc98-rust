@@ -58,10 +58,12 @@ function renderFrame(frame) {
     const copied = performance.now();
     const output = core.video_render(frame.length) >>> 0;
     if (!output) throw Error('Invalid video snapshot');
-    const unchanged = typeof core.video_render_changed==='function' && !core.video_render_changed();
+    const unchanged = previousSequence > 0 && typeof core.video_render_changed==='function' && !core.video_render_changed();
     if (unchanged) totals.unchangedFrames++;
     const rasterized = performance.now();
-    new Uint8Array(pixels).set(new Uint8Array(core.memory.buffer,output,640*400*4));
+    // The sole returned pixel credit still contains the preceding output.
+    // A discarded frame needs this same full payload on the next presentation.
+    if (!unchanged) new Uint8Array(pixels).set(new Uint8Array(core.memory.buffer,output,640*400*4));
     totals.wasmBytes = core.memory.buffer.byteLength;
     totals.frames++;
     totals.rasterMs += rasterized-copied;

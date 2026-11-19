@@ -315,3 +315,47 @@ their root-path cases passed. These results use the production release Wasm
 and unmodified production Worker/AudioWorklet. They are local container results,
 not a new GitHub Actions result; this revision does not push. No media, recordings,
 build outputs or trace artifacts are committed.
+
+## Live NP2kai comparison
+
+`tools/measure_live_audio.mjs` compares both cores in a shared local browser
+frontend with the production AudioWorklet and Sharp CRT presenter. Both runs
+prepare the same verified prologue image before starting the audio clock. They
+then play a 24-second stationary window followed by 48 wall-paced dialogue
+inputs. The progressing window measures response to equal input schedules.
+Guest progress and the final scene can differ when either core falls behind.
+The production boot and Worker pipeline are tested independently with
+`tools/measure_cpu_budget.mjs`.
+
+Build the pinned reference with `tools/build_np2kai_browser.py --live`. Use a local
+installed base-game HDD, a replacement FONT.ROM and an NP2kai configuration
+setting `SampleHz = 48000` under `[NekoProjectIIkai]` and
+`[NekoProject21kai]`. The fixture uses Shinonome from `fixtures/fonts` converted
+to the reference's V98 glyph layout. See the
+[reference build instructions](browser-block-core.md) for pinned upstream and
+model settings. All paths below are absolute and outside the checkout:
+
+```sh
+node tools/measure_live_audio.mjs --media=/tmp/private/installed.hdi \
+  --reference=/tmp/private/np2kai --font=/tmp/private/FONT.ROM \
+  --config=/tmp/private/np2kai.cfg --output=/tmp/private/live-audio \
+  --budgets=unlimited,0.5 --repeat=2
+```
+
+The reference adapter exposes one libretro frame at a time and downmixes its
+48 kHz stereo PCM to the shared mono sink. The Rust adapter uses the production
+RAM-block JIT and software snapshot renderer. Their common host loop bounds
+PCM and frame credits. It serves only the frozen local assets over loopback.
+The order of the two engines alternates across repetitions. The cached Chromium
+141 image, two allowed CPUs and 4 ms quota period match the production controls.
+The runner records actual Worker slowdown, active CRT status, guest/wall, fps,
+missing frames and callback/wall. PCM/wall measures the fraction of real time
+filled by delivered PCM. Missing frames alone can make a descheduled sink look
+healthy if fewer callbacks run. Chromium 141 did not expose device underrun
+statistics in these runs. The measurement includes browser AudioWorklet output
+and leaves physical DAC behavior and soundtrack fidelity unmeasured.
+
+The measurement tool and raw reports live outside the published `web/` assets.
+Keep private HDDs, converted fonts, setup diagnostics, captured frames, PCM and
+full reports outside Git. The compared NP2kai revision and its executable hash
+are recorded with the numeric evidence.

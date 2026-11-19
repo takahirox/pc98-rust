@@ -46,13 +46,14 @@ assets.set('app.js',Buffer.from(assets.get('app.js').toString()+`
 window.reproductionMouse=(...args)=>core.mouse(...args);
 window.reproductionAudio=()=>{
   const modern=audio?.playbackStats, legacy=audio?.playoutStats;
-  if(modern)return {supported:true,api:'playbackStats',totalSeconds:modern.totalDuration,
+  const latency={baseLatencySeconds:audio?.baseLatency,outputLatencySeconds:audio?.outputLatency};
+  if(modern)return {...latency,supported:true,api:'playbackStats',totalSeconds:modern.totalDuration,
     underrunSeconds:modern.underrunDuration,underrunEvents:modern.underrunEvents,
     averageLatencySeconds:modern.averageLatency,maximumLatencySeconds:modern.maximumLatency};
-  if(legacy)return {supported:true,api:'playoutStats',totalSeconds:legacy.totalFramesDuration/1000,
+  if(legacy)return {...latency,supported:true,api:'playoutStats',totalSeconds:legacy.totalFramesDuration/1000,
     underrunSeconds:legacy.fallbackFramesDuration/1000,underrunEvents:legacy.fallbackFramesEvents,
     averageLatencySeconds:legacy.averageLatency/1000,maximumLatencySeconds:legacy.maximumLatency/1000};
-  return {supported:false};
+  return {...latency,supported:false};
 };
 `));
 const servedHashes=Object.fromEntries([...assets].map(([name,body])=>[name,sha(body)]));
