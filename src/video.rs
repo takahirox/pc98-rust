@@ -1,5 +1,6 @@
 //! Immutable scanout boundary shared by native, inline-Wasm and render Worker paths.
 use crate::{devices::Gdc, font::UserCharacters, profile::Profile};
+use std::ops::Range;
 
 pub const HEADER: usize = 128;
 pub const GLYPHS: usize = HEADER + 16 * 3 + 256 * 3;
@@ -106,7 +107,9 @@ impl VideoView<'_> {
         let blink_off =
             frame % (8 * u64::from(gdc.blink_rate.max(1))) >= 6 * u64::from(gdc.blink_rate.max(1));
         let cursor_on = gdc.cursor_on(frame);
-        let cell_pixels = if self.text_40 { 16 } else { 8 };
+        let dot_width = if self.text_40 { 2 } else { 1 };
+        let cell_pixels = 8 * dot_width;
+        let graphics_start = self.gdcs[1].start as usize;
         let mut colors = [[0; 4]; 256];
         let palette = if self.pegc {
             &self.pegc_palette[..]
@@ -116,114 +119,120 @@ impl VideoView<'_> {
         for (color, rgb) in colors.iter_mut().zip(palette) {
             *color = [rgb[0], rgb[1], rgb[2], 255];
         }
-        for (y, &changed) in rows.iter().enumerate() {
+        let rgba = out[..640 * 400 * 4].as_chunks_mut::<4>().0;
+        for (y, (row, &changed)) in rgba.chunks_exact_mut(640).zip(rows).enumerate() {
             if !changed {
                 continue;
             }
-            for left in (0..640).step_by(cell_pixels) {
-                // Address, glyph and attributes are shared by a character row.
-                // Decode once, then composite its dots over the current bitmap.
-                // In 40-column mode each span doubles its dots and skips the
-                // odd VRAM word, so its physical column is still left / 8.
-                let mut ink = 0;
-                let mut text_color = 0;
-                if let Some((cell, glyph_y)) = text.then(|| gdc.text_address(y, left / 8)).flatten()
-                {
-                    let ch = self.mem[cell * 2];
-                    let attr = self.mem[0x2000 + cell * 2];
-                    let high = self.mem[cell * 2 + 1];
-                    ink = if self.profile == Profile::Pc9821ApDos && high != 0 {
-                        // Dot access blanks text Kanji while preserving glyph RAM.
-                        if self.cg_dot || glyph_y >= 16 {
-                            0
-                        } else {
-                            self.user_characters.byte(
-                                (ch & 127).wrapping_add(0x20),
-                                high,
-                                glyph_y * 2 + usize::from(ch & 128 != 0),
-                            )
-                        }
-                    } else if self.text_graph && attr & 16 != 0 {
-                        if glyph_y < 16 {
-                            let blocks = ch >> (glyph_y / 4 * 2);
-                            (if blocks & 1 != 0 { 0xf0 } else { 0 })
-                                | (if blocks & 2 != 0 { 0x0f } else { 0 })
-                        } else {
-                            0
-                        }
-                    } else if glyph_y < 16 {
-                        crate::font::row(ch, glyph_y as u8)
+            if !graphics {
+                row.fill(colors[0]);
+            } else if self.pegc {
+                let start = (usize::from(self.display_page) * 0x40000
+                    + graphics_start * 8
+                    + y * usize::from(self.gdcs[1].pitch) * 8)
+                    & 0x7ffff;
+                let first = row.len().min(0x80000 - start);
+                let indexes = self.graphics[start..start + first]
+                    .iter()
+                    .chain(&self.graphics[..row.len() - first]);
+                for (pixel, &index) in row.iter_mut().zip(indexes) {
+                    *pixel = colors[usize::from(index)];
+                }
+            } else {
+                let line = if self.graphics_200 { y / 2 } else { y };
+                let start = graphics_start * 2 + line * 80;
+                let blue = &self.graphics[page..page + 0x8000];
+                let red = &self.graphics[page + 0x8000..page + 0x10000];
+                let green = &self.graphics[page + 0x10000..page + 0x18000];
+                let intensity = (self.analog && self.profile == Profile::Pc9821ApDos)
+                    .then(|| &self.graphics[page + 0x18000..page + 0x20000]);
+                for (column, pixels) in row.as_chunks_mut::<8>().0.iter_mut().enumerate() {
+                    let at = (start + column) & 0x7fff;
+                    let mut indexes = PLANE_DOTS[usize::from(blue[at])]
+                        | (PLANE_DOTS[usize::from(red[at])] << 1)
+                        | (PLANE_DOTS[usize::from(green[at])] << 2);
+                    if let Some(plane) = intensity {
+                        indexes |= PLANE_DOTS[usize::from(plane[at])] << 3;
+                    }
+                    for (pixel, index) in pixels.iter_mut().zip(indexes.to_le_bytes()) {
+                        *pixel = colors[usize::from(index)];
+                    }
+                }
+            }
+
+            let Some((start, glyph_y, stride)) = text.then(|| gdc.text_row(y)).flatten() else {
+                continue;
+            };
+            for (column, pixels) in row.chunks_exact_mut(cell_pixels).enumerate() {
+                // A 40-column cell doubles its dots and skips the odd VRAM word.
+                let cell = (start + column * stride * dot_width) & 4095;
+                let attr = self.mem[0x2000 + cell * 2];
+                if attr & 1 == 0 {
+                    continue;
+                }
+                let ch = self.mem[cell * 2];
+                let high = self.mem[cell * 2 + 1];
+                let mut ink = if self.profile == Profile::Pc9821ApDos && high != 0 {
+                    // Dot access blanks text Kanji while preserving glyph RAM.
+                    if self.cg_dot || glyph_y >= 16 {
+                        0
+                    } else {
+                        self.user_characters.byte(
+                            (ch & 127).wrapping_add(0x20),
+                            high,
+                            glyph_y * 2 + usize::from(ch & 128 != 0),
+                        )
+                    }
+                } else if self.text_graph && attr & 16 != 0 {
+                    if glyph_y < 16 {
+                        let blocks = ch >> (glyph_y / 4 * 2);
+                        (if blocks & 1 != 0 { 0xf0 } else { 0 })
+                            | (if blocks & 2 != 0 { 0x0f } else { 0 })
                     } else {
                         0
-                    };
-                    if attr & 4 != 0 {
-                        ink = !ink;
                     }
-                    if attr & 8 != 0 && glyph_y == height - 1 {
-                        ink = 255;
-                    }
-                    if !self.text_graph && attr & 16 != 0 {
-                        ink |= 1;
-                    }
-                    if attr & 2 != 0 && blink_off {
-                        ink = 0;
-                    }
-                    if cursor_on
-                        && cell == gdc.cursor as usize
-                        && (gdc.cursor_top..=gdc.cursor_bottom).contains(&(glyph_y as u8))
-                    {
-                        ink = !ink;
-                    }
-                    if attr & 1 == 0 {
-                        ink = 0;
-                    }
-                    text_color = (attr >> 5) & 7;
+                } else if glyph_y < 16 {
+                    crate::font::row(ch, glyph_y as u8)
+                } else {
+                    0
+                };
+                if attr & 4 != 0 {
+                    ink = !ink;
                 }
-                let text_rgb = [
-                    if text_color & 2 != 0 { 255 } else { 0 },
-                    if text_color & 4 != 0 { 255 } else { 0 },
-                    if text_color & 1 != 0 { 255 } else { 0 },
-                    255,
-                ];
-                let mut planar = 0;
-                for x in left..left + cell_pixels {
-                    let mut color = 0;
-                    if graphics && self.pegc {
-                        let start =
-                            self.display_page as usize * 0x40000 + self.gdcs[1].start as usize * 8;
-                        let a = (start + y * self.gdcs[1].pitch as usize * 8 + x) & 0x7ffff;
-                        color = self.graphics[a];
-                    } else if graphics {
-                        if x & 7 == 0 {
-                            let line = if self.graphics_200 { y / 2 } else { y };
-                            let a = ((self.gdcs[1].start as usize * 2 + line * 80 + x / 8)
-                                & 0x7fff)
-                                + page;
-                            planar = 0;
-                            for plane in 0..if self.analog {
-                                self.profile.planes()
-                            } else {
-                                3
-                            } {
-                                planar |=
-                                    PLANE_DOTS[self.graphics[a + plane * 0x8000] as usize] << plane;
-                            }
-                        }
-                        color = planar as u8;
-                        planar >>= 8;
-                    }
-                    let dot = if self.text_40 { x / 2 } else { x };
-                    let text_ink = ink & (128 >> (dot % 8)) != 0;
-                    let rgb = if text_ink && self.profile == Profile::Pc9821ApDos {
-                        &text_rgb
-                    } else {
-                        if text_ink {
-                            color = text_color;
-                        }
-                        &colors[color as usize]
-                    };
-                    let idx = (y * 640 + x) * 4;
-                    out[idx..idx + 4].copy_from_slice(rgb);
+                if attr & 8 != 0 && glyph_y == height - 1 {
+                    ink = 255;
+                }
+                if !self.text_graph && attr & 16 != 0 {
+                    ink |= 1;
+                }
+                if attr & 2 != 0 && blink_off {
+                    ink = 0;
+                }
+                if cursor_on
+                    && cell == gdc.cursor as usize
+                    && (gdc.cursor_top..=gdc.cursor_bottom).contains(&(glyph_y as u8))
+                {
+                    ink = !ink;
+                }
+                if ink == 0 {
+                    continue;
+                }
+                let index = (attr >> 5) & 7;
+                let rgb = if self.profile == Profile::Pc9821ApDos {
+                    [
+                        if index & 2 != 0 { 255 } else { 0 },
+                        if index & 4 != 0 { 255 } else { 0 },
+                        if index & 1 != 0 { 255 } else { 0 },
+                        255,
+                    ]
+                } else {
+                    colors[usize::from(index)]
+                };
+                while ink != 0 {
+                    let dot = ink.leading_zeros() as usize;
+                    let x = dot * dot_width;
+                    pixels[x..x + dot_width].fill(rgb);
+                    ink ^= 0x80 >> dot;
                 }
             }
         }
@@ -238,12 +247,16 @@ pub struct SnapshotRenderer {
     previous: Vec<u8>,
     pixels: Vec<u8>,
     blink_phase: (bool, bool),
-    changed: bool,
+    changed_rows: Range<usize>,
 }
 impl SnapshotRenderer {
     /// Whether the last successful snapshot required updating retained pixels.
     pub fn changed(&self) -> bool {
-        self.changed
+        !self.changed_rows.is_empty()
+    }
+    /// Rows that may differ from the previous output, including both layers.
+    pub fn changed_rows(&self) -> Range<usize> {
+        self.changed_rows.clone()
     }
     pub fn render(&mut self, bytes: &[u8], out: &mut [u8]) -> bool {
         if out.len() != 640 * 400 * 4 {
@@ -332,7 +345,7 @@ impl SnapshotRenderer {
             && self.previous[..8] == bytes[..8]
             && self.previous[16..] == bytes[16..]
         {
-            self.changed = false;
+            self.changed_rows = 0..0;
             return Some(false);
         }
         // Retained pixels need work only on rows whose scanout inputs changed.
@@ -352,9 +365,8 @@ impl SnapshotRenderer {
             for (y, row) in rows.iter_mut().enumerate() {
                 *row = false;
                 if text {
-                    if let Some((cell, _)) = gdc.text_address(y, 0) {
-                        let next = gdc.text_address(y, 1).unwrap().0;
-                        let words = 79 * ((next.wrapping_sub(cell)) & 4095) + 1;
+                    if let Some((cell, _, stride)) = gdc.text_row(y) {
+                        let words = 79 * stride + 1;
                         *row = changed(TEXT, cell * 2, words * 2, 0x2000)
                             || changed(TEXT + 0x2000, cell * 2, words * 2, 0x2000);
                     }
@@ -382,7 +394,12 @@ impl SnapshotRenderer {
                 }
             }
         }
-        self.changed = rows.iter().any(|&row| row);
+        let Some(first) = rows.iter().position(|&row| row) else {
+            self.changed_rows = 0..0;
+            return Some(true); // Retain the new inputs even when they are off screen.
+        };
+        let last = rows.iter().rposition(|&row| row).unwrap();
+        self.changed_rows = first..last + 1;
         let palette = std::array::from_fn(|i| {
             bytes[HEADER + i * 3..HEADER + i * 3 + 3]
                 .try_into()

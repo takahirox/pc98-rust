@@ -58,18 +58,29 @@ function renderFrame(frame) {
     const copied = performance.now();
     const output = core.video_render(frame.length) >>> 0;
     if (!output) throw Error('Invalid video snapshot');
-    const unchanged = previousSequence > 0 && typeof core.video_render_changed==='function' && !core.video_render_changed();
+    let bounds = 400 << 16;
+    if (previousSequence > 0) {
+      if (typeof core.video_render_rows === 'function') bounds = core.video_render_rows();
+      else if (typeof core.video_render_changed === 'function' && !core.video_render_changed()) bounds = 0;
+    }
+    const first = bounds & 65535, end = bounds >>> 16;
+    const unchanged = first === end;
     if (unchanged) totals.unchangedFrames++;
     const rasterized = performance.now();
-    // The sole returned pixel credit still contains the preceding output.
-    // A discarded frame needs this same full payload on the next presentation.
-    if (!unchanged) new Uint8Array(pixels).set(new Uint8Array(core.memory.buffer,output,640*400*4));
+    // The returned pixel credit still contains all preceding rows, even if
+    // the presenter discarded that frame. Keep the payload independently usable.
+    if (!unchanged) {
+      const offset = first * 640 * 4;
+      new Uint8Array(pixels).set(new Uint8Array(core.memory.buffer,output+offset,(end-first)*640*4),offset);
+    }
+    const changedRows = !unchanged && (first !== 0 || end !== 400)
+      ? {after:previousSequence, first, end} : undefined;
     totals.wasmBytes = core.memory.buffer.byteLength;
     totals.frames++;
     totals.rasterMs += rasterized-copied;
     totals.copyMs += copied-began+performance.now()-rasterized;
     totals.transportMs += performance.timeOrigin+began-frame.captured;
-    postMessage({...frame,event:'frame',samePixelsAs:unchanged ? previousSequence : 0,buffer:pixels,renderStats:{...totals}},[pixels]);
+    postMessage({...frame,event:'frame',samePixelsAs:unchanged ? previousSequence : 0,changedRows,buffer:pixels,renderStats:{...totals}},[pixels]);
     pixels = null;
   } catch (error) { postMessage({event:'fault',error:error.message}); }
 }

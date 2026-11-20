@@ -119,18 +119,21 @@ export class Presenter {
   present(frame, source) {
     const previous = this.frameSource;
     const sameSize = this.raw.width === frame.width && this.raw.height === frame.height;
-    // A renderer's equality proof refers to its previous output, which may
-    // have been discarded by the DOM. Only reuse the last accepted output.
-    const reuse = sameSize && this.hasFrame && source?.renderer && previous
-      && source.renderer === previous.renderer && source.samePixelsAs > 0
-      && source.samePixelsAs === previous.sequence && source.sequence > previous.sequence
+    // A row update depends on the renderer's preceding output. The DOM may
+    // have discarded that frame, in which case the complete input is needed.
+    const related = sameSize && this.hasFrame && source?.renderer && previous
+      && source.renderer === previous.renderer && source.sequence > previous.sequence
       && source.generation === previous.generation && source.videoEpoch === previous.videoEpoch;
+    const reuse = related && source.samePixelsAs === previous.sequence;
     this.frameSource = null;
     if (reuse) this.stats.reusedFrames++;
     else {
       if (!sameSize) { this.raw.width = frame.width; this.raw.height = frame.height; }
-      this.context.putImageData(frame,0,0); this.hasFrame = true;
-      this.draw(frame.data);
+      const rows = related && source.changedRows?.after === previous.sequence ? source.changedRows : undefined;
+      if (rows) this.context.putImageData(frame,0,0,0,rows.first,frame.width,rows.end-rows.first);
+      else this.context.putImageData(frame,0,0);
+      this.hasFrame = true;
+      this.draw(frame.data,rows);
     }
     if (source?.renderer) this.frameSource = {renderer:source.renderer,sequence:source.sequence,
       generation:source.generation,videoEpoch:source.videoEpoch};
@@ -141,7 +144,7 @@ export class Presenter {
     // incoming view directly and retain neither its buffer nor a second image.
     this.draw();
   }
-  draw(bytes) {
+  draw(bytes, rows) {
     if (this.preset === 'off') {
       this.output.hidden = true; this.surface.classList.remove('crt');
       this.notify('Original pixels · raw screenshots'); return;
@@ -184,6 +187,9 @@ export class Presenter {
       if (allocate) {
         gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,this.raw.width,this.raw.height,0,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
         this.textureWidth = this.raw.width; this.textureHeight = this.raw.height;
+      } else if (rows) {
+        gl.texSubImage2D(gl.TEXTURE_2D,0,0,rows.first,this.raw.width,rows.end-rows.first,
+          gl.RGBA,gl.UNSIGNED_BYTE,pixels,rows.first*this.raw.width*4);
       } else gl.texSubImage2D(gl.TEXTURE_2D,0,0,0,this.raw.width,this.raw.height,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
       const uploaded = performance.now();
       gl.uniform2f(this.uniforms.sourceSize,this.raw.width,this.raw.height);
