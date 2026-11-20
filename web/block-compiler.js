@@ -155,6 +155,7 @@ export function compileRamBlock(packet,meta){
   const linked=!!(meta[0]&4),header=linked?5:2,stride=linked?14:12;
   if(count<1||count>16||packet.length!==2+count*4||meta.length!==header+count*stride||![1,3,5,7].includes(meta[0]))throw Error('Invalid RAM block plan');
   const bios=!!(meta[0]&2);
+  const highCode=linked && meta[2]+packet[2]>=0x100000;
   // Four pointer parameters. Locals 4..52 contain ALU temporaries, cached GPRs,
   // context addresses, timing and the last committed instruction metadata.
   // Extended packets carry raw code guards and a run-wide final plan ID.
@@ -261,7 +262,13 @@ export function compileRamBlock(packet,meta){
     if(memory&&(access&1))body.push(...set(11,loadMemory()));
     // A RAM peek has no bus effects. Reject a mapped return target before
     // committing SP/IP or charging the instruction; the original RET resumes.
-    if(op===0xc3)exitIf(bin(0x4f,add(get(40),get(11)),c(0xa0000)));
+    if(op===0xc3){
+      const target=add(get(40),get(11));
+      // The root already checked A20. A near return keeps the code segment
+      // and must stay in the same executable RAM range as the trace.
+      exitIf(highCode ? or(bin(0x49,target,c(0x100000)),bin(0x4f,target,c(0x110000)))
+        : bin(0x4f,target,c(0xa0000)));
+    }
     const destinations=policy===255?Array.from({length:8},(_,r)=>r).filter(r=>writtenRegisters(op,m)&(1<<r)):[];
     if(destinations.length>2)throw Error('RAM block register policy');
     for(let n=0;n<destinations.length;n++){used.add(destinations[n]);body.push(...set(23+n,get(15+destinations[n])));}
