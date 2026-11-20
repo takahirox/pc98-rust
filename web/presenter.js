@@ -105,7 +105,7 @@ export class Presenter {
       this.maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
       this.maxRenderbufferSize = gl.getParameter(gl.MAX_RENDERBUFFER_SIZE);
       const framebuffer = gl.createFramebuffer(), color = gl.createRenderbuffer();
-      this.filtered = framebuffer && color ? {framebuffer,color,width:0,height:0} : null;
+      this.filtered = framebuffer && color ? {framebuffer,color,width:0,height:0,valid:false} : null;
       if (!this.filtered) {
         if (framebuffer) gl.deleteFramebuffer(framebuffer);
         if (color) gl.deleteRenderbuffer(color);
@@ -214,8 +214,11 @@ export class Presenter {
   }
   drawCrt(width,height,rows) {
     const gl = this.gl, target = this.filtered;
-    if (!target || Math.max(width,height) > this.maxRenderbufferSize) {
-      if (target) target.width = target.height = 0;
+    const sourceHeight = this.raw.height;
+    // Substantial changes are cheaper to shade directly than to shade and copy.
+    if (!target || !rows || (rows.end-rows.first)*3 > sourceHeight
+      || Math.max(width,height) > this.maxRenderbufferSize) {
+      if (target) target.valid = false;
       gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
       return;
     }
@@ -240,8 +243,7 @@ export class Presenter {
       }
       // The shader only filters horizontally. Round the affected source
       // rows outwards in the output viewport, whose Y axis starts at the bottom.
-      if (rows && !resized) {
-        const sourceHeight = this.raw.height;
+      if (target.valid && !resized) {
         const bottom = Math.floor((sourceHeight-rows.end)*height/sourceHeight);
         const top = Math.ceil((sourceHeight-rows.first)*height/sourceHeight);
         gl.enable(gl.SCISSOR_TEST);
@@ -252,6 +254,7 @@ export class Presenter {
       if (clipped) { gl.disable(gl.SCISSOR_TEST); clipped = false; }
       gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER,null);
       gl.blitFramebuffer(0,0,width,height,0,0,width,height,gl.COLOR_BUFFER_BIT,gl.NEAREST);
+      target.valid = true;
     } finally {
       if (clipped) gl.disable(gl.SCISSOR_TEST);
       gl.bindFramebuffer(gl.FRAMEBUFFER,null);
