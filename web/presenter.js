@@ -103,6 +103,13 @@ export class Presenter {
       this.textureWidth = 0; this.textureHeight = 0;
       this.timer = this.diagnostics ? gl.getExtension('EXT_disjoint_timer_query_webgl2') : null;
       this.maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+      this.maxRenderbufferSize = gl.getParameter(gl.MAX_RENDERBUFFER_SIZE);
+      const framebuffer = gl.createFramebuffer(), color = gl.createRenderbuffer();
+      this.filtered = framebuffer && color ? {framebuffer,color,width:0,height:0} : null;
+      if (!this.filtered) {
+        if (framebuffer) gl.deleteFramebuffer(framebuffer);
+        if (color) gl.deleteRenderbuffer(color);
+      }
       this.failed = false;
     } catch (error) {
       if (texture) gl.deleteTexture(texture);
@@ -197,13 +204,58 @@ export class Presenter {
       gl.uniform1f(this.uniforms.scan,presets[this.preset].scan);
       gl.uniform1f(this.uniforms.softness,presets[this.preset].softness);
       gl.uniform1f(this.uniforms.mask,this.mask ? 0.025 : 0);
-      gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+      this.drawCrt(width,height,allocate ? undefined : rows);
       if (query) {gl.endQuery(timer.TIME_ELAPSED_EXT); this.queries.push(query);}
       this.stats.uploads++; this.stats.uploadMs += uploaded-start; this.stats.submitMs += performance.now()-uploaded;
       if ((allocate || resized) && gl.getError() !== gl.NO_ERROR) throw Error('GPU allocation failed');
       this.output.hidden = false;
       this.notify('RGB CRT · 4:3 · screenshots of the screen include the filter');
     } catch (error) { this.stats.failures++; this.fallback(error.message); }
+  }
+  drawCrt(width,height,rows) {
+    const gl = this.gl, target = this.filtered;
+    if (!target || Math.max(width,height) > this.maxRenderbufferSize) {
+      if (target) target.width = target.height = 0;
+      gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+      return;
+    }
+    const resized = target.width !== width || target.height !== height;
+    let clipped = false;
+    gl.bindFramebuffer(gl.FRAMEBUFFER,target.framebuffer);
+    try {
+      if (resized) {
+        gl.bindRenderbuffer(gl.RENDERBUFFER,target.color);
+        gl.renderbufferStorage(gl.RENDERBUFFER,gl.RGBA8,width,height);
+        gl.framebufferRenderbuffer(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.RENDERBUFFER,target.color);
+        if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+          this.filtered = null;
+          gl.bindFramebuffer(gl.FRAMEBUFFER,null);
+          gl.deleteFramebuffer(target.framebuffer);
+          gl.deleteRenderbuffer(target.color);
+          gl.getError(); // Clear the failed offscreen allocation before the full draw.
+          gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+          return;
+        }
+        target.width = width; target.height = height;
+      }
+      // The shader only filters horizontally. Round the affected source
+      // rows outwards in the output viewport, whose Y axis starts at the bottom.
+      if (rows && !resized) {
+        const sourceHeight = this.raw.height;
+        const bottom = Math.floor((sourceHeight-rows.end)*height/sourceHeight);
+        const top = Math.ceil((sourceHeight-rows.first)*height/sourceHeight);
+        gl.enable(gl.SCISSOR_TEST);
+        gl.scissor(0,bottom,width,top-bottom);
+        clipped = true;
+      }
+      gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+      if (clipped) { gl.disable(gl.SCISSOR_TEST); clipped = false; }
+      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER,null);
+      gl.blitFramebuffer(0,0,width,height,0,0,width,height,gl.COLOR_BUFFER_BIT,gl.NEAREST);
+    } finally {
+      if (clipped) gl.disable(gl.SCISSOR_TEST);
+      gl.bindFramebuffer(gl.FRAMEBUFFER,null);
+    }
   }
   diagnosticsState() {
     return {...this.stats, preset:this.preset, active:!this.output.hidden, fallback:Boolean(this.failed),
