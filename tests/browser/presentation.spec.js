@@ -230,6 +230,19 @@ test('shader pixels stay upright, retain black/white and single-pixel edges, and
     // At a small size scanlines and mask must have no effect at all.
     surface.style.width='640px'; surface.style.height='480px'; p.setPreset('strong',false);
     const small=stable(); p.setPreset('strong',true); const masked=stable();
+    const source=sequence=>({renderer:output,sequence,generation:1,videoEpoch:0});
+    p.present(frame,source(1));
+    const modified=new ImageData(frame.data.slice(),640,400);
+    for(let x=0;x<640;x++) modified.data.set([100,255,40,255],(217*640+x)*4);
+    p.present(modified,{...source(2),changedRows:{after:1,first:217,end:218}});
+    const partialRaw=p.context.getImageData(0,0,640,400).data;
+    const partialCrt=new Uint8Array(output.width*output.height*4);
+    p.gl.readPixels(0,0,output.width,output.height,p.gl.RGBA,p.gl.UNSIGNED_BYTE,partialCrt);
+    p.present(modified);
+    const stableFull=new Uint8Array(partialCrt.length);
+    p.gl.readPixels(0,0,output.width,output.height,p.gl.RGBA,p.gl.UNSIGNED_BYTE,stableFull);
+    const partialEqual=partialCrt.every((v,i)=>v===stableFull[i]);
+    p.present(frame);
     surface.style.width='2560px'; surface.style.height='1920px'; p.setPreset('strong',false);
     const largePlain=sample(64.5/640,.1); p.setPreset('strong',true); const largeMask=sample(64.5/640,.1);
     const unchanged=frame.data.every((v,i)=>v===original[i]);
@@ -237,12 +250,15 @@ test('shader pixels stay upright, retain black/white and single-pixel edges, and
     p.present(new ImageData(320,200));
     const futureAspect=surface.style.getPropertyValue('--crt-aspect');
     surface.remove(); p.observer.disconnect();
-    return {defaultPreset,defaultActive,defaultTuning,invalidPreset,top,bottom,black,line,neighbor,unchanged,futureAspect,largePlain,largeMask,stable:a.every((v,i)=>v===b[i]),smallMaskEqual:small.every((v,i)=>v===masked[i])};
+    return {defaultPreset,defaultActive,defaultTuning,invalidPreset,top,bottom,black,line,neighbor,unchanged,futureAspect,largePlain,largeMask,stable:a.every((v,i)=>v===b[i]),smallMaskEqual:small.every((v,i)=>v===masked[i]),
+      partialEqual,partialRawEqual:partialRaw.every((v,i)=>v===modified.data[i])};
   });
   expect(result.defaultPreset).toBe('sharp'); expect(result.defaultActive).toBe(true); expect(result.invalidPreset).toBe('sharp');
   expect(result.defaultTuning.scan).toBeCloseTo(.06); expect(result.defaultTuning.softness).toBeCloseTo(.035); expect(result.defaultTuning.mask).toBe(0);
   expect(result.top[0]).toBeGreaterThan(220); expect(result.top[2]).toBe(0);
   expect(result.bottom[2]).toBeGreaterThan(220); expect(result.bottom[0]).toBe(0);
+  expect(result.partialEqual).toBe(true);
+  expect(result.partialRawEqual).toBe(true);
   expect(result.black).toEqual([0,0,0,255]);
   expect(result.line[1]).toBeGreaterThan(210); expect(result.neighbor[1]).toBeLessThan(12);
   expect(result.largeMask[0]).toBeLessThan(result.largePlain[0]);

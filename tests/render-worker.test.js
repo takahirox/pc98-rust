@@ -151,6 +151,13 @@ test('unchanged raster proofs name the preceding output and retain full pixel cr
  r.snapshot(4);
  assert.equal(r.frames[3].samePixelsAs,3);assert.equal(r.frames[3].buffer.byteLength,640*400*4);
  assert.equal(new Uint8Array(r.frames[3].buffer)[0],83);
+ r.context.ack=r.frames[3].buffer;r.run('onmessage({data:{type:"frameAck",buffer:ack,sequence:4}})');
+ r.run(`const bytes=new Uint8Array(testCore.memory.buffer);
+   bytes[8]=12;bytes[8+200*640*4]=205;testCore.video_render_rows=()=>201<<16|200`);
+ r.snapshot(5);
+ assert.deepEqual(r.frames[4].changedRows,{after:4,first:200,end:201});
+ assert.equal(new Uint8Array(r.frames[4].buffer)[0],83); // The preceding image persists elsewhere.
+ assert.equal(new Uint8Array(r.frames[4].buffer)[200*640*4],205);
 });
 
 // Exercise the presentation consumer independently of renderer/guest mocks.
@@ -161,14 +168,14 @@ test('presentation only reuses its accepted lineage and redraws after barriers o
  try{
   globalThis.ResizeObserver=class {observe(){}};globalThis.window={addEventListener(){}};globalThis.devicePixelRatio=1;
   globalThis.matchMedia=()=>({addEventListener(){}});
-  const puts=[],draws=[],raw={width:2,height:1,getContext:()=>({putImageData:f=>puts.push([...f.data])})};
+  const puts=[],draws=[],raw={width:2,height:1,getContext:()=>({putImageData:(f,...rect)=>puts.push([[...f.data],rect])})};
   const p=new Presenter(raw,{addEventListener(){}},{},()=>{});p.draw=bytes=>draws.push(bytes);
   const worker={},other={},image=n=>({width:2,height:1,data:Uint8ClampedArray.of(n,0,0,255,n,0,0,255)});
   const source=(sequence,samePixelsAs,extra={})=>({renderer:worker,sequence,samePixelsAs,generation:1,videoEpoch:1,...extra});
   p.present(image(1),source(1,0));p.present(image(1),source(2,1));
   assert.equal(puts.length,1);assert.equal(draws.length,1);assert.equal(p.stats.reusedFrames,1);
   // Output 3 changed, but was discarded before presentation.
-  p.present(image(2),source(4,3));assert.equal(puts.length,2);assert.equal(puts.at(-1)[0],2);
+  p.present(image(2),source(4,3));assert.equal(puts.length,2);assert.equal(puts.at(-1)[0][0],2);
   p.present(image(2),source(5,4,{videoEpoch:2}));assert.equal(puts.length,3);
   p.present(image(2),source(6,5,{videoEpoch:2}));assert.equal(puts.length,3);
   p.present(image(2),source(7,6,{videoEpoch:2,generation:2}));assert.equal(puts.length,4);
@@ -178,5 +185,12 @@ test('presentation only reuses its accepted lineage and redraws after barriers o
   p.present(image(2),source(11,10));assert.equal(puts.length,8);
   raw.width=1;p.present(image(2),source(12,11));assert.equal(puts.length,9);
   p.setPreset('off');assert.equal(draws.length,10); // UI redraws are never suppressed.
+  const next=n=>({width:2,height:3,data:new Uint8ClampedArray(24).fill(n)});
+  p.present(next(3),source(13,0,{changedRows:{after:12,first:1,end:2}}));
+  assert.deepEqual(puts.at(-1)[1],[0,0]); // A different size invalidates the previous texture.
+  p.present(next(4),source(14,0,{changedRows:{after:13,first:1,end:2}}));
+  assert.deepEqual(puts.at(-1)[1],[0,0,0,1,2,1]);
+  p.present(next(5),source(16,0,{changedRows:{after:15,first:1,end:2}}));
+  assert.deepEqual(puts.at(-1)[1],[0,0]); // The complete credit is needed after a discarded frame.
  }finally{for(const[k,d]of saved)d?Object.defineProperty(globalThis,k,d):delete globalThis[k];}
 });

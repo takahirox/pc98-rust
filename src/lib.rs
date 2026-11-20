@@ -438,6 +438,13 @@ mod wasm {
         RENDERER.with(|r| u32::from(r.borrow().changed()))
     }
     #[no_mangle]
+    pub extern "C" fn video_render_rows() -> u32 {
+        RENDERER.with(|r| {
+            let rows = r.borrow().changed_rows();
+            ((rows.end as u32) << 16) | rows.start as u32
+        })
+    }
+    #[no_mangle]
     pub extern "C" fn key(scan: u8, down: u32) {
         MACHINE.with(|m| m.borrow_mut().bus.key(scan, down != 0))
     }

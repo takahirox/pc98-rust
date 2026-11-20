@@ -839,7 +839,12 @@ impl Default for Gdc {
 impl Gdc {
     /// Character-mode partitions count raster lines, not VRAM rows. The PC-98
     /// has 4096 text words; the address wraps at that physical boundary.
-    pub fn text_address(&self, mut line: usize, column: usize) -> Option<(usize, usize)> {
+    pub fn text_address(&self, line: usize, column: usize) -> Option<(usize, usize)> {
+        self.text_row(line)
+            .map(|(start, glyph_y, stride)| ((start + column * stride) & 4095, glyph_y))
+    }
+
+    pub(crate) fn text_row(&self, mut line: usize) -> Option<(usize, usize, usize)> {
         let height = self.character_lines.max(1) as usize;
         for (area, p) in self.scroll.as_chunks::<4>().0.iter().enumerate() {
             let lines = (p[2] as usize >> 4) | ((p[3] as usize & 63) << 4);
@@ -855,10 +860,7 @@ impl Gdc {
                     self.pitch as usize
                 };
                 let wide = if p[3] & 128 != 0 { 2 } else { 1 };
-                return Some((
-                    (start + line / height * stride + column * wide) & 4095,
-                    line % height,
-                ));
+                return Some(((start + line / height * stride) & 4095, line % height, wide));
             }
             line -= lines;
         }

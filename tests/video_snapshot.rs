@@ -279,7 +279,7 @@ fn scanout_change_proofs_track_visible_inputs_and_preserve_the_last_valid_cache(
         let mut bytes = Vec::new();
         m.bus.video().snapshot(&mut bytes);
         assert_eq!(renderer.frame(&bytes).unwrap(), m.render());
-        assert!(renderer.changed());
+        assert_eq!(renderer.changed_rows(), 0..400);
         m.bus.cycles += 1;
         m.bus.video().snapshot(&mut bytes);
         assert_eq!(renderer.frame(&bytes).unwrap(), m.render());
@@ -291,7 +291,7 @@ fn scanout_change_proofs_track_visible_inputs_and_preserve_the_last_valid_cache(
         m.bus.graphics[0] ^= 0x80;
         m.bus.video().snapshot(&mut bytes);
         assert_eq!(renderer.frame(&bytes).unwrap(), m.render());
-        assert!(renderer.changed());
+        assert_eq!(renderer.changed_rows(), 0..1);
         let valid = bytes.clone();
         bytes[0] ^= 1;
         assert!(renderer.frame(&bytes).is_none());
