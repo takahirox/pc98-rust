@@ -30,6 +30,9 @@ static COEFFICIENTS: LazyLock<Coefficients> = LazyLock::new(|| Coefficients {
 #[derive(Clone, Copy, Default)]
 struct Operator {
     phase: f64,
+    phase_step: f64,
+    frequency: f64,
+    dtmul: u8,
     level: f64,
     stage: u8, // 0 off, 1 attack, 2 decay, 3 sustain, 4 release
     key: bool,
@@ -217,13 +220,20 @@ impl Opn {
             }
             _ => {}
         }
-        let multiple = if dtmul & 15 == 0 {
-            0.5
-        } else {
-            f64::from(dtmul & 15)
-        };
-        let detune = f64::from((dtmul >> 4) & 3) * if dtmul & 64 == 0 { 0.1 } else { -0.1 };
-        op.phase = (op.phase + (hz * multiple + detune) / 48_000.0).fract();
+        // These register-derived terms stay fixed between pitch writes. Read
+        // the signature on every sample so direct register writes work too.
+        if hz != op.frequency || dtmul != op.dtmul {
+            let multiple = if dtmul & 15 == 0 {
+                0.5
+            } else {
+                f64::from(dtmul & 15)
+            };
+            let detune = f64::from((dtmul >> 4) & 3) * if dtmul & 64 == 0 { 0.1 } else { -0.1 };
+            op.phase_step = (hz * multiple + detune) / 48_000.0;
+            op.frequency = hz;
+            op.dtmul = dtmul;
+        }
+        op.phase = (op.phase + op.phase_step).fract();
         (op.phase * TAU + modulation * 4.0).sin() * op.level * coefficients.total_level[tl as usize]
     }
     fn frequency(&self, low: usize) -> f64 {

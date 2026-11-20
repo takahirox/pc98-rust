@@ -438,6 +438,39 @@ impl Engine {
             && self.plan(id).is_some_and(|p| p.ready && p.block.is_some())
             && self.prepare_block(m, id)
     }
+    fn try_block_move(&mut self, m: &mut Machine, id: u32) -> bool {
+        let Some(op) = self.plan(id).and_then(|p| p.ops.first()).copied() else {
+            return false;
+        };
+        let reg = match op.opcode {
+            0x88..=0x8b => usize::from((op.modrm >> 3) & 7),
+            0xa0..=0xa3 => AX,
+            _ => return false,
+        };
+        let Some(memory) = op.memory else {
+            return false;
+        };
+        if !self.runnable(m) || !self.prepare(m, id, 0, None, false) {
+            return false;
+        }
+        let word = memory.width.get() == 2;
+        if memory.flags & Memory::READ != 0 {
+            let value = self.scratch.operand[0] as u16;
+            if word {
+                m.cpu.r[reg] = value;
+            } else {
+                m.cpu.set_byte(reg, value as u8);
+            }
+        } else {
+            self.scratch.operand[1] = if word {
+                u32::from(m.cpu.r[reg])
+            } else {
+                u32::from(m.cpu.byte(reg))
+            };
+        }
+        self.next(m, 0, false); // Retire just this operation on the ordinary bus.
+        true
+    }
     pub fn finish_block(&mut self, m: &mut Machine) {
         let Some(_) = self.block_active.take() else {
             return;
@@ -449,7 +482,9 @@ impl Engine {
         self.block_counters[3] += u64::from(ctx.blocks);
         if count == 0 {
             self.block_counters[2] += 1;
-            self.fallback(m);
+            if !self.try_block_move(m, id) {
+                self.fallback(m);
+            }
             return;
         }
         let Some(op) = self

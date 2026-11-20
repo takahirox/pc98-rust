@@ -6,6 +6,37 @@ fn opn_register(opn: &mut Opn, address: u8, value: u8) {
 }
 
 #[test]
+fn fm_phase_tracks_direct_frequency_and_detune_changes() {
+    let mut opn = Opn::default();
+    opn_register(&mut opn, 0xb0, 7); // Independent carriers.
+    opn_register(&mut opn, 0x50, 31); // Immediate attack on the first carrier.
+    opn_register(&mut opn, 0x28, 0x10);
+    let mut phase: f64 = 0.0;
+    for (fnum, block, dtmul) in [
+        (293_u16, 2_u8, 0x12_u8),
+        (293, 2, 0x57),
+        (471, 4, 0x57),
+        (471, 4, 0),
+    ] {
+        opn.registers[0xa0] = fnum as u8;
+        opn.registers[0xa4] = (block << 3) | (fnum >> 8) as u8;
+        opn.registers[0x30] = dtmul;
+        let hz = f64::from(fnum) * f64::from(1_u16 << block) * 3_993_600.0 / (144.0 * 1_048_576.0);
+        let multiple = if dtmul & 15 == 0 {
+            0.5
+        } else {
+            f64::from(dtmul & 15)
+        };
+        let detune = f64::from((dtmul >> 4) & 3) * if dtmul & 64 == 0 { 0.1 } else { -0.1 };
+        for _ in 0..4 {
+            phase = (phase + (hz * multiple + detune) / 48_000.0).fract();
+            let expected = ((phase * std::f64::consts::TAU).sin() * 0.08) as f32;
+            assert_eq!(opn.sample().to_bits(), expected.to_bits());
+        }
+    }
+}
+
+#[test]
 fn opna_irq_disabled_timer_regression() {
     let mut opn = Opn::default();
     for (address, value) in [(0x29, 0x80), (0x24, 0xff), (0x25, 3), (0x27, 5)] {
