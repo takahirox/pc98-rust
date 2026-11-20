@@ -105,6 +105,27 @@ test('a direct high-memory return stays in RAM and falls back at the ROM boundar
  assert.equal(rom.a.block_metric(2),fallback+1);
 });
 
+test('direct traces read visible segment selectors and push the four legacy selectors',async()=>{
+ const setup=[0xb8,0x34,0x12,0x8e,0xd8,0xb8,0x78,0x56,0x8e,0xc0,0x31,0xc0,0x8e,0xd0,0x90];
+ const code=[...setup,0x06,0x8c,0xc3,0x0e,0x16,0x1e,0x8c,0xd9,0xeb,0xf6];
+ const a=await boot(code),b=await boot(code);
+ const regs=[0,0,0,0,0x8000,0,0,0];
+ for(const c of [a,b]){
+  c.step(7);
+  assert.equal(state(c).ip,1+setup.length);
+  setState(c,regs,2,1+setup.length);
+ }
+ const p=await translate(a,b,1+setup.length);
+ assert.equal(execute(p,regs,2,6),6);
+ const {regs:after,cs}=state(a);
+ assert.equal(after[1],0x1234);
+ assert.equal(after[3],0x5678);
+ assert.equal(after[4],0x7ff8);
+ const stack=new DataView(a.memory.buffer,(a.block_ram_ptr()>>>0)+0x7ff8,8);
+ assert.deepEqual([0,2,4,6].map(offset=>stack.getUint16(offset,true)),[0x1234,0,cs,0x5678]);
+ assert.equal(a.block_metric(1),6);
+});
+
 test('linked traces retire once per event and revalidate code changed by an earlier trace',async()=>{
  // The store is in the first trace; its eventual target lies beyond that trace.
  const body=[0x2e,0xc6,0x07,0x48,...Array(40).fill(0x40)];
