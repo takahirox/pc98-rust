@@ -61,11 +61,24 @@ test('a self-modifying store exits before the store and resumes through the orig
  p.a.jit_devices_begin();p.a.block_begin_slice(80000,1);p.a.jit_dispatch(0);p.a.jit_devices_end();p.b.step(p.a.jit_done());equal(p.a,p.b);assert.equal(p.a.peek(0x1fc09),0x48);
 });
 
-test('mapped operands and a 16-bit boundary decline before bus effects',async()=>{
- for(const bx of [0xffff,0x8000]){
-  const p=await pair([0x89,0x07,0x40,0xeb,0xfb]);
-  if(bx===0x8000){for(const c of[p.a,p.b]){const ptr=c.block_ram_ptr()>>>0;new Uint8Array(c.memory.buffer,ptr+0x1fd00,5).set([0xb8,0,0xa8,0x8e,0xd8]);const s=state(c);setState(c,s.regs,s.flags,0x100);c.step(2);}}
-  execute(p,[0x9876,0,0,bx,0,0,0,0],2,1);assert(p.a.block_metric(2)>0);
+test('guarded MOV preserves mapped word transfers and rejects a segment-crossing word',async()=>{
+ for(const opcode of [0x89,0x8b])for(const bx of [0xffff,0x8000]){
+  const p=await pair([opcode,0x07,0x40,0xeb,0xfb]);
+  const mapped=bx===0x8000;
+  if(mapped)for(const c of [p.a,p.b]){
+   const ptr=c.block_ram_ptr()>>>0;
+   const setup=[0xb8,0,0xa8,0x8e,0xd8,0xb8,0x45,0x23,0xa3,0,0x80]; // DS=A800; seed the mapped word.
+   new Uint8Array(c.memory.buffer,ptr+0x1fd00,setup.length).set(setup);
+   const s=state(c);setState(c,s.regs,s.flags,0x100);c.step(4);
+  }
+  const translated=p.a.jit_metric(1);
+  execute(p,[0x9876,0,0,bx,0,0,0,0],2,1);
+  assert(p.a.block_metric(2)>0);
+  assert.equal(p.a.jit_metric(1)-translated,Number(mapped));
+  if(mapped&&opcode===0x89){
+   assert.equal(p.a.peek(0xb0000),0x76);assert.equal(p.a.peek(0xb0001),0x98);
+  }
+  if(mapped&&opcode===0x8b)assert.equal(state(p.a).regs[0],0x2345);
  }
 });
 
