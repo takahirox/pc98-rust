@@ -528,7 +528,14 @@ impl Bus {
         self.device_deadline = 0;
     }
     fn next_device_event(&self) -> u64 {
-        let mut clocks = (8_000_000 - self.audio_fraction).div_ceil(48_000);
+        // I/O, firmware and the end of the run flush pending samples. Only
+        // PIT beeper phase and PCM FIFO IRQs need the individual sample clock
+        // as a boundary. FM synthesis can run at the next device barrier.
+        let mut clocks = if self.beep || self.pcm.control & 0x20 != 0 {
+            (8_000_000 - self.audio_fraction).div_ceil(48_000)
+        } else {
+            u64::MAX
+        };
         clocks = clocks.min(self.pit.clocks_until_irq());
         clocks = clocks.min(self.opn.clocks_until_timer());
         clocks = clocks.min(self.mouse.clocks_until_irq());
@@ -1418,6 +1425,66 @@ impl Bus {
 #[cfg(test)]
 mod cpu_access_tests {
     use super::*;
+
+    #[test]
+    fn deferred_audio_matches_instruction_ticks_at_port_and_beeper_changes() {
+        let mut reference = Bus::new(Profile::Pc9821ApDos);
+        let mut deferred = Bus::new(Profile::Pc9821ApDos);
+        for bus in [&mut reference, &mut deferred] {
+            for (address, value) in [(0, 5), (7, 0x3e), (8, 15)] {
+                bus.output(0x188, address);
+                bus.output(0x18a, value);
+            }
+            bus.output(0x77, 0x76);
+            bus.output(0x73, 7);
+            bus.output(0x73, 0);
+        }
+        deferred.begin_device_run();
+        for enable_beeper in [false, true, false] {
+            let value = if enable_beeper { 0 } else { 8 };
+            reference.output(0x35, value);
+            deferred.output(0x35, value);
+            assert_eq!(reference.audio, deferred.audio);
+            deferred.device_deadline = deferred.next_device_event();
+            for _ in 0..1_000 {
+                reference.tick(7);
+                deferred.tick(7);
+                if enable_beeper {
+                    assert_eq!(reference.audio, deferred.audio);
+                }
+            }
+            assert_eq!(reference.input(0x188), deferred.input(0x188));
+            assert_eq!(reference.audio, deferred.audio);
+        }
+        deferred.end_device_run();
+        assert!(deferred.audio.iter().any(|&sample| sample != 0.0));
+    }
+
+    #[test]
+    fn deferred_pcm_irq_remains_observable_on_the_original_sample() {
+        let mut reference = Bus::new(Profile::Pc9821ApDos);
+        let mut deferred = Bus::new(Profile::Pc9821ApDos);
+        for bus in [&mut reference, &mut deferred] {
+            bus.output(0xa46a, 0x70); // Signed 8-bit stereo.
+            for sample in [1, 2, 3, 4] {
+                bus.output(0xa46c, sample);
+            }
+            bus.output(0xa468, 0xa0); // Start playback with FIFO IRQ enabled.
+            bus.output(0xa46a, 0); // Interrupt when the FIFO empties.
+        }
+        deferred.begin_device_run();
+        deferred.device_deadline = deferred.next_device_event();
+        for _ in 0..100 {
+            reference.tick(7);
+            deferred.tick(7);
+            assert_eq!(reference.audio, deferred.audio);
+            assert_eq!(reference.pcm.irq, deferred.pcm.irq);
+            assert_eq!(reference.sound_irq_edges, deferred.sound_irq_edges);
+        }
+        deferred.end_device_run();
+        assert_eq!(deferred.pcm.samples, 2);
+        assert_eq!(deferred.sound_irq_edges, 1);
+    }
 
     #[test]
     fn io_barrier_does_not_reassert_a_keyboard_irq_after_inta() {
