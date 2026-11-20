@@ -231,10 +231,16 @@ test('shader pixels stay upright, retain black/white and single-pixel edges, and
     surface.style.width='640px'; surface.style.height='480px'; p.setPreset('strong',false);
     const small=stable(); p.setPreset('strong',true); const masked=stable();
     const source=sequence=>({renderer:output,sequence,generation:1,videoEpoch:0});
+    const rows=(sequence,first)=>({...source(sequence),changedRows:{after:sequence-1,first,end:first+1}});
     p.present(frame,source(1));
     const modified=new ImageData(frame.data.slice(),640,400);
     for(let x=0;x<640;x++) modified.data.set([100,255,40,255],(217*640+x)*4);
-    p.present(modified,{...source(2),changedRows:{after:1,first:217,end:218}});
+    // Let resize observers settle before priming and compositing the target.
+    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    p.present(modified,rows(2,217));
+    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    for(let x=0;x<640;x++) modified.data.set([30,50,80,255],(261*640+x)*4);
+    p.present(modified,rows(3,261));
     const partialRaw=p.context.getImageData(0,0,640,400).data;
     const partialCrt=new Uint8Array(output.width*output.height*4);
     p.gl.readPixels(0,0,output.width,output.height,p.gl.RGBA,p.gl.UNSIGNED_BYTE,partialCrt);
@@ -242,7 +248,13 @@ test('shader pixels stay upright, retain black/white and single-pixel edges, and
     const stableFull=new Uint8Array(partialCrt.length);
     p.gl.readPixels(0,0,output.width,output.height,p.gl.RGBA,p.gl.UNSIGNED_BYTE,stableFull);
     const partialEqual=partialCrt.every((v,i)=>v===stableFull[i]);
-    p.present(frame);
+    const checkFramebufferStatus=p.gl.checkFramebufferStatus;
+    p.gl.checkFramebufferStatus=()=>p.gl.FRAMEBUFFER_UNSUPPORTED;
+    surface.style.width='648px'; surface.style.height='486px';
+    p.present(frame,source(4));
+    p.present(frame,rows(5,217));
+    const fullDrawFallback=!output.hidden && p.filtered === null && sample(.1,.1)[0]>220;
+    p.gl.checkFramebufferStatus=checkFramebufferStatus;
     surface.style.width='2560px'; surface.style.height='1920px'; p.setPreset('strong',false);
     const largePlain=sample(64.5/640,.1); p.setPreset('strong',true); const largeMask=sample(64.5/640,.1);
     const unchanged=frame.data.every((v,i)=>v===original[i]);
@@ -251,7 +263,7 @@ test('shader pixels stay upright, retain black/white and single-pixel edges, and
     const futureAspect=surface.style.getPropertyValue('--crt-aspect');
     surface.remove(); p.observer.disconnect();
     return {defaultPreset,defaultActive,defaultTuning,invalidPreset,top,bottom,black,line,neighbor,unchanged,futureAspect,largePlain,largeMask,stable:a.every((v,i)=>v===b[i]),smallMaskEqual:small.every((v,i)=>v===masked[i]),
-      partialEqual,partialRawEqual:partialRaw.every((v,i)=>v===modified.data[i])};
+      partialEqual,partialRawEqual:partialRaw.every((v,i)=>v===modified.data[i]),fullDrawFallback};
   });
   expect(result.defaultPreset).toBe('sharp'); expect(result.defaultActive).toBe(true); expect(result.invalidPreset).toBe('sharp');
   expect(result.defaultTuning.scan).toBeCloseTo(.06); expect(result.defaultTuning.softness).toBeCloseTo(.035); expect(result.defaultTuning.mask).toBe(0);
@@ -259,6 +271,7 @@ test('shader pixels stay upright, retain black/white and single-pixel edges, and
   expect(result.bottom[2]).toBeGreaterThan(220); expect(result.bottom[0]).toBe(0);
   expect(result.partialEqual).toBe(true);
   expect(result.partialRawEqual).toBe(true);
+  expect(result.fullDrawFallback).toBe(true);
   expect(result.black).toEqual([0,0,0,255]);
   expect(result.line[1]).toBeGreaterThan(210); expect(result.neighbor[1]).toBeLessThan(12);
   expect(result.largeMask[0]).toBeLessThan(result.largePlain[0]);
