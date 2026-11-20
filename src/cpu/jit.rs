@@ -280,11 +280,13 @@ fn eligible(m: &Machine) -> bool {
 fn code(m: &Machine, ip: u32, length: u32) -> Option<usize> {
     let cs = m.cpu.segment_cache(CS);
     let address = cs.base.checked_add(ip)?;
-    // Exclude mapped video/ROM and wrapping fetches. The interpreter retains
-    // fault delivery, unusual hidden caches and all other address spaces.
-    (ip.checked_add(length)? <= 0x10000
-        && cs.contains(ip, length)
-        && address.checked_add(length)? <= 0xa0000)
+    let end = address.checked_add(length)?;
+    // Keep mapped video and ROM on the interpreter. With A20 enabled, DOS
+    // real-mode code can use RAM above 1 MiB. Direct links preserve CS, and
+    // a 16-bit IP window cannot include both this range and conventional RAM.
+    let plain =
+        end <= 0xa0000 || m.bus.a20 && (0x100000..0x110000).contains(&address) && end <= 0x110000;
+    (plain && ip.checked_add(length)? <= 0x10000 && cs.contains(ip, length))
         .then_some(address as usize)
 }
 fn displacement_len(m: u8) -> u32 {
@@ -1215,6 +1217,28 @@ mod tests {
         assert_ne!(id, 0);
         assert!(e.register(id, true));
         id
+    }
+    #[test]
+    fn hma_code_requires_a20_at_every_entry() {
+        let mut m = machine();
+        m.cpu.s[CS] = 0xffff;
+        m.cpu.ip = 0x20;
+        m.bus.a20 = true;
+        m.bus.mem[0x100010..0x100014].copy_from_slice(&[0x40, 0x48, 0xeb, 0xfc]);
+        m.bus.mem[0x10..0x14].copy_from_slice(&[0x90, 0x90, 0xeb, 0xfc]);
+        assert_eq!(code(&m, 0x0f, 2), None);
+        assert_eq!(code(&m, 0x10, 1), Some(0x100000));
+        assert_eq!(code(&m, 0xffff, 1), Some(0x10ffef));
+        assert_eq!(code(&m, 0xffff, 2), None);
+
+        let mut engine = Engine::default();
+        let id = offered(&mut m, &mut engine);
+        m.bus.a20 = false;
+        engine.begin_slice(&m, 80_000, 1);
+        assert!(!engine.start(&mut m, id));
+        assert_eq!(m.cpu.ip, 0x20);
+        m.bus.a20 = true;
+        assert!(engine.start(&mut m, id));
     }
     #[test]
     fn native_interrupt_steps_match_reference_state_memory_and_timing() {
