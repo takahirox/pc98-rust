@@ -28,6 +28,54 @@ test('RAM block respects partial work/event exits and exact unaligned/dependency
  const p=await pair([0x40,0x48,0xeb,0xfc]);execute(p,[65535,0,0,0,0,0,0,0],3,100,1);
 });
 
+test('real-mode high-memory traces stop at the A20 gate and recheck changed code',async()=>{
+ const setup=[0xe6,0xf2,0xea,0x20,0,0xff,0xff]; // Enable A20 and enter FFFF:0020.
+ const a=await boot(setup),b=await boot(setup),j=new BlockJit(a);
+ const cores=[a,b];
+ const ram=c=>new Uint8Array(c.memory.buffer,c.block_ram_ptr()>>>0,0x110000);
+ for(const c of cores){
+  ram(c).set([0x40,0xeb,0xfd],0x100010); // High loop increments AX.
+  ram(c).set([0x41,0xeb,0xfd],0x10); // Wrapped loop increments CX.
+  ram(c).set([0xb0,3,0xe6,0xf6],0x1000f0); // Disable A20 while still in high RAM.
+  ram(c).set([0xe6,0xf2],0xf0); // Re-enable A20 from the wrapped address.
+  c.step(2);
+  assert.equal(state(c).ip,0x20);
+ }
+ async function compare(){
+  const done=j.step(8000,120);
+  b.step(done);
+  while(j.pending)await new Promise(resolve=>setTimeout(resolve,0));
+  assert(!j.failed,j.compileError);
+  equal(a,b);
+  for(const c of cores)c.audio_clear();
+ }
+ function runGateProgram(units){
+  for(const c of cores){
+   const s=state(c);
+   setState(c,s.regs,s.flags,0x100);
+   c.step(units);
+   const after=state(c);
+   setState(c,after.regs,after.flags,0x20);
+  }
+ }
+ for(let run=0;run<12;run++)await compare();
+ const translated=j.stats().blockInstructions;
+ assert(translated>0);
+
+ runGateProgram(2);
+ const cx=state(a).regs[1];
+ await compare();
+ assert(state(a).regs[1]>cx);
+ assert.equal(j.stats().blockInstructions,translated);
+
+ runGateProgram(1);
+ const dx=state(a).regs[2],invalidations=a.jit_metric(2);
+ for(const c of cores)ram(c)[0x100010]=0x42;
+ await compare();
+ assert(state(a).regs[2]>dx);
+ assert(a.jit_metric(2)>invalidations);
+});
+
 test('linked traces retire once per event and revalidate code changed by an earlier trace',async()=>{
  // The store is in the first trace; its eventual target lies beyond that trace.
  const body=[0x2e,0xc6,0x07,0x48,...Array(40).fill(0x40)];
