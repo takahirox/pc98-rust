@@ -140,6 +140,7 @@ function writtenRegisters(op,m){
   if(op===0x86||op===0x87)return target(r)|(m>=0xc0?target(rm):0);
   if(op===0x88||op===0x89||op===0xc6||op===0xc7)return m>=0xc0?target(rm):0;
   if(op===0x8a||op===0x8b||op===0x8d)return target(r);
+  if(op===0x8c)return 1<<rm;
   if(op>=0x90&&op<=0x97)return 1|(1<<(op&7));
   if(op===0x9f||op===0xa0||op===0xa1)return 1;
   if(op===0xa2||op===0xa3)return 0;
@@ -164,6 +165,7 @@ export function compileRamBlock(packet,meta){
   const writeReg=(r,wide,value)=>{const word=wide?r:r&3;dirty.add(word);used.add(word);return set(15+word,wide?and(value,c(65535)):or(and(get(15+word),c(r&4?255:65280)),r&4?shl(and(value,c(255)),8):and(value,c(255))));};
   const context=i=>[...get(14),0x28,2,...uleb(i*4)];
   const save=(i,value)=>[...get(14),...value,0x36,2,...uleb(i*4)];
+  const selector=i=>load(14,116+2*i,2);
   const exitIf=value=>body.push(...value,0x0d,1);
   body.push(...set(14,add(get(3),c(meta[1]))),...set(7,load(1,0,2)),...set(33,[...get(2),0x28,2,0]),
     ...(linked?[...set(27,context(4)),...set(28,context(3)),...set(29,context(6)),...set(30,context(7)),...set(31,context(8)),...set(32,context(9)),...set(45,context(18)),...set(46,context(19)),...set(47,context(24)),...set(48,context(25)),...set(52,context(26))]:bios?set(47,c(1)):[]),
@@ -279,6 +281,7 @@ export function compileRamBlock(packet,meta){
         write:kind!==7,writeFlags,putRegister:(dst,w,v)=>memDst?writeMemory(v):writeReg(dst,w,v)}));
     }else if(op>=0x40&&op<=0x4f){
       body.push(...arithmetic(op&8?5:0,true,op&7,readReg(op&7,true),c(1),{increment:true,writeFlags,putRegister:writeReg}));
+    }else if([0x06,0x0e,0x16,0x1e].includes(op)){body.push(...writeMemory(selector(op>>3)),...writeReg(4,true,sub(readReg(4,true),c(2))));
     }else if(op>=0x50&&op<=0x57){body.push(...writeMemory(readReg(op&7,true)),...writeReg(4,true,sub(readReg(4,true),c(2))));
     }else if(op>=0x58&&op<=0x5f){body.push(...writeReg(4,true,add(readReg(4,true),c(2))),...writeReg(op&7,true,get(11)));
     }else if(op===0xc3){body.push(...writeReg(4,true,add(readReg(4,true),c(2))));
@@ -289,6 +292,7 @@ export function compileRamBlock(packet,meta){
     }else if(op===0x84||op===0x85){body.push(...arithmetic(4,wide,rm,rmValue(),readReg(r,wide),{write:false,writeFlags}));
     }else if(op===0x86||op===0x87){body.push(...set(4,rmValue()),...writeRm(readReg(r,wide)),...writeReg(r,wide,get(4)));
     }else if(op>=0x88&&op<=0x8b){body.push(...(op&2?writeReg(r,wide,rmValue()):writeRm(readReg(r,wide))));
+    }else if(op===0x8c){body.push(...writeReg(rm,true,selector(r)));
     }else if(op===0x8d){body.push(...writeReg(r,true,get(10)));
     }else if(op>=0x90&&op<=0x97){body.push(...set(4,readReg(0,true)),...writeReg(0,true,readReg(op&7,true)),...writeReg(op&7,true,get(4)));
     }else if(op===0x9e){body.push(...writeFlags(or(or(and(get(7),c(~0xd5)),and(readReg(4,false),c(0xd5))),c(2))));

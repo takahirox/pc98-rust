@@ -29,8 +29,12 @@ pub(super) struct Context {
     last_plan: u32,
     pub(super) mode: u32, // Bit 0: direct entry; bit 1: all segment bases may be linked.
     blocks: u32,
+    // Segment-reading instructions use the visible values even when the
+    // hidden caches retain a different base from protected mode.
+    selectors: [u16; 6],
 }
-const _: () = assert!(std::mem::size_of::<Context>() == 116);
+const _: () = assert!(std::mem::offset_of!(Context, selectors) == 116);
+const _: () = assert!(std::mem::size_of::<Context>() == 128);
 
 // Full keys prevent hash collisions from entering an unrelated table slot.
 #[derive(Clone, Copy, Default)]
@@ -175,14 +179,51 @@ pub(super) fn decode_trace(m: &Machine, ip: u32, ops: &[Op]) -> Option<Op> {
         execution: [latency(0xcd) + latency(0xe6) + latency(0xcf), latency(0xcf)],
     })
 }
-// LEA is offered only by this direct tier. The guarded production compiler
-// keeps its existing opcode contract, including on feature-enabled test cores.
+// Keep LEA and selector reads on the direct tier. The guarded compiler
+// retains its own opcode contract.
 pub(super) fn decode(m: &Machine, ip: u32) -> Option<Op> {
     let at = code(m, ip, 1)?;
     let prefix = matches!(m.bus.mem[at], 0x26 | 0x2e | 0x36 | 0x3e | 0x64 | 0x65);
     let skip = u32::from(prefix);
     let at = code(m, ip + skip, 1)?;
-    if m.bus.mem[at] != 0x8d {
+    let opcode = m.bus.mem[at];
+    if matches!(opcode, 0x06 | 0x0e | 0x16 | 0x1e | 0x8c) {
+        if !ordinary(m.cpu.segment_cache(CS)) {
+            return None;
+        }
+        let mov = opcode == 0x8c;
+        let len = skip + if mov { 2 } else { 1 };
+        let at = code(m, ip, len)?;
+        let modrm = if mov {
+            m.bus.mem[at + skip as usize + 1]
+        } else {
+            0
+        };
+        if mov && (modrm < 0xc0 || (modrm >> 3) & 7 > 5) {
+            return None;
+        }
+        let mut bytes = [0; 7];
+        bytes[..len as usize].copy_from_slice(&m.bus.mem[at..at + len as usize]);
+        return Some(Op {
+            ip,
+            bytes,
+            opcode,
+            len: len as u8,
+            prefix_len: skip as u8,
+            modrm,
+            memory: (!mov).then_some(Memory {
+                segment: SS as u8,
+                base: SP as u8,
+                index: 8,
+                displacement: 0xfffe,
+                width: NonZeroU8::new(2).unwrap(),
+                flags: Memory::WRITE | Memory::STACK,
+            }),
+            register_writes: if mov { 0xff } else { 1 << SP },
+            execution: m.bus.timing.jit_execution(opcode, modrm, skip),
+        });
+    }
+    if opcode != 0x8d {
         return super::decode(m, ip);
     }
     if !ordinary(m.cpu.segment_cache(CS)) {
@@ -421,6 +462,7 @@ impl Engine {
             code_start: at as u32,
             code_end: end as u32,
             segments: bases,
+            selectors: std::array::from_fn(|segment| m.cpu.segment(segment)),
             idtr_base: m.cpu.idtr_base,
             idtr_limit: u32::from(m.cpu.idtr_limit),
             cs: u32::from(m.cpu.s[CS]),
@@ -573,6 +615,22 @@ mod tests {
         assert!(e.register(id, true));
         m.cpu.ip = 0x100;
         (m, e, id)
+    }
+    #[test]
+    fn direct_entry_preserves_visible_selectors_and_hidden_bases() {
+        let (mut m, mut e, id) = plan();
+        m.cpu.s[DS] = 0x1234;
+        m.cpu.segment_caches[DS] = Some(SegmentCache {
+            base: 0x54320,
+            limit: 0xffff,
+            access: 0x93,
+            attributes: 0,
+        });
+        m.bus.begin_device_run();
+        e.begin_block_slice(&m, 80_000, 4);
+        assert!(e.start_block(&mut m, id));
+        assert_eq!(e.scratch.block.selectors[DS], 0x1234);
+        assert_eq!(e.scratch.block.segments[DS], 0x54320);
     }
     #[test]
     fn links_clear_on_slot_reuse_unregistration_and_reset() {
