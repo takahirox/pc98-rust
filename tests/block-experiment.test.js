@@ -76,6 +76,35 @@ test('real-mode high-memory traces stop at the A20 gate and recheck changed code
  assert(a.jit_metric(2)>invalidations);
 });
 
+test('a direct high-memory return stays in RAM and falls back at the ROM boundary',async()=>{
+ const setup=[0xe6,0xf2,0xea,0x20,0,0xff,0xff];
+ const regs=[0x120,0,0,0,0x8000,0,0,0];
+ async function highPair(code,stack=[]){
+  const a=await boot(setup),b=await boot(setup);
+  for(const c of [a,b]){
+   const ram=new Uint8Array(c.memory.buffer,c.block_ram_ptr()>>>0,0x110000);
+   ram.set(code,0x100010);ram.set(stack,0x8000);
+   c.step(2);
+   setState(c,regs,2,0x20);
+  }
+  return translate(a,b,0x20);
+ }
+ const trace=await highPair([0xe8,2,0,0xeb,0xfb,0x40,0xc3]); // CALL helper; JMP start; helper: INC AX; RET.
+ assert.equal(execute(trace,regs,2,4),4);
+ const returned=state(trace.a);
+ assert.equal(returned.ip,0x20);
+ assert.equal(returned.regs[0],0x121);
+ assert.equal(returned.regs[4],0x8000);
+ assert.equal(trace.a.block_metric(1),4);
+
+ const stack=Uint8Array.from({length:128},(_,i)=>i%2 ? 0 : 0x0f);
+ const rom=await highPair([0xc3],stack);
+ const fallback=rom.a.block_metric(2);
+ assert.equal(execute(rom,regs,2,2),1);
+ assert.equal(state(rom.a).ip,0x0f); // FFFF:000F points to ROM.
+ assert.equal(rom.a.block_metric(2),fallback+1);
+});
+
 test('linked traces retire once per event and revalidate code changed by an earlier trace',async()=>{
  // The store is in the first trace; its eventual target lies beyond that trace.
  const body=[0x2e,0xc6,0x07,0x48,...Array(40).fill(0x40)];
