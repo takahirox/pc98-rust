@@ -120,7 +120,8 @@ impl VideoView<'_> {
             *color = [rgb[0], rgb[1], rgb[2], 255];
         }
         let rgba = out[..640 * 400 * 4].as_chunks_mut::<4>().0;
-        for (y, (row, &changed)) in rgba.chunks_exact_mut(640).zip(rows).enumerate() {
+        let scanlines = rgba.as_chunks_mut::<640>().0;
+        for (y, (row, &changed)) in scanlines.iter_mut().zip(rows).enumerate() {
             if !changed {
                 continue;
             }
