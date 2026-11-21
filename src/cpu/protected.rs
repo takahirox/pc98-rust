@@ -188,17 +188,20 @@ impl Cpu {
             ..d
         })
     }
+    pub(super) fn load_real_segment(&mut self, s: usize, selector: u16) {
+        self.set_segment(s, selector);
+        // Real-address loads replace base while retaining cached limits/B.
+        if let Some(d) = &mut self.segment_caches[s] {
+            d.base = u32::from(selector) << 4;
+        }
+    }
     pub(super) fn load_segment(&mut self, b: &mut Bus, s: usize, selector: u16) -> ExecResult<()> {
         if self.vm86() {
             self.load_vm86_segment(s, selector);
             return Ok(());
         }
         if !self.protected_mode() {
-            self.set_segment(s, selector);
-            // Real-address loads replace base while retaining cached limits/B.
-            if let Some(d) = &mut self.segment_caches[s] {
-                d.base = (selector as u32) << 4;
-            }
+            self.load_real_segment(s, selector);
             return Ok(());
         }
         if s != SS && selector & !3 == 0 {

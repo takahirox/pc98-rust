@@ -126,6 +126,80 @@ test('direct traces read visible segment selectors and push the four legacy sele
  assert.equal(a.block_metric(1),6);
 });
 
+test('direct segment loads update later operands and commit at partial work exits',async()=>{
+ const setup=[0x31,0xc0,0x8e,0xd0]; // SS = 0.
+ const body=[
+  0x8e,0xd8,                     // MOV DS, AX
+  0x2e,0x8e,0x06,0x00,0x01,      // MOV ES, [CS:0100]
+  0x8b,0x1e,0x10,0x00,           // MOV BX, [DS:0010]
+  0x26,0x8b,0x0e,0x10,0x00,      // MOV CX, [ES:0010]
+  0x1f,0x07,                     // POP DS; POP ES
+  0x8c,0xd8,0x8c,0xc2,           // MOV AX, DS; MOV DX, ES
+ ];
+ const regs=[0x1234,0,0,0,0x8000,0,0,0],ip=1+setup.length;
+ const code=[...setup,...body,0xeb,(-body.length-2)&255];
+ const [a,b]=await Promise.all([boot(code,[0x45,0x23]),boot(code,[0x45,0x23])]);
+ for(const c of [a,b]){
+  c.step(2);
+  setState(c,regs,2,ip);
+  const ram=new Uint8Array(c.memory.buffer,c.block_ram_ptr()>>>0,0xa0000);
+  ram.set([0x67,0x98],0x12350);
+  ram.set([0xab,0xcd],0x23460);
+  ram.set([0x45,0x34,0x56,0x45],0x8000);
+ }
+ const p=await translate(a,b,ip);
+ for(const cap of [1,2,4,5,6,8]){
+  const translated=a.block_metric(1);
+  assert.equal(execute(p,regs,2,cap),cap);
+  assert.equal(a.block_metric(1)-translated,cap);
+  for(const c of [a,b])c.step(8-cap);
+  equal(a,b);
+  assert.deepEqual(state(a).regs.slice(0,5),[0x3445,0xcdab,0x4556,0x9867,0x8004]);
+ }
+});
+
+test('a mapped or segment-crossing MOV to a data segment uses the interpreter',async()=>{
+ const setup=[0xb8,0x00,0xa0,0x8e,0xd8,0x31,0xc0,0x8e,0xd0];
+ const code=[...setup,0x8e,0x07,0x8c,0xc1,0xeb,0xfa]; // MOV ES,[BX]; MOV CX,ES.
+ const [a,b]=await Promise.all([boot(code),boot(code)]);
+ const regs=[0,0,0,0x20,0x8000,0,0,0],ip=1+setup.length;
+ for(const c of [a,b]){
+  c.step(4);
+  setState(c,regs,2,ip);
+  new Uint8Array(c.memory.buffer,c.block_ram_ptr()>>>0,0x100000).set([0x34,0x12],0xa0020);
+ }
+ const p=await translate(a,b,ip),fallback=a.block_metric(2);
+ assert.equal(execute(p,regs,2,1),1);
+ for(const c of [a,b])c.step(1);
+ equal(a,b);
+ assert.equal(state(a).regs[1],0x1234);
+ assert.equal(execute(p,[0,0,0,0xffff,0x8000,0,0,0],2,1),1);
+ assert.equal(a.block_metric(2)-fallback,2);
+ assert.equal(a.block_metric(1),0);
+});
+
+test('linked traces carry a changed segment base into the next trace',async()=>{
+ const body=[0x35,0x33,0x33,0x8e,0xd8,...Array(20).fill(0x90),0x8b,0x0e,0x10,0];
+ const code=[...body,0xeb,(-body.length-2)&255];
+ const [a,b]=await Promise.all([boot(code),boot(code)]),j=new BlockJit(a);
+ for(const c of [a,b]){
+  setState(c,[0x1234,0,0,0,0,0,0,0]);
+  const ram=new Uint8Array(c.memory.buffer,c.block_ram_ptr()>>>0,0xa0000);
+  ram.set([0x34,0x12],0x12350);
+  ram.set([0x07,0x21],0x21080);
+ }
+ for(let n=0;n<36;n++){
+  const done=j.step(8000,120);
+  b.step(done);
+  while(j.pending)await new Promise(resolve=>setTimeout(resolve,0));
+  assert(!j.failed,j.compileError);
+  equal(a,b);
+  for(const c of [a,b])c.audio_clear();
+ }
+ assert(j.stats().blockTraces>j.stats().blockCalls);
+ assert([0x1234,0x2107].includes(state(a).regs[1]));
+});
+
 test('linked traces retire once per event and revalidate code changed by an earlier trace',async()=>{
  // The store is in the first trace; its eventual target lies beyond that trace.
  const body=[0x2e,0xc6,0x07,0x48,...Array(40).fill(0x40)];

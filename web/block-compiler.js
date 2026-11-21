@@ -293,6 +293,16 @@ export function compileRamBlock(packet,meta){
     }else if(op===0x86||op===0x87){body.push(...set(4,rmValue()),...writeRm(readReg(r,wide)),...writeReg(r,wide,get(4)));
     }else if(op>=0x88&&op<=0x8b){body.push(...(op&2?writeReg(r,wide,rmValue()):writeRm(readReg(r,wide))));
     }else if(op===0x8c){body.push(...writeReg(rm,true,selector(r)));
+    }else if(op===0x8e||op===0x07||op===0x1f){
+      if(!linked)throw Error('Missing linked segment context');
+      const segment=op===0x8e?r:op>>3;
+      const value=op===0x8e&&!memory?readReg(rm,true):get(11);
+      // The completed load is visible to subsequent instructions and linked
+      // traces through the context. Rust commits the changed caches on exit.
+      body.push(...store(14,116+2*segment,2,value),
+        ...set(39+segment,shl(selector(segment),4)),...save(12+segment,get(39+segment)),
+        ...save(32,or(context(32),c(1<<segment))));
+      if(op!==0x8e)body.push(...writeReg(4,true,add(readReg(4,true),c(2))));
     }else if(op===0x8d){body.push(...writeReg(r,true,get(10)));
     }else if(op>=0x90&&op<=0x97){body.push(...set(4,readReg(0,true)),...writeReg(0,true,readReg(op&7,true)),...writeReg(op&7,true,get(4)));
     }else if(op===0x9e){body.push(...writeFlags(or(or(and(get(7),c(~0xd5)),and(readReg(4,false),c(0xd5))),c(2))));
