@@ -261,6 +261,17 @@ impl Bus {
     fn page_bytes(&self) -> usize {
         self.profile.planes() * 0x8000
     }
+    #[cfg(feature = "block-experiment")]
+    pub(crate) fn direct_graphics_ptr(&mut self) -> u32 {
+        if self.pegc || self.grcg_mode & 0x80 != 0 {
+            return 0;
+        }
+        let length = self.page_bytes();
+        let offset = usize::from(self.cpu_page) * length;
+        self.graphics
+            .get_mut(offset..offset + length)
+            .map_or(0, |page| page.as_mut_ptr() as usize as u32)
+    }
     fn graphics_offset(&self, a: usize) -> Option<usize> {
         if self.pegc {
             return None;

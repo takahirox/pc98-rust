@@ -299,7 +299,7 @@ test('guarded MOV preserves mapped word transfers and rejects a segment-crossing
   const mapped=bx===0x8000;
   if(mapped)for(const c of [p.a,p.b]){
    const ptr=c.block_ram_ptr()>>>0;
-   const setup=[0xb8,0,0xa8,0x8e,0xd8,0xb8,0x45,0x23,0xa3,0,0x80]; // DS=A800; seed the mapped word.
+   const setup=[0xb8,0,0x98,0x8e,0xd8,0xb8,0x45,0x23,0xa3,0,0x80]; // DS=9800; seed text VRAM at A0000.
    new Uint8Array(c.memory.buffer,ptr+0x1fd00,setup.length).set(setup);
    const s=state(c);setState(c,s.regs,s.flags,0x100);c.step(4);
   }
@@ -308,9 +308,57 @@ test('guarded MOV preserves mapped word transfers and rejects a segment-crossing
   assert(p.a.block_metric(2)>0);
   assert.equal(p.a.jit_metric(1)-translated,Number(mapped));
   if(mapped&&opcode===0x89){
-   assert.equal(p.a.peek(0xb0000),0x76);assert.equal(p.a.peek(0xb0001),0x98);
+   assert.equal(p.a.peek(0xa0000),0x76);assert.equal(p.a.peek(0xa0001),0x98);
   }
   if(mapped&&opcode===0x8b)assert.equal(state(p.a).regs[0],0x2345);
+ }
+});
+
+test('direct planar loads and stores match video timing for every plane and CPU page',async()=>{
+ const body=[
+  0x89,0x07,           // MOV [BX],AX
+  0xff,0x07,           // INC WORD [BX]
+  0x8b,0x0f,           // MOV CX,[BX]
+  0x88,0x67,2,         // MOV [BX+2],AH
+  0x8a,0x57,2,         // MOV DL,[BX+2]
+ ];
+ for(const segment of [0xa8,0xb0,0xb8,0xe0])for(const page of [0,1]){
+  const setup=[0xb8,0,segment,0x8e,0xd8,0xb0,page,0xe6,0xa6];
+  const code=[...setup,...body,0xeb,(-body.length-2)&255],ip=1+setup.length;
+  const [a,b]=await Promise.all([boot(code),boot(code)]);
+  const regs=[0x9876,0,0,0x10,0x8000,0,0,0];
+  for(const c of [a,b]){c.step(4);setState(c,regs,2,ip);}
+  const p=await translate(a,b,ip);
+  for(const bx of [0x10,0x11]){
+   const translated=a.block_metric(1);
+   assert.equal(execute(p,[...regs.slice(0,3),bx,...regs.slice(4)],2,5),5);
+   assert.equal(a.block_metric(1)-translated,5);
+   assert.deepEqual(state(a).regs.slice(0,3),[0x9876,0x9877,0x98]);
+   const at=(segment<<12)+bx;
+   assert.deepEqual([0,1,2].map(offset=>a.peek(at+offset)),[0x77,0x98,0x98]);
+  }
+ }
+});
+
+test('warm planar traces fall back across window boundaries and when GRCG or PEGC is enabled',async()=>{
+ const setup=[0xb8,0,0xe0,0x8e,0xd8];
+ const body=[0x89,0x07,0xeb,0xfc]; // MOV [BX],AX; JMP start.
+ const ip=1+setup.length,code=[...setup,...body];
+ for(const mode of [[0xb0,0x80,0xe6,0x7c],[0xb0,7,0xe6,0x6a,0xb0,0x21,0xe6,0x6a]]){
+  const [a,b]=await Promise.all([boot(code),boot(code)]);
+  const regs=[0x9876,0,0,0x10,0x8000,0,0,0];
+  for(const c of [a,b]){
+   c.step(2);setState(c,regs,2,ip);
+   new Uint8Array(c.memory.buffer,(c.block_ram_ptr()>>>0)+0x1fd00,mode.length).set(mode);
+  }
+  const p=await translate(a,b,ip),before=a.block_metric(1),fallback=a.block_metric(2);
+  assert.equal(execute(p,regs,2,1),1);
+  assert.equal(a.block_metric(1)-before,1);
+  assert.equal(execute(p,[0x9876,0,0,0x7fff,0x8000,0,0,0],2,1),1);
+  for(const c of [a,b]){setState(c,regs,2,0x100);c.step(mode.length/2);}
+  assert.equal(execute(p,regs,2,1),1);
+  assert.equal(a.block_metric(1)-before,1);
+  assert.equal(a.block_metric(2)-fallback,2);
  }
 });
 

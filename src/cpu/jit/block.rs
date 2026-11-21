@@ -33,10 +33,12 @@ pub(super) struct Context {
     // hidden caches retain a different base from protected mode.
     selectors: [u16; 6],
     segment_writes: u32,
+    graphics: u32,
 }
 const _: () = assert!(std::mem::offset_of!(Context, selectors) == 116);
 const _: () = assert!(std::mem::offset_of!(Context, segment_writes) == 128);
-const _: () = assert!(std::mem::size_of::<Context>() == 132);
+const _: () = assert!(std::mem::offset_of!(Context, graphics) == 132);
+const _: () = assert!(std::mem::size_of::<Context>() == 136);
 
 // Full keys prevent hash collisions from entering an unrelated table slot.
 #[derive(Clone, Copy, Default)]
@@ -515,6 +517,7 @@ impl Engine {
         }
         self.scratch.block = Context {
             ram: m.bus.mem.as_mut_ptr() as usize as u32,
+            graphics: m.bus.direct_graphics_ptr(),
             budget,
             limit: self.remaining,
             writes: u32::from(m.cpu.timing_writes),

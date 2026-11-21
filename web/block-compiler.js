@@ -205,9 +205,11 @@ export function compileRamBlock(packet,meta){
     const info=meta.subarray(header+index*stride,header+index*stride+12),[exec0,exec1,seg,base,regIndex,disp,width,access,addressConstant,baseMask,policy,fetch]=info;
     const memory=width!==0,displacement=(m>>6)===1?1:(m>>6)===2||(m>>6)===0&&rm===6?2:0;
     const imm=(at,w)=>w?bytes[at]|bytes[at+1]<<8:bytes[at];
-    const loadMemory=()=>[...add(get(34),get(10)),width===4?0x28:width===2?0x2f:0x2d,width===4?2:width===2?1:0,0];
+    const videoAccess=linked&&memory&&!!(access&3)&&!(access&4);
+    const hostAddress=videoAccess?get(49):add(get(34),get(10));
+    const loadMemory=()=>[...hostAddress,width===4?0x28:width===2?0x2f:0x2d,width===4?2:width===2?1:0,0];
     const wordCost=address=>add(c(4),add(bin(0x6c,and(address,c(1)),c(3)),shl(bin(0x46,and(address,c(3)),c(3)),2)));
-    const writeMemory=value=>[...add(get(34),get(10)),...value,width===1?0x3a:0x3b,width===1?0:1,0];
+    const writeMemory=value=>[...hostAddress,...value,width===1?0x3a:0x3b,width===1?0:1,0];
     const rmValue=()=>memory?get(11):readReg(rm,wide);
     const writeRm=value=>memory?writeMemory(value):writeReg(rm,wide,value);
     const writeFlags=value=>set(7,value);
@@ -253,13 +255,27 @@ export function compileRamBlock(packet,meta){
       if(access&3){
       exitIf(bin(0x4b,get(10),c(65536-width)));
       body.push(...set(10,add(get(39+seg),get(10))));
-      exitIf(bin(0x4b,get(10),c(0xa0000-width)));
+      if(videoAccess){
+        const within=(lo,hi)=>and(bin(0x4f,get(10),c(lo)),bin(0x4d,get(10),c(hi-width)));
+        // Only plain planar windows have a direct host pointer. Test the
+        // complete physical operand before any read, store or retirement.
+        body.push(...set(49,add(get(34),get(10))),...set(50,bin(0x4b,get(10),c(0xa0000-width))),
+          ...get(50),0x04,0x40,
+            ...set(51,within(0xa8000,0xc0000)),
+            ...or(not(context(33)),not(or(get(51),within(0xe0000,0xe8000)))),0x0d,2,
+            ...set(49,add(context(33),[...sub(get(10),c(0xa8000)),...sub(get(10),c(0xc8000)),...get(51),0x1b])),
+          0x0b);
+      }else exitIf(bin(0x4b,get(10),c(0xa0000-width)));
       if(access&2)exitIf(and(bin(0x49,get(10),get(38)),bin(0x4b,add(get(10),c(width)),get(37))));
       }
     }
     const transfers=Number(!!(access&1))+Number(!!(access&2));
     // A far pointer is fetched as two ordered word accesses.
-    const dataPenalty=width===4?add(wordCost(get(10)),wordCost(add(get(10),c(2)))):width===2?wordCost(get(10)):c(4);
+    const ramPenalty=width===4?add(wordCost(get(10)),wordCost(add(get(10),c(2)))):width===2?wordCost(get(10)):c(4);
+    // The planar bus transfers one aligned 16-bit beat at eight clocks.
+    // Unaligned words add three clocks and cross to a second beat.
+    const videoPenalty=width===1?c(8):add(c(width*4),bin(0x6c,and(get(10),c(1)),c(width/2*11)));
+    const dataPenalty=videoAccess?[...videoPenalty,...ramPenalty,...get(50),0x1b]:ramPenalty;
     body.push(...set(13,transfers?add(c(fetch),bin(0x6c,c(transfers),dataPenalty)):c(fetch)),
       ...set(26,add(c(addressConstant),nz(and(get(25),c(baseMask))))));
     exitIf(bin(0x4b,add(get(27),add(get(13),add(get(26),c(Math.max(exec0,exec1))))),get(35)));
