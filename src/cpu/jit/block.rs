@@ -55,7 +55,7 @@ pub(super) struct Plan {
     segments: u8,
     bios: bool,
     runs: u16,
-    exits: [u16; BLOCK],
+    exits: [u16; TRACE],
 }
 struct CodeSpan {
     ip: u32,
@@ -103,7 +103,7 @@ impl Plan {
             segments,
             bios: ops.iter().any(|op| op.opcode == 0xcd),
             runs: 0,
-            exits: [0; BLOCK],
+            exits: [0; TRACE],
         })
     }
 }

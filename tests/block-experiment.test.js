@@ -20,6 +20,18 @@ test('RAM loop executes loads, stores, arithmetic and a direct back edge without
  assert(done>p.packet[1]&&done<=40);assert.equal(p.a.peek(0x8000),Math.floor((done+1)/4));assert.equal(p.a.block_metric(0),1);assert.equal(p.a.block_metric(1),done);
 });
 
+test('direct plans preserve partial work exits beyond sixteen operations',async()=>{
+ const body=Array(36).fill(0x40);
+ const p=await pair([...body,0xeb,(-body.length-2)&255]);
+ assert.equal(p.packet[1],32);
+ const regs=[0,0,0,0,0,0,0,0];
+ for(const cap of [15,16,17,31,32,33]){
+  const done=execute(p,regs,2,cap);
+  assert.equal(done,Math.min(32,cap));
+  assert.equal(state(p.a).regs[0],done);
+ }
+});
+
 test('RAM block respects partial work/event exits and exact unaligned/dependency timing',async()=>{
  for(const bx of [0x8000,0x8001,0x8002,0x8003])for(const cap of [1,2,3,4,5,19]){
   const p=await pair([0x43,0x8b,0x07,0x83,0xc0,1,0x89,0x07,0xeb,0xf6]);
@@ -179,7 +191,7 @@ test('a mapped or segment-crossing MOV to a data segment uses the interpreter',a
 });
 
 test('linked traces carry a changed segment base into the next trace',async()=>{
- const body=[0x35,0x33,0x33,0x8e,0xd8,...Array(20).fill(0x90),0x8b,0x0e,0x10,0];
+ const body=[0x35,0x33,0x33,0x8e,0xd8,...Array(36).fill(0x90),0x8b,0x0e,0x10,0];
  const code=[...body,0xeb,(-body.length-2)&255];
  const [a,b]=await Promise.all([boot(code),boot(code)]),j=new BlockJit(a);
  for(const c of [a,b]){
