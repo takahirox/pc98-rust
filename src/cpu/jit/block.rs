@@ -32,9 +32,11 @@ pub(super) struct Context {
     // Segment-reading instructions use the visible values even when the
     // hidden caches retain a different base from protected mode.
     selectors: [u16; 6],
+    segment_writes: u32,
 }
 const _: () = assert!(std::mem::offset_of!(Context, selectors) == 116);
-const _: () = assert!(std::mem::size_of::<Context>() == 128);
+const _: () = assert!(std::mem::offset_of!(Context, segment_writes) == 128);
+const _: () = assert!(std::mem::size_of::<Context>() == 132);
 
 // Full keys prevent hash collisions from entering an unrelated table slot.
 #[derive(Clone, Copy, Default)]
@@ -222,6 +224,50 @@ pub(super) fn decode(m: &Machine, ip: u32) -> Option<Op> {
             register_writes: if mov { 0xff } else { 1 << SP },
             execution: m.bus.timing.jit_execution(opcode, modrm, skip),
         });
+    }
+    if matches!(opcode, 0x07 | 0x1f | 0x8e) {
+        if !ordinary(m.cpu.segment_cache(CS)) {
+            return None;
+        }
+        let mov = opcode == 0x8e;
+        let modrm = if mov {
+            code(m, ip + skip, 2)?;
+            m.bus.mem[at + 1]
+        } else {
+            0
+        };
+        // SS loads have an interrupt shadow, and loading CS is invalid.
+        if mov && !matches!((modrm >> 3) & 7, 0 | 3..=5) {
+            return None;
+        }
+        let len = skip + if mov { 2 + displacement_len(modrm) } else { 1 };
+        let at = code(m, ip, len)?;
+        let mut bytes = [0; 7];
+        bytes[..len as usize].copy_from_slice(&m.bus.mem[at..at + len as usize]);
+        let mut op = Op {
+            ip,
+            bytes,
+            opcode,
+            len: len as u8,
+            prefix_len: skip as u8,
+            modrm,
+            memory: None,
+            register_writes: if mov { 0 } else { 1 << SP },
+            execution: m.bus.timing.jit_execution(opcode, modrm, skip),
+        };
+        op.memory = if mov {
+            memory_spec(op)
+        } else {
+            Some(Memory {
+                segment: SS as u8,
+                base: SP as u8,
+                index: 8,
+                displacement: 0,
+                width: NonZeroU8::new(2).unwrap(),
+                flags: Memory::READ | Memory::STACK,
+            })
+        };
+        return Plan::supports(m, op).then_some(op);
     }
     if opcode != 0x8d {
         return super::decode(m, ip);
@@ -572,6 +618,12 @@ impl Engine {
         b.timing
             .block_fetch_end(physical as usize + usize::from(len) - 1, last_byte);
         let timing = b.timing.finish_jit(ctx.last_execution - ctx.last_address);
+        let mut segment_writes = ctx.segment_writes;
+        while segment_writes != 0 {
+            let segment = segment_writes.trailing_zeros() as usize;
+            segment_writes &= segment_writes - 1;
+            m.cpu.load_real_segment(segment, ctx.selectors[segment]);
+        }
         m.cpu.flags_upper &= !(ctx.upper_clear as u16);
         m.cpu.operand32 = false;
         m.cpu.address32 = false;
