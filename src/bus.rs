@@ -517,7 +517,7 @@ impl Bus {
         }
     }
     /// Only synchronous execution scopes without host observers may defer
-    /// device state. I/O, firmware and the scope exit materialize it first.
+    /// device state. Device I/O, firmware and the scope exit materialize it first.
     pub(crate) fn begin_device_run(&mut self) {
         debug_assert!(!self.deferred_devices);
         self.deferred_devices = self.profile == Profile::Pc9821ApDos;
@@ -784,6 +784,38 @@ impl Bus {
         self.pics[0].request(1)
     }
     pub fn input(&mut self, p: u16) -> u8 {
+        // These ports use the actual scheduler clock and synchronous GDC FIFO.
+        // Pending device work cannot change either status result.
+        match p {
+            0x5c | 0x5e => return (self.cycles / 8) as u8,
+            0x60 | 0xa0 => {
+                // Fixed 640x400 raster approximation at the 8 MHz guest clock:
+                // VM: 40 us/line, 32 us active; Ap: 32 us/line, 25 us active.
+                // Both GDCs share the scan phase, including while display is off.
+                // See docs/hardware.md; SYNC parameters are not modeled.
+                let (line, active) = match self.profile {
+                    Profile::Pc9801Vm => (320, 256),
+                    Profile::Pc9821ApDos => (256, 200),
+                };
+                return 0x04
+                    | if self.cycles % 133_333 > 125_000 {
+                        0x20
+                    } else {
+                        0
+                    }
+                    | if self.cycles % line >= active {
+                        0x40
+                    } else {
+                        0
+                    }
+                    | if !self.gdcs[usize::from(p == 0xa0)].fifo.is_empty() {
+                        1
+                    } else {
+                        0
+                    };
+            }
+            _ => {}
+        }
         self.sync_devices();
         if matches!(p, 0 | 2 | 8 | 10) {
             self.sync_cascade();
@@ -838,29 +870,6 @@ impl Bus {
                     5
                 } else {
                     7
-                }
-            }
-            0x60 | 0xa0 => {
-                // Fixed 640x400 raster approximation at the 8 MHz guest clock:
-                // VM: 40 us/line, 32 us active; Ap: 32 us/line, 25 us active.
-                // Both GDCs share the scan phase, including while display is off.
-                // See docs/hardware.md; SYNC parameters are not modeled.
-                let (line, active) = match self.profile {
-                    Profile::Pc9801Vm => (320, 256),
-                    Profile::Pc9821ApDos => (256, 200),
-                };
-                0x04 | if self.cycles % 133_333 > 125_000 {
-                    0x20
-                } else {
-                    0
-                } | if self.cycles % line >= active {
-                    0x40
-                } else {
-                    0
-                } | if !self.gdcs[usize::from(p == 0xa0)].fifo.is_empty() {
-                    1
-                } else {
-                    0
                 }
             }
             0x62 | 0xa2 => self.gdcs[usize::from(p == 0xa2)]
@@ -939,7 +948,6 @@ impl Bus {
             0xf2 | 0xf6 if self.profile == Profile::Pc9821ApDos => u8::from(!self.a20),
             0xa4 => self.display_page,
             0xa6 => self.cpu_page,
-            0x5c | 0x5e => (self.cycles / 8) as u8,
             0x40 => 0x20,
             0x64 => 0,
             0x6e => 0,
@@ -1520,6 +1528,42 @@ mod cpu_access_tests {
         deferred.end_device_run();
         assert_eq!(reference.pics[0].irr, deferred.pics[0].irr);
         assert_eq!(reference.audio, deferred.audio);
+    }
+
+    #[test]
+    fn passive_status_polls_leave_unrelated_devices_deferred() {
+        let mut eager = Bus::new(Profile::Pc9821ApDos);
+        let mut deferred = Bus::new(Profile::Pc9821ApDos);
+        for bus in [&mut eager, &mut deferred] {
+            bus.gdcs[1].fifo.push_back(0x55);
+            bus.pics[0].mask = 0;
+            bus.output(0x64, 0); // Latch the next vertical blank IRQ.
+            for (register, value) in [(0, 19), (7, 0x3e), (8, 15)] {
+                bus.output(0x188, register);
+                bus.output(0x18a, value);
+            }
+        }
+        deferred.begin_device_run();
+        let mut polled_pending_clocks = false;
+        for clocks in [17, 2, 201, 300, 124_700, 1000, 7222] {
+            eager.tick(clocks);
+            deferred.tick(clocks);
+            let pending = deferred.pending_device_clocks;
+            let deadline = deferred.device_deadline;
+            polled_pending_clocks |= pending != 0;
+            for port in [0x5c, 0x5e, 0x60, 0xa0] {
+                assert_eq!(eager.input(port), deferred.input(port));
+            }
+            assert_eq!(deferred.pending_device_clocks, pending);
+            assert_eq!(deferred.device_deadline, deadline);
+            assert_eq!(eager.pics[0].pending(), deferred.pics[0].pending());
+        }
+        assert!(polled_pending_clocks);
+        deferred.end_device_run();
+        assert!(eager.audio.iter().any(|sample| *sample != 0.0));
+        assert_eq!(eager.audio, deferred.audio);
+        assert_eq!(eager.irq(), Some(10));
+        assert_eq!(deferred.irq(), Some(10));
     }
 
     #[test]
