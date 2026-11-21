@@ -141,6 +141,7 @@ function writtenRegisters(op,m){
   if(op===0x88||op===0x89||op===0xc6||op===0xc7)return m>=0xc0?target(rm):0;
   if(op===0x8a||op===0x8b||op===0x8d)return target(r);
   if(op===0x8c)return 1<<rm;
+  if(op===0xc4||op===0xc5)return 1<<r;
   if(op>=0x90&&op<=0x97)return 1|(1<<(op&7));
   if(op===0x9f||op===0xa0||op===0xa1)return 1;
   if(op===0xa2||op===0xa3)return 0;
@@ -204,7 +205,8 @@ export function compileRamBlock(packet,meta){
     const info=meta.subarray(header+index*stride,header+index*stride+12),[exec0,exec1,seg,base,regIndex,disp,width,access,addressConstant,baseMask,policy,fetch]=info;
     const memory=width!==0,displacement=(m>>6)===1?1:(m>>6)===2||(m>>6)===0&&rm===6?2:0;
     const imm=(at,w)=>w?bytes[at]|bytes[at+1]<<8:bytes[at];
-    const loadMemory=()=>[...add(get(34),get(10)),width===1?0x2d:0x2f,width===1?0:1,0];
+    const loadMemory=()=>[...add(get(34),get(10)),width===4?0x28:width===2?0x2f:0x2d,width===4?2:width===2?1:0,0];
+    const wordCost=address=>add(c(4),add(bin(0x6c,and(address,c(1)),c(3)),shl(bin(0x46,and(address,c(3)),c(3)),2)));
     const writeMemory=value=>[...add(get(34),get(10)),...value,width===1?0x3a:0x3b,width===1?0:1,0];
     const rmValue=()=>memory?get(11):readReg(rm,wide);
     const writeRm=value=>memory?writeMemory(value):writeReg(rm,wide,value);
@@ -229,7 +231,6 @@ export function compileRamBlock(packet,meta){
       exitIf(bin(0x47,at(get(49),0x28,2),c(0xf0001060)));
       exitIf(bin(0x47,at(c(0xf1060),0x2f,1),c(0xf0e6)));
       exitIf(bin(0x47,at(c(0xf1062),0x2d),c(0xcf)));
-      const wordCost=address=>add(c(4),add(bin(0x6c,and(address,c(1)),c(3)),shl(bin(0x46,and(address,c(3)),c(3)),2)));
       body.push(...set(50,add(add(wordCost(get(10)),wordCost(add(get(10),c(2)))),wordCost(add(get(10),c(4))))),
         ...set(51,add(wordCost(get(49)),wordCost(add(get(49),c(2))))),
         ...set(13,add(c(fetch+8),add(get(51),shl(get(50),1)))));
@@ -257,7 +258,8 @@ export function compileRamBlock(packet,meta){
       }
     }
     const transfers=Number(!!(access&1))+Number(!!(access&2));
-    const dataPenalty=width===2?add(c(4),add(bin(0x6c,and(get(10),c(1)),c(3)),shl(bin(0x46,and(get(10),c(3)),c(3)),2))):c(4);
+    // A far pointer is fetched as two ordered word accesses.
+    const dataPenalty=width===4?add(wordCost(get(10)),wordCost(add(get(10),c(2)))):width===2?wordCost(get(10)):c(4);
     body.push(...set(13,transfers?add(c(fetch),bin(0x6c,c(transfers),dataPenalty)):c(fetch)),
       ...set(26,add(c(addressConstant),nz(and(get(25),c(baseMask))))));
     exitIf(bin(0x4b,add(get(27),add(get(13),add(get(26),c(Math.max(exec0,exec1))))),get(35)));
@@ -293,16 +295,18 @@ export function compileRamBlock(packet,meta){
     }else if(op===0x86||op===0x87){body.push(...set(4,rmValue()),...writeRm(readReg(r,wide)),...writeReg(r,wide,get(4)));
     }else if(op>=0x88&&op<=0x8b){body.push(...(op&2?writeReg(r,wide,rmValue()):writeRm(readReg(r,wide))));
     }else if(op===0x8c){body.push(...writeReg(rm,true,selector(r)));
-    }else if(op===0x8e||op===0x07||op===0x1f){
+    }else if(op===0x8e||op===0x07||op===0x1f||op===0xc4||op===0xc5){
       if(!linked)throw Error('Missing linked segment context');
-      const segment=op===0x8e?r:op>>3;
-      const value=op===0x8e&&!memory?readReg(rm,true):get(11);
+      const pointer=op===0xc4||op===0xc5;
+      const segment=op===0x8e?r:op===0xc4?0:op===0xc5?3:op>>3;
+      const value=pointer?bin(0x76,get(11),c(16)):op===0x8e&&!memory?readReg(rm,true):get(11);
       // The completed load is visible to subsequent instructions and linked
       // traces through the context. Rust commits the changed caches on exit.
       body.push(...store(14,116+2*segment,2,value),
         ...set(39+segment,shl(selector(segment),4)),...save(12+segment,get(39+segment)),
         ...save(32,or(context(32),c(1<<segment))));
-      if(op!==0x8e)body.push(...writeReg(4,true,add(readReg(4,true),c(2))));
+      if(pointer)body.push(...writeReg(r,true,get(11)));
+      else if(op!==0x8e)body.push(...writeReg(4,true,add(readReg(4,true),c(2))));
     }else if(op===0x8d){body.push(...writeReg(r,true,get(10)));
     }else if(op>=0x90&&op<=0x97){body.push(...set(4,readReg(0,true)),...writeReg(0,true,readReg(op&7,true)),...writeReg(op&7,true,get(4)));
     }else if(op===0x9e){body.push(...writeFlags(or(or(and(get(7),c(~0xd5)),and(readReg(4,false),c(0xd5))),c(2))));
