@@ -10,6 +10,8 @@ const HEAT: u8 = 32;
 const SLOTS: usize = 4096;
 const PROBES: usize = 16384;
 const BLOCK: usize = 16;
+#[cfg(feature = "block-experiment")]
+const TRACE: usize = 32;
 
 #[derive(Clone, Copy, Debug)]
 struct Op {
@@ -583,7 +585,11 @@ impl Engine {
                         let mut ip = m.cpu.ip;
                         #[cfg(feature = "block-experiment")]
                         let mut returns = Vec::new();
-                        while ops.len() < BLOCK {
+                        #[cfg(feature = "block-experiment")]
+                        let mut limit = BLOCK;
+                        #[cfg(not(feature = "block-experiment"))]
+                        let limit = BLOCK;
+                        while ops.len() < limit {
                             #[cfg(feature = "block-experiment")]
                             let decoded = if self.block_mode
                                 && m.cpu.cr0 & 0x4000_0000 != 0
@@ -606,6 +612,14 @@ impl Engine {
                                 && !block::Plan::supports(m, op)
                             {
                                 break;
+                            }
+                            #[cfg(feature = "block-experiment")]
+                            if ops.is_empty()
+                                && self.block_mode
+                                && m.cpu.cr0 & 0x4000_0000 != 0
+                                && block::Plan::supports(m, op)
+                            {
+                                limit = TRACE;
                             }
                             ip += u32::from(op.len);
                             ops.push(op);

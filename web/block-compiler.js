@@ -155,7 +155,7 @@ function writtenRegisters(op,m){
 export function compileRamBlock(packet,meta){
   const count=packet[1];
   const linked=!!(meta[0]&4),header=linked?5:2,stride=linked?14:12;
-  if(count<1||count>16||packet.length!==2+count*4||meta.length!==header+count*stride||![1,3,5,7].includes(meta[0]))throw Error('Invalid RAM block plan');
+  if(count<1||count>(linked?32:16)||packet.length!==2+count*4||meta.length!==header+count*stride||![1,3,5,7].includes(meta[0]))throw Error('Invalid RAM block plan');
   const bios=!!(meta[0]&2);
   const highCode=linked && meta[2]+packet[2]>=0x100000;
   // Four pointer parameters. Locals 4..52 contain ALU temporaries, cached GPRs,
