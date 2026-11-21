@@ -200,6 +200,54 @@ test('linked traces carry a changed segment base into the next trace',async()=>{
  assert([0x1234,0x2107].includes(state(a).regs[1]));
 });
 
+test('direct LES and LDS preserve both word transfers and the resulting bases',async()=>{
+ for(const alignment of [0,1,2,3]){
+  const body=[
+   0x2e,0xc5,0x1e,alignment,1, // LDS BX,[CS:0100+alignment]
+   0xc4,0x3f,                 // LES DI,[DS:BX]
+   0x26,0x8b,0x05,            // MOV AX,[ES:DI]
+   0x8c,0xc2,0x8c,0xde,       // MOV DX,ES; MOV SI,DS
+  ];
+  const regs=[0,0,0,0,0x8000,0,0,0];
+  const patch=[...Array(alignment).fill(0),0x10+alignment,0,0x34,0x12];
+  const p=await pair([...body,0xeb,(-body.length-2)&255],patch,regs);
+  for(const c of [p.a,p.b]){
+   const ram=new Uint8Array(c.memory.buffer,c.block_ram_ptr()>>>0,0xa0000);
+   ram.set([0x57,0,0x78,0x56],0x12350+alignment);
+   ram.set([0xef,0xbe],0x567d7);
+  }
+  for(const cap of [1,2,5]){
+   const translated=p.a.block_metric(1);
+   assert.equal(execute(p,regs,2,cap),cap);
+   assert.equal(p.a.block_metric(1)-translated,cap);
+   for(const c of [p.a,p.b])c.step(5-cap);
+   equal(p.a,p.b);
+   assert.deepEqual(state(p.a).regs,[0xbeef,0,0x5678,0x10+alignment,0x8000,0,0x1234,0x57]);
+  }
+ }
+});
+
+test('a mapped or segment-crossing far pointer stays on the original path',async()=>{
+ const setup=[0xb8,0,0xa0,0x8e,0xd8,0x31,0xc0,0x8e,0xd0];
+ const code=[...setup,0xc5,0x37,0x8c,0xd8,0xeb,0xfa]; // LDS SI,[BX]; MOV AX,DS.
+ const [a,b]=await Promise.all([boot(code),boot(code)]);
+ const regs=[0,0,0,0x20,0x8000,0,0,0],ip=1+setup.length;
+ for(const c of [a,b]){
+  c.step(4);
+  setState(c,regs,2,ip);
+  new Uint8Array(c.memory.buffer,c.block_ram_ptr()>>>0,0x100000).set([0x21,0x43,0,0xa0],0xa0020);
+ }
+ const p=await translate(a,b,ip),fallback=a.block_metric(2);
+ assert.equal(execute(p,regs,2,1),1);
+ for(const c of [a,b])c.step(1);
+ equal(a,b);
+ assert.equal(state(a).regs[0],0xa000);
+ assert.equal(state(a).regs[6],0x4321);
+ assert.equal(execute(p,[0,0,0,0xfffd,0x8000,0,0,0],2,1),1);
+ assert.equal(a.block_metric(2)-fallback,2);
+ assert.equal(a.block_metric(1),0);
+});
+
 test('linked traces retire once per event and revalidate code changed by an earlier trace',async()=>{
  // The store is in the first trace; its eventual target lies beyond that trace.
  const body=[0x2e,0xc6,0x07,0x48,...Array(40).fill(0x40)];

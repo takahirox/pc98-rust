@@ -225,12 +225,13 @@ pub(super) fn decode(m: &Machine, ip: u32) -> Option<Op> {
             execution: m.bus.timing.jit_execution(opcode, modrm, skip),
         });
     }
-    if matches!(opcode, 0x07 | 0x1f | 0x8e) {
+    if matches!(opcode, 0x07 | 0x1f | 0x8e | 0xc4 | 0xc5) {
         if !ordinary(m.cpu.segment_cache(CS)) {
             return None;
         }
         let mov = opcode == 0x8e;
-        let modrm = if mov {
+        let pointer = matches!(opcode, 0xc4 | 0xc5);
+        let modrm = if mov || pointer {
             code(m, ip + skip, 2)?;
             m.bus.mem[at + 1]
         } else {
@@ -240,7 +241,15 @@ pub(super) fn decode(m: &Machine, ip: u32) -> Option<Op> {
         if mov && !matches!((modrm >> 3) & 7, 0 | 3..=5) {
             return None;
         }
-        let len = skip + if mov { 2 + displacement_len(modrm) } else { 1 };
+        if pointer && modrm >= 0xc0 {
+            return None;
+        }
+        let len = skip
+            + if mov || pointer {
+                2 + displacement_len(modrm)
+            } else {
+                1
+            };
         let at = code(m, ip, len)?;
         let mut bytes = [0; 7];
         bytes[..len as usize].copy_from_slice(&m.bus.mem[at..at + len as usize]);
@@ -252,10 +261,14 @@ pub(super) fn decode(m: &Machine, ip: u32) -> Option<Op> {
             prefix_len: skip as u8,
             modrm,
             memory: None,
-            register_writes: if mov { 0 } else { 1 << SP },
+            register_writes: match opcode {
+                0x8e => 0,
+                0xc4 | 0xc5 => 0xff,
+                _ => 1 << SP,
+            },
             execution: m.bus.timing.jit_execution(opcode, modrm, skip),
         };
-        op.memory = if mov {
+        op.memory = if mov || pointer {
             memory_spec(op)
         } else {
             Some(Memory {

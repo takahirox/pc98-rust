@@ -303,7 +303,7 @@ fn memory_modrm(op: u8) -> bool {
         0x80 | 0x81 | 0x83
             ..=0x8b | 0xc0 | 0xc1 | 0xc6 | 0xc7 | 0xd0 | 0xd1 | 0xf6 | 0xf7 | 0xfe | 0xff
     ) || op <= 0x3d && op & 7 < 4
-        || cfg!(feature = "block-experiment") && matches!(op, 0x8d | 0x8e)
+        || cfg!(feature = "block-experiment") && matches!(op, 0x8d | 0x8e | 0xc4 | 0xc5)
 }
 fn memory_spec(op: Op) -> Option<Memory> {
     let opcode = op.opcode;
@@ -357,7 +357,11 @@ fn memory_spec(op: Op) -> Option<Memory> {
                 base,
                 index,
                 displacement,
-                if opcode == 0x8e { 2 } else { 1 + (opcode & 1) },
+                match opcode {
+                    0xc4 | 0xc5 => 4,
+                    0x8e => 2,
+                    _ => 1 + (opcode & 1),
+                },
                 Memory::ADDRESS,
             )
         } else {
