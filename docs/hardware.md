@@ -1241,7 +1241,8 @@ motivate this approximation. The model uses no guest identity or port-read count
 
 Existing status semantics are preserved: bit 5 is set when
 `bus.cycles % 133333 > 125000`, bit 2 stays set, and bit 0 reflects the selected
-GDC's actual readback FIFO. Vertical status and IRQ timing retain their independent
+GDC's actual readback FIFO. Ap bitmap status bit 3 reports the drawing interval
+described below. Vertical status and IRQ timing retain their independent
 approximation; horizontal and vertical phases are not a complete physical raster.
 The renderer composites planar graphics with text attributes (visible, reverse, underline and
 color), cursor and GDC display start. Text scrolling also works through guest RAM
@@ -1849,15 +1850,26 @@ creation/reset chooses flashless (false/bit 3 clear), a deterministic emulator
 default rather than a claim about every physical machine's power-on setting.
 Direct guest RAM writes to the work byte do not program the GDC.
 
-This is a timing **selection** contract. Both choices use the unchanged fixed
-8 MHz scheduler, horizontal/vertical status periods and instantaneous VRAM
-writes. Selection does not advance clocks, wait for blanking, restart scan phase,
-change display enable, consume the GDC FIFO or alter rendered pixels. The core
-has no GDC vector/area drawing engine, drawing-busy interval, display-memory
-contention, visible flash artifact or mode-dependent drawing throughput.
+This is a timing **selection** contract. Both choices use the fixed 8 MHz
+scheduler, horizontal/vertical status periods and instantaneous VRAM writes.
+Selection does not advance clocks, wait for blanking, restart scan phase,
+change display enable, consume the GDC FIFO or alter rendered pixels.
 Physical Ap machines can remain flashless regardless of this request; this
 subset records the requested mode and does not add a hardware capability flag
 or simulate that arbitration. No physical speed or flicker accuracy is claimed.
+
+### Ap planar bitmap GDC point and line drawing
+
+With ordinary planar access, bitmap FIGD (6Ch) draws a dot or straight line
+using CURS, FIGS, PRAM bytes 8–9 and the WDAT logical mode. CURS selects the
+plane, word and dot and port A6h selects the access page. The line uses the
+signed 14-bit D and D2 terms, unsigned D1 and DC, and the eight directions in
+the [NEC uPD7220 manual, chapter 4](https://ftpmirror.your.org/pub/misc/bitsavers/components/nec/uPD72220_GDC_Design_Manual_Version_3.pdf#page=74).
+Each accepted command writes its pixels atomically and asserts bitmap status
+bit 3 for an approximate four 5 MHz read-modify-write clocks per dot, rounded
+up in the 8 MHz scheduler. Status reads leave the interval intact. Controller
+reset clears it. Area fills, graphics characters, arcs, GRCG/EGC/PEGC
+interactions and scanout arbitration are outside this subset.
 
 Only the two documented CH values are accepted on Ap. Other CH values stop with
 an explicit unsupported-drawing-timing core error before changing state; no

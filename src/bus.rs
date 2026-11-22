@@ -797,7 +797,13 @@ impl Bus {
                     Profile::Pc9801Vm => (320, 256),
                     Profile::Pc9821ApDos => (256, 200),
                 };
+                let gdc = &self.gdcs[usize::from(p == 0xa0)];
                 return 0x04
+                    | if self.cycles < gdc.drawing_until {
+                        8
+                    } else {
+                        0
+                    }
                     | if self.cycles % 133_333 > 125_000 {
                         0x20
                     } else {
@@ -808,11 +814,7 @@ impl Bus {
                     } else {
                         0
                     }
-                    | if !self.gdcs[usize::from(p == 0xa0)].fifo.is_empty() {
-                        1
-                    } else {
-                        0
-                    };
+                    | if !gdc.fifo.is_empty() { 1 } else { 0 };
             }
             _ => {}
         }
@@ -1032,6 +1034,16 @@ impl Bus {
             0x41 => self.keyboard.write(v),
             0x43 => {}
             0x60 | 0xa0 => self.gdcs[usize::from(p == 0xa0)].data(v),
+            0xa2 if v == 0x6c
+                && self.profile == Profile::Pc9821ApDos
+                && !self.pegc
+                && self.grcg_mode & 0x80 == 0 =>
+            {
+                self.gdcs[1].command(v);
+                let bytes = self.page_bytes();
+                let start = usize::from(self.cpu_page) * bytes;
+                self.gdcs[1].draw_planar(&mut self.graphics[start..start + bytes], self.cycles);
+            }
             0x62 | 0xa2 => self.gdcs[usize::from(p == 0xa2)].command(v),
             0x68 => {
                 if v & 0xfe == 0 {

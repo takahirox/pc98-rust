@@ -37,6 +37,30 @@ async function advancing(page) {
   await expect.poll(async()=> (await stats(page)).consumedSamples).toBeGreaterThan(before.consumedSamples+4800);
 }
 
+test('volume changes playback gain and respects pause, resume and mute', async ({page}) => {
+  await page.addInitScript(() => {
+    const create = AudioContext.prototype.createGain;
+    AudioContext.prototype.createGain = function() {
+      return window.testOutputGain = create.call(this);
+    };
+  });
+  await page.goto('./');
+  await expect(page.locator('#sound')).toBeEnabled();
+  const gain = () => page.evaluate(() => window.testOutputGain?.gain.value);
+  await page.locator('#volume').fill('250');
+  await expect(page.locator('#volume-level')).toHaveText('250%');
+  await page.locator('#sound').click();
+  await expect.poll(gain).toBe(2.5);
+  await page.locator('#pause').click();
+  await expect.poll(gain).toBe(0);
+  await page.locator('#volume').fill('200');
+  expect(await gain()).toBe(0);
+  await page.locator('#pause').click();
+  await expect.poll(gain).toBe(2);
+  await page.locator('#sound').click();
+  await expect.poll(gain).toBe(0);
+});
+
 test('ADV98 production playback remains continuous through scene changes', async ({page},testInfo) => {
   test.setTimeout(90000);
   // Use the second serving-path run to cover a real 44.1 kHz AudioWorklet,

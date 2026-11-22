@@ -88,6 +88,26 @@ async function exported(page, name, image) {
   expect((await fs.readFile(await file.path())).equals(image)).toBe(true);
 }
 
+test('Ap mounts and boots an NHD, retains it after a malformed replacement, and exports its container', async ({ page }) => {
+  await ready(page);
+  const header = Buffer.alloc(512);
+  header.write('T98HDDIMAGE.R0');
+  header.write('IDE test in an NHD container', 16);
+  header.writeUInt32LE(header.length, 0x110);
+  header.writeUInt32LE(hdi.readUInt32LE(28), 0x114);
+  header.writeUInt16LE(hdi.readUInt32LE(24), 0x118);
+  header.writeUInt16LE(hdi.readUInt32LE(20), 0x11a);
+  header.writeUInt16LE(512, 0x11c);
+  const image = Buffer.concat([header, hdi.subarray(hdi.readUInt32LE(8))]);
+  await upload(page, 'picker', 'boot.NHD', image);
+  await mounted(page, 'boot.NHD', 'IDE HDD');
+  await boot(page, 'IDE VERIFY PASS', 2);
+  await upload(page, 'picker', 'truncated.nhd', image.subarray(0, image.length - 1));
+  await expect(page.locator('#error')).toContainText('invalid NHD geometry');
+  await expect(page.locator('#media-name')).toHaveText('boot.NHD');
+  await exported(page, 'boot.NHD', image);
+});
+
 test('fresh page selects Ap in DOM and Rust, Auto, matching display and released input', async ({ page }) => {
   const errors = await ready(page);
   for (let run = 0; run < 2; run++) {
@@ -263,8 +283,8 @@ for (const path of ['picker', 'drop']) {
       ['auto', 'large.hdm', Buffer.alloc(4 * 1024 * 1024 + 1), 'Floppy image exceeds 4 MiB'],
       ['auto', 'large.hdi', Buffer.alloc(32 * 1024 * 1024 + 1), 'invalid HDI geometry'],
       ['auto', 'program.exe', Buffer.alloc(100), 'Unsupported media extension'],
-      ['0', 'wrong.hdi', hdi, 'HDI requires IDE HDD'],
-      ['1', 'wrong.hdi', hdi, 'HDI requires IDE HDD'],
+      ['0', 'wrong.hdi', hdi, 'Hard disk images require IDE HDD'],
+      ['1', 'wrong.hdi', hdi, 'Hard disk images require IDE HDD'],
       ['2', 'wrong.tfd', hello, 'IDE HDD requires an HDI'],
     ];
     for (const [drive, name, image, error] of cases) {

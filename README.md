@@ -68,7 +68,8 @@ Open `http://127.0.0.1:8000`, select **Play Star Trail**, then use arrows to col
 all three `*` stars with `@`. `#` cells are walls. Press **R** to restart the game.
 Click the screen to give it keyboard focus. **Hello world + BEEP** boots the
 independently authored MIT HelloWorld-PC98 fixture. Sound starts after a user
-click; **Enable sound / Mute** controls browser audio. All runtime assets are local;
+click; **Enable sound / Mute** controls browser audio. **Volume** adjusts host
+output from 0% to 300% for quiet titles. All runtime assets are local;
 there are no network requests after the selected media loads.
 
 A fresh browser visit starts **PC-9821Ap DOS** with a writable **128 MiB FAT16
@@ -79,7 +80,7 @@ bytes as zero. Bounded import expands it into the existing sparse Rust disk;
 there is no full-sized JavaScript disk copy. See [desktop validation](docs/desktop-validation.md).
 
 **Insert into** selects a destination, independently of **Boot from**. Auto sends
-`.hdi` to IDE HDD (Ap only), and `.tfd/.hdm/.xdf/.2hd/.d88/.d98/.img` to Floppy 1,
+`.hdi/.nhd` to IDE HDD (Ap only), and `.tfd/.hdm/.xdf/.2hd/.d88/.d98/.img` to Floppy 1,
 case-insensitively. A manual drive overrides Auto; mismatches fail without
 rerouting. Both floppy drives support live insertion, swap and eject, without
 resetting DOS or changing its boot preference. HDD-booted FreeDOS assigns the HDD
@@ -94,11 +95,12 @@ profile. Choose HDD and Reset to return to DOS. **Pause / Resume** controls exec
 CPU/devices and preserve all media/writes. VM always boots Floppy 1, never IDE;
 returning to Ap restores the retained boot preference and default/custom HDD.
 
-Replacing an HDD resets the machine using the selected boot source. A local HDI
+Replacing an HDD resets the machine using the selected boot source. A local HDI or NHD
 replaces the bundled disk completely. **Restore FreeDOS HDD** creates a clean
 installed disk and also retries a failed startup download. Loading locks media,
 profile and boot controls; failure retains the prior disk and enables recovery.
-The parsers check size/geometry; large local HDI import/export stays chunked.
+Hard disk images require 512-byte sectors and supported IDE geometry. Large
+images import and export in chunks and retain their original container format.
 512 MiB and 1 GiB are tested ([large disk evidence](docs/large-hdi.md)).
 
 Auto displays the last inserted drive and filename. **Eject** and **Export disk**
@@ -147,8 +149,9 @@ Japanese CG glyphs. FEP input is not implemented.
 Instruction-dependent [V30/DX2 timing](docs/cpu-timing.md) separates core clocks
 from the 8 MHz device scheduler and documents cache, bus and firmware approximations.
 
-**Display** presets add a restrained GPU RGB CRT presentation without
-changing guest pixels or clocks. Sharp CRT is the default for new visitors;
+**Display** presets add restrained RGB CRT presentation without changing guest
+pixels or clocks. Software graphics use a lightweight Canvas 2D filter.
+Sharp CRT is the default for new visitors;
 saved preferences, including Original pixels, are preserved. See
 [presets, raw screenshots, fallback and validation](docs/crt-presentation.md).
 

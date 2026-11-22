@@ -1,10 +1,12 @@
 //! Original PC-9821 IDE PIO subset. PC-98 ports 640–64E/74C, INT 11h.
-//! One master on bank zero; HDI geometry is explicit rather than guessed.
+//! One master on bank zero. HDI and NHD carry explicit geometry.
 // Portable file extent for the wasm32 transfer ABI. The HDI payload itself is
 // a u32 field; exact geometry/extent checks below normally impose a lower bound.
 pub const MAX_HDI_BYTES: u64 = u32::MAX as u64;
 pub const PAGE_BYTES: usize = 64 * 1024;
 pub const TRANSFER_BYTES: usize = 1024 * 1024;
+const NHD_SIGNATURE: &[u8] = b"T98HDDIMAGE.R0\0";
+const NHD_HEADER_BYTES: usize = 512;
 
 #[derive(Clone)]
 enum Backing {
@@ -35,15 +37,36 @@ impl HardDisk {
             );
         }
         let field = |p| u32::from_le_bytes(bytes[p..p + 4].try_into().unwrap()) as u64;
-        let (offset, size, sector, sectors, heads, cylinders) = (
-            field(8),
-            field(12),
-            field(16),
-            field(20),
-            field(24),
-            field(28),
-        );
-        if offset < 32
+        let (format, minimum_offset, offset, size, sector, sectors, heads, cylinders) =
+            if bytes.starts_with(NHD_SIGNATURE) {
+                if bytes.len() < NHD_HEADER_BYTES {
+                    return Err("invalid NHD header: requires 512 bytes".into());
+                }
+                let word = |p| u16::from_le_bytes(bytes[p..p + 2].try_into().unwrap()) as u64;
+                let offset = field(0x110);
+                (
+                    "NHD",
+                    NHD_HEADER_BYTES as u64,
+                    offset,
+                    len.saturating_sub(offset),
+                    word(0x11c),
+                    word(0x11a),
+                    word(0x118),
+                    field(0x114),
+                )
+            } else {
+                (
+                    "HDI",
+                    32,
+                    field(8),
+                    field(12),
+                    field(16),
+                    field(20),
+                    field(24),
+                    field(28),
+                )
+            };
+        if offset < minimum_offset
             || sector != 512
             || !(1..=63).contains(&sectors)
             || !(1..=16).contains(&heads)
@@ -51,9 +74,9 @@ impl HardDisk {
             || cylinders * heads * sectors * sector != size
             || offset + size != len
         {
-            return Err(
-                "invalid HDI geometry, size or offset (requires 512-byte IDE sectors)".into(),
-            );
+            return Err(format!(
+                "invalid {format} geometry, size or offset (requires 512-byte IDE sectors)"
+            ));
         }
         let len = usize::try_from(len).map_err(|_| "HDI extent exceeds host addressing")?;
         let mut dirty = Vec::new();
@@ -188,6 +211,7 @@ fn zero_page(len: usize) -> Result<Vec<u8>, String> {
 pub struct HdiImport {
     disk: HardDisk,
     received: usize,
+    validated_header: Vec<u8>,
 }
 impl HdiImport {
     pub fn new(header: &[u8], file_len: u64) -> Result<Self, String> {
@@ -198,7 +222,17 @@ impl HdiImport {
             .map_err(|_| "Host memory cannot allocate HDI page table; mounted disk retained")?;
         pages.resize_with(disk.len.div_ceil(PAGE_BYTES), || None);
         disk.backing = Backing::Paged(pages);
-        Ok(Self { disk, received: 0 })
+        let validated_header = if header.starts_with(NHD_SIGNATURE) {
+            header[..NHD_HEADER_BYTES].to_vec()
+        } else {
+            // HDI historically ignores the first eight container bytes.
+            header[8..32].to_vec()
+        };
+        Ok(Self {
+            disk,
+            received: 0,
+            validated_header,
+        })
     }
     pub fn append(&mut self, bytes: &[u8]) -> Result<(), String> {
         let end = self
@@ -232,22 +266,15 @@ impl HdiImport {
             return Err("HDI import truncated; mounted disk retained".into());
         }
         // Header used for validation must be the header actually imported.
-        let mut header = [0; 32];
+        let mut header = [0; NHD_HEADER_BYTES];
         self.disk.read_bytes(0, &mut header)?;
-        let mut expected = [0; 32];
-        // Geometry is rechecked against the imported fields, not just extent.
-        for (at, value) in [
-            (8, self.disk.offset as u32),
-            (12, (self.disk.len - self.disk.offset) as u32),
-            (16, 512),
-            (20, self.disk.sectors as u32),
-            (24, self.disk.heads as u32),
-            (28, self.disk.cylinders as u32),
-        ] {
-            expected[at..at + 4].copy_from_slice(&value.to_le_bytes());
-        }
-        if header[8..32] != expected[8..32] {
-            return Err("HDI header changed during import".into());
+        let matches = if self.validated_header.len() == NHD_HEADER_BYTES {
+            header == self.validated_header.as_slice()
+        } else {
+            !header.starts_with(NHD_SIGNATURE) && header[8..32] == self.validated_header
+        };
+        if !matches {
+            return Err("Hard disk header changed during import".into());
         }
         Ok(self.disk)
     }

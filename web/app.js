@@ -170,10 +170,16 @@ async function startRenderer() {
 }
 screen.addEventListener('contextlost',event => { event.preventDefault(); contextLost = true; presenter.invalidate(); });
 screen.addEventListener('contextrestored',() => { contextLost = false; rpc('videoRefresh').catch(fail); });
+function applyVolume() {
+  const percent = Number($('volume').value);
+  $('volume-level').value = `${percent}%`;
+  if (outputGain) outputGain.gain.value = running && !muted && audio?.state === 'running' ? percent / 100 : 0;
+}
+$('volume').oninput = applyVolume;
 async function soundState() {
   if (outputGain) outputGain.gain.value = 0;
   await rpc('sound',{enabled:!muted, state:audio?.state});
-  if (outputGain) outputGain.gain.value = running && !muted && audio?.state === 'running' ? 1 : 0;
+  applyVolume();
 }
 async function enableAudio() {
   if (!audio) {
@@ -204,7 +210,7 @@ function releaseKeys() {
 }
 async function setRunning(value) {
   running = value; $('pause').textContent = value ? 'Pause' : 'Resume';
-  if (outputGain) outputGain.gain.value = running && !muted ? 1 : 0;
+  applyVolume();
   if (!value) releaseKeys();
   await rpc('running',value);
   status(value ? 'Running · click screen to type' : 'Paused');
@@ -225,17 +231,17 @@ function showMedia() {
 }
 function mediaDrive() { return $('drive').value === 'auto' ? lastDrive : Number($('drive').value); }
 function resolveDrive(name) {
-  const hdi = /\.hdi$/i.test(name), floppy = /\.(tfd|hdm|xdf|2hd|d88|d98|img)$/i.test(name);
-  if (!hdi && !floppy) throw Error('Unsupported media extension. Use HDI or a supported floppy image.');
-  if (hdi && core.metric(21) !== 1) throw Error('IDE requires PC-9821Ap DOS. Select that machine to insert an HDI.');
-  const drive = $('drive').value === 'auto' ? (hdi ? 2 : 0) : Number($('drive').value);
-  if (drive === 2 && !hdi) throw Error('IDE HDD requires an HDI image. Choose Auto or a floppy drive for this image.');
-  if (drive !== 2 && hdi) throw Error('HDI requires IDE HDD. Choose Auto or IDE HDD for this image.');
+  const hardDisk = /\.(hdi|nhd)$/i.test(name), floppy = /\.(tfd|hdm|xdf|2hd|d88|d98|img)$/i.test(name);
+  if (!hardDisk && !floppy) throw Error('Unsupported media extension. Use HDI, NHD or a supported floppy image.');
+  if (hardDisk && core.metric(21) !== 1) throw Error('IDE requires PC-9821Ap DOS for hard disk images.');
+  const drive = $('drive').value === 'auto' ? (hardDisk ? 2 : 0) : Number($('drive').value);
+  if (drive === 2 && !hardDisk) throw Error('IDE HDD requires an HDI or NHD image. Choose Auto or a floppy drive for this image.');
+  if (drive !== 2 && hardDisk) throw Error('Hard disk images require IDE HDD. Choose Auto or IDE HDD for this image.');
   return drive;
 }
 function checkSize(size, drive) {
   if (size > (drive === 2 ? 0xffffffff : 4 * 1024 * 1024)) throw Error(drive === 2
-    ? 'HDI file extent must be below 4 GiB (32-bit container/browser addressing).'
+    ? 'Hard disk image extent must be below 4 GiB (32-bit container/browser addressing).'
     : 'Floppy image exceeds 4 MiB.');
 }
 async function insert(bytes, name, drive) {
@@ -341,17 +347,17 @@ async function exportBlob(drive) {
   await setRunning(false); mediaBusy(true);
   try {
     const len = await rpc('snapshot',true), parts = [];
-    if (!len) throw Error('No HDI mounted.');
+    if (!len) throw Error('No hard disk image mounted.');
     for (let at = 0; at < len; at += chunkBytes) {
       const n = Math.min(chunkBytes,len-at);
       parts.push(new Blob([await rpc('readChunk',[at,n])]));
-      status(`Exporting HDI · ${Math.min(100, Math.floor((at + n) * 100 / len))}%`);
+      status(`Exporting hard disk · ${Math.min(100, Math.floor((at + n) * 100 / len))}%`);
     }
     const blob = new Blob(parts, { type: 'application/octet-stream' });
-    if (blob.size !== len) throw Error('Incomplete HDI export; please retry.');
+    if (blob.size !== len) throw Error('Incomplete hard disk export; please retry.');
     return blob;
   } catch (error) {
-    throw Error(`Cannot export HDI: ${error.message}. Disk remains mounted; free browser resources and retry.`);
+    throw Error(`Cannot export hard disk: ${error.message}. Disk remains mounted; free browser resources and retry.`);
   } finally { await rpc('snapshot',false); mediaBusy(false); await setRunning(resume && !document.hidden); }
 }
 $('export').onclick = async () => {
@@ -380,15 +386,15 @@ async function loadFile(file) {
       await setRunning(false); suspended = true;
       if (!await mayReplace(drive)) { await setRunning(resume && !document.hidden); return; }
       const transfer = bytes => rpc('input',bytes.buffer,[bytes.buffer]);
-      await transfer(new Uint8Array(await file.slice(0,32).arrayBuffer()));
+      await transfer(new Uint8Array(await file.slice(0,512).arrayBuffer()));
       await core.hdi_begin(file.size);
       for (let at = 0; at < file.size; at += chunkBytes) {
         await transfer(new Uint8Array(await file.slice(at, at + chunkBytes).arrayBuffer()));
         await core.hdi_append();
-        status(`Importing HDI · ${Math.min(100, Math.floor((at + chunkBytes) * 100 / file.size))}%`);
+        status(`Importing hard disk · ${Math.min(100, Math.floor((at + chunkBytes) * 100 / file.size))}%`);
       }
       await core.hdi_commit();
-      mounted[2] = { name: file.name, format: 'hdi' };
+      mounted[2] = { name: file.name, format: file.name.split('.').at(-1).toLowerCase() };
       lastDrive = 2;
       await resetMachine();
     } else {

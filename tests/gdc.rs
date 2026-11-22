@@ -88,6 +88,61 @@ fn fifo_and_vertical_sync_status_are_preserved_through_horizontal_edges() {
 }
 
 #[test]
+fn ap_planar_figd_observes_plane_page_direction_pattern_and_busy() {
+    fn gdc(bus: &mut Bus, command: u8, data: &[u8]) {
+        bus.output(0xa2, command);
+        for &byte in data {
+            bus.output(0xa0, byte);
+        }
+    }
+
+    let mut b = Bus::new(Profile::Pc9821ApDos);
+    // Page 1, red plane, word 80, dot 14. The line crosses a byte and
+    // word boundary, with one dependent step at each D==0 tie.
+    b.output(0xa6, 1);
+    gdc(&mut b, 0x49, &[80, 0x80, 0xe0]);
+    gdc(&mut b, 0x78, &[0xff, 0xff]);
+    gdc(&mut b, 0x23, &[]);
+    gdc(&mut b, 0x4c, &[9, 4, 0, 0, 0, 0xfc, 0x3f, 4, 0]);
+    gdc(&mut b, 0x6c, &[]);
+    let red = 0xb0000;
+    for (x, y) in [(14, 2), (15, 3), (16, 3), (17, 4), (18, 4)] {
+        assert_ne!(b.read(red + y * 80 + x / 8) & (0x80 >> (x & 7)), 0);
+    }
+    assert_eq!(b.read(red + 2 * 80 + 1), 0x02);
+    assert_eq!(b.read(red + 3 * 80 + 2), 0x80);
+    assert_eq!(b.read(red + 4 * 80 + 2), 0x60);
+    assert_eq!(b.read(0xa8000 + 2 * 80 + 1), 0);
+    b.output(0xa6, 0);
+    assert_eq!(b.read(red + 2 * 80 + 1), 0);
+    b.output(0xa6, 1);
+    assert_eq!(b.display_page, 0);
+
+    b.tick(31);
+    for _ in 0..16 {
+        assert_eq!(b.input(0x60) & 8, 0);
+        assert_eq!(b.input(0xa0) & 8, 8);
+    }
+    b.tick(1);
+    assert_eq!(b.input(0xa0) & 8, 0);
+
+    // FIGD has reset FIGS to a single dot at CURS. XOR with pattern bit 0
+    // clears that pixel, while a zero replace bit clears it unconditionally.
+    gdc(&mut b, 0x21, &[]);
+    gdc(&mut b, 0x6c, &[]);
+    assert_eq!(b.read(red + 2 * 80 + 1), 0);
+    gdc(&mut b, 0x23, &[]);
+    gdc(&mut b, 0x6c, &[]);
+    assert_eq!(b.read(red + 2 * 80 + 1), 2);
+    gdc(&mut b, 0x78, &[0, 0]);
+    gdc(&mut b, 0x20, &[]);
+    gdc(&mut b, 0x6c, &[]);
+    assert_eq!(b.read(red + 2 * 80 + 1), 0);
+    gdc(&mut b, 0, &[]);
+    assert_eq!(b.input(0xa0) & 8, 0);
+}
+
+#[test]
 fn reset_and_display_commands_have_documented_fixed_scan_phase() {
     for (profile, _, active) in MODES {
         let mut m = Machine::new(profile);

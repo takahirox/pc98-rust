@@ -5,6 +5,18 @@ use std::f64::consts::TAU;
 use std::sync::LazyLock;
 
 const CLOCK: u64 = 3_993_600;
+// SSG tone and noise share the same divider. Keep the division and rounding
+// identical to the per-sample calculation while storing the finite period set.
+static SSG_PHASE_STEPS: [f64; 4096] = {
+    let mut steps = [0.0; 4096];
+    let mut period = 1;
+    while period < steps.len() {
+        steps[period] = CLOCK as f64 / (64.0 * period as f64 * 48_000.0);
+        period += 1;
+    }
+    steps[0] = steps[1];
+    steps
+};
 
 struct Coefficients {
     rate: [f64; 32],
@@ -248,6 +260,10 @@ impl Opn {
             if ch >= 3 && self.registers[0x29] & 128 == 0 {
                 continue;
             }
+            if self.operators[ch].iter().all(|op| op.stage == 0) {
+                self.feedback[ch] = 0.0;
+                continue;
+            }
             let register_ch = ch % 3 + ch / 3 * 256;
             let hz = if ch == 2 && matches!(self.registers[0x27] & 0xc0, 0x40 | 0x80) {
                 // Logical operators 1,2,3,4, bank zero only. This implements
@@ -311,8 +327,7 @@ impl Opn {
             } * 0.08;
         }
         // SSG tone/noise mixer and programmable envelope, with bounded state.
-        self.noise_phase +=
-            CLOCK as f64 / (64.0 * f64::from((self.registers[6] & 31).max(1)) * 48_000.0);
+        self.noise_phase += SSG_PHASE_STEPS[usize::from(self.registers[6] & 31)];
         while self.noise_phase >= 1.0 {
             self.noise_phase -= 1.0;
             let bit = (self.noise ^ (self.noise >> 3)) & 1;
@@ -346,11 +361,9 @@ impl Opn {
             }
         };
         for ch in 0..3 {
-            let period = (u16::from(self.registers[ch * 2])
-                | (u16::from(self.registers[ch * 2 + 1] & 15) << 8))
-                .max(1);
-            self.ssg_phase[ch] =
-                (self.ssg_phase[ch] + CLOCK as f64 / (64.0 * f64::from(period) * 48_000.0)).fract();
+            let period = usize::from(self.registers[ch * 2])
+                | (usize::from(self.registers[ch * 2 + 1] & 15) << 8);
+            self.ssg_phase[ch] = (self.ssg_phase[ch] + SSG_PHASE_STEPS[period]).fract();
             let volume = self.registers[8 + ch];
             let level = if volume & 16 != 0 {
                 level as u8

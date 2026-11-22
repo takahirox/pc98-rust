@@ -144,17 +144,18 @@ fn main() {
     } else {
         pc98_rust::Profile::Pc9801Vm
     });
+    let extension = std::path::Path::new(path)
+        .extension()
+        .and_then(std::ffi::OsStr::to_str);
+    let boot_hdd = extension
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("hdi") || ext.eq_ignore_ascii_case("nhd"));
     m.insert(
-        if path.to_ascii_lowercase().ends_with(".hdi") {
-            2
-        } else {
-            0
-        },
+        if boot_hdd { 2 } else { 0 },
         std::fs::read(path).expect("read image"),
         path,
     )
     .expect("parse image");
-    m.set_boot_hdd(path.to_ascii_lowercase().ends_with(".hdi"));
+    m.set_boot_hdd(boot_hdd);
     m.reset();
     let steps = args
         .get(2)
