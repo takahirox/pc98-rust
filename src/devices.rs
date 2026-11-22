@@ -796,7 +796,7 @@ impl Keyboard {
 pub struct Gdc {
     pub enabled: bool,
     /// Requested drawing timing: true permits drawing during active display.
-    /// The fixed scheduler does not yet execute GDC drawing commands.
+    /// The scan scheduler does not model display-memory contention.
     pub draw_during_display: bool,
     pub command: u8,
     pub params: Vec<u8>,
@@ -812,7 +812,12 @@ pub struct Gdc {
     /// uPD7220 parameter RAM: four character-mode scanout partitions.
     pub scroll: [u8; 16],
     pub fifo: VecDeque<u8>,
+    pub(crate) dot_address: u8,
+    pub(crate) figure: [u8; 11],
+    pub(crate) modification: u8,
+    pub(crate) drawing_until: u64,
 }
+const DEFAULT_FIGURE: [u8; 11] = [0, 0, 0, 8, 0, 8, 0, 0xff, 0xff, 0xff, 0xff];
 impl Default for Gdc {
     fn default() -> Self {
         let mut scroll = [0; 16];
@@ -833,6 +838,10 @@ impl Default for Gdc {
             blink_rate: 12,
             scroll,
             fifo: VecDeque::new(),
+            dot_address: 0,
+            figure: DEFAULT_FIGURE,
+            modification: 0,
+            drawing_until: 0,
         }
     }
 }
@@ -874,13 +883,20 @@ impl Gdc {
         self.command = c;
         self.params.clear();
         match c {
-            0x00 | 0x0c | 0x0e => self.enabled = false,
+            0x00 => {
+                self.enabled = false;
+                self.drawing_until = 0;
+                self.figure = DEFAULT_FIGURE;
+                self.modification = 0;
+            }
+            0x0c | 0x0e => self.enabled = false,
             0x0d | 0x6b => self.enabled = true,
+            0x20..=0x3f => self.modification = c & 3,
             0xe0 if self.fifo.len() <= 11 => {
                 self.fifo.extend([
                     self.cursor as u8,
                     (self.cursor >> 8) as u8,
-                    (self.cursor >> 16) as u8,
+                    (self.cursor >> 16) as u8 | (self.dot_address << 4),
                     0,
                     0,
                 ]);
@@ -900,8 +916,10 @@ impl Gdc {
                 // the word address for graphics mode (NEC uPD7220 p.7).
                 self.cursor = p[0] as u32
                     | ((p[1] as u32) << 8)
-                    | (((p.get(2).copied().unwrap_or(0) & 3) as u32) << 16)
+                    | (((p.get(2).copied().unwrap_or(0) & 3) as u32) << 16);
+                self.dot_address = p.get(2).copied().unwrap_or(0) >> 4;
             }
+            0x4c if p.len() <= self.figure.len() => self.figure[p.len() - 1] = v,
             0x4b if p.len() >= 3 => {
                 self.cursor_visible = p[0] & 128 != 0;
                 self.character_lines = (p[0] & 31) + 1;
@@ -921,6 +939,68 @@ impl Gdc {
             }
             _ => {}
         }
+    }
+
+    /// The PC-98 bitmap slave interleaves the four plane selectors above a
+    /// 14-bit word address. Each line spans 40 words, MSB first within bytes.
+    pub(crate) fn draw_planar(&mut self, page: &mut [u8], now: u64) {
+        let figure = std::mem::replace(&mut self.figure, DEFAULT_FIGURE);
+        let kind = figure[0] & 0xf8;
+        if !matches!(kind, 0 | 8) {
+            return;
+        }
+        let word = |at| u16::from_le_bytes([figure[at], figure[at + 1]]);
+        let signed = |at| i32::from(((word(at) << 2) as i16) >> 2);
+        let dots = if kind == 0 {
+            1
+        } else {
+            u64::from(word(1) & 0x3fff) + 1
+        };
+        let (dx, dy, sx, sy) = [
+            (0, 1, 1, 0),
+            (1, 0, 0, 1),
+            (1, 0, 0, -1),
+            (0, -1, 1, 0),
+            (0, -1, -1, 0),
+            (-1, 0, 0, -1),
+            (-1, 0, 0, 1),
+            (0, 1, -1, 0),
+        ][usize::from(figure[0] & 7)];
+        let address = (self.cursor & 0x3fff) as i32;
+        let mut x = address % 40 * 16 + i32::from(self.dot_address);
+        let mut y = address / 40;
+        let plane = [3, 0, 1, 2][(self.cursor as usize >> 14) & 3] * 0x8000;
+        let pattern = u16::from_le_bytes([self.scroll[8], self.scroll[9]]);
+        let (mut error, diagonal, straight) = (signed(3), signed(5), i32::from(word(7) & 0x3fff));
+        for dot in 0..dots {
+            if (0..640).contains(&x) && ((0..409).contains(&y) || (y == 409 && x < 384)) {
+                let offset = y as usize * 80 + x as usize / 8;
+                let mask = 0x80 >> (x & 7);
+                let pixel = &mut page[plane + offset];
+                let on = pattern & (1 << (dot & 15)) != 0;
+                match (self.modification, on) {
+                    (0, false) | (2, true) => *pixel &= !mask,
+                    (0 | 3, true) => *pixel |= mask,
+                    (1, true) => *pixel ^= mask,
+                    _ => {}
+                }
+            }
+            x += dx;
+            y += dy;
+            if error >= 0 {
+                x += sx;
+                y += sy;
+                error += diagonal;
+            } else {
+                error += straight;
+            }
+        }
+        // Approximate four 5 MHz read/modify/write clocks per dot on the
+        // 8 MHz scheduler. Rendering itself is atomic at this boundary.
+        self.drawing_until = self
+            .drawing_until
+            .max(now)
+            .saturating_add((dots * 32).div_ceil(5));
     }
 }
 #[derive(Clone, Default)]

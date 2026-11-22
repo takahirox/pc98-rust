@@ -44,28 +44,30 @@ or audio data is saved by this feature.
 
 ## Presentation and fallback
 
-`web/presenter.js` owns a local WebGL2 texture and one fullscreen triangle strip.
-Current Chrome/Edge, Firefox and Safari with WebGL2 enabled can use it; browsers
-without WebGL2 retain the original 2D display. The automated validation below
-identifies the browser actually tested; other browser/GPU combinations may differ.
+`web/presenter.js` uses a local WebGL2 texture and one fullscreen triangle strip
+when accelerated rendering is available. Browsers without WebGL2 and detected
+software WebGL drivers use Canvas 2D. This path filters changed rows at source
+resolution and retains the 4:3 correction and horizontal softness. Scanline and
+mask modulation use the accelerated path. The status shows which display mode
+is active.
 No runtime dependency, network shader, font, media or license change is involved.
 
 The original `#screen` 2D canvas is updated first and remains underneath the
 pointer-transparent GPU canvas. Keyboard focus, pointer capture and relative
 mouse coordinates belong to the original screen, using its displayed dimensions.
-Changing a preset redraws even a paused guest. Unsupported WebGL2, shader compile
-or link failure, and context loss immediately reveal the latest raw canvas and
+Changing a preset redraws even a paused guest. Shader compile or link failure,
+unavailable canvas contexts, and context loss immediately reveal the latest raw canvas and
 its original geometry. The status explicitly reports original pixels during
 fallback; the selector retains the requested preference. Restoration rebuilds
 GPU resources and reuploads the raw canvas. A GPU failure does not stop frame
 acknowledgments or restart either Worker, the guest, or audio. Context loss of
 the original 2D canvas retains the existing refresh/credit recovery behavior.
 
-The production upload uses the incoming transferable view with `texSubImage2D`,
-allocating texture storage only on source-size changes. No CPU pixel-filter loop
-or retained incoming buffer is added. The raw canvas supplies the rare extra copy
+The accelerated upload uses the incoming transferable view with `texSubImage2D`,
+allocating texture storage only on source-size changes and retaining no incoming
+buffer. The raw canvas supplies the rare extra copy
 needed on settings changes, resize or restoration. ResizeObserver, window resize
-and DPR changes resize only the GPU output. Backing resolution is capped at DPR
+and DPR changes resize the accelerated output. Backing resolution is capped at DPR
 2 and 2560×1920, also respecting the device texture limit; CSS owns aspect ratio
 once. At the cap a very large/high-DPI display may look softer. One 640×400 RGBA
 texture is 1,024,000 bytes; the maximum color backing buffer is approximately

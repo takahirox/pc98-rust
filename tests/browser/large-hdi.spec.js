@@ -131,7 +131,7 @@ test('512 MiB local HDI: real guest high I/O, reset, full streamed export/reimpo
       });
     });
     await page.locator('#export').click();
-    await expect(page.locator('#error')).toContainText('Cannot export HDI: Export snapshot allocation failed');
+    await expect(page.locator('#error')).toContainText('Cannot export hard disk: Export snapshot allocation failed');
     await expect(page.locator('#error')).toContainText('Disk remains mounted');
     await expect(page.locator('#reset')).toBeEnabled();
     expect(await inspect(page, () => pc98.stats().running)).toBe(true);

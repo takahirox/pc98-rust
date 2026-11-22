@@ -9,6 +9,41 @@ fn fixture() -> Vec<u8> {
     .expect("run python3 tools/prepare_hdd_fixture.py before HDD tests")
 }
 
+#[test]
+fn nhd_import_uses_its_sector_offset_and_preserves_header_bytes() {
+    use pc98_rust::hdd::HdiImport;
+
+    let offset = 768;
+    let mut image = vec![0; offset + 4 * 512];
+    image[..15].copy_from_slice(b"T98HDDIMAGE.R0\0");
+    image[16..28].copy_from_slice(b"Test comment");
+    image[0x110..0x114].copy_from_slice(&(offset as u32).to_le_bytes());
+    image[0x114..0x118].copy_from_slice(&2u32.to_le_bytes());
+    image[0x118..0x11a].copy_from_slice(&1u16.to_le_bytes());
+    image[0x11a..0x11c].copy_from_slice(&2u16.to_le_bytes());
+    image[0x11c..0x11e].copy_from_slice(&512u16.to_le_bytes());
+    image[512..offset].fill(0xa6);
+    image[offset..offset + 512].fill(0x48);
+    let mut importer = HdiImport::new(&image[..512], image.len() as u64).unwrap();
+    importer.append(&image).unwrap();
+    let owned = HardDisk::parse(image.clone()).unwrap();
+    let paged = importer.finish().unwrap();
+    for mut disk in [owned, paged] {
+        assert_eq!((disk.cylinders, disk.heads, disk.sectors), (2, 1, 2));
+        let mut sector = [0; 512];
+        disk.read_sector(0, &mut sector).unwrap();
+        assert_eq!(sector, [0x48; 512]);
+        disk.write_sector(3, &[0x3a; 512]).unwrap();
+        let mut expected = image.clone();
+        expected[offset + 3 * 512..].fill(0x3a);
+        assert_eq!(disk.to_vec(), expected);
+    }
+    assert!(HardDisk::parse(image[..image.len() - 1].to_vec()).is_err());
+    assert!(HdiImport::new(&image[..32], image.len() as u64).is_err());
+    image[0x11c..0x11e].copy_from_slice(&256u16.to_le_bytes());
+    assert!(HardDisk::parse(image).is_err());
+}
+
 fn file(image: &[u8], name: &[u8; 11]) -> Vec<u8> {
     let volume = &image[4096 + 128 * 512..];
     let root = &volume[14 * 512..26 * 512];

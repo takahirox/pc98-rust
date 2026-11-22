@@ -42,6 +42,14 @@ void main() {
   color = vec4(c,1);
 }`;
 
+// Software GL can synchronously read the output back during browser
+// compositing. Shade at source resolution on a 2D canvas in that case.
+function softwareRenderer(gl) {
+  const info = gl.getExtension('WEBGL_debug_renderer_info');
+  return info && /swiftshader|llvmpipe|softpipe|software rasterizer|basic render driver/i
+    .test(gl.getParameter(info.UNMASKED_RENDERER_WEBGL));
+}
+
 export class Presenter {
   constructor(raw, output, surface, notify = () => {}, diagnostics = false) {
     this.raw = raw; this.output = output; this.surface = surface;
@@ -51,10 +59,12 @@ export class Presenter {
     this.stats = {uploads:0, uploadMs:0, submitMs:0, gpuMs:0, gpuSamples:0, failures:0, reusedFrames:0};
     this.queries = [];
     output.addEventListener('webglcontextlost', event => {
+      if (event.target !== this.output) return;
       event.preventDefault(); this.gl = null; this.queries = []; this.timer = null;
       this.fallback('WebGL context lost');
     });
     output.addEventListener('webglcontextrestored', () => {
+      if (output !== this.output) return;
       this.failed = false; this.redraw();
     });
     this.observer = new ResizeObserver(() => this.redraw());
@@ -73,8 +83,30 @@ export class Presenter {
     this.notify(`${reason}; showing original pixels`);
   }
   initialize() {
-    const gl = this.output.getContext('webgl2', {alpha:false, antialias:false, depth:false, stencil:false, preserveDrawingBuffer:false});
-    if (!gl || gl.isContextLost()) throw Error('WebGL2 unavailable');
+    const gl = this.output.getContext('webgl2', {alpha:false, antialias:false, depth:false, stencil:false,
+      preserveDrawingBuffer:false, failIfMajorPerformanceCaveat:true});
+    if (!gl || softwareRenderer(gl)) {
+      // A canvas that already owns a WebGL context can't acquire a 2D context.
+      const original = this.output;
+      const canvas = gl ? original.cloneNode(false) : original;
+      const context = canvas.getContext('2d',{alpha:false});
+      if (!context) throw Error('CRT presentation unavailable');
+      if (gl) {
+        original.replaceWith(canvas);
+        this.output = canvas;
+        gl.getExtension('WEBGL_lose_context')?.loseContext();
+      }
+      canvas.style.imageRendering = 'pixelated';
+      canvas.addEventListener('contextlost', () => this.fallback('Canvas context lost'));
+      canvas.addEventListener('contextrestored', () => {
+        this.softwareFrame = null;
+        this.failed = false;
+        this.redraw();
+      });
+      this.software = context;
+      return;
+    }
+    if (gl.isContextLost()) throw Error('WebGL2 unavailable');
     this.gl = gl;
     const shaders = [];
     let program, buffer, texture;
@@ -158,9 +190,7 @@ export class Presenter {
     }
     if (this.failed) return;
     try {
-      if (!this.gl) this.initialize();
-      const gl = this.gl;
-      if (gl.isContextLost()) throw Error('WebGL context lost');
+      if (!this.gl && !this.software) this.initialize();
       this.surface.classList.add('crt');
       // Current PC-98 output is 640x400 with 1:1.2 pixels. Unknown future
       // dimensions default to square pixels rather than applying 1.2 twice.
@@ -170,6 +200,12 @@ export class Presenter {
         this.surface.style.setProperty('--crt-aspect',aspect);
         this.surface.style.setProperty('--crt-width-per-height',aspect);
       }
+      if (this.software) {
+        this.drawSoftware(bytes, rows);
+        return;
+      }
+      const gl = this.gl;
+      if (gl.isContextLost()) throw Error('WebGL context lost');
       const bounds = this.surface.getBoundingClientRect();
       const scale = Math.min(devicePixelRatio || 1,2,2560/Math.max(1,bounds.width),1920/Math.max(1,bounds.height),
         this.maxTextureSize/Math.max(1,bounds.width,bounds.height));
@@ -211,6 +247,35 @@ export class Presenter {
       this.output.hidden = false;
       this.notify('RGB CRT · 4:3 · screenshots of the screen include the filter');
     } catch (error) { this.stats.failures++; this.fallback(error.message); }
+  }
+  drawSoftware(bytes, rows) {
+    const width = this.raw.width, height = this.raw.height;
+    const started = performance.now();
+    if (!this.softwareFrame || this.output.width !== width || this.output.height !== height) {
+      this.output.width = width;
+      this.output.height = height;
+      this.softwareFrame = this.software.createImageData(width,height);
+      rows = undefined;
+    }
+    const pixels = bytes || this.context.getImageData(0,0,width,height).data;
+    const output = this.softwareFrame.data;
+    const side = presets[this.preset].softness / 2, center = 1 - side * 2;
+    const first = rows?.first ?? 0, end = rows?.end ?? height;
+    for (let y = first; y < end; y++) {
+      const start = y * width * 4, stop = start + width * 4;
+      for (let at = start; at < stop; at += 4) {
+        const left = at === start ? at : at - 4, right = at + 4 === stop ? at : at + 4;
+        for (let channel = 0; channel < 3; channel++) {
+          output[at+channel] = pixels[at+channel] * center + (pixels[left+channel] + pixels[right+channel]) * side;
+        }
+        output[at+3] = 255;
+      }
+    }
+    this.software.putImageData(this.softwareFrame,0,0,0,first,width,end-first);
+    this.stats.uploads++;
+    this.stats.submitMs += performance.now()-started;
+    this.output.hidden = false;
+    this.notify('RGB CRT · lightweight · 4:3 · horizontal softness');
   }
   drawCrt(width,height,rows) {
     const gl = this.gl, target = this.filtered;
@@ -262,6 +327,7 @@ export class Presenter {
   }
   diagnosticsState() {
     return {...this.stats, preset:this.preset, active:!this.output.hidden, fallback:Boolean(this.failed),
+      backend:this.software ? 'canvas2d' : this.gl ? 'webgl2' : null,
       gpuTimerAvailable:Boolean(this.timer), width:this.output.width,height:this.output.height};
   }
 }

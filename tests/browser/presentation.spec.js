@@ -7,7 +7,25 @@ async function ready(page) {
   await expect.poll(()=>stats(page).then(s=>s.presentationStats.frames)).toBeGreaterThan(0);
 }
 
+// These tests exercise the shader and WebGL faults even when the test browser
+// uses a software graphics driver in CI.
+async function useWebGl(page) {
+  await page.addInitScript(() => {
+    const get = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function(type, options) {
+      if (type !== 'webgl2') return get.call(this,type,options);
+      const gl = get.call(this,type,{...options,failIfMajorPerformanceCaveat:false});
+      if (gl) {
+        const extension = gl.getExtension.bind(gl);
+        gl.getExtension = name => name === 'WEBGL_debug_renderer_info' ? null : extension(name);
+      }
+      return gl;
+    };
+  });
+}
+
 test('live presets preserve raw frames, guest state and input across VM/Ap and context restoration',async({page})=>{
+  await useWebGl(page);
   await ready(page);
   expect(await page.evaluate(()=>localStorage.getItem('pc98-presentation'))).toBeNull();
   await expect(page.locator('#presentation')).toHaveValue('sharp');
@@ -173,10 +191,11 @@ test.describe('touch fullscreen fallback',()=>{
 });
 
 for (const fault of ['unsupported','compile','link','allocation','render']) test(`GPU ${fault} falls back while presentation credits and keyboard keep working`,async({page})=>{
+  await useWebGl(page);
   await page.addInitScript(fault=>{
     const get = HTMLCanvasElement.prototype.getContext;
     HTMLCanvasElement.prototype.getContext = function(type,...args) {
-      if (type === 'webgl2' && fault === 'unsupported') return null;
+      if (this.id === 'crt-screen' && fault === 'unsupported') return null;
       const result = get.call(this,type,...args);
       if (type === 'webgl2' && result && fault === 'compile') result.getShaderParameter = () => false;
       if (type === 'webgl2' && result && fault === 'link') result.getProgramParameter = () => false;
@@ -199,6 +218,7 @@ for (const fault of ['unsupported','compile','link','allocation','render']) test
 });
 
 test('shader pixels stay upright, retain black/white and single-pixel edges, and suppress undersampled effects',async({page})=>{
+  await useWebGl(page);
   await ready(page);
   const result = await page.evaluate(async()=>{
     const {Presenter} = await import('./presenter.js');
@@ -280,6 +300,48 @@ test('shader pixels stay upright, retain black/white and single-pixel edges, and
   expect(Number(result.futureAspect)).toBeCloseTo(1.6);
 });
 
+test('software-only CRT filters changed rows, preserves raw pixels and keeps the 4:3 view', async ({page}) => {
+  await page.addInitScript(() => {
+    const get = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function(type, options) {
+      return type === 'webgl2' ? null : get.call(this,type,options);
+    };
+  });
+  await ready(page);
+  await expect(page.locator('#presentation-status')).toContainText('RGB CRT · lightweight');
+  expect((await stats(page)).presenterStats).toMatchObject({active:true,backend:'canvas2d'});
+  expect(await page.locator('#screen').evaluate(c=>c.clientWidth/c.clientHeight)).toBeCloseTo(4/3,2);
+  const frames = await page.evaluate(async () => {
+    const {Presenter} = await import('./presenter.js');
+    const surface = document.createElement('div');
+    const raw = document.createElement('canvas'), output = document.createElement('canvas');
+    surface.append(raw,output);
+    const presenter = new Presenter(raw,output,surface);
+    const frame = new ImageData(3,2);
+    frame.data.set([
+      0,0,0,255, 255,100,10,255, 0,0,0,255,
+      255,255,255,255, 255,255,255,255, 255,255,255,255,
+    ]);
+    const source = sequence => ({renderer:output,sequence,generation:1,videoEpoch:0});
+    const read = () => Array.from(output.getContext('2d').getImageData(0,0,3,2).data);
+    presenter.present(frame,source(1));
+    const sharp = read();
+    presenter.setPreset('soft');
+    const soft = read();
+    frame.data.set([60,40,20,255],0);
+    presenter.present(frame,{...source(2),changedRows:{after:1,first:0,end:1}});
+    const partial = read();
+    presenter.present(frame);
+    presenter.observer.disconnect();
+    return {sharp,soft,partial,full:read(),raw:Array.from(presenter.context.getImageData(0,0,3,2).data)};
+  });
+  expect(frames.sharp.slice(0,12)).toEqual([4,2,0,255,246,96,10,255,4,2,0,255]);
+  expect(frames.soft[0]).toBeGreaterThan(frames.sharp[0]);
+  expect(frames.partial.slice(12)).toEqual(frames.sharp.slice(12));
+  expect(frames.partial).toEqual(frames.full);
+  expect(frames.raw.slice(0,12)).toEqual([60,40,20,255,255,100,10,255,0,0,0,255]);
+});
+
 // Compare production raster bytes with the authoritative Wasm image. Existing
 // CRT/GDC tests cover exact Japanese glyph, palette, PEGC and blink bytes.
 test('production raster bytes remain exact with CRT enabled',async({page})=>{
@@ -296,6 +358,7 @@ test('production raster bytes remain exact with CRT enabled',async({page})=>{
 test('high DPI output is bounded and resizes without applying aspect correction twice',async({browser},info)=>{
   const page=await browser.newPage({baseURL:info.project.use.baseURL,deviceScaleFactor:3,viewport:{width:1500,height:1100}});
   try {
+    await useWebGl(page);
     await ready(page); await page.locator('#presentation').selectOption('strong');
     await page.locator('#phosphor-mask').check();
     for (const viewport of [{width:1500,height:1100},{width:701,height:900},{width:480,height:800}]) {
