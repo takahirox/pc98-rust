@@ -358,6 +358,7 @@ test('production raster bytes remain exact with CRT enabled',async({page})=>{
 test('high DPI output is bounded and resizes without applying aspect correction twice',async({browser},info)=>{
   const page=await browser.newPage({baseURL:info.project.use.baseURL,deviceScaleFactor:3,viewport:{width:1500,height:1100}});
   try {
+    await useWebGl(page);
     await ready(page); await page.locator('#presentation').selectOption('strong');
     await page.locator('#phosphor-mask').check();
     for (const viewport of [{width:1500,height:1100},{width:701,height:900},{width:480,height:800}]) {
