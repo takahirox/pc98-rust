@@ -93,6 +93,25 @@ function worker(code=source, {prebuffer=4320, stalls=[], frameCost=0, renderWork
     result:()=>({now,missed,slices,frames,produced:run('producedSamples'),outstanding:run('outstandingAudio()')})};
 }
 
+test('worker transfers both PCM lanes in a single frame-counted credit',()=>{
+  const current = worker();
+  const packet = current.run(`
+    stereo = true; diagnostics = true;
+    core.audio_len = () => 3; core.audio_right_ptr = () => 16;
+    new Float32Array(core.memory.buffer,0,3).set([1,2,3]);
+    new Float32Array(core.memory.buffer,16,3).set([4,5,6]);
+    let packet;
+    port.postMessage = message => { packet = message; };
+    deliverAudio();
+    packet
+  `);
+  assert.equal(packet.count,3);
+  assert.equal(packet.start,0);
+  assert.equal(packet.stereo,true);
+  assert.deepEqual(Array.from(new Float32Array(packet.buffer,0,6)),[1,2,3,4,5,6]);
+  assert.equal(current.result().outstanding,3);
+});
+
 test('host rendering waits for PCM reserve while preview refresh stays bounded',()=>{
   const current=worker(source,{frameCost:22}); current.run('schedule(0)'); current.until(5000);
   assert.equal(current.result().missed,0);

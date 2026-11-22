@@ -51,6 +51,28 @@ test('device sample rates preserve source cadence and phase across render quanta
   const lower=sink(24000); lower.send([1,2,3]); lower.send([4,5,6]);
   assert.deepEqual(lower.read(4),[1,3,5,0]);
 });
+
+test('stereo lanes share the same source phase, underflow and credit', () => {
+  const {processor,reports,send,read} = sink(96000);
+  const values = Float32Array.from([1,2,10,20]);
+  const bits = new Uint32Array(values.buffer);
+  let checksum = 2166136261;
+  for (const i of [0,2,1,3]) checksum = Math.imul(checksum^bits[i],16777619)>>>0;
+  processor.receive({type:'pcm',epoch:0,start:0,count:2,buffer:values.buffer,stereo:true,checksum});
+  send([3]);
+  const left = new Float32Array(8), right = new Float32Array(8);
+  processor.process([],[[left,right]]);
+  assert.deepEqual([...left],[1,1,2,2,3,3,0,0]);
+  assert.deepEqual([...right],[10,10,20,20,3,3,0,0]);
+  assert.equal(processor.underflows,2);
+  assert.equal(processor.sequenceErrors,0);
+  assert.equal(processor.checksumErrors,0);
+  assert.equal(processor.checkedBlocks,1);
+  assert.equal(reports.filter(m=>m.type==='recycle').length,2);
+  processor.receive({type:'flush',epoch:1});
+  processor.receive({type:'pcm',epoch:1,start:0,count:2,buffer:values.buffer,stereo:true});
+  assert.deepEqual(read(4),[5.5,5.5,11,11]);
+});
 for (const rate of [44100,48000,96000]) test(`${rate} Hz: sustained PCM matches an independent rational source cursor`,()=>{
   const {processor,send,read}=sink(rate,4320);
   let sent=0, rendered=0;

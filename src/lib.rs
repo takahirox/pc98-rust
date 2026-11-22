@@ -70,6 +70,7 @@ impl Machine {
         let disks = std::mem::take(&mut self.bus.disks);
         let hdd = self.bus.ide.disk.take();
         let boot_hdd = self.bus.boot_hdd;
+        let stereo_audio = self.bus.stereo_audio;
         let rtc = std::mem::take(&mut self.bus.rtc);
         // RESET without BIST retains the x87 environment (Intel486 PRM 19.2.3).
         self.cpu = Cpu {
@@ -84,6 +85,7 @@ impl Machine {
         self.bus.disks = disks;
         self.bus.ide.disk = hdd;
         self.bus.boot_hdd = boot_hdd;
+        self.bus.stereo_audio = stereo_audio;
         self.error = None;
         self.clock_converter = timing::ClockConverter::default();
         firmware::initialize(&mut self.bus);
@@ -472,12 +474,25 @@ mod wasm {
         MACHINE.with(|m| m.borrow().bus.audio.as_ptr())
     }
     #[no_mangle]
+    pub extern "C" fn audio_right_ptr() -> *const f32 {
+        MACHINE.with(|m| m.borrow().bus.audio_right.as_ptr())
+    }
+    #[no_mangle]
+    pub extern "C" fn audio_enable_stereo() {
+        audio_clear();
+        MACHINE.with(|m| m.borrow_mut().bus.stereo_audio = true);
+    }
+    #[no_mangle]
     pub extern "C" fn audio_len() -> usize {
         MACHINE.with(|m| m.borrow().bus.audio.len())
     }
     #[no_mangle]
     pub extern "C" fn audio_clear() {
-        MACHINE.with(|m| m.borrow_mut().bus.audio.clear())
+        MACHINE.with(|m| {
+            let mut m = m.borrow_mut();
+            m.bus.audio.clear();
+            m.bus.audio_right.clear();
+        })
     }
     #[no_mangle]
     pub extern "C" fn metric(id: u32) -> f64 {

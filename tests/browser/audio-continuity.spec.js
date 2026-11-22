@@ -97,6 +97,7 @@ test('ADV98 production playback remains continuous through scene changes', async
   const start=previous;
   const presentationWindows=[]; let windowStart=previous, windowTime=performance.now();
   expect(start.deviceSampleRate).toBe(testInfo.project.name==='pages' ? 44100 : 48000);
+  expect(start.deviceChannels).toBe(2);
   for(let i=0;i<16;i++) {
     if(i%4===0) {
       const preset=['off','sharp','soft','strong'][i/4];

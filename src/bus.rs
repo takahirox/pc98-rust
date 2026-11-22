@@ -35,6 +35,8 @@ pub struct Bus {
     /// Rising edges on the combined OPN/86 sound IRQ12 wire.
     pub sound_irq_edges: u64,
     pub audio: Vec<f32>,
+    pub(crate) audio_right: Vec<f32>,
+    pub(crate) stereo_audio: bool,
     audio_fraction: u64,
     deferred_devices: bool,
     pending_device_clocks: u32,
@@ -206,6 +208,8 @@ impl Bus {
             beep_edges: 0,
             sound_irq_edges: 0,
             audio: Vec::with_capacity(4096),
+            audio_right: Vec::new(),
+            stereo_audio: false,
             audio_fraction: 0,
             deferred_devices: false,
             pending_device_clocks: 0,
@@ -632,13 +636,18 @@ impl Bus {
         self.audio_fraction += cycles as u64 * 48_000;
         while self.audio_fraction >= 8_000_000 {
             self.audio_fraction -= 8_000_000;
-            let fm = if self.profile == Profile::Pc9821ApDos {
-                let sample = self.opn.sample() + self.pcm.sample();
+            let (left, right, pcm) = if self.profile == Profile::Pc9821ApDos {
+                let [left, right] = if self.stereo_audio {
+                    self.opn.sample_stereo()
+                } else {
+                    [self.opn.sample(), 0.0]
+                };
+                let pcm = self.pcm.sample();
                 // PCM threshold IRQs arise during FIFO consumption.
                 self.sync_sound_irq();
-                sample
+                (left, right, pcm)
             } else {
-                0.0
+                (0.0, 0.0, 0.0)
             };
             if self.audio.len() < 4096 {
                 let counter = &self.pit.c[1];
@@ -649,7 +658,11 @@ impl Bus {
                 } else {
                     -0.15
                 };
-                self.audio.push((beep + fm).clamp(-1.0, 1.0));
+                self.audio.push((beep + (left + pcm)).clamp(-1.0, 1.0));
+                if self.stereo_audio {
+                    self.audio_right
+                        .push((beep + (right + pcm)).clamp(-1.0, 1.0));
+                }
             }
         }
         if poll_keyboard && !self.keyboard.fifo.is_empty() {

@@ -37,6 +37,50 @@ fn fm_phase_tracks_direct_frequency_and_detune_changes() {
 }
 
 #[test]
+fn opna_pan_routes_both_banks_and_keeps_phase_while_muted() {
+    for bank in [false, true] {
+        let mut opn = Opn::default();
+        let mut mono = Opn::default();
+        let write = |opn: &mut Opn, register, value| {
+            if bank {
+                opn.bank_address = register;
+                opn.write_bank(value);
+            } else {
+                opn_register(opn, register, value);
+            }
+        };
+        for chip in [&mut opn, &mut mono] {
+            opn_register(chip, 0x29, 0x9f);
+            for (address, value) in [(0xb0, 7), (0x50, 31), (0xa0, 0x68), (0xa4, 0x22)] {
+                write(chip, address, value);
+            }
+            opn_register(chip, 0x28, 0x10 | if bank { 4 } else { 0 });
+        }
+        let sample = mono.sample();
+        assert_ne!(sample, 0.0);
+        assert_eq!(opn.sample_stereo(), [sample; 2]);
+        for (pan, left, right) in [
+            (0x80, true, false),
+            (0x40, false, true),
+            (0x00, false, false),
+            (0xc0, true, true),
+        ] {
+            write(&mut opn, 0xb4, pan);
+            for _ in 0..32 {
+                let sample = mono.sample();
+                assert_eq!(
+                    opn.sample_stereo(),
+                    [
+                        if left { sample } else { 0.0 },
+                        if right { sample } else { 0.0 }
+                    ]
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn opna_irq_disabled_timer_regression() {
     let mut opn = Opn::default();
     for (address, value) in [(0x29, 0x80), (0x24, 0xff), (0x25, 3), (0x27, 5)] {

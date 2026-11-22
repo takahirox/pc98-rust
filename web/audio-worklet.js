@@ -7,6 +7,7 @@ class PC98Audio extends AudioWorkletProcessor {
     this.energy = 0; this.samples = 0; this.underflows = 0; this.overflows = 0;
     this.receivedSamples = 0; this.consumedSamples = 0; this.queuedSamples = 0;
     this.sequenceErrors = 0; this.staleBlocks = 0; this.checksumErrors = 0; this.checkedBlocks = 0;
+    this.deviceChannels = 0;
     this.prebufferSamples = 4320; // 90 ms, inside the ten transferable credits.
     this.waiting = true; this.started = false;
     this.underflowRun = 0; this.maxUnderflowRun = 0; this.reportFrames = 0;
@@ -26,7 +27,7 @@ class PC98Audio extends AudioWorkletProcessor {
       queuedSamples:this.queuedSamples, sequenceErrors:this.sequenceErrors,
       staleBlocks:this.staleBlocks, underflowRun:this.underflowRun, maxUnderflowRun:this.maxUnderflowRun,
       checksumErrors:this.checksumErrors, checkedBlocks:this.checkedBlocks,
-      deviceSampleRate:sampleRate,
+      deviceSampleRate:sampleRate, deviceChannels:this.deviceChannels,
     }}, buffer ? [buffer] : []);
     this.reportFrames = 0;
   }
@@ -53,7 +54,10 @@ class PC98Audio extends AudioWorkletProcessor {
     // Retain fractional phase and any downsampling skip across block edges.
     while (this.phase >= sampleRate && this.queue.length) {
       const block = this.queue[0];
-      if (block.bits) block.hash = Math.imul(block.hash ^ block.bits[this.offset],16777619) >>> 0;
+      if (block.bits) {
+        block.hash = Math.imul(block.hash ^ block.bits[this.offset],16777619) >>> 0;
+        if (block.stereo) block.hash = Math.imul(block.hash ^ block.bits[block.count+this.offset],16777619) >>> 0;
+      }
       this.phase -= sampleRate; this.consumedSamples++; this.queuedSamples--;
       if (++this.offset >= block.count) {
         if (block.bits) { this.checkedBlocks++; if (block.hash !== block.checksum) this.checksumErrors++; }
@@ -62,8 +66,9 @@ class PC98Audio extends AudioWorkletProcessor {
     }
   }
   process(_inputs, outputs) {
-    const output = outputs[0][0];
+    const [output, rightOutput] = outputs[0];
     if (!output) return true;
+    this.deviceChannels = outputs[0].length;
     for (let i = 0; i < output.length; i++) {
       // A guest slice can hit its work cap before producing 10 ms of PCM.
       // With every credit held, play the available prefix to recycle a block.
@@ -74,6 +79,7 @@ class PC98Audio extends AudioWorkletProcessor {
       const block = this.queue[0];
       if (this.waiting || !block) {
         output[i] = 0; this.waiting = true;
+        if (rightOutput) rightOutput[i] = 0;
         if (this.started) {
           this.underflows++; this.underflowRun++;
           this.maxUnderflowRun = Math.max(this.maxUnderflowRun,this.underflowRun);
@@ -87,11 +93,18 @@ class PC98Audio extends AudioWorkletProcessor {
       // End preview permission immediately when real PCM resumes.
       if (this.input && recovered) this.report('stats');
       const value = block.samples[this.offset];
-      output[i] = value; this.energy += value*value; this.samples++;
+      const right = block.stereo ? block.samples[block.count+this.offset] : value;
+      if (rightOutput) {
+        output[i] = value; rightOutput[i] = right;
+        this.energy += (value*value + right*right) / 2;
+      } else {
+        const mono = (value + right) / 2;
+        output[i] = mono; this.energy += mono*mono;
+      }
+      this.samples++;
       // Integer phase avoids accumulated rounding drift at 44.1 kHz.
       this.phase += 48000; this.advance();
     }
-    for (let ch = 1; ch < outputs[0].length; ch++) outputs[0][ch].set(output);
     // A starved sink still reports, so diagnostics cannot hide a persistent
     // dropout behind the last successful recycle. No unbounded event history.
     this.reportFrames += output.length;
