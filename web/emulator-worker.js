@@ -15,8 +15,8 @@ function invalidateVideo() {
   previewDue = captureDue = 0;
   clearTimeout(captureTimer);
 }
-let port, audioEnabled = false, audioState, audioEpoch = 0, flushWaiter;
-const audioBuffers = Array.from({length: 10}, () => new ArrayBuffer(1024 * 4));
+let port, audioEnabled = false, audioState, audioEpoch = 0, flushWaiter, stereo = false;
+const audioBuffers = Array.from({length: 10}, () => new ArrayBuffer(1024 * 2 * 4));
 let sinkStats = {}, sinkStatsAt = 0, transaction = null;
 let producedSamples = 0, sentSamples = 0, droppedSamples = 0;
 let deadline = 0, diagnostics = false;
@@ -175,17 +175,24 @@ function deliverAudio() {
     producedSamples += count;
     let sent = 0;
     const ptr = core.audio_ptr() >>> 0, samples = new Float32Array(core.memory.buffer,ptr,count);
+    const right = stereo ? new Float32Array(core.memory.buffer,core.audio_right_ptr() >>> 0,count) : null;
     // Ten credits bound both MessagePort traffic and the sink queue. Normal
     // execution stops producing at the watermark, before exhausting credits.
     for (let at = 0; at < count && audioBuffers.length; at += 1024) {
       const buffer = audioBuffers.pop(), n = Math.min(1024,count-at);
-      new Float32Array(buffer).set(samples.subarray(at,at+n));
+      const block = new Float32Array(buffer);
+      block.set(samples.subarray(at,at+n));
+      if (right) block.set(right.subarray(at,at+n),n);
       let checksum;
       if (diagnostics) {
         checksum = 2166136261;
-        for (const bits of new Uint32Array(buffer,0,n)) checksum = Math.imul(checksum ^ bits,16777619) >>> 0;
+        const bits = new Uint32Array(buffer);
+        for (let i = 0; i < n; i++) {
+          checksum = Math.imul(checksum ^ bits[i],16777619) >>> 0;
+          if (right) checksum = Math.imul(checksum ^ bits[n+i],16777619) >>> 0;
+        }
       }
-      port.postMessage({type:'pcm', epoch:audioEpoch, buffer, count:n, start:producedSamples-count+at, checksum}, [buffer]);
+      port.postMessage({type:'pcm', epoch:audioEpoch, buffer, count:n, start:producedSamples-count+at, checksum, stereo}, [buffer]);
       sent += n;
     }
     sentSamples += sent; droppedSamples += count-sent;
@@ -323,6 +330,10 @@ async function command(type, data) {
   }
   if (type === 'sound') { audioEnabled = data.enabled; audioState = data.state; await flushAudio(); return; }
   if (type === 'audioPort') {
+    if (core.audio_enable_stereo) {
+      core.audio_enable_stereo();
+      stereo = true;
+    }
     port = data;
     port.onmessage = ({data:m}) => {
       if (m.buffer) audioBuffers.push(m.buffer);

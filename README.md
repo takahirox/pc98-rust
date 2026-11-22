@@ -822,11 +822,12 @@ retains the former architecture for reproducible comparisons. Every Wasm memory
 view is obtained after its exported call, including after memory growth.
 
 After **Enable sound**, a direct Worker-to-[AudioWorklet](web/audio-worklet.js)
-MessagePort carries guest-generated 48 kHz mono PCM. Six reusable 1,024-sample
-buffers bound all queued/in-flight audio to 128 ms; the normal slices produce
-480 samples each. The sink prefills 50 ms at startup or after starvation,
-consumes blocks in order and outputs accounted silence on underflow. Production
-waits at the watermark or until a credit returns; exceptional producer
+MessagePort carries guest-generated 48 kHz stereo PCM. Ap FM respects guest
+left/right routing. The SSG, PCM86 and beeper contributions are centered.
+Ten reusable credits hold up to 1,024 stereo frames each. Normal slices produce
+480 frames and the producer targets 100 ms of queued and in-flight audio. The
+sink prefills up to 90 ms at startup or after starvation, consumes blocks in
+order and outputs accounted silence on underflow. Exceptional producer
 drops and sink overflow remain counted. Integer sample-rate conversion phase
 preserves 48 kHz source cadence at 44.1/48/96 kHz device rates.
 Mute, pause, reset, profile changes and AudioContext state changes flush the

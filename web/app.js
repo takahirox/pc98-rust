@@ -187,7 +187,7 @@ async function enableAudio() {
     outputGain = audio.createGain(); outputGain.gain.value = 0; outputGain.connect(audio.destination);
     audioSetup = (async () => {
       await audio.audioWorklet.addModule(new URL('audio-worklet.js',import.meta.url));
-      audioNode = new AudioWorkletNode(audio,'pc98-audio',{outputChannelCount:[1]});
+      audioNode = new AudioWorkletNode(audio,'pc98-audio',{outputChannelCount:[2]});
       audioNode.onprocessorerror = () => { muted = true; soundState().catch(fail); fail('AudioWorklet stopped. Reload to enable sound again.'); };
       const channel = new MessageChannel();
       audioNode.port.postMessage({type:'connect',port:channel.port1},[channel.port1]);

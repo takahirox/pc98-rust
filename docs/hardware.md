@@ -1566,8 +1566,13 @@ keying is absent. Combined encoding `11` is explicitly unverified and currently
 follows ordinary frequency selection; that fallback is not a hardware claim.
 Frequency-write latch timing, prescalers, key scaling, fuller envelopes/SSG-EG
 and broader synthesis verification remain outstanding. OPNA also retains LFO,
-pan/stereo, rhythm and ADPCM gaps. VM sound exposure remains outstanding.
+rhythm and ADPCM gaps. VM sound exposure remains outstanding.
 No inventory scope or status is promoted by these bounded probes.
+
+Ap browser playback routes banked B4h–B6h bits 7/6 to the left/right FM
+outputs. Channel synthesis continues when both outputs are disabled. Reset
+centers all FM channels. SSG, PCM86 and the beeper are centered in the browser
+mix. The native mono inspection path retains its existing pre-pan signal.
 
 ## Ap YM2608 timer IRQ enables
 

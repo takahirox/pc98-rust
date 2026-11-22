@@ -73,6 +73,8 @@ impl Default for Opn {
     fn default() -> Self {
         let mut registers = [0; 512];
         registers[7] = 0xff;
+        registers[0xb4..=0xb6].fill(0xc0);
+        registers[0x1b4..=0x1b6].fill(0xc0);
         // Ap YM2608: all five IRQ enables set, SCH clear at reset. Reserved
         // D6:D5 reset to zero; writes retain them without assigning behavior.
         registers[0x29] = 0x1f;
@@ -255,7 +257,15 @@ impl Opn {
             / (144.0 * 1_048_576.0)
     }
     pub fn sample(&mut self) -> f32 {
-        let mut sum = 0.0;
+        self.mix(false)[0]
+    }
+    /// Ap's two FM output pins. SSG is centered by the board mixer.
+    pub fn sample_stereo(&mut self) -> [f32; 2] {
+        self.mix(true)
+    }
+    fn mix(&mut self, stereo: bool) -> [f32; 2] {
+        let mut left = 0.0;
+        let mut right = 0.0;
         for ch in 0..6 {
             if ch >= 3 && self.registers[0x29] & 128 == 0 {
                 continue;
@@ -319,12 +329,19 @@ impl Opn {
                     _ => 0.0,
                 },
             );
-            sum += match alg {
+            let sample = match alg {
                 0..=3 => fourth,
                 4 => second + fourth,
                 5..=6 => second + third + fourth,
                 _ => first + second + third + fourth,
             } * 0.08;
+            let pan = self.registers[0xb4 + register_ch];
+            if !stereo || pan & 0x80 != 0 {
+                left += sample;
+            }
+            if stereo && pan & 0x40 != 0 {
+                right += sample;
+            }
         }
         // SSG tone/noise mixer and programmable envelope, with bounded state.
         self.noise_phase += SSG_PHASE_STEPS[usize::from(self.registers[6] & 31)];
@@ -373,10 +390,14 @@ impl Opn {
             if level != 0 {
                 let gate = (self.registers[7] & (1 << ch) != 0 || self.ssg_phase[ch] < 0.5)
                     && (self.registers[7] & (8 << ch) != 0 || self.noise & 1 != 0);
-                sum +=
+                let sample =
                     if gate { 1.0 } else { -1.0 } * 0.08 * COEFFICIENTS.ssg_level[level as usize];
+                left += sample;
+                if stereo {
+                    right += sample;
+                }
             }
         }
-        sum.clamp(-1.0, 1.0) as f32
+        [left.clamp(-1.0, 1.0) as f32, right.clamp(-1.0, 1.0) as f32]
     }
 }
