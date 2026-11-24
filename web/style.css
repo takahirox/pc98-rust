@@ -301,6 +301,15 @@ body:has(.full-window) { overflow: hidden; }
   .display-select span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
   #volume { width: 73px; }
 }
+@media (orientation: landscape) and (max-height: 520px) and (width < 580px) {
+  .drives #error-notice {
+    position: fixed;
+    inset: auto max(10px, env(safe-area-inset-right)) max(6px, env(safe-area-inset-bottom))
+      max(10px, env(safe-area-inset-left));
+    margin: 0;
+  }
+  .drives #error { max-height: 24dvh; overflow: auto; }
+}
 @media (orientation: landscape) and (max-height: 520px) and (min-width: 580px) {
   .player { grid-template-columns: minmax(0, 1fr) minmax(205px, min(34%, 270px)); grid-template-rows: auto auto 1fr; gap: 6px 12px; }
   .drives { grid-area: 1 / 2 / span 3; gap: 4px; }
