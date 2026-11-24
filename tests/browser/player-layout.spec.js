@@ -211,6 +211,39 @@ test.describe('568 × 320 touch media picker', () => {
     expect(await page.locator('#screen').boundingBox()).toEqual(normal);
   });
 
+  test('keeps Keyboard and Settings tappable while a drop warning is visible', async ({page}) => {
+    await ready(page);
+    const screen = page.locator('#screen');
+    const initial = await screen.boundingBox();
+    const keyboard = page.getByRole('button', {name:'Keyboard', exact:true});
+    const settings = page.getByRole('button', {name:'Settings'});
+    const dismiss = page.getByRole('button', {name:'Dismiss error'});
+    const tapInPlace = async control => {
+      await expect(control).toBeInViewport({ratio:1});
+      const {x, y, width, height} = await control.boundingBox();
+      await page.touchscreen.tap(x + width / 2, y + height / 2);
+    };
+    await dropUnsupportedFile(page);
+    await expectNoticeClearOfScreen(page, initial);
+    await expect(dismiss).toBeInViewport({ratio:1});
+
+    await tapInPlace(keyboard);
+    await expect(keyboard).toHaveAttribute('aria-expanded', 'true');
+    await tapInPlace(keyboard);
+    await expect(keyboard).toHaveAttribute('aria-expanded', 'false');
+    await expectNoticeClearOfScreen(page, initial);
+
+    await tapInPlace(settings);
+    const panel = page.getByRole('dialog', {name:'Settings'});
+    await expect(panel).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(panel).toBeHidden();
+    await expectNoticeClearOfScreen(page, initial);
+    await dismiss.tap();
+    await expect(page.getByRole('alert')).toBeHidden();
+    expect(await screen.boundingBox()).toEqual(initial);
+  });
+
   test('keeps HDD drop progress in view without moving the screen', async ({page}) => {
     await ready(page);
     const screen = page.locator('#screen');
@@ -801,6 +834,53 @@ for (const mode of ['native', 'fallback']) {
     await expect(exit).toBeHidden();
     await expect(fullscreen).toBeFocused();
     await expect(alert).toBeVisible();
+  });
+}
+
+for (const [width, height] of [[568, 320], [390, 844]]) {
+  test.describe(`${width} × ${height} fullscreen touch notices`, () => {
+    test.use({viewport:{width,height}, hasTouch:true, isMobile:true});
+    for (const mode of ['native', 'fallback']) {
+      test(`${mode} fullscreen keeps the guest image and keyboard stable across a warning`, async ({page}) => {
+        if (mode === 'fallback') {
+          await page.addInitScript(() => {
+            Element.prototype.requestFullscreen = () => Promise.reject(new Error('Fullscreen unavailable'));
+          });
+        }
+        await ready(page);
+        await page.getByRole('button', {name:'Fullscreen', exact:true}).tap();
+        const fullscreen = page.locator(mode === 'native' ? '#drop:fullscreen' : '#drop.full-window');
+        await fullscreen.getByRole('button', {name:'Keyboard', exact:true}).tap();
+        const panel = fullscreen.locator('#keyboard-panel');
+        const screen = fullscreen.locator('#screen');
+        const exit = fullscreen.getByRole('button', {name:'Exit fullscreen'});
+        await expect(screen).toBeInViewport({ratio:1});
+        await expect(panel).toBeInViewport({ratio:1});
+        const initial = await screen.boundingBox();
+        const keys = await panel.boundingBox();
+        expect(initial.height).toBeGreaterThanOrEqual(150);
+        expect(initial.width / initial.height).toBeCloseTo(4/3, 2);
+
+        await dropUnsupportedFile(page);
+        await expectNoticeClearOfScreen(page, initial);
+        expect(await panel.boundingBox()).toEqual(keys);
+        const scrollTop = () => panel.locator('#keyboard-scroll').evaluate(el => el.scrollTop);
+        await panel.getByRole('button', {name:'Scroll keyboard down'}).tap();
+        await expect.poll(scrollTop).toBeGreaterThan(0);
+        await expect(exit).toBeInViewport({ratio:1});
+        await exit.tap({trial:true});
+
+        await fullscreen.getByRole('button', {name:'Dismiss error'}).tap();
+        await expect(page.getByRole('alert')).toBeHidden();
+        await expect(screen).toBeInViewport({ratio:1});
+        expect(await screen.boundingBox()).toEqual(initial);
+        expect(await panel.boundingBox()).toEqual(keys);
+        await panel.getByRole('button', {name:'Scroll keyboard up'}).tap();
+        await expect.poll(scrollTop).toBe(0);
+        await exit.tap();
+        await expect(fullscreen).toHaveCount(0);
+      });
+    }
   });
 }
 
