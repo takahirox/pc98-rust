@@ -170,7 +170,7 @@ canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; 
 #error { color: #872c24; background: #f8e9e5; }
 #display-warning { color: #634921; background: #f4eedf; }
 #keyboard-home { grid-column: 1 / -1; min-width: 0; }
-#keyboard-home:has(> [hidden]) { display: none; }
+#keyboard-home:not(:has(> #keyboard-panel:not([hidden]))) { display: none; }
 #keyboard-panel { background: #edf0eb; padding: 7px; border: 1px solid var(--border); border-radius: 8px; }
 #keyboard-scroll { overflow: auto; min-height: 0; }
 .keyboard-scroll-actions { display: none; }
@@ -230,6 +230,25 @@ body:has(.full-window) { overflow: hidden; }
   .icon-button { width: 44px; }
   .keyrow { flex-wrap: wrap; }
   .keyrow button { min-width: 40px; }
+  #keyboard-home #keyboard-panel {
+    display: grid;
+    grid-template: minmax(0, 1fr) / minmax(0, 1fr) auto;
+    max-height: min(36dvh, 340px);
+    gap: 6px;
+  }
+  #keyboard-home #keyboard-scroll { overscroll-behavior: contain; }
+  #keyboard-home .keyboard-scroll-actions {
+    display: flex;
+    flex-direction: column;
+    align-self: center;
+    gap: 4px;
+  }
+  .keyboard-scroll-actions button { min-width: 44px; }
+}
+@media (pointer: coarse) and (orientation: portrait), (pointer: coarse) and (max-width: 579px) {
+  .player:has(#keyboard-home > :not([hidden])) .display:not(:is(:fullscreen,.full-window)) .screen-stage {
+    max-height: 44dvh;
+  }
 }
 @media (orientation: landscape) and (max-height: 520px) and (min-width: 580px) {
   main {
@@ -249,6 +268,17 @@ body:has(.full-window) { overflow: hidden; }
   .display-select span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
   #volume { width: 73px; }
   .slot { padding-block: 3px; }
+}
+@media (pointer: coarse) and (orientation: landscape) and (min-width: 580px) {
+  #keyboard-home { grid-area: 1 / 2; }
+  #keyboard-home #keyboard-panel { max-height: var(--screen-height); }
+  .player:has(#keyboard-home > :not([hidden])) {
+    grid-template-columns: minmax(0, 1fr) minmax(205px, 42%);
+    grid-template-rows: auto auto 1fr;
+    .toolbar { grid-column: 1 / -1; }
+    .secondary { grid-area: 3 / 1; }
+    .drives { grid-area: 4 / 1 / auto / -1; }
+  }
 }
 @media (max-height: 650px), (max-width: 740px), (pointer: coarse) and (max-height: 760px) {
   .display:is(:fullscreen,.full-window) #keyboard-panel {

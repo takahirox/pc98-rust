@@ -17,7 +17,7 @@
       <button id="help" class="link-button" popovertarget="help-panel" aria-haspopup="dialog">Help</button>
       <div id="help-panel" class="panel" popover role="dialog" aria-labelledby="help-title" tabindex="-1" autofocus>
         <h2 id="help-title">Player help</h2>
-        <p>Focus the screen to type. Shift, Ctrl, Alt (GRPH), right Alt (XFER) and left Meta (NFER) map to PC-98 keys. Tab moves between player controls until you click or type in the screen. Press F12 to return to the player controls. Open Keyboard for on-screen keys, including Kana and STOP.</p>
+        <p>Focus the screen to type. Shift, Ctrl, Alt (GRPH), right Alt (XFER) and left Meta (NFER) map to PC-98 keys. Tab and Shift+Tab move between player controls until you click or start typing in the screen. Press F12 to return to the player controls. Open Keyboard for on-screen keys, including Kana and STOP.</p>
         <p>Drag an image onto the screen or use Insert media for automatic routing. HDI/NHD images go to IDE HDD on Ap. TFD, HDM, XDF, 2HD, D88, D98 and IMG images go to Floppy 1. Drop on a drive or open its picker to choose a specific slot.</p>
         <p>Floppy insertion leaves the guest running. Choose the next boot drive in Settings, then Reset. Replacing the HDD resets the machine. Demos boot Floppy 1 immediately.</p>
         <p>Disk changes stay in browser memory. Export from the mounted drive’s picker before reloading or discarding writes. VM retains the IDE disk for when you return to Ap. Mouse input on Ap may require a guest DOS driver.</p>
@@ -29,7 +29,7 @@
 
   <section class="player" aria-label="PC-98 player">
     <div class="display" id="drop">
-      <p id="screen-input-help" hidden>Tab moves between player controls until you click or type in the screen. Press F12 to return to the player controls.</p>
+      <p id="screen-input-help" hidden>Tab and Shift+Tab move between player controls until you click or start typing in the screen. Press F12 to return to the player controls.</p>
       <div class="fullscreen-controls">
         <button id="fullscreen-keyboard" aria-controls="keyboard-panel" aria-expanded="false">Keyboard</button>
         <button id="exit-fullscreen">Exit fullscreen</button>
@@ -69,6 +69,41 @@
         </label>
         <button id="fullscreen">Fullscreen</button>
       </div>
+    </div>
+
+    <div class="secondary">
+      <button id="toggle-keyboard" aria-controls="keyboard-panel" aria-expanded="false">Keyboard</button>
+      <button id="settings" popovertarget="settings-panel" aria-haspopup="dialog">Settings</button>
+      <div id="settings-panel" class="panel" popover role="dialog" aria-labelledby="settings-title" tabindex="-1" autofocus>
+        <h2 id="settings-title">Settings</h2>
+        <p id="active-boot" class="boot-detail">Starting machine…</p>
+        <label class="boot-select">Next boot
+          <select id="boot" disabled><option value="1" selected>IDE HDD</option><option value="0">Floppy 1</option></select>
+        </label>
+        <p id="boot-source" class="boot-detail" role="status"></p>
+        <button id="default-hdd" disabled>Restore FreeDOS HDD</button>
+        <hr>
+        <label class="setting-check"><input id="phosphor-mask" type="checkbox"> Faint RGB phosphor mask</label>
+        <label id="mouse-setting" class="setting-check"><input id="mouse" type="checkbox" disabled> Send mouse input to Ap guest</label>
+        <p id="display-mode" class="display-detail"></p>
+        <p id="presentation-status" class="display-detail">Preparing display…</p>
+      </div>
+      <div class="player-status" role="status">
+        <span id="lamp" class="lamp" aria-hidden="true"></span>
+        <span id="status">Loading…</span>
+      </div>
+    </div>
+
+    <div id="keyboard-home">
+      <section id="keyboard-panel" aria-label="PC-98 on-screen keyboard" hidden>
+        <div id="keyboard-scroll">
+          <div id="keyboard" role="group" aria-label="PC-98 keys"></div>
+        </div>
+        <div class="keyboard-scroll-actions" role="group" aria-label="Scroll the on-screen keyboard">
+          <button id="keys-up" aria-label="Scroll keyboard up">▴</button>
+          <button id="keys-down" aria-label="Scroll keyboard down">▾</button>
+        </div>
+      </section>
     </div>
 
     <div class="notices" id="notices" role="region" aria-label="Player notices">
@@ -120,41 +155,6 @@
         </div>
       </div>
     </aside>
-
-    <div class="secondary">
-      <button id="toggle-keyboard" aria-controls="keyboard-panel" aria-expanded="false">Keyboard</button>
-      <button id="settings" popovertarget="settings-panel" aria-haspopup="dialog">Settings</button>
-      <div id="settings-panel" class="panel" popover role="dialog" aria-labelledby="settings-title" tabindex="-1" autofocus>
-        <h2 id="settings-title">Settings</h2>
-        <p id="active-boot" class="boot-detail">Starting machine…</p>
-        <label class="boot-select">Next boot
-          <select id="boot" disabled><option value="1" selected>IDE HDD</option><option value="0">Floppy 1</option></select>
-        </label>
-        <p id="boot-source" class="boot-detail" role="status"></p>
-        <button id="default-hdd" disabled>Restore FreeDOS HDD</button>
-        <hr>
-        <label class="setting-check"><input id="phosphor-mask" type="checkbox"> Faint RGB phosphor mask</label>
-        <label id="mouse-setting" class="setting-check"><input id="mouse" type="checkbox" disabled> Send mouse input to Ap guest</label>
-        <p id="display-mode" class="display-detail"></p>
-        <p id="presentation-status" class="display-detail">Preparing display…</p>
-      </div>
-      <div class="player-status" role="status">
-        <span id="lamp" class="lamp" aria-hidden="true"></span>
-        <span id="status">Loading…</span>
-      </div>
-    </div>
-
-    <div id="keyboard-home">
-      <section id="keyboard-panel" aria-label="PC-98 on-screen keyboard" hidden>
-        <div id="keyboard-scroll">
-          <div id="keyboard" role="group" aria-label="PC-98 keys"></div>
-        </div>
-        <div class="keyboard-scroll-actions" role="group" aria-label="Scroll the on-screen keyboard">
-          <button id="keys-up" aria-label="Scroll keyboard up">▴</button>
-          <button id="keys-down" aria-label="Scroll keyboard down">▾</button>
-        </div>
-      </section>
-    </div>
   </section>
 </main>
 </body>

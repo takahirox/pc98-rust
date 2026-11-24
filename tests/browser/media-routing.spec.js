@@ -228,10 +228,22 @@ for (const path of ['picker', 'drop']) {
     await nextBoot(page, '1');
     await page.locator('#reset').click();
     await boot(page, 'IDE VERIFY PASS', 2);
+    // The IDE probe halts with interrupts disabled. Boot the mounted floppy
+    // to exercise BIOS keyboard handling while retaining the HDD for Ap.
+    await nextBoot(page, '0');
+    await page.locator('#reset').click();
+    await boot(page, 'Hello world!!', 0);
+    await nextBoot(page, '1');
     await page.locator('#settings').click();
     await page.locator('#mouse').check();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#settings-panel')).toBeHidden();
     await page.locator('#screen').focus();
     await page.keyboard.down('ArrowRight');
+    expect(await inspect(page, () => {
+      pc98.advance(10000);
+      return pc98.read(0x531) & 0x10; // BIOS bitmap entry for scan 0x3c.
+    })).toBe(0x10);
     await page.locator('#profile').selectOption('0');
     await expect(page.locator('#profile')).toHaveValue('0');
     await expect(page).toHaveTitle('pc98-rust · PC-9801VM');
