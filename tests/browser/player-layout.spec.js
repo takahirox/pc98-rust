@@ -74,7 +74,37 @@ for (const {width, height, touch = false} of sizes) {
   });
 }
 
-test('keyboard navigation, picker dismissal and chooser cancellation preserve the running guest', async ({page}) => {
+test('guest Tab and Shift+Tab release correctly and F12 returns to host navigation', async ({page}) => {
+  await ready(page);
+  const screen = page.locator('#screen');
+  const tabHeld = () => page.evaluate(async () => Boolean((await pc98.read(0x52b)) & 0x80));
+  const shiftHeld = () => page.evaluate(async () => Boolean((await pc98.read(0x538)) & 0x01));
+  await expect(screen).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(page.getByRole('link', {name:'GitHub'})).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(screen).toBeFocused();
+  await page.keyboard.press('ArrowRight');
+
+  await page.keyboard.down('Tab');
+  await expect.poll(tabHeld).toBe(true);
+  await page.keyboard.down('Shift');
+  await expect.poll(shiftHeld).toBe(true);
+  await page.keyboard.up('Tab');
+  await expect.poll(tabHeld).toBe(false);
+  await page.keyboard.down('Tab');
+  await expect(screen).toBeFocused();
+  await expect.poll(tabHeld).toBe(true);
+
+  await page.keyboard.press('F12');
+  await expect(page.getByRole('button', {name:'Pause'})).toBeFocused();
+  await expect.poll(tabHeld).toBe(false);
+  await expect.poll(shiftHeld).toBe(false);
+  await page.keyboard.up('Tab');
+  await page.keyboard.up('Shift');
+});
+
+test('keyboard navigation, picker dismissal, cancellation and selection preserve the running guest', async ({page}) => {
   await ready(page);
   const screen = page.getByRole('img', {name:'PC-98 screen'});
   await expect(screen).toBeFocused();
@@ -111,6 +141,35 @@ test('keyboard navigation, picker dismissal and chooser cancellation preserve th
   await page.getByRole('heading', {name:'pc98-rust'}).click();
   await expect(picker).toBeHidden();
   await expect(page.locator('#media-name-0')).toHaveText('Empty');
+  await floppy1.focus();
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('button', {name:'Insert Floppy 2'})).toBeFocused();
+  await page.keyboard.press('Enter');
+  const floppy2Picker = page.getByRole('dialog', {name:'Floppy 2', exact:true});
+  await expect(floppy2Picker.getByRole('button', {name:'Choose local file for Floppy 2'})).toBeFocused();
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.keyboard.press('Enter')]);
+  await chooser.setFiles(floppy('second.tfd'));
+  await expect(floppy2Picker).toBeHidden();
+  await expect(page.locator('#media-name-1')).toHaveText('second.tfd');
+  await expect(page.getByRole('button', {name:'Change Floppy 2'})).toBeFocused();
+
+  // Keep the file read pending long enough to navigate to another control.
+  await page.evaluate(() => {
+    const read = File.prototype.arrayBuffer;
+    const wait = new Promise(resolve => { window.finishFileRead = resolve; });
+    File.prototype.arrayBuffer = async function () {
+      if (this.name === 'replacement.tfd') await wait;
+      return read.call(this);
+    };
+  });
+  await uploadMedia(page, floppy('replacement.tfd'), '1');
+  await expect(page.locator('#drive-1')).toBeDisabled();
+  const settings = page.getByRole('button', {name:'Settings'});
+  await settings.focus();
+  await page.evaluate(() => window.finishFileRead());
+  await expect(page.locator('#media-name-1')).toHaveText('replacement.tfd');
+  await expect(settings).toBeFocused();
+
   await expect(page.locator('#media-name-2')).toHaveText('FreeDOS-128MiB.hdi');
   const after = await stats(page);
   expect(after.running).toBe(true);
@@ -130,6 +189,47 @@ test('keyboard navigation, picker dismissal and chooser cancellation preserve th
   await openSettings(page);
   await expect(page.locator('#active-boot')).toHaveText('Booted: Floppy 1 · hello.tfd');
 });
+
+for (const mode of ['native', 'fallback']) {
+  test(`${mode} fullscreen keeps Worker recovery visible and the exit reachable`, async ({page}) => {
+    await page.setViewportSize({width:844,height:390});
+    if (mode === 'fallback') {
+      await page.addInitScript(() => {
+        Element.prototype.requestFullscreen = () => Promise.reject(new Error('Fullscreen unavailable'));
+      });
+    }
+    await ready(page);
+    const fullscreen = page.getByRole('button', {name:'Fullscreen', exact:true});
+    await fullscreen.press('Enter');
+    await expect.poll(() => page.evaluate(() => document.fullscreenElement?.id ?? null))
+      .toBe(mode === 'native' ? 'drop' : null);
+    const exit = page.getByRole('button', {name:'Exit fullscreen'});
+    await expect(exit).toBeFocused();
+    await page.locator('#drop').getByRole('button', {name:'Keyboard', exact:true}).click();
+    await expect(page.locator('#drop #keyboard-panel')).toBeVisible();
+
+    const worker = page.workers().find(worker => worker.url().includes('emulator-worker.js'));
+    await worker.evaluate(() => { setTimeout(() => { throw Error('Intentional fullscreen Worker failure'); }, 0); });
+    const alert = page.getByRole('alert');
+    await expect(alert).toContainText('Intentional fullscreen Worker failure. Reload to restart.');
+    await expect(alert).toBeInViewport({ratio:1});
+    await expect(exit).toBeInViewport({ratio:1});
+    const session = await page.context().newCDPSession(page);
+    const {root} = await session.send('DOM.getDocument');
+    const {nodeId} = await session.send('DOM.querySelector', {nodeId:root.nodeId, selector:'#error'});
+    const {nodes} = await session.send('Accessibility.getPartialAXTree', {nodeId,fetchRelatives:false});
+    expect(nodes[0]).toMatchObject({ignored:false,role:{value:'alert'}});
+    await session.detach();
+
+    await page.locator('#screen').focus();
+    await page.keyboard.press('F12');
+    await expect(exit).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(exit).toBeHidden();
+    await expect(fullscreen).toBeFocused();
+    await expect(alert).toBeVisible();
+  });
+}
 
 test.describe('fullscreen touch keyboard', () => {
   test.use({viewport:{width:844,height:390}, hasTouch:true, isMobile:true});

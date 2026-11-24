@@ -139,7 +139,7 @@ Backspace, Tab, Shift, Ctrl, F1–F10, editing keys and numeric keypad. Alt maps
 GRPH, right Alt to XFER, left Meta to NFER; the expandable on-screen PC-98 keyboard
 also supplies Kana, NFER/XFER, STOP/COPY and Japanese punctuation. Key releases,
 modifiers and host key repeat reach the guest. Focus the screen for guest input. Tab advances through the host controls until
-you click or start typing in the screen, and Shift+Tab returns to host navigation.
+you click or start typing in the screen. Press F12 to return to the player controls.
 Focus loss releases held keys. Hiding the tab pauses execution. The Ap DOS profile supplies licensed replacement
 Japanese CG glyphs. FEP input is not implemented.
 
