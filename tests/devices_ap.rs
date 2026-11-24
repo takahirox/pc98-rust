@@ -232,6 +232,25 @@ fn host_mouse_delivers_large_motion_over_latches_and_discards_pending_input_on_r
 }
 
 #[test]
+fn host_mouse_buttons_stay_live_with_either_latch_level() {
+    let mut b = Bus::new(Profile::Pc9821ApDos);
+    b.mouse.host_motion(11, 0, 1);
+    assert_eq!(b.input(0x7fd9), 0x6b);
+    assert_eq!(latch_mouse(&mut b), (11, 0, 0x60));
+
+    // HC stays high and the X count stays latched while button levels change.
+    b.output(0x7fdd, 0x80);
+    b.mouse.host_motion(0, 0, 2);
+    assert_eq!(b.input(0x7fd9), 0xcb);
+    b.mouse.host_motion(0, 0, 0);
+    assert_eq!(b.input(0x7fd9), 0xeb);
+
+    assert_eq!(latch_mouse(&mut b), (0, 0, 0xc0));
+    assert_eq!(b.input(0x7fd9) & 0xe0, 0xe0);
+    assert_eq!(latch_mouse(&mut b), (0, 0, 0xe0));
+}
+
+#[test]
 fn host_mouse_samples_a_short_click_after_all_earlier_motion() {
     let mut b = Bus::new(Profile::Pc9821ApDos);
     b.mouse.host_motion(512, -519, 0);
@@ -246,6 +265,57 @@ fn host_mouse_samples_a_short_click_after_all_earlier_motion() {
     assert_eq!(latch_mouse(&mut b), (0, 0, 0x60));
     assert_eq!(latch_mouse(&mut b), (9, -3, 0xe0));
     assert_eq!(latch_mouse(&mut b), (0, 0, 0xe0));
+}
+
+#[test]
+fn host_mouse_bounds_a_burst_of_clicks_and_keeps_its_motion() {
+    let mut b = Bus::new(Profile::Pc9821ApDos);
+    b.mouse.host_motion(600, -400, 0);
+    for _ in 0..4096 {
+        b.mouse.host_motion(0, 0, 1);
+        b.mouse.host_motion(0, 0, 0);
+    }
+    // The retained samples keep their order, including the final release.
+    let mut motion = (0, 0);
+    let mut presses = 0;
+    let mut previous = 0xe0;
+    for _ in 0..256 {
+        let (x, y, buttons) = latch_mouse(&mut b);
+        motion.0 += i32::from(x);
+        motion.1 += i32::from(y);
+        presses += usize::from(buttons == 0x60 && previous == 0xe0);
+        previous = buttons;
+    }
+    assert_eq!(motion, (600, -400));
+    assert!((1..=32).contains(&presses), "{presses} queued presses");
+    assert_eq!(previous, 0xe0);
+}
+
+#[test]
+fn host_mouse_expires_unsampled_input_but_keeps_live_button_levels() {
+    let mut b = Bus::new(Profile::Pc9821ApDos);
+    b.mouse.host_motion(1024, -512, 1);
+    b.mouse.host_motion(0, 0, 0);
+    b.tick(1_999_999);
+    b.mouse.host_motion(50, 50, 2);
+    b.tick(1); // New host input cannot keep an idle backlog alive.
+    assert_eq!(latch_mouse(&mut b), (0, 0, 0xc0));
+
+    b.mouse.host_motion(0, 0, 0);
+    b.mouse.host_motion(-600, 420, 1);
+    b.mouse.host_motion(0, 0, 0);
+    assert_eq!(latch_mouse(&mut b), (0, 0, 0xe0));
+    for expected in [
+        (-128, 127, 0x60),
+        (-128, 127, 0x60),
+        (-128, 127, 0x60),
+        (-128, 39, 0x60),
+        (-88, 0, 0x60),
+        (0, 0, 0xe0),
+    ] {
+        b.tick(533_333); // Simulate a driver sampling at the slowest IRQ rate.
+        assert_eq!(latch_mouse(&mut b), expected);
+    }
 }
 
 #[test]

@@ -256,8 +256,8 @@ test('a focused canvas retries a rejected lock without sending the acquisition b
   expect(await guest(page)).toEqual(before);
 });
 
-test('a retry rejected after mouseup delivers a bounded click to the guest', async ({page}) => {
-  const screen = await start(page);
+test('a retry rejected after mouseup preserves fallback movement before the click', async ({page}) => {
+  const screen = await start(page, {manual:true});
   await screen.evaluate(canvas => {
     canvas.requestPointerLock = () => {
       canvas.requestPointerLock = () => new Promise((_, reject) => {
@@ -269,10 +269,18 @@ test('a retry rejected after mouseup delivers a bounded click to the guest', asy
   const position = {x:30, y:30};
   await screen.click({position});
   const before = await guest(page);
-  await screen.click({position});
-  expect(await guest(page)).toEqual(before);
+  const box = await screen.boundingBox();
+  const x = box.x + position.x, y = box.y + position.y;
+  await page.mouse.move(x, y);
+  await page.mouse.move(x + box.width / 8, y);
+  await page.mouse.down();
+  await page.mouse.up();
   await screen.evaluate(canvas => canvas.rejectLock());
-  await expect.poll(() => guest(page)).toMatchObject({buttons:0, edges:before.edges + 2});
+  // Both the motion and the replayed tap are in Wasm before the guest samples.
+  expect(await guest(page)).toEqual(before);
+  const after = await guest(page, 100000);
+  expect(after).toMatchObject({buttons:0, edges:before.edges + 2, y:before.y});
+  expect(after.x - before.x).toBeCloseTo(80, -1);
   expect(await owner(page)).toBeNull();
 });
 

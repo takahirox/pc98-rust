@@ -302,21 +302,29 @@ async function enableAudio() {
   }
   muted = false; await soundState();
 }
-function releaseKeys() {
+function releaseGuestKeys() {
   pendingShifts.clear();
   for (const scan of held) core?.key(scan, 0).catch(fail);
   held.clear(); document.querySelectorAll('.held').forEach((el) => el.classList.remove('held'));
+}
+function releaseKeys() {
+  releaseGuestKeys();
   releaseMouse();
 }
-function clearMouseInput() {
+function clearMouseInput({discardPending = true} = {}) {
   if (mouseFrame) cancelAnimationFrame(mouseFrame);
-  mouseFrame = mouseX = mouseY = pointerButtons = 0;
+  mouseFrame = mouseX = mouseY = 0;
   const touch = touchPointer;
   pointerPosition = touchPointer = undefined;
   if (touch !== undefined && screen.hasPointerCapture(touch)) screen.releasePointerCapture(touch);
   captureButtonHeld = false;
-  if (sentMouse && !workerFailed) core.mouse(0, 0, 0, true).catch(fail);
-  sentMouse = false;
+  if (discardPending) {
+    pointerButtons = 0;
+    if (sentMouse && !workerFailed) core.mouse(0, 0, 0, true).catch(fail);
+    sentMouse = false;
+  } else {
+    mouseButtons(0);
+  }
 }
 function releaseMouse() {
   // Keep a cancelled request until its outcome so a late lock can be released.
@@ -776,7 +784,9 @@ function pointerLockFailed(request) {
   pointerRequest = undefined;
   if (request.cancelled || !mouseAvailable()) return;
   const buttonHeld = captureButtonHeld;
-  releaseKeys();
+  releaseGuestKeys();
+  // The guest may have yet to sample movement flushed before this retry.
+  clearMouseInput({discardPending:false});
   pointerRejected = true;
   if (request.fallbackPress) {
     mouseButtons(1);
