@@ -64,54 +64,50 @@ python3 tools/build_web.py # Includes pinned FreeDOS desktop and complete source
 python3 -m http.server 8000 --bind 127.0.0.1 --directory web
 ```
 
-Open `http://127.0.0.1:8000`, select **Play Star Trail**, then use arrows to collect
-all three `*` stars with `@`. `#` cells are walls. Press **R** to restart the game.
-Click the screen to give it keyboard focus. **Hello world + BEEP** boots the
-independently authored MIT HelloWorld-PC98 fixture. Sound starts after a user
-click; **Enable sound / Mute** controls browser audio. **Volume** adjusts host
-output from 0% to 300% for quiet titles. All runtime assets are local;
-there are no network requests after the selected media loads.
+Open `http://127.0.0.1:8000`. The screen and playback controls come first.
+**Machine** and the three drive slots sit beside the screen on desktop and below
+it on phones. **Help** links to controls, compatibility and guest licenses.
+**Keyboard** opens the PC-98 on-screen keys, including in fullscreen.
 
-A fresh browser visit starts **PC-9821Ap DOS** with a writable **128 MiB FAT16
-FreeDOS(98) IDE HDD** and empty floppies, and automatically boots its real kernel
-and FreeCOM to `A:\>`. No proprietary BIOS or user upload is required. The
-655,360-byte sparse template (0.49% of a full HDI transfer) defines the remaining
-bytes as zero. Bounded import expands it into the existing sparse Rust disk;
-there is no full-sized JavaScript disk copy. See [desktop validation](docs/desktop-validation.md).
+A fresh visit automatically boots **PC-9821Ap** with a writable **128 MiB FAT16
+FreeDOS(98) IDE HDD** and two empty floppies. The real kernel and FreeCOM start
+at `A:\>`. The build serves a 655,360-byte sparse template, which the emulator
+expands into the existing sparse Rust disk. See [desktop validation](docs/desktop-validation.md).
 
-**Insert into** selects a destination, independently of **Boot from**. Auto sends
-`.hdi/.nhd` to IDE HDD (Ap only), and `.tfd/.hdm/.xdf/.2hd/.d88/.d98/.img` to Floppy 1,
-case-insensitively. A manual drive overrides Auto; mismatches fail without
-rerouting. Both floppy drives support live insertion, swap and eject, without
-resetting DOS or changing its boot preference. HDD-booted FreeDOS assigns the HDD
-`A:` and Floppy 1/2 `B:`/`C:`; use `DIR` and `TYPE` on those drives. DOS owns drive
-assignment; a floppy-booted session uses different letters.
+- **Insert and change media.** Each drive shows its current image. Use that
+  slot’s **Insert…** or **Change…** button to choose a local file, or drop the
+  image on the slot. Drop a file on the screen or use **Insert media** for automatic
+  routing. HDI and NHD go to IDE HDD on Ap. TFD, HDM, XDF, 2HD, D88, D98 and IMG
+  go to Floppy 1. Explicit destinations reject incompatible formats. Canceling
+  the chooser or closing a picker leaves the guest and disk alone.
+- **Boot and reset.** Floppy insertion is live. **Settings** shows the drive
+  used to boot and the source for the next **Reset**. Reset preserves writes
+  and uses the selected source even if it is empty. Replacing the HDD restarts
+  the machine. HDD-booted FreeDOS assigns the HDD `A:` and the floppies `B:`
+  and `C:`. DOS owns those assignments, so they can differ when booting a floppy.
+  Switching to **PC-9801VM** resets the guest and boots Floppy 1. Returning to
+  Ap restores its boot preference and retained IDE disk.
+- **Boot a demo.** **Demos** opens Star Trail and Hello world + BEEP. Either
+  replaces Floppy 1 and restarts the machine from it. In Star Trail, use the
+  arrows to move `@`, collect three `*` stars and avoid `#` walls. Press **R**
+  to restart the game. Hello world + BEEP uses the independently authored MIT
+  HelloWorld-PC98 fixture. To return to DOS, choose IDE HDD in Settings and
+  press Reset.
+- **Keep disk writes.** Choose **Export disk** in the corresponding slot’s
+  picker. Export preserves floppy protection, disk headers and all logical
+  HDD bytes, including guest writes. **Eject** leaves the guest running.
+  Replacing, ejecting or restoring a dirty HDD asks before discarding writes.
+  Cancel to keep it mounted, then export. **Restore FreeDOS HDD** in Settings
+  also retries a failed FreeDOS download. HDI and NHD use 512-byte sectors and
+  supported IDE geometry. Chunked import/export has been tested with 512 MiB
+  and 1 GiB images. See [large disk evidence](docs/large-hdi.md).
 
-**Boot from** selects IDE HDD (default) or Floppy 1 for the next **Reset**.
-Reset preserves media and writes; an absent selected disk fails without silently
-booting another medium. Demo buttons explicitly mount and boot Floppy 1 on either
-profile. Choose HDD and Reset to return to DOS. **Pause / Resume** controls execution.
-**PC-9801VM** remains selectable with its documented limits: profile changes reset
-CPU/devices and preserve all media/writes. VM always boots Floppy 1, never IDE;
-returning to Ap restores the retained boot preference and default/custom HDD.
-
-Replacing an HDD resets the machine using the selected boot source. A local HDI or NHD
-replaces the bundled disk completely. **Restore FreeDOS HDD** creates a clean
-installed disk and also retries a failed startup download. Loading locks media,
-profile and boot controls; failure retains the prior disk and enables recovery.
-Hard disk images require 512-byte sectors and supported IDE geometry. Large
-images import and export in chunks and retain their original container format.
-512 MiB and 1 GiB are tested ([large disk evidence](docs/large-hdi.md)).
-
-Auto displays the last inserted drive and filename. **Eject** and **Export disk**
-act on that drive, or the explicitly selected manual drive. Eject does not reboot.
-A warning before replacing/ejecting an HDD with guest writes lets you cancel and
-export first. Export includes all writes and the full logical HDI, preserving
-headers and floppy protection. Export and reinsert are the persistence route;
-reload starts a clean desktop. There is no automatic storage, upload or CPU save-state.
-Star Trail records moves/score in sector 8; a new game starts at zero.
-Enable **Send mouse movement and buttons** for Ap guest input. INT 33h applications
-require their own guest DOS mouse driver; the default desktop does not install one.
+Guest media and writes stay in browser memory. Export and reinsert to keep
+them across visits. Reload starts a clean desktop. Star Trail records moves
+and score in sector 8. Demo and boot assets are served from the same origin.
+The speaker button enables audio after a user gesture and toggles mute.
+**Volume** adjusts output from 0% to 300%. **Settings** also offers Ap mouse
+input. INT 33h applications require a guest DOS mouse driver.
 
 The Ap desktop loads pinned PC-98 HimemX before `DOS=HIGH`. At the clean DOS
 prompt, `MEMSIZE` measures and successfully allocates **619,664 conventional
@@ -142,8 +138,10 @@ The physical keyboard uses PC-98 scancodes: letters/digits, arrows, Return,
 Backspace, Tab, Shift, Ctrl, F1–F10, editing keys and numeric keypad. Alt maps to
 GRPH, right Alt to XFER, left Meta to NFER; the expandable on-screen PC-98 keyboard
 also supplies Kana, NFER/XFER, STOP/COPY and Japanese punctuation. Key releases,
-modifiers and host key repeat reach the guest. Focus loss releases held keys;
-hiding the tab pauses execution. The Ap DOS profile supplies licensed replacement
+modifiers and host key repeat reach the guest. Focus the screen for guest input.
+Tab and Shift+Tab navigate the player until you click, type, or press F12 on the
+screen to capture guest keys. Press F12 again to return to the player controls.
+Focus loss releases held keys. Hiding the tab pauses execution. The Ap DOS profile supplies licensed replacement
 Japanese CG glyphs. FEP input is not implemented.
 
 Instruction-dependent [V30/DX2 timing](docs/cpu-timing.md) separates core clocks
@@ -152,8 +150,10 @@ from the 8 MHz device scheduler and documents cache, bus and firmware approximat
 **Display** presets add restrained RGB CRT presentation without changing guest
 pixels or clocks. Software graphics use a lightweight Canvas 2D filter.
 Sharp CRT is the default for new visitors;
-saved preferences, including Original pixels, are preserved. See
-[presets, raw screenshots, fallback and validation](docs/crt-presentation.md).
+saved preferences, including Original pixels and the optional RGB mask in
+Settings, are preserved. See
+[presets, raw screenshots, fallback and validation](docs/crt-presentation.md)
+and [player layout validation](docs/player-layout-validation.md).
 
 ## Reproduce the checks
 

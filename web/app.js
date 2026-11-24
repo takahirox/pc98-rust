@@ -2,7 +2,12 @@ import {Presenter,defaultPreset,presets} from './presenter.js';
 const $ = (id) => document.getElementById(id);
 const screen = $('screen');
 const presenter = new Presenter(screen,$('crt-screen'),$('screen-surface'),
-  text => { $('presentation-status').textContent = text; },new URLSearchParams(location.search).has('diagnostics'));
+  text => {
+    $('presentation-status').textContent = text;
+    const warning = $('display-warning');
+    warning.hidden = !text.includes('showing original pixels');
+    warning.textContent = warning.hidden ? '' : text;
+  },new URLSearchParams(location.search).has('diagnostics'));
 $('presentation').value = defaultPreset; $('phosphor-mask').checked = false;
 try {
   const saved = JSON.parse(localStorage.getItem('pc98-presentation') || 'null');
@@ -17,23 +22,67 @@ function presentationSettings() {
 $('presentation').onchange = presentationSettings;
 $('phosphor-mask').onchange = presentationSettings;
 presenter.setPreset($('presentation').value,$('phosphor-mask').checked);
-$('fullscreen').onclick = async () => {
-  try { await $('drop').requestFullscreen(); }
-  catch { $('drop').classList.add('full-window'); }
-  screen.focus();
+const display = $('drop'), notices = $('notices'), keyboardPanel = $('keyboard-panel');
+const drives = document.querySelector('.drives');
+const keyboardToggles = [$('toggle-keyboard'), $('fullscreen-keyboard')];
+function toggleKeyboard(open) {
+  releaseKeys();
+  keyboardPanel.hidden = !open;
+  for (const toggle of keyboardToggles) toggle.setAttribute('aria-expanded', String(open));
+}
+for (const toggle of keyboardToggles) toggle.onclick = () => toggleKeyboard(keyboardPanel.hidden);
+const keyboardScroll = $('keyboard-scroll');
+for (const [id, direction] of [['keys-up', -1], ['keys-down', 1]]) {
+  $(id).onclick = () => keyboardScroll.scrollBy(0, direction * Math.max(44, keyboardScroll.clientHeight - 44));
+}
+
+let fullscreenFromKeyboard = false;
+function fullscreenActive() {
+  return document.fullscreenElement === display || display.classList.contains('full-window');
+}
+function syncFullscreen() {
+  toggleKeyboard(false);
+  const active = fullscreenActive();
+  if (active) {
+    notices.tabIndex = 0;
+    display.append(notices, keyboardPanel);
+  } else {
+    const keyboardHome = $('keyboard-home');
+    notices.removeAttribute('tabindex');
+    drives.prepend(notices);
+    keyboardHome.append(keyboardPanel);
+  }
+  for (const element of [document.querySelector('.site-header'), ...display.parentElement.children]) {
+    if (element !== display) element.inert = active;
+  }
+  const button = $(active ? 'exit-fullscreen' : 'fullscreen');
+  (fullscreenFromKeyboard ? button : screen).focus({preventScroll:true});
+}
+$('fullscreen').onclick = async event => {
+  fullscreenFromKeyboard = event.detail === 0;
+  for (const panel of document.querySelectorAll(':popover-open')) panel.hidePopover();
+  try { await display.requestFullscreen(); }
+  catch {
+    display.classList.add('full-window');
+    syncFullscreen();
+  }
 };
+document.addEventListener('fullscreenchange', syncFullscreen);
 async function exitFullscreen() {
-  if (document.fullscreenElement === $('drop')) await document.exitFullscreen();
-  $('drop').classList.remove('full-window');
-  screen.focus();
+  if (document.fullscreenElement === display) await document.exitFullscreen();
+  else {
+    display.classList.remove('full-window');
+    syncFullscreen();
+  }
 }
 $('exit-fullscreen').onclick = () => exitFullscreen().catch(fail);
-document.addEventListener('keydown',event => {
-  if (event.key === 'Escape' && $('drop').classList.contains('full-window')) {
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && fullscreenActive()) {
     event.preventDefault(); event.stopPropagation(); exitFullscreen().catch(fail);
   }
-},true);
+}, true);
 let core, worker, running = false, audio, outputGain, audioNode, audioSetup, muted = true, loading = false;
+let activePlaybackButton;
 let contextLost = false;
 let renderWorker, videoEpoch = 0, presentedSequence = 0;
 let rendererStartupMs = 0, rendererFailure = null;
@@ -44,22 +93,55 @@ const presentationTolerance = 2;
 const captureLead = 10;
 let nextPresentation = 0;
 const pending = new Map(); let requestId = 0;
-const metrics = new Map(); let bootByte = 0;
+const metrics = new Map(); let bootSource;
 const mounted = [null, null, null], held = new Set();
-let pointerPosition;
+const pendingShifts = new Set();
+let pointerPosition, pointerButtons = 0;
 new ResizeObserver(() => { pointerPosition = undefined; }).observe(screen);
-let lastDrive = null;
 const driveNames = ['Floppy 1', 'Floppy 2', 'IDE HDD'];
-const controls = ['game', 'hello', 'pause', 'reset', 'sound', 'eject', 'export', 'profile', 'boot', 'default-hdd'];
-function fail(error) {
-  $('error').textContent = String(error.message ?? error); $('error').hidden = false;
+const mediaPicker = $('media-picker'), fileInput = $('file');
+const driveButtons = [...document.querySelectorAll('[data-drive]')];
+let pickerDrive = 'auto', fileDrive = 'auto';
+const controls = ['game', 'hello', 'demos', 'pause', 'reset', 'sound', 'profile', 'file'];
+let errorFocus;
+function fail(error, focusTarget) {
+  // Rejected requests must not overwrite the Worker recovery notice.
+  if (workerFailed) return;
+  errorFocus = focusTarget;
+  $('error-notice').hidden = false;
+  $('error').textContent = String(error.message ?? error);
 }
-function status(text) { $('status').textContent = text; $('lamp').classList.toggle('active', running); }
-function clearError() { $('error').hidden = true; $('error').textContent = ''; }
+function status(text, mediaProgress = false) {
+  $('status').textContent = text;
+  $('lamp').classList.toggle('active', running);
+  const progress = $('media-progress');
+  progress.hidden = !mediaProgress;
+  progress.textContent = mediaProgress ? text : '';
+}
+function clearError() {
+  errorFocus = undefined;
+  $('error-notice').hidden = true;
+  $('error').textContent = '';
+}
+$('dismiss-error').onclick = event => {
+  const recovery = errorFocus?.matches(':enabled') ? errorFocus : $('presentation');
+  clearError();
+  const target = fullscreenActive() ? $('exit-fullscreen') : recovery;
+  target.focus({preventScroll:event.detail !== 0});
+};
 function acceptState(state) {
   if (!state || state.generation < generation) return;
-  generation = state.generation; bootByte = state.boot;
+  if (state.generation > generation) {
+    bootSource = undefined;
+    $('active-boot').textContent = 'Waiting to boot';
+  }
+  generation = state.generation;
   for (const [id,value] of state.metrics) metrics.set(id,value);
+  const mode = metrics.get(21) === 0 ? '640 × 400 · 8 colors · replacement Latin font'
+    : metrics.get(13) ? '640 × 400 · 256 colors · PEGC'
+      : '640 × 400 · 16 colors · Shinonome Japanese CG';
+  const label = $('display-mode');
+  if (label.textContent !== mode) label.textContent = mode;
 }
 function rpc(type, data, transfer = []) {
   if (workerFailed) return Promise.reject(Error('Emulation Worker stopped. Reload to restart.'));
@@ -71,11 +153,13 @@ function rpc(type, data, transfer = []) {
   });
 }
 function workerFault(error) {
+  if (workerFailed) return;
+  fail(`${error.message}. Reload to restart.`);
   workerFailed = true; running = false; ++videoEpoch; pendingFrame = null;
   if (outputGain) outputGain.gain.value = 0;
   worker?.terminate(); renderWorker?.terminate(); renderWorker = null;
   for (const waiter of pending.values()) waiter.reject(error);
-  pending.clear(); mediaBusy(true); status('Worker stopped · reload to restart'); fail(error);
+  pending.clear(); syncControls(); status('Worker stopped');
 }
 function recycleFrame(frame, captureAt) {
   if (frame.renderer) {
@@ -108,9 +192,6 @@ function render(timestamp) {
       // callback time as the origin for the delay calculated from rAF.
       if (running) captureAt = performance.timeOrigin+began
         +Math.max(0,nextPresentation-timestamp-captureLead);
-      if ($('profile').value === '1') $('display-mode').textContent = core?.metric(13)
-        ? '640 × 400 · 256 colors · PEGC'
-        : '640 × 400 · 16 colors · Shinonome Japanese CG · approximate OPN';
     }
     else presentationStats.stale++;
   } finally { recycleFrame(frame,captureAt); }
@@ -173,10 +254,13 @@ screen.addEventListener('contextrestored',() => { contextLost = false; rpc('vide
 function applyVolume() {
   const percent = Number($('volume').value);
   $('volume-level').value = `${percent}%`;
+  $('volume').setAttribute('aria-valuetext', `${percent}%`);
   if (outputGain) outputGain.gain.value = running && !muted && audio?.state === 'running' ? percent / 100 : 0;
 }
 $('volume').oninput = applyVolume;
 async function soundState() {
+  $('sound').setAttribute('aria-pressed', String(muted));
+  $('sound').title = muted ? (audio ? 'Unmute' : 'Enable sound') : 'Mute';
   if (outputGain) outputGain.gain.value = 0;
   await rpc('sound',{enabled:!muted, state:audio?.state});
   applyVolume();
@@ -199,44 +283,155 @@ async function enableAudio() {
   // resume is invoked before awaiting module loading to retain gesture permission.
   const resumed = audio.resume();
   try { await Promise.all([audioSetup,resumed]); }
-  catch (error) { muted = true; await audio.close(); audio = null; throw error; }
+  catch (error) {
+    muted = true; await audio.close(); audio = null;
+    applyVolume();
+    throw Error(`Cannot enable sound: ${error.message}. Try the sound button again.`);
+  }
   muted = false; await soundState();
-  $('sound').textContent = 'Mute'; $('sound').setAttribute('aria-pressed','true');
 }
 function releaseKeys() {
+  pendingShifts.clear();
   for (const scan of held) core?.key(scan, 0).catch(fail);
   held.clear(); document.querySelectorAll('.held').forEach((el) => el.classList.remove('held'));
-  core?.mouse(0, 0, 0).catch(fail); pointerPosition = undefined;
+  releaseMouse();
 }
-async function setRunning(value) {
+function releaseMouse() {
+  if (pointerButtons) core?.mouse(0, 0, 0).catch(fail);
+  pointerButtons = 0;
+  pointerPosition = undefined;
+}
+function hasBootMedia() {
+  return Boolean(mounted[0] || (mounted[2] && core.metric(21) === 1));
+}
+function pausedStatus() {
+  return bootSource === undefined && !hasBootMedia() ? 'No boot disk' : 'Paused';
+}
+function refreshPausedMediaStatus() {
+  if (!running && bootSource === undefined) status(pausedStatus());
+}
+async function setRunning(value, label, mediaProgress = false) {
   running = value; $('pause').textContent = value ? 'Pause' : 'Resume';
   applyVolume();
   if (!value) releaseKeys();
   await rpc('running',value);
-  status(value ? 'Running · click screen to type' : 'Paused');
+  status(label ?? (value ? 'Running' : pausedStatus()), mediaProgress);
 }
-function showMedia() {
-  const drive = mediaDrive();
-  $('media-drive').textContent = drive === null ? 'Auto' : driveNames[drive]
-    + (drive === 2 && core.metric(21) === 0 ? ' (requires Ap)' : '');
-  $('media-name').textContent = mounted[drive]?.name ?? 'No disk';
-  $('media-origin').textContent = mounted[drive] ? (mounted[drive].source === 'bundled' ? 'Bundled' : 'Local file') : '';
-  $('eject').disabled = loading || !mounted[drive]; $('export').disabled = loading || !mounted[drive];
-  // Rust owns the preference. VM always boots its floppy, retaining Ap's choice.
-  const boot = core.metric(21) === 1 && core.metric(22) ? 2 : 0;
-  $('boot').value = String(core.metric(22));
-  $('boot').disabled = loading || core.metric(21) !== 1;
-  $('default-hdd').disabled = loading || core.metric(21) !== 1;
-  $('boot-source').textContent = `Reset boots: ${driveNames[boot]} · ${mounted[boot]?.name ?? 'No disk'}`;
+function showPicker() {
+  const name = driveNames[pickerDrive], disk = mounted[pickerDrive];
+  $('media-title').textContent = name ?? 'Insert media';
+  $('picker-disk').hidden = !disk;
+  $('picker-disk').textContent = disk?.name ?? '';
+  $('media-hint').textContent = pickerDrive === 'auto' ? 'Hard disk images go to IDE HDD. Floppy images go to Floppy 1.'
+    : pickerDrive === 2 ? 'Choose an HDI or NHD image. Replacing the disk restarts the machine.'
+      : 'Choose a floppy image to insert while the guest is running.';
+  $('choose-file').disabled = loading || workerFailed || (pickerDrive === 2 && core?.metric(21) !== 1);
+  if (pickerDrive === 2 && core?.metric(21) !== 1) $('media-hint').textContent = 'Switch to PC-9821Ap to use this drive.';
+  $('eject').hidden = $('export').hidden = !disk;
+  $('eject').disabled = $('export').disabled = loading || workerFailed || !disk;
+  if (name) {
+    $('choose-file').setAttribute('aria-label', `Choose local file for ${name}`);
+    $('eject').setAttribute('aria-label', `Eject ${name}`);
+    $('export').setAttribute('aria-label', `Export disk from ${name}`);
+  } else $('choose-file').removeAttribute('aria-label');
 }
-function mediaDrive() { return $('drive').value === 'auto' ? lastDrive : Number($('drive').value); }
-function resolveDrive(name) {
+function syncControls() {
+  const ap = core?.metric(21) === 1;
+  const busy = !core || loading || workerFailed;
+  for (const id of controls) {
+    const control = $(id);
+    control.disabled = busy && (control !== activePlaybackButton || workerFailed);
+  }
+  for (const button of driveButtons) {
+    const drive = Number(button.dataset.drive);
+    button.disabled = busy || (drive === 2 && !ap && !mounted[2]);
+    if (Number.isNaN(drive)) continue;
+    const name = $('media-name-' + drive);
+    const disk = mounted[drive];
+    name.textContent = disk?.name ?? 'Empty';
+    if (drive === 2 && !ap) {
+      // Keep the availability message visible even when the filename is long.
+      name.textContent = disk ? `Requires Ap · ${disk.name}` : 'Requires Ap';
+    }
+    name.title = name.textContent;
+    button.textContent = disk ? 'Change…' : 'Insert…';
+    button.setAttribute('aria-label', `${disk ? 'Change' : 'Insert'} ${driveNames[drive]}`);
+  }
+  $('mouse-setting').hidden = !ap;
+  $('mouse').disabled = !ap || workerFailed;
+  $('boot').disabled = $('default-hdd').disabled = busy || !ap;
+  const preference = core?.metric(22);
+  if (preference !== undefined) {
+    const boot = ap && preference ? 2 : 0;
+    if (!busy) $('boot').value = boot === 2 ? '1' : '0';
+    $('boot-source').textContent = `Reset boots: ${driveNames[boot]} · ${mounted[boot]?.name ?? 'Empty'}`;
+  }
+  showPicker();
+}
+for (const button of driveButtons) {
+  button.onclick = event => {
+    event.preventDefault();
+    const drive = button.dataset.drive === 'auto' ? 'auto' : Number(button.dataset.drive);
+    if (mediaPicker.matches(':popover-open')) {
+      mediaPicker.hidePopover();
+      if (drive === pickerDrive) return;
+    }
+    pickerDrive = drive;
+    showPicker();
+    button.focus({preventScroll:true});
+    mediaPicker.showPopover({source:button});
+  };
+}
+mediaPicker.addEventListener('beforetoggle', event => {
+  for (const button of driveButtons) {
+    const expanded = event.newState === 'open' && button.dataset.drive === String(pickerDrive);
+    button.setAttribute('aria-expanded', String(expanded));
+    // The native target keeps a click on the current trigger within the
+    // popover's light-dismiss boundary and exposes it as expanded.
+    if (expanded) button.setAttribute('popovertarget', mediaPicker.id);
+    else button.removeAttribute('popovertarget');
+  }
+});
+for (const panel of document.querySelectorAll('[popover]')) {
+  panel.addEventListener('beforetoggle', event => { if (event.newState === 'open') releaseKeys(); });
+}
+$('choose-file').onclick = () => {
+  fileDrive = pickerDrive;
+  fileInput.click();
+};
+async function withControlFocus(trigger, operation, {allowBody = false} = {}) {
+  // Disabling the initiating control can send focus to the body.
+  if (document.activeElement !== trigger && !(allowBody && document.activeElement === document.body)) return operation();
+  let restoreFocus = true;
+  const focusMoved = () => { restoreFocus = false; };
+  document.addEventListener('focusin', focusMoved, {once:true});
+  try {
+    await operation();
+  } finally {
+    document.removeEventListener('focusin', focusMoved);
+    if (restoreFocus && document.activeElement === document.body) trigger.focus({preventScroll:true});
+  }
+}
+function withDriveFocus(drive, operation) {
+  if (mediaPicker.matches(':popover-open')) mediaPicker.hidePopover();
+  const button = $('drive-' + drive);
+  return withControlFocus(button, () => operation(button), {allowBody:true});
+}
+fileInput.onchange = () => {
+  const file = fileInput.files[0];
+  fileInput.value = '';
+  if (file) return withDriveFocus(fileDrive, () => loadFile(file, fileDrive, {focusScreen:false}));
+};
+fileInput.oncancel = () => {
+  if (mediaPicker.matches(':popover-open')) $('choose-file').focus({preventScroll:true});
+};
+function resolveDrive(name, target) {
   const hardDisk = /\.(hdi|nhd)$/i.test(name), floppy = /\.(tfd|hdm|xdf|2hd|d88|d98|img)$/i.test(name);
   if (!hardDisk && !floppy) throw Error('Unsupported media extension. Use HDI, NHD or a supported floppy image.');
+  const drive = target === 'auto' ? (hardDisk ? 2 : 0) : target;
   if (hardDisk && core.metric(21) !== 1) throw Error('IDE requires PC-9821Ap DOS for hard disk images.');
-  const drive = $('drive').value === 'auto' ? (hardDisk ? 2 : 0) : Number($('drive').value);
-  if (drive === 2 && !hardDisk) throw Error('IDE HDD requires an HDI or NHD image. Choose Auto or a floppy drive for this image.');
-  if (drive !== 2 && hardDisk) throw Error('Hard disk images require IDE HDD. Choose Auto or IDE HDD for this image.');
+  if (drive === 2 && !hardDisk) throw Error('IDE HDD requires an HDI or NHD image. Choose Insert media or a floppy drive for this image.');
+  if (drive !== 2 && hardDisk) throw Error('Hard disk images require IDE HDD. Choose Insert media or IDE HDD for this image.');
   return drive;
 }
 function checkSize(size, drive) {
@@ -248,95 +443,93 @@ async function insert(bytes, name, drive) {
   checkSize(bytes.length,drive);
   await rpc('input',bytes.buffer,[bytes.buffer]);
   await rpc('insert',{drive,format:/\.(d88|d98)$/i.test(name) ? 1 : 0});
-  mounted[drive] = {name,format:/\.(d88|d98)$/i.test(name) ? 'd88' : 'hdm'};
-  lastDrive = drive; showMedia();
+  mounted[drive] = {name};
 }
-async function loadBytes(bytes, name, drive) {
-  clearError(); await insert(bytes, name, drive);
-  // Floppy insertion is live media access, independent of the next boot.
-}
-async function bundled(name) {
-  if (!core || loading) return;
-  loading = true; mediaBusy(true);
-  try {
+function bundled(name) {
+  $('demo-picker').hidePopover();
+  return exclusive(async () => {
+    clearError();
     // Audio is initialized inside the user gesture, before waiting for assets.
     const enable = enableAudio().then(() => null,error => error);
     const response = await fetch(`media/${name}`);
     if (!response.ok) throw Error(`Cannot load demo: HTTP ${response.status}`);
-    $('drive').value = '0';
-    await loadBytes(new Uint8Array(await response.arrayBuffer()), name, 0);
-    mounted[0].source = 'bundled';
+    await insert(new Uint8Array(await response.arrayBuffer()), name, 0);
     await core.set_boot_source(0); await resetMachine();
     const audioError = await enable;
     if (audioError) fail(audioError);
-  } catch (error) { fail(error); } finally { loading = false; mediaBusy(false); }
+  });
 }
 $('game').onclick = () => bundled('startrail.hdm');
 $('hello').onclick = () => bundled('hello98.tfd');
-$('pause').onclick = () => exclusive(() => setRunning(!running));
-function showActiveBoot() {
-  const drive = bootByte === 0x80 ? 2 : 0;
-  $('active-boot').textContent = `Booted: ${driveNames[drive]} · ${mounted[drive]?.name ?? 'No disk'}`;
-}
-async function resetMachine() {
+$('pause').onclick = event => exclusive(() => setRunning(!running), {playbackButton:event.currentTarget});
+async function resetMachine({focusScreen = true, preserveHostFocus = false} = {}) {
   releaseKeys();
   if (outputGain) outputGain.gain.value = 0;
   if (pendingFrame) { recycleFrame(pendingFrame); pendingFrame = null; }
-  await core.reset(); showActiveBoot(); clearError(); showMedia();
-  await setRunning(!document.hidden); screen.focus();
+  await core.reset(); clearError();
+  await setRunning(!document.hidden);
+  const canFocusScreen = !preserveHostFocus || document.activeElement === document.body;
+  if (focusScreen && canFocusScreen && !panelOpen()) screen.focus({preventScroll:true});
 }
-async function exclusive(operation) {
+async function exclusive(operation, {playbackButton, recovery} = {}) {
   if (!core || loading || workerFailed) return;
-  loading = true; mediaBusy(true);
-  try { await operation(); } catch (error) { fail(error); }
-  finally { loading = false; mediaBusy(false); }
+  // Native disabling blurs the button. The transaction guard also blocks
+  // activation of the focusable button while its action is pending.
+  activePlaybackButton = playbackButton;
+  playbackButton?.setAttribute('aria-disabled', 'true');
+  loading = true; syncControls();
+  try { await operation(); } catch (error) { fail(error, recovery); }
+  finally {
+    playbackButton?.removeAttribute('aria-disabled');
+    activePlaybackButton = undefined;
+    loading = false; syncControls();
+  }
 }
 $('reset').onclick = () => exclusive(resetMachine);
-$('boot').onchange = () => {
-  const source = Number($('boot').value);
-  exclusive(async () => { await core.set_boot_source(source); showMedia(); });
+$('boot').onchange = ({currentTarget}) => {
+  const source = Number(currentTarget.value);
+  return withControlFocus(currentTarget, () => exclusive(() => core.set_boot_source(source)));
 };
-$('sound').onclick = () => exclusive(async () => {
+$('sound').onclick = event => exclusive(async () => {
   clearError();
   if (muted) await enableAudio();
-  else { muted = true; await soundState(); $('sound').textContent = 'Enable sound'; $('sound').setAttribute('aria-pressed','false'); }
-});
+  else { muted = true; await soundState(); }
+}, {playbackButton:event.currentTarget});
 async function selectProfile() {
   releaseKeys();
   const profile = $('profile').value;
-  if (!await core.set_profile(Number(profile))) throw Error('Unsupported machine profile');
-  $('profile').value = profile;
-  document.title = `pc98-rust · ${$('profile').value === '1' ? 'PC-9821Ap DOS' : 'PC-9801VM'}`;
-  $('profile-label').textContent = $('profile').value === '1' ? 'PC-9821Ap DOS · experimental' : 'PC-9801VM · experimental';
-  $('display-mode').textContent = $('profile').value === '1'
-    ? '640 × 400 · 16 colors · Shinonome Japanese CG · approximate OPN'
-    : '640 × 400 · 8 colors · replacement Latin font';
-  $('mouse').disabled = $('profile').value !== '1';
-  if ($('mouse').disabled) $('mouse').checked = false;
-  clearError(); showMedia(); showActiveBoot();
-  await setRunning(!document.hidden && Boolean(mounted[0] || (mounted[2] && $('profile').value === '1')));
+  try {
+    if (!await core.set_profile(Number(profile))) throw Error('Unsupported machine profile');
+  } finally { $('profile').value = String(core.metric(21)); }
+  const ap = $('profile').value === '1';
+  document.title = `pc98-rust · ${ap ? 'PC-9821Ap DOS' : 'PC-9801VM'}`;
+  if (!ap) {
+    $('mouse').checked = false;
+    display.classList.remove('guest-mouse');
+  }
+  clearError();
+  await setRunning(!document.hidden && hasBootMedia());
 }
-$('profile').onchange = () => exclusive(selectProfile);
-$('drive').onchange = showMedia;
+$('profile').onchange = ({currentTarget}) => withControlFocus(currentTarget, () => exclusive(selectProfile));
 async function mayReplace(drive) {
   return drive !== 2 || !mounted[2] || ((await core.hdi_dirty_page(0)) >>> 0) === 0xffffffff ||
     confirm(`${mounted[2].name} has guest writes. Discard them? Cancel to keep the disk and use Export disk first.`);
 }
-$('eject').onclick = () => exclusive(async () => {
-  const drive = mediaDrive(), resume = running;
-  if (!mounted[drive]) return;
-  if (drive === 2) await setRunning(false);
-  try {
-    if (!await mayReplace(drive)) return;
-    await core.eject(drive); mounted[drive] = null; showMedia();
-  } finally { if (drive === 2 && !workerFailed) await setRunning(resume && !document.hidden); }
-});
+$('eject').onclick = () => {
+  const drive = pickerDrive;
+  return withDriveFocus(drive, recovery => exclusive(async () => {
+    if (!mounted[drive]) return;
+    const resume = running;
+    if (drive === 2) await setRunning(false);
+    try {
+      if (!await mayReplace(drive)) return;
+      await core.eject(drive); mounted[drive] = null;
+      if (drive !== 2) refreshPausedMediaStatus();
+      clearError();
+    } finally { if (drive === 2 && !workerFailed) await setRunning(resume && !document.hidden); }
+  }, {recovery}));
+};
 const chunkBytes = 1024 * 1024;
-function mediaBusy(value) {
-  value ||= loading || workerFailed;
-  for (const id of [...controls, 'file', 'drive']) $(id).disabled = value;
-  if (!value && !workerFailed) showMedia();
-}
 async function exportBlob(drive) {
   if (drive !== 2) return new Blob([await rpc('export',drive)]);
   // Snapshot the mounted bytes while paused. Local File slices can become
@@ -344,126 +537,148 @@ async function exportBlob(drive) {
   // succeeds. Blob snapshots own each bounded chunk independently of that file
   // and of the reusable Wasm transfer buffer.
   const resume = running;
-  await setRunning(false); mediaBusy(true);
+  await setRunning(false, 'Exporting HDD…', true);
   try {
     const len = await rpc('snapshot',true), parts = [];
     if (!len) throw Error('No hard disk image mounted.');
     for (let at = 0; at < len; at += chunkBytes) {
       const n = Math.min(chunkBytes,len-at);
       parts.push(new Blob([await rpc('readChunk',[at,n])]));
-      status(`Exporting hard disk · ${Math.min(100, Math.floor((at + n) * 100 / len))}%`);
+      status(`Exporting HDD · ${Math.min(100, Math.floor((at + n) * 100 / len))}%`, true);
     }
     const blob = new Blob(parts, { type: 'application/octet-stream' });
     if (blob.size !== len) throw Error('Incomplete hard disk export; please retry.');
     return blob;
   } catch (error) {
     throw Error(`Cannot export hard disk: ${error.message}. Disk remains mounted; free browser resources and retry.`);
-  } finally { await rpc('snapshot',false); mediaBusy(false); await setRunning(resume && !document.hidden); }
+  } finally { await rpc('snapshot',false); await setRunning(resume && !document.hidden); }
 }
-$('export').onclick = async () => {
-  const drive = mediaDrive();
-  if (loading || !mounted[drive]) return;
-  loading = true;
-  try {
+$('export').onclick = () => {
+  const drive = pickerDrive;
+  return withDriveFocus(drive, recovery => exclusive(async () => {
+    if (!mounted[drive]) return;
     clearError();
     const data = await exportBlob(drive);
     const link = document.createElement('a'), url = URL.createObjectURL(data);
     link.href = url; link.download = mounted[drive].name; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-  } catch (error) { fail(error); } finally { loading = false; mediaBusy(false); }
+  }, {recovery}));
 };
-async function loadFile(file) {
-  if (!file || !core || loading) return;
-  loading = true;
-  const resume = running;
-  let suspended = false;
-  try {
+function loadFile(file, target, resetOptions) {
+  if (!file) return;
+  return exclusive(async () => {
     clearError();
-    const drive = resolveDrive(file.name);
+    const drive = resolveDrive(file.name, target);
     checkSize(file.size, drive);
-    mediaBusy(true);
-    if (drive === 2) {
-      await setRunning(false); suspended = true;
+    if (drive !== 2) {
+      // Floppy insertion is live access, independent of the next boot.
+      await insert(new Uint8Array(await file.arrayBuffer()), file.name, drive);
+      refreshPausedMediaStatus();
+      return;
+    }
+    const resume = running;
+    await setRunning(false);
+    try {
       if (!await mayReplace(drive)) { await setRunning(resume && !document.hidden); return; }
+      status('Importing HDD…', true);
       const transfer = bytes => rpc('input',bytes.buffer,[bytes.buffer]);
       await transfer(new Uint8Array(await file.slice(0,512).arrayBuffer()));
       await core.hdi_begin(file.size);
       for (let at = 0; at < file.size; at += chunkBytes) {
         await transfer(new Uint8Array(await file.slice(at, at + chunkBytes).arrayBuffer()));
         await core.hdi_append();
-        status(`Importing hard disk · ${Math.min(100, Math.floor((at + chunkBytes) * 100 / file.size))}%`);
+        status(`Importing HDD · ${Math.min(100, Math.floor((at + chunkBytes) * 100 / file.size))}%`, true);
       }
       await core.hdi_commit();
-      mounted[2] = { name: file.name, format: file.name.split('.').at(-1).toLowerCase() };
-      lastDrive = 2;
-      await resetMachine();
-    } else {
-      await loadBytes(new Uint8Array(await file.arrayBuffer()), file.name, drive);
+      mounted[2] = {name: file.name};
+      await resetMachine(resetOptions);
+    } catch (error) {
+      await core.hdi_cancel().catch(() => {});
+      if (!workerFailed) await setRunning(resume && !document.hidden);
+      throw error;
     }
-  } catch (error) { await core.hdi_cancel().catch(() => {}); fail(error); if (suspended && !workerFailed) await setRunning(resume && !document.hidden); }
-  finally { loading = false; mediaBusy(false); }
+  }, {recovery:$('drive-' + target)});
 }
-async function defaultHdd() {
-  if (!core || loading || core.metric(21) !== 1) return;
-  loading = true; mediaBusy(true);
-  const resume = running;
-  try {
-    await setRunning(false);
-    if (!await mayReplace(2)) { await setRunning(resume && !document.hidden); return; }
-    clearError(); status('Loading FreeDOS HDD…');
-    const response = await fetch('freedos/manifest.json');
-    if (!response.ok) throw Error(`Cannot load FreeDOS manifest: HTTP ${response.status}`);
-    const manifest = await response.json();
-    if (manifest.bytes !== 128 * 1024 * 1024 + 4096 ||
-        !Number.isInteger(manifest.prefix_bytes) ||
-        manifest.prefix_bytes <= 32 || manifest.prefix_bytes > chunkBytes ||
-        manifest.prefix_bytes % 65536 ||
-        JSON.stringify(manifest.geometry) !== '[512,16,32,512]') throw Error('Invalid FreeDOS template geometry/size');
-    const template = await fetch('freedos/desktop.bin');
-    if (!template.ok) throw Error(`Cannot load FreeDOS template: HTTP ${template.status}`);
-    // Bound even a misconfigured server response before any large allocation.
-    const reader = template.body.getReader(), parts = [];
-    let received = 0;
+function defaultHdd({startup = false} = {}) {
+  if (core?.metric(21) !== 1) return;
+  return exclusive(async () => {
+    const resume = running;
     try {
-      while (true) {
-        const {done, value} = await reader.read();
-        if (done) break;
-        received += value.length;
-        if (received > manifest.prefix_bytes) throw Error('FreeDOS template exceeds expected size');
-        parts.push(value);
-      }
-    } finally { await reader.cancel(); }
-    if (received !== manifest.prefix_bytes) throw Error('Truncated FreeDOS template');
-    const prefix = new Uint8Array(received);
-    let offset = 0;
-    for (const part of parts) { prefix.set(part, offset); offset += part.length; }
-    const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', prefix)),
-      byte => byte.toString(16).padStart(2, '0')).join('');
-    if (digest !== manifest.prefix_sha256) throw Error('FreeDOS template checksum mismatch');
-    const transfer = bytes => rpc('input',bytes.buffer,[bytes.buffer]);
-    await transfer(prefix.slice(0,32));
-    await core.hdi_begin(manifest.bytes);
-    await transfer(prefix);
-    await core.hdi_append();
-    const zero = new Uint8Array(chunkBytes);
-    for (let at = received; at < manifest.bytes; at += chunkBytes) {
-      await transfer(zero.slice(0, Math.min(chunkBytes, manifest.bytes-at)));
+      await setRunning(false);
+      if (!await mayReplace(2)) { await setRunning(resume && !document.hidden); return; }
+      clearError(); status('Loading FreeDOS HDD…', !startup);
+      const response = await fetch('freedos/manifest.json');
+      if (!response.ok) throw Error(`Cannot load FreeDOS manifest: HTTP ${response.status}`);
+      const manifest = await response.json();
+      if (manifest.bytes !== 128 * 1024 * 1024 + 4096 ||
+          !Number.isInteger(manifest.prefix_bytes) ||
+          manifest.prefix_bytes <= 32 || manifest.prefix_bytes > chunkBytes ||
+          manifest.prefix_bytes % 65536 ||
+          JSON.stringify(manifest.geometry) !== '[512,16,32,512]') throw Error('Invalid FreeDOS template geometry/size');
+      const template = await fetch('freedos/desktop.bin');
+      if (!template.ok) throw Error(`Cannot load FreeDOS template: HTTP ${template.status}`);
+      // Bound even a misconfigured server response before any large allocation.
+      const reader = template.body.getReader(), parts = [];
+      let received = 0;
+      try {
+        while (true) {
+          const {done, value} = await reader.read();
+          if (done) break;
+          received += value.length;
+          if (received > manifest.prefix_bytes) throw Error('FreeDOS template exceeds expected size');
+          parts.push(value);
+        }
+      } finally { await reader.cancel(); }
+      if (received !== manifest.prefix_bytes) throw Error('Truncated FreeDOS template');
+      const prefix = new Uint8Array(received);
+      let offset = 0;
+      for (const part of parts) { prefix.set(part, offset); offset += part.length; }
+      const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', prefix)),
+        byte => byte.toString(16).padStart(2, '0')).join('');
+      if (digest !== manifest.prefix_sha256) throw Error('FreeDOS template checksum mismatch');
+      const transfer = bytes => rpc('input',bytes.buffer,[bytes.buffer]);
+      await transfer(prefix.slice(0,32));
+      await core.hdi_begin(manifest.bytes);
+      await transfer(prefix);
       await core.hdi_append();
+      const zero = new Uint8Array(chunkBytes);
+      for (let at = received; at < manifest.bytes; at += chunkBytes) {
+        await transfer(zero.slice(0, Math.min(chunkBytes, manifest.bytes-at)));
+        await core.hdi_append();
+      }
+      await core.hdi_commit();
+      mounted[2] = {name: 'FreeDOS-128MiB.hdi'};
+      await resetMachine({preserveHostFocus:startup});
+    } catch (error) {
+      await core.hdi_cancel().catch(() => {});
+      if (!workerFailed) await setRunning(resume && !document.hidden);
+      throw Error(`${error.message}. Disk retained. Use Restore FreeDOS HDD to retry, or insert local media.`);
     }
-    await core.hdi_commit();
-    mounted[2] = {name: 'FreeDOS-128MiB.hdi', format: 'hdi', source: 'bundled'};
-    lastDrive = 2;
-    await resetMachine();
-  } catch (error) {
-    await core.hdi_cancel().catch(() => {}); if (!workerFailed) await setRunning(resume && !document.hidden);
-    fail(`${error.message}. Disk retained. Use Restore FreeDOS HDD to retry, or insert local media.`);
-  } finally { loading = false; mediaBusy(false); }
+  });
 }
-$('default-hdd').onclick = defaultHdd;
-$('file').onchange = (e) => { loadFile(e.target.files[0]); e.target.value = ''; };
-$('drop').ondragover = (e) => { e.preventDefault(); $('drop').classList.add('dragging'); };
-$('drop').ondragleave = () => $('drop').classList.remove('dragging');
-$('drop').ondrop = (e) => { e.preventDefault(); $('drop').classList.remove('dragging'); loadFile(e.dataTransfer.files[0]); };
+$('default-hdd').onclick = () => {
+  $('settings-panel').hidePopover();
+  return defaultHdd();
+};
+for (const target of [display, ...document.querySelectorAll('[data-drop-drive]')]) {
+  target.ondragover = event => {
+    if (!event.dataTransfer.types.includes('Files')) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = fileInput.disabled ? 'none' : 'copy';
+    target.classList.toggle('dragging', !fileInput.disabled);
+  };
+  target.ondragleave = event => {
+    if (!target.contains(event.relatedTarget)) target.classList.remove('dragging');
+  };
+  target.ondrop = event => {
+    event.preventDefault();
+    target.classList.remove('dragging');
+    if (!fileInput.disabled) {
+      if (mediaPicker.matches(':popover-open')) mediaPicker.hidePopover();
+      void loadFile(event.dataTransfer.files[0], target === display ? 'auto' : Number(target.dataset.dropDrive));
+    }
+  };
+}
 const rows = [
   [['STOP',0x60],['COPY',0x61],...Array.from({length:10},(_,i)=>[`F${i+1}`,0x62+i])],
   [['Esc',0],...Array.from('1234567890', (ch,i)=>[ch,i+1]),['-',11],['^',12],['¥',13],['BS',14]],
@@ -475,7 +690,7 @@ const rows = [
 ];
 function key(scan, down) {
   if (!core || !running) return;
-  if (down) held.add(scan); else held.delete(scan);
+  if (down) held.add(scan); else if (!held.delete(scan)) return;
   core.key(scan, down ? 1 : 0).catch(fail);
 }
 for (const row of rows) {
@@ -483,9 +698,16 @@ for (const row of rows) {
   for (const [label, scan] of row) {
     const button = document.createElement('button'); button.textContent = label; button.dataset.scan = scan;
     button.onpointerdown = (e) => { e.preventDefault(); button.setPointerCapture(e.pointerId); button.classList.add('held'); key(scan, true); };
-    button.onpointerup = button.onpointercancel = () => { button.classList.remove('held'); key(scan, false); };
+    button.onpointerup = button.onpointercancel = button.onlostpointercapture = () => { button.classList.remove('held'); key(scan, false); };
     button.onkeydown = (e) => { if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); key(scan, true); } };
     button.onkeyup = (e) => { if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); key(scan, false); } };
+    button.onclick = (event) => {
+      // Pointer input and physical key activation already handle press and release.
+      if (event.detail !== 0 || held.has(scan)) return;
+      key(scan, true);
+      key(scan, false);
+    };
+    button.onblur = () => { if (held.has(scan)) key(scan, false); };
     element.append(button);
   }
   $('keyboard').append(element);
@@ -495,20 +717,72 @@ for (const [start,chars] of [[0x10,'QWERTYUIOP'],[0x1d,'ASDFGHJKL'],[0x29,'ZXCVB
 Array.from('1234567890').forEach((ch,i)=>codes[`Digit${ch}`]=i+1);
 for(let i=1;i<=10;i++) codes[`F${i}`]=0x61+i;
 for(const [code,scan] of Object.entries({Numpad7:0x42,Numpad8:0x43,Numpad9:0x44,Numpad4:0x46,Numpad5:0x47,Numpad6:0x48,Numpad1:0x4a,Numpad2:0x4b,Numpad3:0x4c,Numpad0:0x4e,NumpadDecimal:0x50,NumpadEnter:0x1c,NumpadAdd:0x49,NumpadSubtract:0x40,NumpadMultiply:0x45,NumpadDivide:0x41})) codes[code]=scan;
-for (const [name,down] of [['keydown',true],['keyup',false]]) screen.addEventListener(name,(e)=>{const scan=codes[e.code];if(scan!==undefined){e.preventDefault();key(scan,down);}});
+let captureTab = false;
+screen.addEventListener('focus', () => { captureTab = false; });
+function panelOpen() { return Boolean(document.querySelector('.panel:popover-open')); }
+function captureScreenKeys() {
+  captureTab = true;
+  for (const code of pendingShifts) key(codes[code],true);
+  pendingShifts.clear();
+}
+screen.addEventListener('pointerdown', () => {
+  screen.focus({preventScroll:true});
+  if (panelOpen()) captureTab = false;
+  else captureScreenKeys();
+});
+screen.addEventListener('keydown', event => {
+  if (event.defaultPrevented || panelOpen()) return;
+  if (event.code === 'F12') {
+    event.preventDefault();
+    if (event.repeat) return;
+    if (running && !captureTab) {
+      captureScreenKeys();
+      return;
+    }
+    const playback = $('pause').disabled ? $('presentation') : $('pause');
+    (fullscreenActive() ? $('exit-fullscreen') : playback).focus({preventScroll:true});
+    return;
+  }
+  if (!running || (event.code === 'Tab' && !captureTab)) return;
+  const scan = codes[event.code];
+  if (scan === undefined) return;
+  if (!captureTab) {
+    // Keep Shift+Tab in the host until the screen captures guest keys.
+    if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
+      pendingShifts.add(event.code);
+      return;
+    }
+    // Other standalone modifiers are guest keys but leave host Tab available.
+    const standalone = ['ControlLeft','ControlRight','AltLeft','AltRight','MetaLeft'].includes(event.code);
+    if (!standalone || pendingShifts.size) captureScreenKeys();
+  }
+  event.preventDefault();
+  key(scan,true);
+});
+screen.addEventListener('keyup', event => {
+  if (pendingShifts.delete(event.code)) return;
+  const scan = codes[event.code];
+  if (!held.has(scan)) return;
+  event.preventDefault();
+  key(scan,false);
+});
 for (const name of ['pointermove', 'pointerdown', 'pointerup', 'pointercancel']) screen.addEventListener(name, (event) => {
-  if (!core || !running || !$('mouse').checked || $('profile').value !== '1') return;
+  if (!core || !running || !$('mouse').checked || $('profile').value !== '1' || panelOpen()) return;
   const bounds = screen.getBoundingClientRect();
   const point = [(event.clientX-bounds.left) * screen.width / bounds.width, (event.clientY-bounds.top) * screen.height / bounds.height];
   const delta = pointerPosition ? point.map((n, i) => Math.max(-127, Math.min(127, Math.round(n - pointerPosition[i])))) : [0, 0];
   pointerPosition = point;
   if (name === 'pointerdown') { screen.focus(); screen.setPointerCapture(event.pointerId); }
-  core.mouse(delta[0], delta[1], name === 'pointercancel' ? 0 : event.buttons).catch(fail);
+  pointerButtons = name === 'pointercancel' ? 0 : event.buttons;
+  core.mouse(delta[0], delta[1], pointerButtons).catch(fail);
   event.preventDefault();
 });
 screen.addEventListener('pointerleave', () => { pointerPosition = undefined; });
 screen.addEventListener('contextmenu', event => { if ($('mouse').checked) event.preventDefault(); });
-$('mouse').onchange = () => { core?.mouse(0, 0, 0).catch(fail); pointerPosition = undefined; };
+$('mouse').onchange = () => {
+  display.classList.toggle('guest-mouse', $('mouse').checked);
+  releaseMouse();
+};
 screen.addEventListener('blur',releaseKeys); window.addEventListener('blur',releaseKeys);
 document.addEventListener('visibilitychange',()=>{if(document.hidden && core && running)setRunning(false).catch(fail);});
 try {
@@ -519,8 +793,17 @@ try {
     if (workerFailed) return;
     if (m.event === 'renderFault') { rendererFault(renderWorker,m.error); return; }
     if (m.event === 'fault') { workerFault(Error(m.error)); return; }
+    if (m.event === 'boot') {
+      if (m.generation === generation) {
+        bootSource ??= `${driveNames[m.drive]} · ${mounted[m.drive]?.name ?? 'Empty'}`;
+        $('active-boot').textContent = `${m.result === 'failed' ? 'Boot failed' : 'Booted'}: ${bootSource}`;
+      }
+      return;
+    }
     if (m.event === 'stopped') {
-      setRunning(false).catch(fail); fail(m.error); status('Guest stopped · unsupported instruction or BIOS request'); return;
+      if (m.state.generation < generation) return;
+      acceptState(m.state);
+      setRunning(false, 'Guest stopped').catch(fail); fail(m.error); return;
     }
     if (m.event === 'videoEpoch') {
       videoEpoch = Math.max(videoEpoch,m.videoEpoch);
@@ -547,13 +830,13 @@ try {
   window.pc98 = {text:() => rpc('text'), read:addr => rpc('read',addr), stats:async () => ({...await rpc('stats'),rendererStartupMs,rendererFailure,renderStats:{...renderStats},presentationStats:{...presentationStats},presenterStats:presenter.diagnosticsState()}),
     exportBlob:async (drive=2) => {
       if (loading) throw Error('Media operation already in progress');
-      loading = true; mediaBusy(true);
-      try { return await exportBlob(drive); } finally { loading = false; mediaBusy(false); }
+      loading = true; syncControls();
+      try { return await exportBlob(drive); } finally { loading = false; syncControls(); }
     },
   };
   if (params.has('diagnostics')) window.pc98.audio = {
     suspend:async () => { await audio.suspend(); await soundState(); },
     resume:async () => { await audio.resume(); await soundState(); },
   };
-  await defaultHdd();
-} catch (error) { mediaBusy(true); status('Unable to start'); fail(error); }
+  await defaultHdd({startup:true});
+} catch (error) { status('Unable to start'); fail(error); }

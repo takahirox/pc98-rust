@@ -1,5 +1,6 @@
 // Opt-in, real release-Wasm comparison. Run after npm run build and fixture preparation.
 // node tools/measure_render.mjs --browser=chromium --repeat=3 --seconds=8 --output=target/render-chromium.json
+import { launchDemo, nextBoot, uploadMedia } from '../tests/browser/helpers/player.js';
 import {chromium,firefox} from '@playwright/test';
 import {spawn} from 'node:child_process';
 import {readFile,writeFile} from 'node:fs/promises';
@@ -33,14 +34,14 @@ try {
       await waitFor(()=>page.locator('#profile').isEnabled());
       if(workload==='vm-startrail') {
         await page.locator('#profile').selectOption('0');
-        await waitFor(()=>page.locator('#game').isEnabled());
-        await page.locator('#game').click();
+        await waitFor(()=>page.locator('#demos').isEnabled());
+        await launchDemo(page, 'game');
         await waitFor(()=>page.evaluate(()=>pc98.text().then(s=>s.includes('STAR TRAIL'))));
       } else {
         const disk=workload==='ap-video'?'98videop':'music-scenes';
-        await page.locator('#file').setInputFiles({name:`${disk}.hdm`,mimeType:'application/octet-stream',buffer:await readFile(`fixtures/dos-apps/${disk}.hdm`)});
-        await waitFor(()=>page.locator('#boot').isEnabled());
-        await page.locator('#boot').selectOption('0');
+        await uploadMedia(page, {name:`${disk}.hdm`,mimeType:'application/octet-stream',buffer:await readFile(`fixtures/dos-apps/${disk}.hdm`)});
+        await waitFor(()=>page.locator('#profile').isEnabled());
+        await nextBoot(page, '0');
         await waitFor(()=>page.locator('#reset').isEnabled());
         bootStart=Date.now();
         await page.locator('#reset').click();

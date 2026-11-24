@@ -1,3 +1,4 @@
+import { uploadMedia } from './helpers/player.js';
 import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 
@@ -12,7 +13,7 @@ for (const [profile, name] of [['0', 'VM'], ['1', 'Ap']]) {
     await expect(page.locator('#profile')).toBeEnabled();
     await page.locator('#profile').selectOption(profile);
     const buffer = await fs.readFile(new URL('../../fixtures/freedos/keymap.hdm', import.meta.url));
-    await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'keymap.hdm', mimeType: 'application/octet-stream', buffer });
+    await uploadMedia(page, { name: 'keymap.hdm', mimeType: 'application/octet-stream', buffer });
     await inspect(page, () => pc98.core.set_boot_source(0));
     await page.locator('#reset').click();
     expect(await inspect(page, () => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);

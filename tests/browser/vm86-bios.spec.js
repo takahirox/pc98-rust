@@ -1,3 +1,4 @@
+import { uploadMedia } from './helpers/player.js';
 import { inspect } from './helpers/runtime.js';
 // Original MIT runnable monitor/guest, production Rust/Wasm. Issue #118.
 import { test, expect } from './helpers/runtime.js';
@@ -17,10 +18,10 @@ test('Ap: paged VM86 timer BIOS, work/buffer faults, IRQ callbacks and keyboard,
   const image = await fs.readFile(new URL('../../fixtures/vm86_bios/vm86_bios.hdm', import.meta.url));
   const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/vm86-bios-manifest.json', import.meta.url)));
   expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
-  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'vm86_bios.hdm', mimeType: 'application/octet-stream', buffer: image });
+  await uploadMedia(page, { name: 'vm86_bios.hdm', mimeType: 'application/octet-stream', buffer: image });
   await inspect(page, () => pc98.core.set_boot_source(0));
   await page.locator('#reset').click();
-  await expect(page.locator('#media-name')).toContainText('vm86_bios.hdm');
+  await expect(page.locator('#media-name-0')).toContainText('vm86_bios.hdm');
   for (let run = 0; run < 2; run++) {
     if (run) await page.locator('#reset').click();
     const injected = [false, false, false];

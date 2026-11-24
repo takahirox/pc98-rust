@@ -1,9 +1,10 @@
 // The sole Wasm/Machine owner. Every command runs between finite guest slices.
 // Requests: {id,type,data}; replies: {id,value|error,state}. Unsolicited frame,
-// stopped and fault events never resolve requests. frameAck returns ownership
+// boot, stopped and fault events never resolve requests. frameAck returns ownership
 // of the sole pixel buffer; audio uses its own credit-based MessagePort.
 let core, jit, jitUnavailable = false, running = false, manual = false, busy = false, timer;
-let generation = 0, frameBuffer = new ArrayBuffer(640 * 400 * 4), frameRequested = false;
+let generation = 0, bootDrive = 0, bootResult;
+let frameBuffer = new ArrayBuffer(640 * 400 * 4), frameRequested = false;
 let lastFrameCycles, previewDue = 0, captureDue = 0, captureTimer;
 let videoPort, snapshotBuffer = null, videoEpoch = 0, frameSequence = 0;
 let inFlightSequence = 0;
@@ -49,8 +50,23 @@ function message(kind = 0) {
   const ptr = core.message(kind) >>> 0, len = core.message_len();
   return decoder.decode(new Uint8Array(core.memory.buffer, ptr, len));
 }
+function updateBootResult(error) {
+  // Read counters start at zero on reset. A sector read can precede a
+  // firmware boot failure, for example when the HDD IPL finds no partition.
+  let result = bootResult;
+  if (error?.startsWith('Boot failed:')) result = 'failed';
+  else if (!result) {
+    if (core.metric(1) > 0 || core.metric(9) > 0) result = 'loaded';
+    else if (error) result = 'failed';
+  }
+  if (result === bootResult) return;
+  bootResult = result;
+  // Keep this ordered with media command replies, even when video uses a
+  // separate Worker. The UI can then identify the media at the boot attempt.
+  postMessage({event:'boot', generation, drive:bootDrive, result});
+}
 function state() {
-  return { generation, metrics: [13, 21, 22].map(id => [id, core.metric(id)]), boot: core.peek(0x584) };
+  return { generation, metrics: [13, 21, 22].map(id => [id, core.metric(id)]) };
 }
 function stats() {
   const fields = {instructions:0, reads:1, writes:2, hddReads:9, hddWrites:10,
@@ -246,11 +262,13 @@ function tick() {
       }
     }
     deliverAudio();
-    presentDue();
     if (core.metric(4)) {
       running = false;
-      postMessage({event:'stopped', error:message()});
-    }
+      const error = message();
+      updateBootResult(error);
+      postMessage({event:'stopped', state:state(), error});
+    } else if (!bootResult) updateBootResult();
+    presentDue();
   } catch (error) { running = false; postMessage({event:'fault', error:error.message}); }
   schedule(playingAudio() ? (outstandingAudio() < 4800 && audioBuffers.length ? 0 : 5)
     : (core.metric(5) < guestDeadline ? 0 : Math.max(1,deadline-performance.now())));
@@ -312,7 +330,11 @@ async function command(type, data) {
         transitionStart:() => ({guest:core.metric(29), wall:performance.now()}),
         transitionDuration:start => ({guestSeconds:core.metric(29)-start.guest, wallMs:performance.now()-start.wall}),
         beginInspection:() => { allowance = Math.ceil(16000000 * core.metric(31) / 8000000); },
-        endInspection:() => { if (running && !manual) deliverAudio(); present(); },
+        endInspection:() => {
+          if (!bootResult) updateBootResult(core.metric(4) ? message() : undefined);
+          if (running && !manual) deliverAudio();
+          present();
+        },
       };
     }
     return;
@@ -405,12 +427,14 @@ async function command(type, data) {
   }
   if (type === 'call') {
     const {name,args} = data;
+    const resets = name === 'reset' || name === 'set_profile';
     if (!calls.has(name)) throw Error('Unsupported core command');
     if (transaction && !['hdi_append','hdi_commit','hdi_cancel','hdi_len','hdi_dirty_page','key','mouse'].includes(name)) throw Error('Media operation in progress');
     if (['reset','set_profile','set_boot_source','eject','hdi_begin','hdi_commit','hdi_cancel'].includes(name)) invalidateVideo();
-    if (['reset','set_profile'].includes(name)) { await flushAudio(); generation++; jit?.clear(); }
+    if (resets) { await flushAudio(); generation++; bootResult = undefined; jit?.clear(); }
     if (transaction && (name === 'key' && args[1] || name === 'mouse' && args.some(Boolean))) throw Error('Input is paused for media transfer');
     const value = core[name](...args);
+    if (resets) bootDrive = core.peek(0x584) === 0x80 ? 2 : 0;
     if (name === 'hdi_commit' && value) jit?.clear();
     if (name === 'hdi_begin' && value) transaction = 'import';
     if (name === 'hdi_commit' && value || name === 'hdi_cancel') transaction = null;

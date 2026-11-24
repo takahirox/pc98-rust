@@ -1,30 +1,163 @@
 <!doctype html>
 <html lang="en">
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="color-scheme" content="dark">
-<title>pc98-rust · PC-9821Ap DOS</title>
-<link rel="icon" href="data:,">
-<link rel="stylesheet" href="style.css">
-<script type="module" src="app.js"></script>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light">
+  <title>pc98-rust · PC-9821Ap DOS</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="app.js"></script>
+</head>
 <body>
 <main>
-  <header><div><span class="eyebrow">AN ORIGINAL RUST / WASM EMULATOR</span><h1>pc98<span>-rust</span></h1></div><span id="profile-label" class="badge">PC-9821Ap DOS · experimental</span></header>
-  <section class="intro"><div><h2>A little machine. A new adventure.</h2><p>Your FreeDOS desktop starts automatically. Insert a data floppy or try an original PC-98 game.</p></div><div class="demo-actions"><button id="game" disabled>▶ Play Star Trail</button><button id="hello" disabled>Hello world + BEEP</button></div></section>
-  <section class="machine" aria-label="Emulator">
-    <div class="toolbar"><div><span id="lamp" class="lamp"></span><span id="status" role="status">Loading WebAssembly…</span></div><div><button id="pause" disabled>Pause</button><button id="reset" disabled>Reset</button><button id="sound" disabled aria-pressed="false">Enable sound</button></div></div>
-    <div class="media"><label>Volume <input id="volume" type="range" min="0" max="300" step="5" value="100"></label><output id="volume-level" for="volume">100%</output></div>
-    <div class="display" id="drop"><button id="exit-fullscreen">Exit full screen</button><div id="screen-surface"><canvas id="screen" width="640" height="400" tabindex="0" aria-label="PC-98 screen. Click here to send keyboard input to the guest."></canvas><canvas id="crt-screen" aria-hidden="true" hidden></canvas></div></div>
-    <div class="media presentation"><label>Display <select id="presentation"><option value="off">LCD / Original pixels (off)</option><option value="sharp" selected>Sharp CRT (default)</option><option value="soft">Soft CRT</option><option value="strong">Strong CRT</option></select></label><label><input id="phosphor-mask" type="checkbox"> Faint RGB mask (large displays)</label><button id="fullscreen" title="Escape exits full screen">Full screen</button><span id="presentation-status" role="status">Preparing display…</span></div>
-    <div class="screen-caption"><span id="display-mode">640 × 400 · 16 colors · Shinonome Japanese CG · approximate OPN</span><span>Click screen to type · arrows to move · R to restart</span></div>
-    <div class="media"><label>Machine <select id="profile" disabled><option value="0">PC-9801VM</option><option value="1" selected>PC-9821Ap DOS · experimental</option></select></label><label>Insert into <select id="drive" disabled><option value="auto" selected>Auto</option><option value="0">Floppy 1</option><option value="1">Floppy 2</option><option value="2">IDE HDD</option></select></label><span id="media-drive">Auto</span><span id="media-name">No disk</span><span id="media-origin"></span><label class="file-button">Insert media<input id="file" disabled type="file" accept=".tfd,.hdm,.xdf,.2hd,.d88,.d98,.img,.hdi,.nhd"></label><button id="eject" disabled>Eject</button><button id="export" disabled>Export disk</button></div>
-    <div class="media"><label>Boot from <select id="boot" disabled><option value="1" selected>IDE HDD</option><option value="0">Floppy 1</option></select></label><span id="active-boot"></span><button id="default-hdd" disabled>Restore FreeDOS HDD</button></div>
-    <p id="boot-source" class="boot-source" aria-live="polite">Reset boots: IDE HDD · Loading FreeDOS…</p>
-    <label><input id="mouse" type="checkbox"> Send mouse movement and buttons to Ap guest</label>
-    <p id="error" role="alert" hidden></p>
+  <header class="site-header">
+    <h1>pc98-rust</h1>
+    <nav aria-label="Information">
+      <button id="help" class="link-button" popovertarget="help-panel" aria-haspopup="dialog">Help</button>
+      <div id="help-panel" class="panel" popover role="dialog" aria-labelledby="help-title" tabindex="-1" autofocus>
+        <h2 id="help-title">Player help</h2>
+        <p>Focus the screen to type. Shift, Ctrl, Alt (GRPH), right Alt (XFER) and left Meta (NFER) map to PC-98 keys. Tab and Shift+Tab navigate the player until you click, type, or press F12 on the screen to capture guest keys. Press F12 again to return to the player controls. Open Keyboard for on-screen keys, including Kana and STOP.</p>
+        <p>Drag an image onto the screen or use Insert media for automatic routing. HDI/NHD images go to IDE HDD on Ap. TFD, HDM, XDF, 2HD, D88, D98 and IMG images go to Floppy 1. Drop on a drive or open its picker to choose a specific slot.</p>
+        <p>Floppy insertion leaves the guest running. Choose the next boot drive in Settings, then Reset. Replacing the HDD resets the machine. Demos boot Floppy 1 immediately.</p>
+        <p>Disk changes stay in browser memory. Export from the mounted drive’s picker before reloading or discarding writes. VM retains the IDE disk for when you return to Ap. Mouse input on Ap may require a guest DOS driver.</p>
+        <p><a href="licenses.html">Licenses &amp; media credits</a> · <a href="https://github.com/takahirox/pc98-rust#build-and-play">Compatibility and controls</a></p>
+      </div>
+      <a href="https://github.com/takahirox/pc98-rust">GitHub</a>
+    </nav>
+  </header>
+
+  <section class="player" aria-label="PC-98 player">
+    <div class="display" id="drop">
+      <p id="screen-input-help" hidden>Tab and Shift+Tab navigate the player before capture. Press F12 to capture guest keys. Press F12 again to return to the player controls.</p>
+      <div class="fullscreen-controls">
+        <button id="fullscreen-keyboard" aria-controls="keyboard-panel" aria-expanded="false">Keyboard</button>
+        <button id="exit-fullscreen">Exit fullscreen</button>
+      </div>
+      <div class="screen-stage">
+        <div id="screen-surface">
+          <canvas id="screen" width="640" height="400" tabindex="0" role="img" aria-label="PC-98 screen" aria-describedby="screen-input-help" aria-keyshortcuts="F12"></canvas>
+          <canvas id="crt-screen" aria-hidden="true" hidden></canvas>
+        </div>
+      </div>
+    </div>
+
+    <div class="toolbar" role="group" aria-label="Playback controls">
+      <div class="control-group" role="group" aria-label="Execution">
+        <button id="pause" disabled>Pause</button>
+        <button id="reset" disabled>Reset</button>
+      </div>
+      <div class="control-group audio" role="group" aria-label="Audio">
+        <button id="sound" class="icon-button" type="button" aria-label="Mute" aria-pressed="true" title="Enable sound" disabled>
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M11 4 5 9H2v6h3l6 5Z"/>
+            <path class="sound-waves" d="M15 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/>
+            <path class="mute-mark" d="m16 9 6 6m0-6-6 6"/>
+          </svg>
+        </button>
+        <input id="volume" type="range" min="0" max="300" step="5" value="100" aria-label="Volume" aria-valuetext="100%">
+        <output id="volume-level" for="volume" aria-hidden="true">100%</output>
+      </div>
+      <div class="control-group">
+        <label class="display-select"><span>Display</span>
+          <select id="presentation">
+            <option value="off">Original pixels</option>
+            <option value="sharp" selected>Sharp CRT</option>
+            <option value="soft">Soft CRT</option>
+            <option value="strong">Strong CRT</option>
+          </select>
+        </label>
+        <button id="fullscreen">Fullscreen</button>
+      </div>
+    </div>
+
+    <div class="secondary">
+      <button id="toggle-keyboard" aria-controls="keyboard-panel" aria-expanded="false">Keyboard</button>
+      <button id="settings" popovertarget="settings-panel" aria-haspopup="dialog">Settings</button>
+      <div id="settings-panel" class="panel" popover role="dialog" aria-labelledby="settings-title" tabindex="-1" autofocus>
+        <h2 id="settings-title">Settings</h2>
+        <p id="active-boot" class="boot-detail">Starting machine…</p>
+        <label class="boot-select">Next boot
+          <select id="boot" disabled><option value="1" selected>IDE HDD</option><option value="0">Floppy 1</option></select>
+        </label>
+        <p id="boot-source" class="boot-detail" role="status"></p>
+        <button id="default-hdd" disabled>Restore FreeDOS HDD</button>
+        <hr>
+        <label class="setting-check"><input id="phosphor-mask" type="checkbox"> Faint RGB phosphor mask</label>
+        <label id="mouse-setting" class="setting-check"><input id="mouse" type="checkbox" disabled> Send mouse input to Ap guest</label>
+        <p id="display-mode" class="display-detail"></p>
+        <p id="presentation-status" class="display-detail">Preparing display…</p>
+      </div>
+      <div class="player-status" role="status">
+        <span id="lamp" class="lamp" aria-hidden="true"></span>
+        <span id="status">Loading…</span>
+      </div>
+    </div>
+
+    <div id="keyboard-home">
+      <section id="keyboard-panel" aria-label="PC-98 on-screen keyboard" hidden>
+        <div id="keyboard-scroll">
+          <div id="keyboard" role="group" aria-label="PC-98 keys"></div>
+        </div>
+        <div class="keyboard-scroll-actions" role="group" aria-label="Scroll the on-screen keyboard">
+          <button id="keys-up" aria-label="Scroll keyboard up">▴</button>
+          <button id="keys-down" aria-label="Scroll keyboard down">▾</button>
+        </div>
+      </section>
+    </div>
+
+    <aside class="drives" aria-label="Machine and media">
+      <div class="notices" id="notices" role="region" aria-label="Player notices">
+        <p id="media-progress" role="status" hidden></p>
+        <div id="error-notice" hidden>
+          <p id="error" role="alert"></p>
+          <button id="dismiss-error" aria-label="Dismiss error">×</button>
+        </div>
+        <p id="display-warning" role="status" hidden></p>
+      </div>
+      <label class="machine-select">Machine
+        <select id="profile" disabled>
+          <option value="0">PC-9801VM</option>
+          <option value="1" selected>PC-9821Ap</option>
+        </select>
+      </label>
+      <div id="slot-2" class="slot" role="group" aria-labelledby="slot-label-2" data-drop-drive="2">
+        <div class="slot-info"><h2 id="slot-label-2">IDE HDD</h2><p id="media-name-2" class="media-name" title="Loading FreeDOS…">Loading FreeDOS…</p></div>
+        <button id="drive-2" data-drive="2" aria-controls="media-picker" aria-expanded="false" aria-haspopup="dialog" aria-label="Insert IDE HDD" disabled>Insert…</button>
+      </div>
+      <div id="slot-0" class="slot" role="group" aria-labelledby="slot-label-0" data-drop-drive="0">
+        <div class="slot-info"><h2 id="slot-label-0">Floppy 1</h2><p id="media-name-0" class="media-name" title="Empty">Empty</p></div>
+        <button id="drive-0" data-drive="0" aria-controls="media-picker" aria-expanded="false" aria-haspopup="dialog" aria-label="Insert Floppy 1" disabled>Insert…</button>
+      </div>
+      <div id="slot-1" class="slot" role="group" aria-labelledby="slot-label-1" data-drop-drive="1">
+        <div class="slot-info"><h2 id="slot-label-1">Floppy 2</h2><p id="media-name-1" class="media-name" title="Empty">Empty</p></div>
+        <button id="drive-1" data-drive="1" aria-controls="media-picker" aria-expanded="false" aria-haspopup="dialog" aria-label="Insert Floppy 2" disabled>Insert…</button>
+      </div>
+      <div class="media-actions">
+        <button id="drive-auto" data-drive="auto" aria-controls="media-picker" aria-expanded="false" aria-haspopup="dialog" disabled>Insert media</button>
+        <button id="demos" popovertarget="demo-picker" aria-haspopup="dialog" disabled>Demos</button>
+      </div>
+      <div id="media-picker" class="panel" popover role="dialog" aria-labelledby="media-title" aria-describedby="picker-disk media-hint">
+        <h2 id="media-title">Insert media</h2>
+        <p id="picker-disk" class="boot-detail" hidden></p>
+        <p id="media-hint"></p>
+        <div class="panel-actions">
+          <button id="choose-file" autofocus>Choose local file…</button>
+          <button id="eject" hidden>Eject</button>
+          <button id="export" hidden>Export disk</button>
+        </div>
+      </div>
+      <input id="file" type="file" accept=".tfd,.hdm,.xdf,.2hd,.d88,.d98,.img,.hdi,.nhd" aria-label="Local disk image" hidden disabled>
+      <div id="demo-picker" class="panel" popover role="dialog" aria-labelledby="demo-title" aria-describedby="demo-hint">
+        <h2 id="demo-title">Boot a demo</h2>
+        <p id="demo-hint">Each demo replaces Floppy 1 and restarts the machine.</p>
+        <div class="panel-actions">
+          <button id="game" autofocus disabled>Star Trail</button>
+          <button id="hello" disabled>Hello world + BEEP</button>
+        </div>
+      </div>
+    </aside>
   </section>
-  <details><summary>PC-98 keyboard</summary><p>Mouse or touch keys below, or focus the screen and use your physical keyboard. Shift, Ctrl, GRPH (Alt), XFER (right Alt), and NFER (left Meta) are supported.</p><div id="keyboard" aria-label="PC-98 keyboard"></div></details>
-  <footer><p>PC-9821Ap starts with a writable 128 MiB FreeDOS HDD and empty floppies. Auto sends HDI/NHD to IDE HDD and supported floppy images to Floppy 1. Inserting floppies never reboots DOS. Boot from selects the next Reset; demo buttons explicitly boot Floppy 1. Eject and Export use the displayed drive. Reset retains writes; reload starts clean. Export and reinsert to save. HDD-booted DOS uses A: for the HDD, B: and C: for floppies. VM boots Floppy 1 and retains the HDD for returning to Ap. Replacing an HDD resets the machine; Restore FreeDOS HDD replaces it with a clean copy. Changes stay in memory, with no upload or automatic storage.</p><p>Compatibility is limited to the documented CPU/device subsets. Ap adds Japanese CG, 16/256-color video, approximate FM/86 PCM, IDE and bus mouse input. INT 33h requires a guest DOS mouse driver. Ap supports bounded ring-0 protected mode, 4 KiB paging and VM86; DPMI, privilege transitions and numerical FPU execution remain unsupported.</p><p><a href="licenses.html">Licenses &amp; media credits</a> · No proprietary ROMs or network service required.</p></footer>
 </main>
 </body>
 </html>

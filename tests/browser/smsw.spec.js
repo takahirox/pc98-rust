@@ -1,3 +1,4 @@
+import { uploadMedia } from './helpers/player.js';
 import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -14,7 +15,7 @@ test('Ap: SMSW readback, exact widths and guest fault repair before and after re
   const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/smsw-manifest.json', import.meta.url)));
   expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
   const expected = [...Buffer.from(manifest.result_hex, 'hex')];
-  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'smsw.hdm', mimeType: 'application/octet-stream', buffer: image });
+  await uploadMedia(page, { name: 'smsw.hdm', mimeType: 'application/octet-stream', buffer: image });
   await inspect(page, () => pc98.core.set_boot_source(0));
   await page.locator('#reset').click();
   for (let run = 0; run < 2; run++) {

@@ -1,3 +1,4 @@
+import { launchDemo, openSettings } from './helpers/player.js';
 import {test,expect,inspect} from './helpers/runtime.js';
 
 const stats = page => page.evaluate(()=>pc98.stats());
@@ -75,9 +76,9 @@ test('live presets preserve raw frames, guest state and input across VM/Ap and c
   expect(await page.locator('#presentation').inputValue()).toBe('sharp');
   await expect(page.locator('#crt-screen')).toBeVisible();
   // Exercise actual keyboard delivery with the filtered screen active.
-  await page.locator('#hello').click();
+  await launchDemo(page, 'hello');
   await expect.poll(()=>page.evaluate(()=>pc98.text())).toContain('Hello world!!');
-  await page.locator('#game').click();
+  await launchDemo(page, 'game');
   await page.locator('#screen').focus(); await page.keyboard.press('ArrowRight');
   expect((await stats(page)).presenterStats.active).toBe(true);
   const live=await stats(page);
@@ -104,6 +105,7 @@ for (const preset of ['off','sharp','soft','strong']) test(`saved ${preset} and 
   await page.reload(); await expect(page.locator('#profile')).toBeEnabled();
   await expect(page.locator('#presentation')).toHaveValue(preset);
   await expect(page.locator('#phosphor-mask')).toBeChecked();
+  await openSettings(page);
   await page.locator('#phosphor-mask').uncheck();
   // Persist a newly selected Original pixels choice as well as restoring it.
   await page.locator('#presentation').selectOption('off');
@@ -142,6 +144,7 @@ test('blocked storage still defaults to Sharp CRT and permits live switching',as
     await page.locator('#presentation').selectOption(preset);
     expect((await stats(page)).presenterStats).toMatchObject({preset,active:preset!=='off'});
   }
+  await openSettings(page);
   await page.locator('#phosphor-mask').check();
   await page.reload(); await expect(page.locator('#profile')).toBeEnabled();
   await expect(page.locator('#presentation')).toHaveValue('sharp');
@@ -157,15 +160,15 @@ test.describe('touch fullscreen fallback',()=>{
       Element.prototype.requestFullscreen = () => Promise.reject(new DOMException('Fullscreen unavailable','NotAllowedError'));
     });
     await ready(page);
-    await page.locator('#game').tap();
-    await expect(page.locator('#game')).toBeEnabled();
+    await launchDemo(page, 'game', {touch: true});
+    await expect(page.locator('#demos')).toBeEnabled();
     await expect.poll(()=>stats(page).then(s=>s.running)).toBe(true);
     const before=await stats(page);
     await expect(page.locator('#exit-fullscreen')).toBeHidden();
     await page.locator('#fullscreen').tap();
     await expect(page.locator('#drop')).toHaveClass(/full-window/);
     expect(await page.evaluate(()=>document.fullscreenElement)).toBeNull();
-    const exit=page.getByRole('button',{name:'Exit full screen',exact:true});
+    const exit=page.getByRole('button',{name:'Exit fullscreen',exact:true});
     await expect(exit).toBeVisible();
     const box=await exit.boundingBox();
     expect(box.x).toBeGreaterThanOrEqual(0); expect(box.y).toBeGreaterThanOrEqual(0);
@@ -212,7 +215,7 @@ for (const fault of ['unsupported','compile','link','allocation','render']) test
   await expect(page.locator('#presentation-status')).toContainText('showing original pixels');
   await expect.poll(()=>stats(page).then(s=>s.presentationStats.frames)).toBeGreaterThan(before.presentationStats.frames+2);
   expect((await stats(page)).presenterStats.fallback).toBe(true);
-  await page.locator('#hello').click();
+  await launchDemo(page, 'hello');
   await expect.poll(()=>page.evaluate(()=>pc98.text())).toContain('Hello world!!');
   await expect(page.locator('#error')).toBeHidden();
 });
@@ -360,6 +363,7 @@ test('high DPI output is bounded and resizes without applying aspect correction 
   try {
     await useWebGl(page);
     await ready(page); await page.locator('#presentation').selectOption('strong');
+    await openSettings(page);
     await page.locator('#phosphor-mask').check();
     for (const viewport of [{width:1500,height:1100},{width:701,height:900},{width:480,height:800}]) {
       await page.setViewportSize(viewport);

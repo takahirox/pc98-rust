@@ -1,3 +1,4 @@
+import { launchDemo } from './helpers/player.js';
 import {test,expect,inspect} from './helpers/runtime.js';
 
 const stats=page=>page.evaluate(()=>pc98.stats());
@@ -89,12 +90,12 @@ test('switching to a paused profile replaces the screen after an invalidated sna
 
 test('render startup, runtime and message failures recover through inline rendering without resetting the guest',async({page})=>{
   await page.route('**/render-worker.js',r=>r.fulfill({status:404,body:'missing'}));
-  await page.goto('./'); await expect(page.locator('#game')).toBeEnabled();
+  await page.goto('./'); await expect(page.locator('#demos')).toBeEnabled();
   expect((await stats(page)).videoMode).toBe('inline');
-  await page.locator('#hello').click();
+  await launchDemo(page, 'hello');
   await expect.poll(()=>page.evaluate(()=>pc98.text())).toContain('Hello world!!');
   await expect(page.locator('#error')).toBeHidden();
-  await page.unrouteAll(); await page.reload(); await expect(page.locator('#game')).toBeEnabled();
+  await page.unrouteAll(); await page.reload(); await expect(page.locator('#demos')).toBeEnabled();
   expect((await stats(page)).videoMode).toBe('worker');
   const before=await stats(page);
   await renderer(page).evaluate(()=>{setTimeout(()=>{throw Error('Intentional renderer failure');},0);});
@@ -104,18 +105,18 @@ test('render startup, runtime and message failures recover through inline render
   expect(after.instructions).toBeGreaterThanOrEqual(before.instructions);
   await expect.poll(()=>stats(page).then(s=>s.presentationStats.frames)).toBeGreaterThan(after.presentationStats.frames);
   await expect(page.locator('#error')).toBeHidden();
-  await page.reload(); await expect(page.locator('#game')).toBeEnabled();
+  await page.reload(); await expect(page.locator('#demos')).toBeEnabled();
   await renderer(page).evaluate(()=>onmessage({data:{type:'frameAck',buffer:new ArrayBuffer(8),sequence:-1}}));
   await expect.poll(()=>stats(page).then(s=>s.videoMode)).toBe('inline');
   await expect(page.locator('#error')).toBeHidden();
-  await page.reload(); await expect(page.locator('#game')).toBeEnabled();
+  await page.reload(); await expect(page.locator('#demos')).toBeEnabled();
   await page.workers().find(w=>w.url().includes('emulator-worker.js')).evaluate(()=>postMessage({event:'renderFault',error:'Intentional credit decode failure'}));
   await expect.poll(()=>stats(page).then(s=>s.videoMode)).toBe('inline');
   expect((await stats(page)).rendererFailure).toBe('Intentional credit decode failure');
 });
 
 test('Canvas context loss returns credits and restoration requests a fresh complete frame',async({page})=>{
-  await page.goto('./'); await expect(page.locator('#game')).toBeEnabled();
+  await page.goto('./'); await expect(page.locator('#demos')).toBeEnabled();
   const before=await stats(page);
   await page.locator('#screen').evaluate(canvas=>canvas.dispatchEvent(new Event('contextlost',{cancelable:true})));
   await expect.poll(()=>stats(page).then(s=>s.presentationStats.stale)).toBeGreaterThan(before.presentationStats.stale);
@@ -140,14 +141,15 @@ test('emulation failure discards a queued image before a delayed rAF can present
   await expect.poll(()=>stats(page).then(s=>s.renderStats.frames)).toBeGreaterThan(before.renderStats.frames);
   const emu=page.workers().find(w=>w.url().includes('emulator-worker.js'));
   await emu.evaluate(()=>{setTimeout(()=>{throw Error('Crash with pending image');},0);});
-  await expect(page.locator('#status')).toContainText('reload to restart');
+  await expect(page.locator('#status')).toHaveText('Worker stopped');
+  await expect(page.locator('#error')).toContainText('Reload to restart.');
   await page.evaluate(()=>flushRender());
   expect(await page.locator('#screen').evaluate(canvas=>canvas.getContext('2d').getImageData(0,0,640,400).data.some((n,i)=>i%4!==3&&n!==0))).toBe(false);
 });
 
 test('unchanged frames reuse host presentation and raw context restoration forces a fresh upload',async({page})=>{
   await page.goto('./?diagnostics&manual');await expect(page.locator('#profile')).toBeEnabled();
-  await page.locator('#game').click();await expect(page.locator('#profile')).toBeEnabled();
+  await launchDemo(page, 'game');await expect(page.locator('#profile')).toBeEnabled();
   await inspect(page,()=>{for(let i=0;i<30;i++)pc98.advance(100000);});
   if((await stats(page)).running)await page.locator('#pause').click();
   await expect.poll(()=>stats(page).then(s=>s.frameInFlight)).toBe(false);

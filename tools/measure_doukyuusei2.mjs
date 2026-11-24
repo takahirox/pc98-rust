@@ -1,5 +1,6 @@
 // Opt-in local measurement; the installed game is never copied into web/.
 // See docs/doukyuusei2-performance.md for installation and interpretation.
+import { uploadMedia } from '../tests/browser/helpers/player.js';
 import {chromium, firefox} from '@playwright/test';
 import {createServer} from 'node:http';
 import {readFile, realpath, writeFile} from 'node:fs/promises';
@@ -82,9 +83,8 @@ try {
     await page.goto(`http://127.0.0.1:8077/?diagnostics${playback ? '' : '&manual'}&jit=${options.jit==='0'?'0':'1'}`);
     if(await page.locator('#presentation').count())await page.locator('#presentation').selectOption('off');
     await page.waitForFunction(() => !document.querySelector('#profile').disabled);
-    await page.locator('#drive').selectOption('2');
-    await page.locator('#file').setInputFiles(options.media);
-    await page.waitForFunction(() => !document.querySelector('#file').disabled);
+    await uploadMedia(page, options.media, '2');
+    await page.waitForFunction(() => !document.querySelector('#profile').disabled);
     if (playback) await page.locator('#pause').click();
     const worker = page.workers().find(worker => worker.url().includes('emulator-worker.js'));
     async function inspect(fn, argument) {

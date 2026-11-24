@@ -1,3 +1,4 @@
+import { diskAction, uploadMedia } from './helpers/player.js';
 import { inspect, mediaGuestState } from './helpers/runtime.js';
 // Issue #126: production Rust/Wasm + unchanged GPL DOS + independent MIT data.
 import { test, expect } from './helpers/runtime.js';
@@ -40,9 +41,8 @@ async function keys(page, text) {
 }
 const command = (page, text) => keys(page, `${text}\r`);
 async function mount(page, name, buffer) {
-  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name, mimeType: 'application/octet-stream', buffer });
-  await expect(page.locator('#media-name')).toHaveText(name);
-  await expect(page.locator('#media-drive')).toHaveText('Floppy 2');
+  await uploadMedia(page, { name, mimeType: 'application/octet-stream', buffer }, '1');
+  await expect(page.locator('#media-name-1')).toHaveText(name);
   await expect(page.locator('#error')).toBeHidden();
 }
 async function readFile(page, name, contents, requireRead = true) {
@@ -53,9 +53,9 @@ async function readFile(page, name, contents, requireRead = true) {
   if (requireRead) expect(await inspect(page, () => pc98.stats().reads)).toBeGreaterThan(reads);
   await until(page, 'B:\\>');
 }
-async function exported(page, name, bytes) {
+async function exported(page, name, bytes, drive = '1') {
   const pending = page.waitForEvent('download');
-  await page.locator('#export').click();
+  await diskAction(page, drive, 'export');
   const download = await pending;
   expect(download.suggestedFilename()).toBe(name);
   expect((await fs.readFile(await download.path())).equals(bytes)).toBe(true);
@@ -73,14 +73,13 @@ test('Ap DOS enumerates empty FDD2, reads post-boot D88, swaps/ejects/reinserts 
   await expect(page.locator('#profile')).toBeEnabled();
   await expect(page.locator('#profile')).toHaveValue('1');
   expect(await inspect(page, () => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
-  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'minimal.hdm', mimeType: 'application/octet-stream', buffer: boot });
-  await expect(page.locator('#media-drive')).toHaveText('Floppy 1');
+  await uploadMedia(page, { name: 'minimal.hdm', mimeType: 'application/octet-stream', buffer: boot });
+  await expect(page.locator('#media-name-0')).toHaveText('minimal.hdm');
   await inspect(page, () => pc98.core.set_boot_source(0));
   await page.locator('#reset').click();
   await until(page, 'A:\\>');
   expect(await inspect(page, () => [pc98.read(0x55c), pc98.read(0x66c), pc98.read(0x66d)]))
     .toEqual([3, 0x90, 0x91]);
-  await page.locator('#drive').selectOption('1');
   const before = await mediaGuestState(page);
   await mount(page, 'second.d88', data);
   expect(await mediaGuestState(page)).toEqual(before);
@@ -98,9 +97,11 @@ test('Ap DOS enumerates empty FDD2, reads post-boot D88, swaps/ejects/reinserts 
   expect(await until(page, 'SWAPPED')).not.toContain('SECOND');
   await readFile(page, 'swapped.txt', 'REPLACEMENT FDD2 FILE CONTENTS');
   await exported(page, 'swapped.hdm', replacement);
-  await page.locator('#eject').click();
-  await expect(page.locator('#media-name')).toHaveText('No disk');
-  await expect(page.locator('#export')).toBeDisabled();
+  await diskAction(page, '1', 'eject');
+  await expect(page.locator('#media-name-1')).toHaveText('Empty');
+  await page.locator('#drive-1').click();
+  await expect(page.locator('#export')).toBeHidden();
+  await page.keyboard.press('Escape');
   expect(await inspect(page, () => pc98.read(0x55c))).toBe(3);
   await mount(page, 'second.d88', data);
   await command(page, 'cls');
@@ -121,10 +122,8 @@ test('Ap DOS enumerates empty FDD2, reads post-boot D88, swaps/ejects/reinserts 
   await readFile(page, 'second.txt', 'ORIGINAL FDD2 FILE CONTENTS');
   expect((await inspect(page, () => pc98.stats())).writes).toBe(0);
   await exported(page, 'second.d88', data);
-  await page.locator('#drive').selectOption('0');
-  await exported(page, 'minimal.hdm', boot);
-  await page.locator('#drive').selectOption('1');
-  await page.locator('#eject').click();
+  await exported(page, 'minimal.hdm', boot, '0');
+  await diskAction(page, '1', 'eject');
   await command(page, 'cls');
   await command(page, 'dir');
   expect(await until(page, '(R)')).not.toContain('SECOND');

@@ -1,3 +1,4 @@
+import { uploadMedia } from './helpers/player.js';
 import { inspect } from './helpers/runtime.js';
 // Original MIT independent controls for #113; no private media or host DOS.
 import { test, expect } from './helpers/runtime.js';
@@ -24,9 +25,8 @@ for (const name of ['fragmented12', 'fragmented16', 'wait', 'maskwait']) {
     const sha = b => createHash('sha256').update(b).digest('hex');
     expect(sha(image)).toBe(manifest.images[name].sha256);
     expect(sha(kernel)).toBe(manifest.images[name].files['KERNEL  SYS'].sha256);
-    await page.locator('#drive').selectOption({ value: '2' });
-    await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: `${name}.hdi`, mimeType: 'application/octet-stream', buffer: image });
-    await expect(page.locator('#media-name')).toHaveText(`${name}.hdi`);
+    await uploadMedia(page, { name: `${name}.hdi`, mimeType: 'application/octet-stream', buffer: image }, '2');
+    await expect(page.locator('#media-name-2')).toHaveText(`${name}.hdi`);
     async function step(slots) {
       await inspect(page, slots => {
         for (let left = slots; left > 0; left -= 100000) pc98.advance(Math.min(left, 100000));
