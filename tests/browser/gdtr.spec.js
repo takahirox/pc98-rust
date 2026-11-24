@@ -1,3 +1,4 @@
+import { uploadMedia } from './helpers/player.js';
 import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 
@@ -10,7 +11,7 @@ test('Ap: original GDTR boot probe checks exact bytes and faults before and afte
   await page.locator('#profile').selectOption('1');
   expect(await inspect(page, () => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
   const image = await fs.readFile(new URL('../../fixtures/gdtr/gdtr.hdm', import.meta.url));
-  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'gdtr.hdm', mimeType: 'application/octet-stream', buffer: image });
+  await uploadMedia(page, { name: 'gdtr.hdm', mimeType: 'application/octet-stream', buffer: image });
   await inspect(page, () => pc98.core.set_boot_source(0));
   await page.locator('#reset').click();
   for (let run = 0; run < 2; run++) {

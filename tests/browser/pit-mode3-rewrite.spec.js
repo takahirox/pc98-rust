@@ -1,3 +1,4 @@
+import { uploadMedia } from './helpers/player.js';
 import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -20,11 +21,11 @@ for (const [profile, name] of [['0', 'VM'], ['1', 'Ap']]) {
     const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/pit-mode3-rewrite-manifest.json', import.meta.url)));
     expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
     const expected = [...Buffer.from(manifest.result_hex, 'hex')];
-    await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'pit_mode3_rewrite.hdm', mimeType: 'application/octet-stream', buffer: image });
+    await uploadMedia(page, { name: 'pit_mode3_rewrite.hdm', mimeType: 'application/octet-stream', buffer: image });
     await inspect(page, () => pc98.core.set_boot_source(0));
     await page.locator('#reset').click();
     // File.arrayBuffer() and the mount/reset finish after the change event.
-    await expect(page.locator('#media-name')).toHaveText('pit_mode3_rewrite.hdm');
+    await expect(page.locator('#media-name-0')).toHaveText('pit_mode3_rewrite.hdm');
     for (let run = 0; run < 2; run++) {
       if (run) await page.locator('#reset').click();
       let slots = 0;

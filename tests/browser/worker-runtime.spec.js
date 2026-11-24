@@ -1,3 +1,4 @@
+import { launchDemo, nextBoot, uploadMedia } from './helpers/player.js';
 import {test,expect,inspect} from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 
@@ -16,9 +17,9 @@ test('Worker progresses through DOS graphics and PCM with rAF stopped and DOM ev
   expect(await page.evaluate(() => 'core' in pc98)).toBe(false);
   await page.locator('#sound').click();
   const buffer=await fs.readFile('fixtures/dos-apps/98videop.hdm');
-  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({name:'98videop.hdm',mimeType:'application/octet-stream',buffer});
+  await uploadMedia(page, {name:'98videop.hdm',mimeType:'application/octet-stream',buffer});
   await expect(page.locator('#profile')).toBeEnabled();
-  await page.locator('#boot').selectOption('0');
+  await nextBoot(page, '0');
   await expect(page.locator('#profile')).toBeEnabled();
   await page.evaluate(() => { window.requestAnimationFrame = () => 1; document.getElementById('reset').click(); });
   await expect(page.locator('#profile')).toBeEnabled();
@@ -57,8 +58,8 @@ test('Worker progresses through DOS graphics and PCM with rAF stopped and DOM ev
 });
 
 test('audio mute, pause, resume, reset and interrupted AudioContext flush the sink',async({page}) => {
-  await page.goto('./'); await expect(page.locator('#game')).toBeEnabled();
-  await page.locator('#hello').click();
+  await page.goto('./'); await expect(page.locator('#demos')).toBeEnabled();
+  await launchDemo(page, 'hello');
   await expect.poll(()=>page.evaluate(()=>pc98.stats().then(s=>s.audioEnergy))).toBeGreaterThan(1);
   for (const id of ['sound','sound','pause','pause','reset']) {
     const before=await page.evaluate(()=>pc98.stats());
@@ -81,7 +82,7 @@ test('frame snapshots survive memory growth, reset and delayed presentation on V
   await page.goto('./'); await expect(page.locator('#profile')).toBeEnabled();
   for (const profile of ['0','1']) {
     await page.locator('#profile').selectOption(profile);
-    await page.locator('#hello').click();
+    await launchDemo(page, 'hello');
     await expect.poll(()=>page.evaluate(()=>pc98.text())).toContain('Hello world!!');
     await inspect(page,() => pc98.core.input_buffer(8*1024*1024));
     await page.locator('#reset').click();
@@ -97,8 +98,8 @@ test('frame snapshots survive memory growth, reset and delayed presentation on V
 test('Worker and AudioWorklet load failures are visible and recoverable',async({page}) => {
   await page.route('**/emulator-worker.js',r=>r.fulfill({status:404,body:'missing'}));
   await page.goto('./'); await expect(page.locator('#error')).toBeVisible();
-  await expect(page.locator('#game')).toBeDisabled();
-  await page.unrouteAll(); await page.reload(); await expect(page.locator('#game')).toBeEnabled();
+  await expect(page.locator('#demos')).toBeDisabled();
+  await page.unrouteAll(); await page.reload(); await expect(page.locator('#demos')).toBeEnabled();
   // Chromium's AudioWorklet fetches bypass Playwright routing. Exercise the
   // real browser loader with a missing local asset, then restore its URL.
   await page.evaluate(()=>{
@@ -107,13 +108,13 @@ test('Worker and AudioWorklet load failures are visible and recoverable',async({
     window.restoreWorkletLoader=()=>{AudioWorklet.prototype.addModule=load;};
   });
   await page.locator('#sound').click(); await expect(page.locator('#error')).toBeVisible();
-  await expect(page.locator('#sound')).toHaveText('Enable sound');
-  await page.evaluate(()=>window.restoreWorkletLoader()); await page.locator('#sound').click(); await expect(page.locator('#sound')).toHaveText('Mute');
+  await expect(page.locator('#sound')).toHaveAttribute('aria-pressed', 'true');
+  await page.evaluate(()=>window.restoreWorkletLoader()); await page.locator('#sound').click(); await expect(page.locator('#sound')).toHaveAttribute('aria-pressed', 'false');
 });
 
 test('visibility, repeated reset/profile controls and runtime Worker failure cannot resurrect stale state',async({page}) => {
-  await page.goto('./'); await expect(page.locator('#game')).toBeEnabled();
-  await page.locator('#game').click();
+  await page.goto('./'); await expect(page.locator('#demos')).toBeEnabled();
+  await launchDemo(page, 'game');
   await expect.poll(()=>page.evaluate(()=>pc98.text())).toContain('STAR TRAIL');
   const before=await page.evaluate(()=>pc98.stats());
   await page.evaluate(()=>{const button=document.getElementById('reset');button.click();button.click();});
@@ -144,8 +145,9 @@ test('visibility, repeated reset/profile controls and runtime Worker failure can
   const worker=page.workers().find(w=>w.url().includes('emulator-worker.js'));
   await worker.evaluate(()=>{setTimeout(()=>{throw Error('Intentional runtime Worker failure');},0);});
   await expect(page.locator('#error')).toContainText('Intentional runtime Worker failure');
-  await expect(page.locator('#status')).toContainText('reload to restart');
+  await expect(page.locator('#error')).toContainText('Reload to restart.');
+  await expect(page.locator('#status')).toHaveText('Worker stopped');
   for (const id of ['game','reset','file','profile']) await expect(page.locator('#'+id)).toBeDisabled();
-  await page.reload(); await expect(page.locator('#game')).toBeEnabled();
+  await page.reload(); await expect(page.locator('#demos')).toBeEnabled();
   await expect.poll(()=>page.evaluate(()=>pc98.text()),{timeout:20000}).toContain('A:\\>');
 });

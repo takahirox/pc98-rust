@@ -1,5 +1,6 @@
 // Opt-in local ADV98 benchmark. No downloads, frames, PCM, guest text or traces
 // are saved. See docs/runtime-performance.md for rights, setup and interpretation.
+import { nextBoot, uploadMedia } from '../tests/browser/helpers/player.js';
 import {chromium,firefox} from '@playwright/test';
 import {spawn,execFile} from 'node:child_process';
 import {promisify} from 'node:util';
@@ -75,9 +76,9 @@ try {
     const name=`music-scenes.${medium==='hdd'?'hdi':'hdm'}`;
     const bytes=await readFile(path.join(options.media,name));
     mediaHashes[name]=createHash('sha256').update(bytes).digest('hex');
-    await page.locator('#file').setInputFiles({name,mimeType:'application/octet-stream',buffer:bytes});
-    await waitFor(()=>page.locator('#boot').isEnabled());
-    await page.locator('#boot').selectOption(medium==='hdd'?'1':'0');
+    await uploadMedia(page, {name,mimeType:'application/octet-stream',buffer:bytes});
+    await waitFor(()=>page.locator('#profile').isEnabled());
+    await nextBoot(page, medium==='hdd'?'1':'0');
     await waitFor(()=>page.locator('#reset').isEnabled());
     await page.locator('#reset').click();
     await waitFor(()=>page.locator('#profile').isEnabled());

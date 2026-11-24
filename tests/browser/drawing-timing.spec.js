@@ -1,3 +1,4 @@
+import { uploadMedia } from './helpers/player.js';
 import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 
@@ -6,7 +7,7 @@ async function boot(page, name) {
   await expect(page.locator('#profile')).toBeEnabled();
   await page.locator('#profile').selectOption('1');
   const buffer = await fs.readFile(new URL(`../../fixtures/freedos/${name}.hdm`, import.meta.url));
-  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: `${name}.hdm`, mimeType: 'application/octet-stream', buffer });
+  await uploadMedia(page, { name: `${name}.hdm`, mimeType: 'application/octet-stream', buffer });
   await inspect(page, () => pc98.core.set_boot_source(0));
   await page.locator('#reset').click();
   expect(await inspect(page, () => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);

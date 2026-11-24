@@ -1,3 +1,4 @@
+import { uploadMedia } from './helpers/player.js';
 import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 
@@ -12,7 +13,7 @@ test('Ap: IDTR probe, relocated vectors, wrapping addresses and terminal shutdow
   const image = await fs.readFile(new URL('../../fixtures/idtr/idtr.hdm', import.meta.url));
   const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/idtr-manifest.json', import.meta.url)));
   const expected = [...Buffer.from(manifest.result_hex, 'hex')];
-  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'idtr.hdm', mimeType: 'application/octet-stream', buffer: image });
+  await uploadMedia(page, { name: 'idtr.hdm', mimeType: 'application/octet-stream', buffer: image });
   await inspect(page, () => pc98.core.set_boot_source(0));
   await page.locator('#reset').click();
   for (let run = 0; run < 2; run++) {

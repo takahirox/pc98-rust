@@ -1,3 +1,4 @@
+import { uploadMedia } from './helpers/player.js';
 import { inspect } from './helpers/runtime.js';
 // Original MIT guest, production release Rust/Wasm only. Issue #105.
 import { test, expect } from './helpers/runtime.js';
@@ -18,10 +19,10 @@ test('Ap: CLTS, real/protected TS/EM #NM recovery and WAIT, cold/reset', async (
   const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/clts-manifest.json', import.meta.url)));
   expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
   const expected = [...Buffer.from(manifest.result_hex, 'hex')];
-  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'clts.hdm', mimeType: 'application/octet-stream', buffer: image });
+  await uploadMedia(page, { name: 'clts.hdm', mimeType: 'application/octet-stream', buffer: image });
   await inspect(page, () => pc98.core.set_boot_source(0));
   await page.locator('#reset').click();
-  await expect(page.locator('#media-name')).toContainText('clts.hdm');
+  await expect(page.locator('#media-name-0')).toContainText('clts.hdm');
   for (let run = 0; run < 2; run++) {
     if (run) await page.locator('#reset').click();
     let slots = 0;

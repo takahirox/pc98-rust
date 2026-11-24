@@ -1,3 +1,4 @@
+import { uploadMedia } from './helpers/player.js';
 import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -18,7 +19,7 @@ test('Ap: guest channel-3 operator PCM pitches and keyed mode transitions before
   const image = await fs.readFile(new URL('../../fixtures/opn_ch3/opn_ch3.hdm', import.meta.url));
   const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/opn-ch3-manifest.json', import.meta.url)));
   expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
-  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'opn_ch3.hdm', mimeType: 'application/octet-stream', buffer: image });
+  await uploadMedia(page, { name: 'opn_ch3.hdm', mimeType: 'application/octet-stream', buffer: image });
   await inspect(page, () => pc98.core.set_boot_source(0));
   await page.locator('#reset').click();
   for (let run = 0; run < 2; run++) {

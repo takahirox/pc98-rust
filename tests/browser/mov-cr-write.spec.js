@@ -1,3 +1,4 @@
+import { uploadMedia } from './helpers/player.js';
 import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -16,10 +17,10 @@ test('Ap: MOV CR WRITE from all GPRs, CR0/CR3 readback and guest fault repair be
   const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/mov-cr-write-manifest.json', import.meta.url)));
   expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
   const expected = [...Buffer.from(manifest.result_hex, 'hex')];
-  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'mov_cr_write.hdm', mimeType: 'application/octet-stream', buffer: image });
+  await uploadMedia(page, { name: 'mov_cr_write.hdm', mimeType: 'application/octet-stream', buffer: image });
   await inspect(page, () => pc98.core.set_boot_source(0));
   await page.locator('#reset').click();
-  await expect(page.locator('#media-name')).toContainText('mov_cr_write.hdm');
+  await expect(page.locator('#media-name-0')).toContainText('mov_cr_write.hdm');
   for (let run = 0; run < 2; run++) {
     if (run) await page.locator('#reset').click();
     let slots = 0;
@@ -53,10 +54,10 @@ for (const name of ['pe_pg']) {
     const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/mov-cr-write-manifest.json', import.meta.url)));
     const variant = manifest.transition_variants[name];
     expect(createHash('sha256').update(image).digest('hex')).toBe(variant.image_sha256);
-    await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: `${name}.hdm`, mimeType: 'application/octet-stream', buffer: image });
+    await uploadMedia(page, { name: `${name}.hdm`, mimeType: 'application/octet-stream', buffer: image });
     await inspect(page, () => pc98.core.set_boot_source(0));
     await page.locator('#reset').click();
-    await expect(page.locator('#media-name')).toContainText(`${name}.hdm`);
+    await expect(page.locator('#media-name-0')).toContainText(`${name}.hdm`);
     for (let run = 0; run < 2; run++) {
       if (run) await page.locator('#reset').click();
       await inspect(page, () => { pc98.core.step(10000); pc98.core.audio_clear(); });

@@ -1,3 +1,4 @@
+import { diskAction, launchDemo, nextBoot, openSettings, uploadMedia } from './helpers/player.js';
 import { test, expect, inspect, mediaGuestState } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -106,10 +107,9 @@ test('fresh installed desktop: exact kernel handoff, responsive DOS, live floppi
     expect(await inspect(page, () => [pc98.read(0x66c),pc98.read(0x66d),pc98.read(0x66e)]))
       .toEqual([0x80,0x90,0x91]);
     for (const [drive, letter] of [['0','b'],['1','c']]) {
-      await page.locator('#drive').selectOption(drive);
       const before=await mediaGuestState(page);
-      await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({name:'second.d88',mimeType:'application/octet-stream',buffer:data});
-      await expect(page.locator('#media-name')).toHaveText('second.d88');
+      await uploadMedia(page, {name:'second.d88',mimeType:'application/octet-stream',buffer:data}, drive);
+      await expect(page.locator(`#media-name-${drive}`)).toHaveText('second.d88');
       expect(await mediaGuestState(page)).toEqual(before);
       await expect(page.locator('#boot')).toHaveValue('1');
       await command(page,letter+':'); await until(page,letter.toUpperCase()+':\\>');
@@ -118,28 +118,28 @@ test('fresh installed desktop: exact kernel handoff, responsive DOS, live floppi
       await command(page,'type second.txt'); await until(page,'ORIGINAL FDD2 FILE CONTENTS');
       expect(await inspect(page, ()=>pc98.stats().reads)).toBeGreaterThan(reads);
       expect(Buffer.from(await inspect(page, d=>pc98.exportDisk(d),Number(drive))).equals(data)).toBe(true);
-      await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({name:'swapped.hdm',mimeType:'application/octet-stream',buffer:swapped});
-      await expect(page.locator('#media-name')).toHaveText('swapped.hdm');
+      await uploadMedia(page, {name:'swapped.hdm',mimeType:'application/octet-stream',buffer:swapped}, drive);
+      await expect(page.locator(`#media-name-${drive}`)).toHaveText('swapped.hdm');
       await command(page,'cls'); await command(page,'dir');
       expect((await until(page,'SWAPPED')).text).not.toContain('SECOND');
       await command(page,'type swapped.txt'); await until(page,'REPLACEMENT FDD2 FILE CONTENTS');
       expect(Buffer.from(await inspect(page, d=>pc98.exportDisk(d),Number(drive))).equals(swapped)).toBe(true);
-      await page.locator('#eject').click();
+      await diskAction(page, drive, 'eject');
       await command(page,'cls'); await command(page,'dir'); await until(page,'(R)');
-      await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({name:'second.d88',mimeType:'application/octet-stream',buffer:data});
-      await expect(page.locator('#media-name')).toHaveText('second.d88');
+      await uploadMedia(page, {name:'second.d88',mimeType:'application/octet-stream',buffer:data}, drive);
+      await expect(page.locator(`#media-name-${drive}`)).toHaveText('second.d88');
       await command(page,'r'); // Reinsert, then retry through the real DOS error handler.
       await until(page,letter.toUpperCase()+':\\>');
       await command(page,'a:');
     }
     expect(await inspect(page, ()=>pc98.stats().writes)).toBe(0);
-    await page.locator('#drive').selectOption('0'); await page.locator('#hello').click();
+    await launchDemo(page, 'hello');
     // The bundled image is fetched asynchronously. Wait for media loading and
     // reset to finish before inspecting the Worker-owned Wasm core.
-    await expect(page.locator('#media-name')).toHaveText('hello98.tfd');
+    await expect(page.locator('#media-name-0')).toHaveText('hello98.tfd');
     await expect(page.locator('#reset')).toBeEnabled();
     await until(page,'Hello world!!');
-    await page.locator('#boot').selectOption('1'); await page.locator('#reset').click();
+    await nextBoot(page, '1'); await page.locator('#reset').click();
     await until(page,'A:\\>'); await command(page,'echo back'); await until(page,'back');
     expect(errors).toEqual([]);
   } finally { await memory.stop(); }
@@ -170,34 +170,44 @@ test('dirty desktop: cancel replacement/eject/restore, export guest writes, reim
   expect(await inspect(page, ()=>(pc98.core.hdi_dirty_page(0) >>> 0))).not.toBe(0xffffffff);
   const dialogs=[];
   page.on('dialog',async d=>{dialogs.push(d.message());await d.dismiss();});
-  await page.locator('#eject').click(); await expect.poll(()=>dialogs.length).toBe(1);
+  await diskAction(page, '2', 'eject'); await expect.poll(()=>dialogs.length).toBe(1);
   await expect(page.locator('#profile')).toBeEnabled();
-  await page.locator('#default-hdd').click(); await expect.poll(()=>dialogs.length).toBe(2);
+  await openSettings(page); await page.locator('#default-hdd').click(); await expect.poll(()=>dialogs.length).toBe(2);
   await expect(page.locator('#profile')).toBeEnabled();
-  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles('fixtures/freedos/shell.hdi');
+  await uploadMedia(page, 'fixtures/freedos/shell.hdi');
   await expect.poll(()=>dialogs.length).toBe(3);
   await expect(page.locator('#profile')).toBeEnabled();
-  await expect(page.locator('#media-name')).toHaveText('FreeDOS-128MiB.hdi');
+  await expect(page.locator('#media-name-2')).toHaveText('FreeDOS-128MiB.hdi');
   expect(dialogs).toHaveLength(3); expect(dialogs.every(t=>t.includes('guest writes'))).toBe(true);
-  const downloadEvent=page.waitForEvent('download'); await page.locator('#export').click();
+  const downloadEvent=page.waitForEvent('download'); await diskAction(page, '2', 'export');
   const download=await downloadEvent; expect(await download.failure()).toBeNull();
   const file=info.outputPath('saved.hdi'); await download.saveAs(file);
   expect((await fs.stat(file)).size).toBe(manifest.bytes);
   // All logical bytes export, and DOS changes make the saved disk differ.
   const bytes=await fs.readFile(file); expect(createHash('sha256').update(bytes).digest('hex')).not.toBe(manifest.image_sha256);
-  page.removeAllListeners('dialog'); page.on('dialog',d=>d.accept());
-  await page.locator('#eject').click(); await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles(file);
-  await expect(page.locator('#media-name')).toHaveText('saved.hdi');
+  const accepted=[];
+  page.removeAllListeners('dialog'); page.on('dialog',async d=>{accepted.push(d.message());await d.accept();});
+  await diskAction(page, '2', 'eject'); await uploadMedia(page, file);
+  await expect(page.locator('#media-name-2')).toHaveText('saved.hdi');
   await until(page,'A:\\>'); await command(page,'type saved.txt'); await until(page,'\nsaved');
   await page.locator('#profile').selectOption('0');
   expect(await inspect(page, ()=>pc98.read(0x584))).toBe(0x90);
   await expect(page.locator('#boot')).toBeDisabled(); await expect(page.locator('#default-hdd')).toBeDisabled();
   await page.locator('#profile').selectOption('1'); await until(page,'A:\\>');
   await command(page,'type saved.txt'); await until(page,'\nsaved');
-  await page.locator('#default-hdd').click();
-  await expect(page.locator('#media-name')).toHaveText('FreeDOS-128MiB.hdi');
+  await command(page,'echo saved>fresh.txt'); await until(page,'A:\\>');
+  expect(await inspect(page, ()=>(pc98.core.hdi_dirty_page(0) >>> 0))).not.toBe(0xffffffff);
+  await openSettings(page); await page.locator('#default-hdd').click();
+  await expect(page.locator('#media-name-2')).toHaveText('FreeDOS-128MiB.hdi');
   await until(page,'A:\\>'); expect(await inspect(page, ()=>(pc98.core.hdi_dirty_page(0) >>> 0))).toBe(0xffffffff);
   await checkMemory(page, true);
+  await command(page,'echo replaced>fresh.txt'); await until(page,'A:\\>');
+  expect(await inspect(page, ()=>(pc98.core.hdi_dirty_page(0) >>> 0))).not.toBe(0xffffffff);
+  await uploadMedia(page, file, '2');
+  await expect(page.locator('#media-name-2')).toHaveText('saved.hdi');
+  await until(page,'A:\\>'); await command(page,'type saved.txt'); await until(page,'\nsaved');
+  expect(accepted).toHaveLength(3);
+  expect(accepted.every(text=>text.includes('guest writes'))).toBe(true);
 });
 
 for(const [kind, size] of [
@@ -236,8 +246,8 @@ for(const failure of ['fetch','truncated','checksum','geometry','allocation']) {
     }
     await ready(page); await expect(page.locator('#error')).toBeVisible();
     expect(await inspect(page, ()=>pc98.core.hdi_len())).toBe(0);
-    await page.unrouteAll(); await page.locator('#default-hdd').click();
-    await expect(page.locator('#media-name')).toHaveText('FreeDOS-128MiB.hdi');
+    await page.unrouteAll(); await openSettings(page); await page.locator('#default-hdd').click();
+    await expect(page.locator('#media-name-2')).toHaveText('FreeDOS-128MiB.hdi');
     await until(page,'A:\\>');
   });
 }
@@ -249,13 +259,13 @@ test('startup locks profile/media changes and ignores a competing drop until ass
   await page.route('**/freedos/desktop.bin',async route=>{await pending;await route.continue();});
   await page.goto('./');
   await expect(page.locator('#status')).toContainText('Loading FreeDOS HDD');
-  for(const id of ['profile','boot','file','drive','game','reset']) await expect(page.locator('#'+id)).toBeDisabled();
+  for(const id of ['profile','boot','file','drive-auto','drive-0','drive-1','drive-2','demos','reset']) await expect(page.locator('#'+id)).toBeDisabled();
   await page.locator('#drop').evaluate(drop=>{
     const transfer=new DataTransfer();transfer.items.add(new File([new Uint8Array(1261568)],'competing.hdm'));
     drop.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer}));
   });
   release(); await expect(page.locator('#profile')).toBeEnabled();
-  await expect(page.locator('#media-name')).toHaveText('FreeDOS-128MiB.hdi');
+  await expect(page.locator('#media-name-2')).toHaveText('FreeDOS-128MiB.hdi');
   expect(await inspect(page, ()=>{pc98.core.export_disk(0);return pc98.core.export_len();})).toBe(0);
 });
 

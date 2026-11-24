@@ -1,3 +1,4 @@
+import { uploadMedia } from './helpers/player.js';
 import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -22,8 +23,7 @@ for (const [profile, name] of [['1', 'Ap']]) {
     expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
     const expected = [...Buffer.from(manifest.result_hex, 'hex')];
     expect(expected.slice(1, 12)).toEqual([2, 0, 2, 0, 0, 2, 0, 1, 2, 2, 0x80]);
-    await page.locator('#drive').selectOption({ value: '2' });
-    await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'ide_verify.hdi', mimeType: 'application/octet-stream', buffer: image });
+    await uploadMedia(page, { name: 'ide_verify.hdi', mimeType: 'application/octet-stream', buffer: image }, '2');
     for (let run = 0; run < 2; run++) {
       if (run) await page.locator('#reset').click();
       let slots = 0;

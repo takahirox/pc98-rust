@@ -1,3 +1,4 @@
+import { uploadMedia } from './helpers/player.js';
 import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 
@@ -11,7 +12,7 @@ for (const [profile, name] of [['0', 'VM'], ['1', 'Ap']]) {
     await page.locator('#profile').selectOption(profile);
     expect(await inspect(page, () => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
     const buffer = await fs.readFile(new URL('../../fixtures/freedos/lio.hdm', import.meta.url));
-    await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'lio.hdm', mimeType: 'application/octet-stream', buffer });
+    await uploadMedia(page, { name: 'lio.hdm', mimeType: 'application/octet-stream', buffer });
     await inspect(page, () => pc98.core.set_boot_source(0));
     await page.locator('#reset').click();
     // Observe the entire bounded run, so a later reboot cannot pass unnoticed.

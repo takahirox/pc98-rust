@@ -1,3 +1,4 @@
+import { uploadMedia } from './helpers/player.js';
 import { inspect } from './helpers/runtime.js';
 // Original MIT guest, production release Rust/Wasm only. Issue #109.
 import { test, expect } from './helpers/runtime.js';
@@ -18,10 +19,10 @@ test('Ap: VM86, CPL3 VM86 PG=0/1, TSS monitor gates, bitmap/IOPL, #PF and PIC/PI
   const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/vm86-manifest.json', import.meta.url)));
   expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
   const expected = [...Buffer.from(manifest.result_hex, 'hex')];
-  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'vm86.hdm', mimeType: 'application/octet-stream', buffer: image });
+  await uploadMedia(page, { name: 'vm86.hdm', mimeType: 'application/octet-stream', buffer: image });
   await inspect(page, () => pc98.core.set_boot_source(0));
   await page.locator('#reset').click();
-  await expect(page.locator('#media-name')).toContainText('vm86.hdm');
+  await expect(page.locator('#media-name-0')).toContainText('vm86.hdm');
   for (let run = 0; run < 2; run++) {
     if (run) await page.locator('#reset').click();
     let slots = 0;

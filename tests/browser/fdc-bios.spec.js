@@ -1,3 +1,4 @@
+import { uploadMedia } from './helpers/player.js';
 import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -33,7 +34,7 @@ for (const [profile, name] of [['0', 'VM'], ['1', 'Ap']]) {
       [0xa000, write0], [0xa800, write2], [0xb000, write2],
       [0xb800, image.subarray(33792, 34816)], [0xc000, image.subarray(1024, 2048)],
     ]) bytes.copy(expectedRam, address - 0x8000);
-    await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'fdc_bios.hdm', mimeType: 'application/octet-stream', buffer: image });
+    await uploadMedia(page, { name: 'fdc_bios.hdm', mimeType: 'application/octet-stream', buffer: image });
     await inspect(page, () => pc98.core.set_boot_source(0));
     await page.locator('#reset').click();
     for (let run = 0; run < 2; run++) {

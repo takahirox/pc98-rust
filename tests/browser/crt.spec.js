@@ -1,3 +1,4 @@
+import { uploadMedia } from './helpers/player.js';
 import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -66,7 +67,7 @@ test('Ap CRT family: original guest, KCG/areas/pitch/cursor pixels, timed blink 
   const image = await fs.readFile(new URL('../../fixtures/crt/crt.hdm',import.meta.url));
   const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/crt-manifest.json',import.meta.url)));
   expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
-  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({name:'crt.hdm',mimeType:'application/octet-stream',buffer:image});
+  await uploadMedia(page, {name:'crt.hdm',mimeType:'application/octet-stream',buffer:image});
   await inspect(page, () => pc98.core.set_boot_source(0));
   for (let run = 0; run < 2; run++) {
     await page.locator('#reset').click();

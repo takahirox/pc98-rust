@@ -100,11 +100,10 @@ async function mouse(dx,dy,buttons=0,ms=120){await reproductionMouse(dx,dy,butto
 function mark(name){phase=name;events.push({name,wallMs:performance.now()-began});
   fetch('/phase',{method:'POST',body:name}).catch(()=>{});}
 try{
-  await wait(()=>window.pc98&&window.reproductionMouse&&!document.querySelector('#file').disabled);
-  document.querySelector('#drive').value='2';
+  await wait(()=>window.pc98&&window.reproductionMouse&&!document.querySelector('#profile').disabled);
   const transfer=new DataTransfer();transfer.items.add(new File([await(await fetch('/private-test-media')).arrayBuffer()],'installed.hdi'));
-  document.querySelector('#file').files=transfer.files;document.querySelector('#file').dispatchEvent(new Event('change',{bubbles:true}));
-  await wait(()=>!document.querySelector('#file').disabled);document.querySelector('#reset').click();
+  document.querySelector('#slot-2').dispatchEvent(new DragEvent('drop',{dataTransfer:transfer,bubbles:true,cancelable:true}));
+  await wait(()=>!document.querySelector('#profile').disabled);document.querySelector('#reset').click();
   await wait(()=>!document.querySelector('#reset').disabled);document.querySelector('#sound').click();
   await wait(async()=>(await pc98.stats()).audioState==='running');
   mark('audio-boot');await sample();timer=setInterval(()=>sample().catch(error=>{failure=error;}),250);

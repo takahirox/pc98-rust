@@ -1,3 +1,4 @@
+import { uploadMedia } from './helpers/player.js';
 import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -19,10 +20,10 @@ for (const [profile, name] of [['1', 'Ap']]) {
     const image = await fs.readFile(new URL('../../fixtures/rtc/rtc.hdm', import.meta.url));
     const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/rtc-manifest.json', import.meta.url)));
     expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
-    await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'rtc.hdm', mimeType: 'application/octet-stream', buffer: image });
+    await uploadMedia(page, { name: 'rtc.hdm', mimeType: 'application/octet-stream', buffer: image });
     await inspect(page, () => pc98.core.set_boot_source(0));
     await page.locator('#reset').click();
-    await expect(page.locator('#media-name')).toHaveText('rtc.hdm');
+    await expect(page.locator('#media-name-0')).toHaveText('rtc.hdm');
     for (let run = 0; run < 2; run++) {
       if (run) await page.locator('#reset').click();
       const expected = [...Buffer.from(run ? manifest.reset_result_hex : manifest.result_hex, 'hex')];

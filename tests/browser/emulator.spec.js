@@ -1,3 +1,4 @@
+import { diskAction, launchDemo, uploadMedia } from './helpers/player.js';
 import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 const BASE = 0x21400;
@@ -5,7 +6,7 @@ async function ready(page) {
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto('./');
-  await expect(page.locator('#game')).toBeEnabled();
+  await expect(page.locator('#demos')).toBeEnabled();
   expect(await inspect(page, () => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
   return errors;
 }
@@ -22,7 +23,7 @@ for (const profile of ['1', '0']) {
 test(`${profile === '1' ? 'Ap' : 'VM'}: actual Wasm guest gameplay, PCM audio, pause, save export and import work offline`, async ({ page }) => {
   const errors = await ready(page);
   if (profile === '0') await page.locator('#profile').selectOption(profile);
-  await page.locator('#game').click();
+  await launchDemo(page, 'game');
   await value(page, 8, 1);
   await expect.poll(() => inspect(page, () => pc98.text())).toContain('STAR TRAIL');
   // Once the local assets load, any network call is a failure for this test.
@@ -50,15 +51,15 @@ test(`${profile === '1' ? 'Ap' : 'VM'}: actual Wasm guest gameplay, PCM audio, p
   const paused=await inspect(page, ()=>pc98.stats().instructions);
   await page.waitForTimeout(100);
   expect(await inspect(page, ()=>pc98.stats().instructions)).toBe(paused);
-  const downloaded=page.waitForEvent('download'); await page.locator('#export').click();
+  const downloaded=page.waitForEvent('download'); await diskAction(page, '0', 'export');
   const file=await downloaded; const disk=await fs.readFile(await file.path());
   expect(disk.length).toBe(1261568); expect(disk[7*1024+10]).toBe(3);
   expect(disk.subarray(7*1024,7*1024+8).toString()).toBe('STAR98SV');
-  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({name:'saved.hdm',mimeType:'application/octet-stream',buffer:disk});
+  await uploadMedia(page, {name:'saved.hdm',mimeType:'application/octet-stream',buffer:disk});
   await page.locator('#reset').click();
   await value(page,8,1); await value(page,10,0);
   await expect.poll(()=>inspect(page, ()=>pc98.read(0x2180a))).toBe(3);
-  await expect(page.locator('#media-name')).toHaveText('saved.hdm');
+  await expect(page.locator('#media-name-0')).toHaveText('saved.hdm');
   await page.locator('#reset').click(); await value(page,8,1); await value(page,10,0);
   await expect(page.locator('#error')).toBeHidden();
   expect(errors).toEqual([]);expect(unexpected).toEqual([]);
@@ -67,7 +68,7 @@ test(`${profile === '1' ? 'Ap' : 'VM'}: actual Wasm guest gameplay, PCM audio, p
 test(`${profile === '1' ? 'Ap' : 'VM'}: independent hello disk boots through FDC and guest BEEP reaches Web Audio`, async ({ page }) => {
   const errors=await ready(page);
   if (profile === '0') await page.locator('#profile').selectOption(profile);
-  await page.locator('#hello').click();
+  await launchDemo(page, 'hello');
   await expect.poll(()=>inspect(page, ()=>pc98.text())).toContain('Hello world!!');
   await expect.poll(()=>inspect(page, ()=>pc98.stats().audioEnergy)).toBeGreaterThan(1);
   const state=await page.evaluate(async ()=>{
@@ -82,22 +83,25 @@ test(`${profile === '1' ? 'Ap' : 'VM'}: independent hello disk boots through FDC
 }
 
 test('floppy validation, second drive, eject, and virtual PC-98 keyboard', async ({ page })=>{
-  await ready(page);await page.locator('#game').click();await value(page,8,1);
-  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({name:'corrupt.d88',mimeType:'application/octet-stream',buffer:Buffer.alloc(100)});
+  await ready(page);await launchDemo(page, 'game');await value(page,8,1);
+  await uploadMedia(page, {name:'corrupt.d88',mimeType:'application/octet-stream',buffer:Buffer.alloc(100)});
   await expect(page.locator('#error')).toContainText('truncated D88');
-  await expect(page.locator('#media-name')).toHaveText('startrail.hdm');
-  await page.locator('#drive').selectOption('1');
-  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({name:'blank.hdm',mimeType:'application/octet-stream',buffer:Buffer.alloc(1261568)});
-  await expect(page.locator('#media-name')).toHaveText('blank.hdm');
-  await page.locator('#eject').click();await expect(page.locator('#media-name')).toHaveText('No disk');await expect(page.locator('#export')).toBeDisabled();
-  await page.locator('summary').click();const right=page.locator('[data-scan="60"]');
+  await expect(page.locator('#media-name-0')).toHaveText('startrail.hdm');
+  await uploadMedia(page, {name:'blank.hdm',mimeType:'application/octet-stream',buffer:Buffer.alloc(1261568)}, '1');
+  await expect(page.locator('#media-name-1')).toHaveText('blank.hdm');
+  await diskAction(page, '1', 'eject');
+  await expect(page.locator('#media-name-1')).toHaveText('Empty');
+  await page.locator('#drive-1').click();
+  await expect(page.locator('#export')).toBeHidden();
+  await page.keyboard.press('Escape');
+  await page.locator('#toggle-keyboard').click();const right=page.locator('[data-scan="60"]');
   await right.click();await value(page,8,2);
 });
 
 test('missing or broken Wasm fails visibly and cannot masquerade as a working demo',async({page})=>{
   await page.route('**/core.wasm',route=>route.fulfill({status:404,body:'missing'}));
   await page.goto('./');await expect(page.locator('#error')).toContainText('Missing Wasm bundle');
-  await expect(page.locator('#game')).toBeDisabled();expect(await page.evaluate(()=>window.pc98)).toBeUndefined();
+  await expect(page.locator('#demos')).toBeDisabled();expect(await page.evaluate(()=>window.pc98)).toBeUndefined();
   await page.route('**/core.wasm',route=>route.fulfill({status:200,body:'this is not WebAssembly'}));
-  await page.reload();await expect(page.locator('#status')).toHaveText('Unable to start');await expect(page.locator('#game')).toBeDisabled();
+  await page.reload();await expect(page.locator('#status')).toHaveText('Unable to start');await expect(page.locator('#demos')).toBeDisabled();
 });

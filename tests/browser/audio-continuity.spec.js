@@ -1,3 +1,4 @@
+import { nextBoot, uploadMedia } from './helpers/player.js';
 import {test, expect, inspect} from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import {workerProfile} from './helpers/worker-profile.js';
@@ -73,9 +74,8 @@ test('ADV98 production playback remains continuous through scene changes', async
   await page.goto(testInfo.project.name==='local' ? './?diagnostics' : './?diagnostics&jit=0');
   await expect(page.locator('#profile')).toBeEnabled();
   await page.locator('#profile').selectOption('1');
-  await expect(page.locator('#file')).toBeEnabled();
-  await page.locator('#file').setInputFiles({name:'music-scenes.hdm',mimeType:'application/octet-stream',buffer:await fs.readFile('fixtures/dos-apps/music-scenes.hdm')});
-  await page.locator('#boot').selectOption('0');
+  await uploadMedia(page, {name:'music-scenes.hdm',mimeType:'application/octet-stream',buffer:await fs.readFile('fixtures/dos-apps/music-scenes.hdm')});
+  await nextBoot(page, '0');
   await page.locator('#reset').click(); await expect(page.locator('#profile')).toBeEnabled();
   await page.locator('#pause').click(); await expect(page.locator('#pause')).toHaveText('Resume');
   // Accelerate only silent DOS/compiler/title setup. Playback below uses the

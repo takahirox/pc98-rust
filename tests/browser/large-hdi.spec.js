@@ -1,3 +1,4 @@
+import { diskAction, uploadMedia } from './helpers/player.js';
 import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
@@ -89,8 +90,8 @@ test('512 MiB local HDI: real guest high I/O, reset, full streamed export/reimpo
     timings.baselineBrowserRssKiB=memory.totalPeak();
     memory.reset();
     let start=performance.now();
-    await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles(input);
-    await expect(page.locator('#media-name')).toHaveText('large.hdi', {timeout:60000});
+    await uploadMedia(page, input, '2');
+    await expect(page.locator('#media-name-2')).toHaveText('large.hdi', {timeout:60000});
     timings.importMs=Math.round(performance.now()-start);
     await memory.sample(); timings.importPeakRendererRssKiB=memory.peak();
     timings.importPeakBrowserRssKiB=memory.totalPeak();
@@ -100,9 +101,9 @@ test('512 MiB local HDI: real guest high I/O, reset, full streamed export/reimpo
     timings.wasmHighWaterBytes=await inspect(page, ()=>pc98.core.memory.buffer.byteLength);
     expect(timings.wasmHighWaterBytes).toBeLessThan(32*1024*1024);
     // A failed replacement and incomplete staging import cannot lose prior writes.
-    await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({name:'bad.hdi',mimeType:'application/octet-stream',buffer:Buffer.alloc(32)});
+    await uploadMedia(page, {name:'bad.hdi',mimeType:'application/octet-stream',buffer:Buffer.alloc(32)}, '2');
     await expect(page.locator('#error')).toContainText('invalid HDI geometry');
-    await expect(page.locator('#media-name')).toHaveText('large.hdi');
+    await expect(page.locator('#media-name-2')).toHaveText('large.hdi');
     await page.locator('#reset').click(); await runGuest(page,true);
     await page.evaluate(() => {
       const original=Blob.prototype.arrayBuffer;
@@ -115,9 +116,9 @@ test('512 MiB local HDI: real guest high I/O, reset, full streamed export/reimpo
         return original.call(this);
       };
     });
-    await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles(input);
+    await uploadMedia(page, input, '2');
     await expect(page.locator('#error')).toContainText('Local HDI read failed during import');
-    await expect(page.locator('#media-name')).toHaveText('large.hdi');
+    await expect(page.locator('#media-name-2')).toHaveText('large.hdi');
     await page.locator('#reset').click(); await runGuest(page,true);
     // A resource failure must be visible and recoverable without losing the
     // guest's writes or leaving controls disabled.
@@ -130,7 +131,7 @@ test('512 MiB local HDI: real guest high I/O, reset, full streamed export/reimpo
         },
       });
     });
-    await page.locator('#export').click();
+    await diskAction(page, '2', 'export');
     await expect(page.locator('#error')).toContainText('Cannot export hard disk: Export snapshot allocation failed');
     await expect(page.locator('#error')).toContainText('Disk remains mounted');
     await expect(page.locator('#reset')).toBeEnabled();
@@ -139,7 +140,7 @@ test('512 MiB local HDI: real guest high I/O, reset, full streamed export/reimpo
     memory.reset();
     start=performance.now();
     const downloadEvent=page.waitForEvent('download');
-    await page.locator('#export').click();
+    await diskAction(page, '2', 'export');
     const download=await downloadEvent;
     // Saving over the selected file invalidates Chromium's original File
     // snapshot. Subsequent exports must use the mounted bytes, including all
@@ -153,18 +154,21 @@ test('512 MiB local HDI: real guest high I/O, reset, full streamed export/reimpo
     expect(await digest(input)).toBe(expected);
     start=performance.now();
     const againEvent=page.waitForEvent('download');
-    await page.locator('#export').click();
+    await diskAction(page, '2', 'export');
     const again=await againEvent;
     await again.saveAs(output);
     expect(await again.failure()).toBeNull();
     timings.repeatExportDownloadMs=Math.round(performance.now()-start);
     expect((await fs.stat(output)).size).toBe(512*1024*1024+4096);
     expect(await digest(output)).toBe(expected);
-    await page.locator('#eject').click();
-    await expect(page.locator('#export')).toBeDisabled();
+    await diskAction(page, '2', 'eject');
+    await expect(page.locator('#media-name-2')).toHaveText('Empty');
+    await page.locator('#drive-2').click();
+    await expect(page.locator('#export')).toBeHidden();
+    await page.keyboard.press('Escape');
     memory.reset(); start=performance.now();
-    await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles(output);
-    await expect(page.locator('#media-name')).toHaveText('exported.hdi',{timeout:60000});
+    await uploadMedia(page, output, '2');
+    await expect(page.locator('#media-name-2')).toHaveText('exported.hdi',{timeout:60000});
     timings.reimportMs=Math.round(performance.now()-start);
     await runGuest(page,true);
     await memory.sample();
@@ -190,8 +194,8 @@ test('1 GiB local HDI: actual Ap high-sector guest I/O', async ({ page },testInf
     await page.clock.install({time:now}); await page.clock.pauseAt(now);
     await page.goto('./'); await expect(page.locator('#profile')).toBeEnabled();
     const start=performance.now();
-    await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles(input);
-    await expect(page.locator('#media-name')).toHaveText('one-gib.hdi',{timeout:45000});
+    await uploadMedia(page, input, '2');
+    await expect(page.locator('#media-name-2')).toHaveText('one-gib.hdi',{timeout:45000});
     await runGuest(page,false);
     console.log(`1 GiB import and guest probe ${Math.round(performance.now()-start)} ms`);
   } finally { await fs.rm(folder,{recursive:true,force:true}); }
@@ -204,21 +208,21 @@ test('512 MiB FAT16: unmodified FreeDOS shell reads and writes files above 128 M
   const now=new Date('2026-01-01T00:00:00Z');
   await page.clock.install({time:now}); await page.clock.pauseAt(now);
   await page.goto('./'); await expect(page.locator('#profile')).toBeEnabled();
-  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles(path.resolve('fixtures/freedos/large-fat16.hdi'));
-  await expect(page.locator('#media-name')).toHaveText('large-fat16.hdi',{timeout:60000});
+  await uploadMedia(page, path.resolve('fixtures/freedos/large-fat16.hdi'), '2');
+  await expect(page.locator('#media-name-2')).toHaveText('large-fat16.hdi',{timeout:60000});
   const folder=await fs.mkdtemp(path.join(os.tmpdir(),'pc98-fat16-'));
   try {
     for (let run=0;run<3;run++) {
       if (run===1) await page.locator('#reset').click();
       if (run===2) {
         const output=path.join(folder,'dos-saved.hdi');
-        const downloading=page.waitForEvent('download'); await page.locator('#export').click();
+        const downloading=page.waitForEvent('download'); await diskAction(page, '2', 'export');
         const download=await downloading; await download.saveAs(output);
         expect(await download.failure()).toBeNull();
         expect((await fs.stat(output)).size).toBe(512*1024*1024+4096);
-        await page.locator('#eject').click();
-        await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles(output);
-        await expect(page.locator('#media-name')).toHaveText('dos-saved.hdi',{timeout:60000});
+        await diskAction(page, '2', 'eject');
+        await uploadMedia(page, output, '2');
+        await expect(page.locator('#media-name-2')).toHaveText('dos-saved.hdi',{timeout:60000});
       }
       const result=await inspect(page, ()=>{
         for(let slots=0;slots<8000000;slots+=10000) {
@@ -279,8 +283,8 @@ test('occupied 512 MiB HDI imports once and exports without a second Wasm image'
     await page.clock.install({time:now}); await page.clock.pauseAt(now);
     await page.goto('./'); await expect(page.locator('#profile')).toBeEnabled();
     let start=performance.now();
-    await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles(input);
-    await expect(page.locator('#media-name')).toHaveText('occupied.hdi',{timeout:60000});
+    await uploadMedia(page, input, '2');
+    await expect(page.locator('#media-name-2')).toHaveText('occupied.hdi',{timeout:60000});
     const importMs=Math.round(performance.now()-start);
     await memory.sample(); const importPeakRendererRssKiB=memory.peak(), importPeakBrowserRssKiB=memory.totalPeak();
     await runGuest(page,false,512*1024*1024+4096);
@@ -290,7 +294,7 @@ test('occupied 512 MiB HDI imports once and exports without a second Wasm image'
     expect(wasmBytes).toBeLessThan(600*1024*1024);
     start=performance.now();
     memory.reset();
-    const downloading=page.waitForEvent('download'); await page.locator('#export').click();
+    const downloading=page.waitForEvent('download'); await diskAction(page, '2', 'export');
     const download=await downloading; await download.saveAs(output);
     expect(await download.failure()).toBeNull();
     const exportMs=Math.round(performance.now()-start);

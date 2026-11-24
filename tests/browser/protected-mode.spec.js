@@ -1,3 +1,4 @@
+import { uploadMedia } from './helpers/player.js';
 import { inspect } from './helpers/runtime.js';
 // Original MIT guest, production release Rust/Wasm only. Issue #101.
 import { test, expect } from './helpers/runtime.js';
@@ -18,10 +19,10 @@ test('Ap: paging-disabled 16/32-bit protected mode, faults and hardware IRQ, the
   const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/protected-mode-manifest.json', import.meta.url)));
   expect(createHash('sha256').update(image).digest('hex')).toBe(manifest.image_sha256);
   const expected = [...Buffer.from(manifest.result_hex, 'hex')];
-  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'protected_mode.hdm', mimeType: 'application/octet-stream', buffer: image });
+  await uploadMedia(page, { name: 'protected_mode.hdm', mimeType: 'application/octet-stream', buffer: image });
   await inspect(page, () => pc98.core.set_boot_source(0));
   await page.locator('#reset').click();
-  await expect(page.locator('#media-name')).toContainText('protected_mode.hdm');
+  await expect(page.locator('#media-name-0')).toContainText('protected_mode.hdm');
   for (let run = 0; run < 2; run++) {
     if (run) await page.locator('#reset').click();
     let slots = 0;

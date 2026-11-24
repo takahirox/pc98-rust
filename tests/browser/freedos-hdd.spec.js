@@ -1,3 +1,4 @@
+import { uploadMedia } from './helpers/player.js';
 import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -21,10 +22,8 @@ test('Ap Auto: cleared FreeDOS HDD kernel handoff and responsive shell cold/rese
   const at = manifest.header_bytes + (manifest.partition_lba + 26) * 512;
   const kernel = image.subarray(at, at + manifest.files['KERNEL  SYS'].bytes);
   expect(image.length).toBeGreaterThan(4 * 1024 * 1024);
-  await expect(page.locator('#drive')).toHaveValue('auto');
-  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'shell.hdi', mimeType: 'application/octet-stream', buffer: image });
-  await expect(page.locator('#media-name')).toHaveText('shell.hdi');
-  await expect(page.locator('#media-drive')).toHaveText('IDE HDD');
+  await uploadMedia(page, { name: 'shell.hdi', mimeType: 'application/octet-stream', buffer: image });
+  await expect(page.locator('#media-name-2')).toHaveText('shell.hdi');
   for (let run = 0; run < 2; run++) {
     if (run) await page.locator('#reset').click();
     // Only step/read the actual Rust interpreter. Observe the unmodified GPL

@@ -1,3 +1,4 @@
+import { uploadMedia } from './helpers/player.js';
 import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -24,11 +25,11 @@ for (const [profile, name] of [['0', 'VM'], ['1', 'Ap']]) {
     const expectedMedia = Buffer.from(image);
     payload.copy(expectedMedia, 1024);
     expect(createHash('sha256').update(expectedMedia).digest('hex')).toBe(manifest.expected_media_sha256);
-    await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'fdc_write_multi.hdm', mimeType: 'application/octet-stream', buffer: image });
+    await uploadMedia(page, { name: 'fdc_write_multi.hdm', mimeType: 'application/octet-stream', buffer: image });
     await inspect(page, () => pc98.core.set_boot_source(0));
     await page.locator('#reset').click();
     // File.arrayBuffer() and the mount/reset finish after the change event.
-    await expect(page.locator('#media-name')).toHaveText('fdc_write_multi.hdm');
+    await expect(page.locator('#media-name-0')).toHaveText('fdc_write_multi.hdm');
     for (let run = 0; run < 2; run++) {
       if (run) await page.locator('#reset').click();
       // The host only steps and reads: all requests and results originate in guest code.

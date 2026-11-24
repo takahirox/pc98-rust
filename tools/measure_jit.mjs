@@ -1,4 +1,5 @@
 // Opt-in fixed-work comparison using an original MIT register loop, not game media.
+import { uploadMedia } from '../tests/browser/helpers/player.js';
 import {chromium} from '@playwright/test';
 import {createServer} from 'node:http';
 import {readFile,realpath,writeFile} from 'node:fs/promises';
@@ -30,9 +31,8 @@ try{
       await page.goto('http://127.0.0.1:18152/?diagnostics&manual&jit='+(enabled?1:0));
       await page.waitForFunction(()=>!document.querySelector('#profile').disabled);
       const disk=Buffer.alloc(1261568);disk.set([0xfa,0x01,0xd8,0x31,0xc1,0x46,0x4a,0x09,0xc3,0x83,0xc7,1,0xeb,0xf3]);
-      await page.locator('#drive').selectOption('0');
-      await page.locator('#file').setInputFiles({name:'jit.hdm',mimeType:'application/octet-stream',buffer:disk});
-      await page.waitForFunction(()=>!document.querySelector('#file').disabled);
+      await uploadMedia(page, {name:'jit.hdm',mimeType:'application/octet-stream',buffer:disk}, '0');
+      await page.waitForFunction(()=>!document.querySelector('#profile').disabled);
       const worker=page.workers().find(w=>w.url().includes('emulator-worker.js'));
       await worker.evaluate(()=>pc98.core.set_boot_source(0));await page.locator('#reset').click();
       async function inspect(fn,arg){await worker.evaluate(()=>pc98.beginInspection());try{return await worker.evaluate(fn,arg);}finally{await worker.evaluate(()=>pc98.endInspection());}}

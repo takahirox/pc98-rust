@@ -1,3 +1,4 @@
+import { openSettings, uploadMedia } from './helpers/player.js';
 import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import { exportHdd } from './helpers/disk.js';
@@ -8,10 +9,9 @@ async function boot(page, name, sound = false, extension = 'hdm') {
   await expect(page.locator('#profile')).toBeEnabled();
   expect(await inspect(page, () => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
   await page.locator('#profile').selectOption('1');
-  if (extension === 'hdi') await page.locator('#drive').selectOption({value: '2'});
   if (sound) await page.locator('#sound').click();
   const buffer = await fs.readFile(new URL(`../../fixtures/dos-apps/${name}.${extension}`, import.meta.url));
-  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: `${name}.${extension}`, mimeType: 'application/octet-stream', buffer });
+  await uploadMedia(page, { name: `${name}.${extension}`, mimeType: 'application/octet-stream', buffer }, extension === 'hdi' ? '2' : 'auto');
   if (extension !== 'hdi') {
     await inspect(page, () => pc98.core.set_boot_source(0));
     await page.locator('#reset').click();
@@ -84,7 +84,7 @@ test('Ap DOS: independent Japanese ADV game choices and guest save survive expor
   const saved = Buffer.from(await inspect(page, () => pc98.exportDisk()));
   expect(saved.includes(Buffer.from('ADV98SAV'))).toBe(true);
   expect((await inspect(page, () => pc98.stats())).writes).toBeGreaterThan(0);
-  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'saved.hdm', mimeType: 'application/octet-stream', buffer: saved });
+  await uploadMedia(page, { name: 'saved.hdm', mimeType: 'application/octet-stream', buffer: saved });
   await page.locator('#reset').click();
   await until(page, async () => (await hash(page)) === title);
   await press(page, 'ArrowRight'); await press(page, 'Enter'); await press(page, 'Enter');
@@ -95,7 +95,7 @@ test('Ap DOS: independent Japanese ADV game choices and guest save survive expor
   // Switching profiles resets CPU/devices while preserving mounted media.
   await page.locator('#profile').selectOption('0');
   await expect(page.locator('#display-mode')).toContainText('8 colors');
-  await expect(page.locator('#media-name')).toHaveText('saved.hdm');
+  await expect(page.locator('#media-name-0')).toHaveText('saved.hdm');
 });
 
 test('Ap DOS: independently compiled FM routines reach Web Audio with the beeper off', async ({ page }) => {
@@ -192,7 +192,9 @@ test('Ap IDE HDD boots DOS and ADV98; mouse reaches IRQ driver and game; export 
     }
     throw Error('resident mouse driver not found');
   });
+  await openSettings(page);
   await page.locator('#mouse').check();
+  await page.keyboard.press('Escape');
   // Enabling mouse input may scroll the canvas above the viewport.
   await page.locator('#screen').scrollIntoViewIfNeeded();
   const box = await page.locator('#screen').boundingBox();
@@ -216,7 +218,7 @@ test('Ap IDE HDD boots DOS and ADV98; mouse reaches IRQ driver and game; export 
   expect(save.subarray(0,8).toString()).toBe('ADV98SAV');
   expect(hdiFile(saved, 'HDDSAVE TXT').toString()).toBe('DURABLE DOS WRITE\r\n');
   expect((await inspect(page, () => pc98.stats())).mouseLatches).toBeGreaterThan(0);
-  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'saved.hdi', mimeType: 'application/octet-stream', buffer: saved });
+  await uploadMedia(page, { name: 'saved.hdi', mimeType: 'application/octet-stream', buffer: saved });
   await waitTitle(page);
   await press(page, 'ArrowRight'); await press(page, 'Enter'); await press(page, 'Enter');
   expect(await hash(page)).not.toBe(title);
@@ -224,9 +226,9 @@ test('Ap IDE HDD boots DOS and ADV98; mouse reaches IRQ driver and game; export 
   await expect(page.locator('#error')).toBeHidden();
   // Rejected geometry must preserve the mounted disk and avoid a Wasm trap.
   const bad = Buffer.from(saved); bad.writeUInt32LE(0xffffffff, 28);
-  await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'bad.hdi', mimeType: 'application/octet-stream', buffer: bad });
+  await uploadMedia(page, { name: 'bad.hdi', mimeType: 'application/octet-stream', buffer: bad });
   await expect(page.locator('#error')).toContainText('invalid HDI geometry');
-  await expect(page.locator('#media-name')).toHaveText('saved.hdi');
+  await expect(page.locator('#media-name-2')).toHaveText('saved.hdi');
   expect(hdiFile(await exportHdd(page), 'SAVE1   DAT')).toEqual(save);
 });
 
@@ -284,7 +286,7 @@ for (const profile of ['0', '1']) {
     await page.locator('#profile').selectOption(profile);
     expect(await inspect(page, () => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
     const buffer = await fs.readFile(new URL('../../fixtures/freedos/timer.hdm', import.meta.url));
-    await expect(page.locator('#file')).toBeEnabled(); await page.locator('#file').setInputFiles({ name: 'timer.hdm', mimeType: 'application/octet-stream', buffer });
+    await uploadMedia(page, { name: 'timer.hdm', mimeType: 'application/octet-stream', buffer });
     await inspect(page, () => pc98.core.set_boot_source(0));
     await page.locator('#reset').click();
     await until(page, async () => (await inspect(page, () => pc98.text())).includes('TIMER CALLBACK PASS'), 160);
