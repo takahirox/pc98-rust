@@ -686,12 +686,15 @@ screen.addEventListener('keydown', event => {
   const scan = codes[event.code];
   if (scan === undefined) return;
   if (!captureTab) {
+    // Right Alt and left Meta map to the standalone XFER and NFER keys.
+    const transferKey = event.code === 'AltRight' || event.code === 'MetaLeft';
     // Hold modifiers locally until typing commits to guest input.
-    if (['Shift','Control','Alt','AltGraph','Meta'].includes(event.key)) {
+    if (!transferKey && ['Shift','Control','Alt','AltGraph','Meta'].includes(event.key)) {
       pendingModifiers.add(event.code);
       return;
     }
-    captureScreenKeys();
+    // A standalone transfer key leaves Tab available for host navigation.
+    if (!transferKey || pendingModifiers.size) captureScreenKeys();
   }
   event.preventDefault();
   key(scan,true);

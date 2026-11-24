@@ -12,6 +12,20 @@ async function ready(page) {
   await expect(page.locator('#crt-screen')).toBeVisible();
 }
 
+async function holdHddRead(page, size) {
+  await page.evaluate(size => {
+    const read = Blob.prototype.arrayBuffer;
+    const wait = new Promise(resolve => { window.finishHddRead = resolve; });
+    Blob.prototype.arrayBuffer = async function () {
+      if (this.size === size) {
+        Blob.prototype.arrayBuffer = read;
+        await wait;
+      }
+      return read.call(this);
+    };
+  }, size);
+}
+
 const sizes = [
   {width:1280, height:720},
   {width:1440, height:900},
@@ -123,6 +137,28 @@ test('guest Tab and Shift+Tab release correctly and F12 returns to host navigati
   await expect.poll(shiftHeld).toBe(false);
 });
 
+test('standalone XFER and NFER reach the guest after tabbing to the screen', async ({page}) => {
+  await ready(page);
+  const screen = page.locator('#screen');
+  await expect(screen).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('button', {name:'Pause'})).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(screen).toBeFocused();
+  for (const [code, scan] of [['AltRight', 0x35], ['MetaLeft', 0x51]]) {
+    const held = () => page.evaluate(async scan => {
+      const state = await pc98.read(0x52a + Math.floor(scan / 8));
+      return Boolean(state & (1 << (scan % 8)));
+    }, scan);
+    await page.keyboard.down(code);
+    await expect.poll(held, {message:`${code} make reaches the guest BIOS`}).toBe(true);
+    await page.keyboard.up(code);
+    await expect.poll(held, {message:`${code} break reaches the guest BIOS`}).toBe(false);
+  }
+  await page.keyboard.press('Shift+Tab');
+  await expect(page.getByRole('link', {name:'GitHub'})).toBeFocused();
+});
+
 test('consecutive Space presses toggle playback and sound without moving focus', async ({page}) => {
   await ready(page);
   const pause = page.locator('#pause');
@@ -168,17 +204,7 @@ test.describe('320 × 700 touch media feedback', () => {
     const screen = page.locator('#screen');
     const initial = await screen.boundingBox();
     await expect(drive).toBeInViewport({ratio:1});
-    await page.evaluate(size => {
-      const read = Blob.prototype.arrayBuffer;
-      const wait = new Promise(resolve => { window.finishHddRead = resolve; });
-      Blob.prototype.arrayBuffer = async function () {
-        if (this.size === size) {
-          Blob.prototype.arrayBuffer = read;
-          await wait;
-        }
-        return read.call(this);
-      };
-    }, hdi.length);
+    await holdHddRead(page, hdi.length);
     await tapToUpload({name:'probe.hdi', mimeType:'application/octet-stream', buffer:hdi});
     const progress = page.getByText('Importing HDD…', {exact:true}).filter({visible:true});
     await expect(progress).toBeInViewport({ratio:1});
@@ -286,21 +312,49 @@ test('keyboard navigation, picker dismissal, cancellation and selection preserve
   await expect(page.locator('#active-boot')).toHaveText('Booted: Floppy 1 · hello.tfd');
 });
 
+async function enterFullscreen(page, mode) {
+  await page.setViewportSize({width:844,height:390});
+  if (mode === 'fallback') {
+    await page.addInitScript(() => {
+      Element.prototype.requestFullscreen = () => Promise.reject(new Error('Fullscreen unavailable'));
+    });
+  }
+  await ready(page);
+  await page.getByRole('button', {name:'Fullscreen', exact:true}).press('Enter');
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement?.id ?? null))
+    .toBe(mode === 'native' ? 'drop' : null);
+  await expect(page.getByRole('button', {name:'Exit fullscreen'})).toBeFocused();
+}
+
 for (const mode of ['native', 'fallback']) {
-  test(`${mode} fullscreen keeps Worker recovery visible and the exit reachable`, async ({page}) => {
-    await page.setViewportSize({width:844,height:390});
-    if (mode === 'fallback') {
-      await page.addInitScript(() => {
-        Element.prototype.requestFullscreen = () => Promise.reject(new Error('Fullscreen unavailable'));
-      });
-    }
-    await ready(page);
-    const fullscreen = page.getByRole('button', {name:'Fullscreen', exact:true});
-    await fullscreen.press('Enter');
-    await expect.poll(() => page.evaluate(() => document.fullscreenElement?.id ?? null))
-      .toBe(mode === 'native' ? 'drop' : null);
+  test(`${mode} fullscreen shows HDD drop progress with the exit in view`, async ({page}) => {
+    await enterFullscreen(page, mode);
+    const hdi = await readFile(new URL('../../fixtures/ide_verify/ide_verify.hdi', import.meta.url));
+    const display = page.locator('#drop');
+    await holdHddRead(page, hdi.length);
+    await display.evaluate((drop, base64) => {
+      const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+      const dataTransfer = new DataTransfer();
+      dataTransfer.items.add(new File([bytes], 'fullscreen.hdi', {type:'application/octet-stream'}));
+      drop.dispatchEvent(new DragEvent('drop', {bubbles:true, cancelable:true, dataTransfer}));
+    }, hdi.toString('base64'));
+
+    const progress = display.getByRole('status').filter({hasText:'Importing HDD…'});
     const exit = page.getByRole('button', {name:'Exit fullscreen'});
-    await expect(exit).toBeFocused();
+    await expect(progress).toBeInViewport({ratio:1});
+    await expect(exit).toBeInViewport({ratio:1});
+    await page.evaluate(() => window.finishHddRead());
+    await expect.poll(() => page.evaluate(() => pc98.text())).toContain('IDE VERIFY PASS');
+    await expect(display.locator('#media-progress')).toBeHidden();
+    await exit.click();
+    await expect(exit).toBeHidden();
+    await expect(page.locator('#media-name-2')).toHaveText('fullscreen.hdi');
+  });
+
+  test(`${mode} fullscreen keeps Worker recovery visible and the exit reachable`, async ({page}) => {
+    await enterFullscreen(page, mode);
+    const fullscreen = page.getByRole('button', {name:'Fullscreen', exact:true});
+    const exit = page.getByRole('button', {name:'Exit fullscreen'});
     await page.locator('#drop').getByRole('button', {name:'Keyboard', exact:true}).click();
     await expect(page.locator('#drop #keyboard-panel')).toBeVisible();
 
