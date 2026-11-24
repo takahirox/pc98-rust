@@ -243,7 +243,7 @@ fn host_mouse_buttons_follow_live_reads_after_the_latch_ends() {
     assert_eq!(b.input(0x7fd9), 0x6b);
     assert_eq!(latch_mouse(&mut b), (11, 0, 0x60));
 
-    // Both the X count and the buttons stay latched until HC goes low.
+    // Both the X count and the buttons stay latched during the initial read.
     b.output(0x7fdd, 0x80);
     b.mouse.host_motion(0, 0, 2);
     assert_eq!(b.input(0x7fd9), 0x6b);
@@ -325,6 +325,35 @@ fn host_mouse_short_tap_releases_even_if_the_guest_leaves_hc_high() {
 }
 
 #[test]
+fn host_mouse_polling_with_hc_high_sees_both_click_edges() {
+    const CLOCKS_PER_MS: u32 = 8_000;
+    let mut b = Bus::new(Profile::Pc9821ApDos);
+    b.mouse.host_motion(-17, 35, 0);
+    b.output(0x7fdd, 0x90);
+    assert_eq!(b.input(0x7fd9), 0xef);
+
+    // Port A is polled every 17 ms, with a 38 ms click starting at 2 ms.
+    b.tick(2 * CLOCKS_PER_MS);
+    b.mouse.host_motion(0, 0, 1);
+    b.tick(15 * CLOCKS_PER_MS);
+    assert_eq!(b.input(0x7fd9), 0x6f);
+    b.tick(17 * CLOCKS_PER_MS);
+    assert_eq!(b.input(0x7fd9), 0x6f);
+    b.tick(6 * CLOCKS_PER_MS);
+    b.mouse.host_motion(5, -9, 0);
+    b.tick(11 * CLOCKS_PER_MS);
+    assert_eq!(b.input(0x7fd9), 0xef);
+
+    // The motion snapshot still supplies all four nibbles of the old count.
+    for (control, expected) in [(0xb0, 0xee), (0xd0, 0xe3), (0xf0, 0xe2)] {
+        b.output(0x7fdd, control);
+        assert_eq!(b.input(0x7fd9), expected);
+    }
+    assert_eq!(latch_mouse(&mut b), (0, 0, 0xe0));
+    assert_eq!(latch_mouse(&mut b), (5, -9, 0xe0));
+}
+
+#[test]
 fn host_mouse_continuously_polled_unlatched_counter_keeps_its_motion() {
     let mut b = Bus::new(Profile::Pc9821ApDos);
     b.mouse.host_motion(40, -19, 0);
@@ -401,6 +430,62 @@ fn host_mouse_samples_a_short_click_after_all_earlier_motion() {
     assert_eq!(latch_mouse(&mut b), (0, 0, 0x60));
     assert_eq!(latch_mouse(&mut b), (9, -3, 0xe0));
     assert_eq!(latch_mouse(&mut b), (0, 0, 0xe0));
+}
+
+#[test]
+fn host_mouse_motion_burst_keeps_a_queued_click_and_its_motion_order() {
+    let mut b = Bus::new(Profile::Pc9821ApDos);
+    b.mouse.host_motion(3_000, 0, 0);
+    b.mouse.host_motion(0, 0, 1);
+    b.mouse.host_motion(0, 0, 0);
+
+    let mut samples = Vec::new();
+    for frame in 1..=80 {
+        b.tick(133_333); // Host motion arrives at 60 Hz.
+        b.mouse.host_motion(3, -2, 0);
+        if frame % 4 == 0 {
+            samples.push(latch_mouse(&mut b)); // The guest samples at 15 Hz.
+        }
+    }
+    for _ in 0..12 {
+        b.tick(533_332);
+        samples.push(latch_mouse(&mut b));
+    }
+
+    let press = samples
+        .iter()
+        .position(|sample| *sample == (0, 0, 0x60))
+        .expect("the queued press reaches the guest");
+    for (samples, expected) in [
+        (&samples[..press], (3_000, 0)),
+        (&samples[press + 1..], (240, -160)),
+    ] {
+        let mut motion = (0, 0);
+        for &(x, y, buttons) in samples {
+            assert_eq!(buttons, 0xe0);
+            motion.0 += i32::from(x);
+            motion.1 += i32::from(y);
+        }
+        assert_eq!(motion, expected);
+    }
+    assert_eq!(latch_mouse(&mut b), (0, 0, 0xe0));
+}
+
+#[test]
+fn host_mouse_new_click_compacts_motion_before_older_edges() {
+    let mut b = Bus::new(Profile::Pc9821ApDos);
+    b.mouse.host_motion(0, 0, 1);
+    b.mouse.host_motion(0, 0, 0);
+    for _ in 0..64 {
+        b.tick(1);
+        b.mouse.host_motion(1, 0, 0);
+    }
+    b.mouse.host_motion(0, 0, 2);
+    b.mouse.host_motion(0, 0, 0);
+
+    for expected in [(0, 0, 0x60), (64, 0, 0xe0), (0, 0, 0xc0), (0, 0, 0xe0)] {
+        assert_eq!(latch_mouse(&mut b), expected);
+    }
 }
 
 #[test]

@@ -3,6 +3,7 @@ use std::collections::VecDeque;
 
 const HOST_QUEUE_CAPACITY: usize = 64;
 const HOST_QUEUE_TIMEOUT: u64 = 2_000_000; // 250 ms at 8 MHz
+const BUTTON_LATCH_WINDOW: u64 = 8_000; // 1 ms at 8 MHz
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 struct ButtonState {
@@ -89,18 +90,24 @@ impl Mouse {
         let buttons = self.live_buttons;
         let motion = [i64::from(dx), i64::from(dy)];
         let received_at = self.host_clock;
-        if let Some(sample) = self
-            .pending
-            .back_mut()
-            .filter(|sample| sample.buttons == buttons && sample.received_at == received_at)
-        {
+        let full = self.pending.len() == HOST_QUEUE_CAPACITY;
+        if let Some(sample) = self.pending.back_mut().filter(|sample| {
+            sample.buttons == buttons && (sample.received_at == received_at || full)
+        }) {
             sample.add_motion(motion);
+            sample.received_at = received_at;
         } else {
-            if self.pending.len() == HOST_QUEUE_CAPACITY {
-                // Drop the oldest button state under pressure, carrying its
-                // remaining motion into the next sample.
-                let oldest = self.pending.pop_front().unwrap();
-                self.pending.front_mut().unwrap().add_motion(oldest.motion);
+            if full {
+                // Compact motion within a button state first. If the queue
+                // contains only distinct edges, fold the oldest into its successor.
+                let merge_at = self
+                    .pending
+                    .iter()
+                    .zip(self.pending.iter().skip(1))
+                    .position(|(older, newer)| older.buttons == newer.buttons)
+                    .unwrap_or(0);
+                let older = self.pending.remove(merge_at).unwrap();
+                self.pending[merge_at].add_motion(older.motion);
             }
             self.pending.push_back(HostSample {
                 motion,
@@ -126,8 +133,7 @@ impl Mouse {
             }) {
                 self.pending.pop_front();
             }
-            // A driver holding HC high can still see the live button levels
-            // after the queued sample has had time to be read.
+            // An inactive driver need not keep an old button snapshot.
             if self.host_clock - self.last_sample_at >= HOST_QUEUE_TIMEOUT {
                 self.latched_buttons = None;
             }
@@ -147,26 +153,32 @@ impl Mouse {
                 let count = if latched {
                     self.latch[axis]
                 } else {
-                    self.last_sample_at = self.host_clock;
                     let mut count = self.counter[axis];
                     for sample in &self.pending {
                         count = count.wrapping_add(sample.motion[axis] as u8);
                     }
                     count
                 };
-                let buttons = if latched {
-                    self.latched_buttons
-                } else {
-                    let unread = self.unread_latch();
-                    self.latched_buttons = None;
-                    unread
-                }
-                .unwrap_or_else(|| {
-                    self.pending
-                        .iter()
-                        .find(|sample| sample.buttons.revision > self.reported_buttons.revision)
-                        .map_or(self.live_buttons, |sample| sample.buttons)
-                });
+                // Keep button bits stable during a motion nibble read. A
+                // polling driver can then see later edges with HC still high.
+                let buttons = self
+                    .latched_buttons
+                    .filter(|_| {
+                        latched && self.host_clock - self.last_sample_at < BUTTON_LATCH_WINDOW
+                    })
+                    .unwrap_or_else(|| {
+                        let buttons = self.unread_latch().unwrap_or_else(|| {
+                            self.pending
+                                .iter()
+                                .find(|sample| {
+                                    sample.buttons.revision > self.reported_buttons.revision
+                                })
+                                .map_or(self.live_buttons, |sample| sample.buttons)
+                        });
+                        self.latched_buttons = latched.then_some(buttons);
+                        self.last_sample_at = self.host_clock;
+                        buttons
+                    });
                 self.reported_buttons = buttons;
                 let buttons = buttons.bits;
                 let bits = (if buttons & 1 != 0 { 0x80 } else { 0 })
