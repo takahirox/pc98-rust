@@ -67,6 +67,7 @@ const sizes = [
   {width:1440, height:900},
   {width:390, height:844, touch:true},
   {width:844, height:390, touch:true},
+  {width:568, height:320, touch:true},
   {width:320, height:700, touch:true},
 ];
 
@@ -84,6 +85,7 @@ for (const {width, height, touch = false} of sizes) {
       const initial = await geometry();
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
       const screen = await canvas.boundingBox();
+      expect(await page.locator('#crt-screen').boundingBox()).toEqual(screen);
       expect(screen.width / screen.height).toBeCloseTo(4/3, 2);
       expect(screen.y).toBeGreaterThanOrEqual(0);
       expect(screen.y + screen.height).toBeLessThan(height);
@@ -128,6 +130,46 @@ for (const {width, height, touch = false} of sizes) {
     });
   });
 }
+
+test.describe('568 × 320 touch media picker', () => {
+  test.use({viewport:{width:568,height:320}, hasTouch:true, isMobile:true});
+  test('keeps the IDE file chooser action in view', async ({page}) => {
+    await ready(page);
+    const drive = page.getByRole('button', {name:'Change IDE HDD'});
+    await drive.tap();
+    const picker = page.getByRole('dialog', {name:'IDE HDD'});
+    const choose = picker.getByRole('button', {name:'Choose local file for IDE HDD'});
+    await expect(picker).toBeInViewport({ratio:1});
+    await expect(choose).toBeInViewport({ratio:1});
+    expect(await choose.evaluate(el => el.scrollWidth === el.clientWidth && el.clientWidth >= 150)).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(568);
+    await Promise.all([page.waitForEvent('filechooser'), choose.tap()]);
+    await page.keyboard.press('Escape');
+    await expect(picker).toBeHidden();
+    await expect(drive).toBeFocused();
+  });
+});
+
+test.describe('320 × 700 touch settings', () => {
+  test.use({viewport:{width:320,height:700}, hasTouch:true, isMobile:true});
+  test('keeps the Next boot selector readable and reachable', async ({page}) => {
+    await ready(page);
+    const settings = page.getByRole('button', {name:'Settings'});
+    await settings.tap();
+    const panel = page.getByRole('dialog', {name:'Settings'});
+    const boot = panel.getByRole('combobox', {name:'Next boot'});
+    await expect(panel).toBeInViewport({ratio:1});
+    await expect(boot).toBeInViewport({ratio:1});
+    expect(await panel.evaluate(el => el.scrollWidth)).toBe(await panel.evaluate(el => el.clientWidth));
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(320);
+    await boot.tap({trial:true});
+    await boot.selectOption('0');
+    await expect(boot).toHaveValue('0');
+    await page.keyboard.press('Escape');
+    await expect(panel).toBeHidden();
+    await expect(settings).toBeFocused();
+  });
+});
 
 test('F12 captures standalone Shift and returns to host navigation', async ({page}) => {
   await ready(page);
