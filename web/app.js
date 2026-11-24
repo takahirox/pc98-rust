@@ -92,7 +92,7 @@ const presentationTolerance = 2;
 const captureLead = 10;
 let nextPresentation = 0;
 const pending = new Map(); let requestId = 0;
-const metrics = new Map(); let bootByte = 0;
+const metrics = new Map(); let bootAttempt;
 const mounted = [null, null, null], held = new Set();
 const pendingShifts = new Set();
 let pointerPosition, pointerButtons = 0;
@@ -120,7 +120,15 @@ $('dismiss-error').onclick = () => {
 };
 function acceptState(state) {
   if (!state || state.generation < generation) return;
-  generation = state.generation; bootByte = state.boot;
+  if (state.generation > generation) {
+    const drive = state.boot === 0x80 ? 2 : 0;
+    const disk = mounted[drive];
+    bootAttempt = {source: `${driveNames[drive]} · ${disk?.name ?? 'Empty'}`};
+    if (disk) showBootResult('Last boot attempt');
+    else $('active-boot').textContent = 'No active boot disk';
+  }
+  generation = state.generation;
+  if (state.bootLoaded && bootAttempt) showBootResult('Booted');
   for (const [id,value] of state.metrics) metrics.set(id,value);
   const mode = metrics.get(21) === 0 ? '640 × 400 · 8 colors · replacement Latin font'
     : metrics.get(13) ? '640 × 400 · 256 colors · PEGC'
@@ -414,16 +422,16 @@ function bundled(name) {
 $('game').onclick = () => bundled('startrail.hdm');
 $('hello').onclick = () => bundled('hello98.tfd');
 $('pause').onclick = event => exclusive(() => setRunning(!running), event.currentTarget);
-function showActiveBoot() {
-  const drive = bootByte === 0x80 ? 2 : bootByte === 0x90 ? 0 : null;
-  const disk = mounted[drive];
-  $('active-boot').textContent = disk ? `Booted: ${driveNames[drive]} · ${disk.name}` : 'No active boot disk';
+function showBootResult(result) {
+  if (bootAttempt.result === result) return;
+  bootAttempt.result = result;
+  $('active-boot').textContent = `${result}: ${bootAttempt.source}`;
 }
 async function resetMachine({focusScreen = true} = {}) {
   releaseKeys();
   if (outputGain) outputGain.gain.value = 0;
   if (pendingFrame) { recycleFrame(pendingFrame); pendingFrame = null; }
-  await core.reset(); showActiveBoot(); clearError();
+  await core.reset(); clearError();
   await setRunning(!document.hidden);
   if (focusScreen && !panelOpen()) screen.focus({preventScroll:true});
 }
@@ -463,7 +471,7 @@ async function selectProfile() {
     $('mouse').checked = false;
     display.classList.remove('guest-mouse');
   }
-  clearError(); showActiveBoot();
+  clearError();
   const hasMedia = Boolean(mounted[0] || (mounted[2] && ap));
   await setRunning(!document.hidden && hasMedia, hasMedia ? undefined : 'No boot disk');
 }
@@ -743,6 +751,9 @@ try {
     if (m.event === 'renderFault') { rendererFault(renderWorker,m.error); return; }
     if (m.event === 'fault') { workerFault(Error(m.error)); return; }
     if (m.event === 'stopped') {
+      if (m.state.generation < generation) return;
+      acceptState(m.state);
+      if (bootAttempt && !m.state.bootLoaded) showBootResult('Boot failed');
       setRunning(false, 'Guest stopped').catch(fail); fail(m.error); return;
     }
     if (m.event === 'videoEpoch') {

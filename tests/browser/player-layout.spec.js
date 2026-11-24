@@ -6,6 +6,27 @@ const hello = await readFile(new URL('../../web/media/hello98.tfd', import.meta.
 const floppy = name => ({name, mimeType:'application/octet-stream', buffer:hello});
 const stats = page => page.evaluate(() => pc98.stats());
 
+async function dropUnsupportedFile(page) {
+  await page.locator('#screen').evaluate(canvas => {
+    const dataTransfer = new DataTransfer();
+    dataTransfer.items.add(new File(['unsupported'], 'unsupported.txt'));
+    canvas.dispatchEvent(new DragEvent('drop', {bubbles:true, cancelable:true, dataTransfer}));
+  });
+}
+
+async function expectNoticeClearOfScreen(page, initial) {
+  const screen = page.locator('#screen');
+  const notice = page.locator('#error-notice');
+  const alert = page.getByRole('alert');
+  await expect(alert).toContainText('Unsupported media extension');
+  await expect(alert).toBeInViewport({ratio:1});
+  await expect(notice).toBeInViewport({ratio:1});
+  expect(await screen.boundingBox()).toEqual(initial);
+  const box = await notice.boundingBox();
+  expect(box.x >= initial.x + initial.width || box.x + box.width <= initial.x ||
+    box.y >= initial.y + initial.height || box.y + box.height <= initial.y).toBe(true);
+}
+
 async function ready(page) {
   await page.goto('./');
   await expect.poll(() => page.evaluate(() => window.pc98?.text()), {timeout:20000}).toContain('A:\\>');
@@ -328,6 +349,77 @@ test('keyboard navigation, picker dismissal, cancellation and selection preserve
   await expect.poll(() => page.evaluate(() => pc98.text())).toContain('Hello world!!');
   await openSettings(page);
   await expect(page.locator('#active-boot')).toHaveText('Booted: Floppy 1 · hello.tfd');
+});
+
+test('Settings keeps the failed boot source separate from the next reset', async ({page}) => {
+  await ready(page);
+  // A valid D88 with one sector on side 1 and no track on side 0.
+  const track = 0x2b0;
+  const image = Buffer.alloc(track + 16 + 1024);
+  image[0x1b] = 0x20;
+  image.writeUInt32LE(image.length, 0x1c);
+  image.writeUInt32LE(track, 0x24);
+  image.set([0, 1, 1, 3, 1], track);
+  image.writeUInt16LE(1024, track + 14);
+  await uploadMedia(page, {name:'no-boot-track.d88', mimeType:'application/octet-stream', buffer:image}, '0');
+  await expect(page.locator('#media-name-0')).toHaveText('no-boot-track.d88');
+  await nextBoot(page, '0');
+  await page.getByRole('button', {name:'Reset'}).click();
+  await expect(page.getByRole('alert')).toContainText('Boot failed');
+  expect((await stats(page)).error).toContain('no readable PC-98 floppy or IDE IPL');
+  await page.getByRole('button', {name:'Dismiss error'}).click();
+  await openSettings(page);
+  const attempt = page.locator('#active-boot');
+  const resetSource = page.locator('#boot-source');
+  await expect(attempt).toHaveText('Boot failed: Floppy 1 · no-boot-track.d88');
+  await expect(resetSource).toHaveText('Reset boots: Floppy 1 · no-boot-track.d88');
+  await page.locator('#boot').selectOption('1');
+  await expect(resetSource).toHaveText('Reset boots: IDE HDD · FreeDOS-128MiB.hdi');
+  await expect(attempt).toHaveText('Boot failed: Floppy 1 · no-boot-track.d88');
+  await page.keyboard.press('Escape');
+
+  await uploadMedia(page, floppy('hello.tfd'), '0');
+  await expect(page.locator('#media-name-0')).toHaveText('hello.tfd');
+  await openSettings(page);
+  await expect(attempt).toHaveText('Boot failed: Floppy 1 · no-boot-track.d88');
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', {name:'Reset'}).click();
+  await expect.poll(() => page.evaluate(() => pc98.text())).toContain('A:\\>');
+  await openSettings(page);
+  await expect(attempt).toHaveText('Booted: IDE HDD · FreeDOS-128MiB.hdi');
+});
+
+test.describe('844 × 390 landscape recovery', () => {
+  test.use({viewport:{width:844,height:390}, hasTouch:true, isMobile:true});
+  test('keeps the guest image clear in the player', async ({page}) => {
+    await ready(page);
+    const normal = await page.locator('#screen').boundingBox();
+    await dropUnsupportedFile(page);
+    await expectNoticeClearOfScreen(page, normal);
+    await page.getByRole('button', {name:'Dismiss error'}).tap();
+    await expect(page.getByRole('alert')).toBeHidden();
+  });
+
+  test('keeps the guest image clear in fallback fullscreen with the keyboard open', async ({page}) => {
+    await page.addInitScript(() => {
+      Element.prototype.requestFullscreen = () => Promise.reject(new Error('Fullscreen unavailable'));
+    });
+    await ready(page);
+    await page.getByRole('button', {name:'Fullscreen', exact:true}).tap();
+    const exit = page.getByRole('button', {name:'Exit fullscreen'});
+    await expect(page.locator('#drop')).toHaveClass(/full-window/);
+    await page.locator('#fullscreen-keyboard').tap();
+    const panel = page.locator('#drop #keyboard-panel');
+    await expect(panel).toBeVisible();
+    const fullscreen = await page.locator('#screen').boundingBox();
+    await dropUnsupportedFile(page);
+    await expectNoticeClearOfScreen(page, fullscreen);
+    await expect(exit).toBeInViewport({ratio:1});
+    await expect(panel.getByRole('button', {name:'STOP', exact:true})).toBeInViewport({ratio:1});
+    await exit.tap();
+    await expect(exit).toBeHidden();
+    await expect(page.getByRole('alert')).toBeInViewport({ratio:1});
+  });
 });
 
 async function enterFullscreen(page, mode) {
