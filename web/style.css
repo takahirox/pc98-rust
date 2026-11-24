@@ -358,6 +358,17 @@ body:has(.full-window) { overflow: hidden; }
     .drives { grid-area: 4 / 1 / auto / -1; }
   }
 }
+@media (pointer: coarse) and (orientation: landscape) and (max-height: 520px) and (min-width: 580px) {
+  .player:has(#keyboard-home > :not([hidden])) .drives #error-notice {
+    /* The open keyboard moves the drives below the player. Keep recovery near the controls. */
+    position: fixed;
+    inset: auto max(10px, env(safe-area-inset-right)) max(6px, env(safe-area-inset-bottom)) auto;
+    width: min(40dvw, 22rem);
+    margin: 0;
+    z-index: 2;
+  }
+  .player:has(#keyboard-home > :not([hidden])) .drives #error { max-height: 24dvh; overflow: auto; }
+}
 @media (max-height: 650px), (max-width: 740px), (pointer: coarse) and (max-height: 760px) {
   .display:is(:fullscreen,.full-window) #keyboard-panel {
     display: grid;

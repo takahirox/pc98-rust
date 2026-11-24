@@ -706,6 +706,45 @@ test('Settings retains the firmware failure after a readable HDD IPL finds no bo
 
 test.describe('844 × 390 landscape recovery', () => {
   test.use({viewport:{width:844,height:390}, hasTouch:true, isMobile:true});
+  test('shows FreeDOS recovery when the touch keyboard is already open', async ({page}) => {
+    const {promise: pending, resolve: release} = Promise.withResolvers();
+    await page.route('**/freedos/desktop.bin', async route => {
+      await pending;
+      await route.fulfill({status:503, body:'Unavailable'});
+    });
+    await page.goto('./');
+    await expect(page.getByRole('status').filter({hasText:'Loading FreeDOS HDD'})).toBeVisible();
+    const keyboard = page.getByRole('button', {name:'Keyboard', exact:true});
+    await expect(keyboard).toBeInViewport({ratio:1});
+    await keyboard.tap();
+    await expect(keyboard).toHaveAttribute('aria-expanded', 'true');
+    const screen = page.locator('#screen');
+    const initial = await screen.boundingBox();
+
+    release();
+    const message = 'Cannot load FreeDOS template: HTTP 503. Disk retained. Use Restore FreeDOS HDD to retry, or insert local media.';
+    await expectNoticeClearOfScreen(page, initial, message);
+    const dismiss = page.getByRole('button', {name:'Dismiss error'});
+    await expect(dismiss).toBeInViewport({ratio:1});
+    await expect(keyboard).toBeInViewport({ratio:1});
+    await keyboard.tap({trial:true});
+    const settings = page.getByRole('button', {name:'Settings'});
+    await expect(settings).toBeInViewport({ratio:1});
+    await settings.tap();
+    const panel = page.getByRole('dialog', {name:'Settings'});
+    const restore = panel.getByRole('button', {name:'Restore FreeDOS HDD'});
+    await expect(restore).toBeVisible();
+    await expect(restore).toBeEnabled();
+    await page.keyboard.press('Escape');
+    await expect(panel).toBeHidden();
+
+    await dismiss.tap();
+    await expect(page.getByRole('alert')).toBeHidden();
+    await expect(keyboard).toHaveAttribute('aria-expanded', 'true');
+    expect(await screen.boundingBox()).toEqual(initial);
+    expect(await page.evaluate(() => scrollY)).toBe(0);
+  });
+
   test('keeps the image clear and media actions tappable after a boot failure', async ({page}) => {
     await ready(page);
     await uploadMedia(page, floppyWithoutBootTrack(), '0');
