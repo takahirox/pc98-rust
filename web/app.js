@@ -103,9 +103,11 @@ const mediaPicker = $('media-picker'), fileInput = $('file');
 const driveButtons = [...document.querySelectorAll('[data-drive]')];
 let pickerDrive = 'auto', fileDrive = 'auto';
 const controls = ['game', 'hello', 'demos', 'pause', 'reset', 'sound', 'profile', 'file'];
-function fail(error) {
+let errorFocus;
+function fail(error, focusTarget) {
   // Rejected requests must not overwrite the Worker recovery notice.
   if (workerFailed) return;
+  errorFocus = focusTarget;
   $('error-notice').hidden = false;
   $('error').textContent = String(error.message ?? error);
 }
@@ -116,10 +118,16 @@ function status(text, mediaProgress = false) {
   progress.hidden = !mediaProgress;
   progress.textContent = mediaProgress ? text : '';
 }
-function clearError() { $('error-notice').hidden = true; $('error').textContent = ''; }
-$('dismiss-error').onclick = () => {
+function clearError() {
+  errorFocus = undefined;
+  $('error-notice').hidden = true;
+  $('error').textContent = '';
+}
+$('dismiss-error').onclick = event => {
+  const recovery = errorFocus?.matches(':enabled') ? errorFocus : $('presentation');
   clearError();
-  $(fullscreenActive() ? 'exit-fullscreen' : 'presentation').focus({preventScroll:true});
+  const target = fullscreenActive() ? $('exit-fullscreen') : recovery;
+  target.focus({preventScroll:event.detail !== 0});
 };
 function acceptState(state) {
   if (!state || state.generation < generation) return;
@@ -406,7 +414,8 @@ async function withControlFocus(trigger, operation, {allowBody = false} = {}) {
 }
 function withDriveFocus(drive, operation) {
   if (mediaPicker.matches(':popover-open')) mediaPicker.hidePopover();
-  return withControlFocus($('drive-' + drive), operation, {allowBody:true});
+  const button = $('drive-' + drive);
+  return withControlFocus(button, () => operation(button), {allowBody:true});
 }
 fileInput.onchange = () => {
   const file = fileInput.files[0];
@@ -452,7 +461,7 @@ function bundled(name) {
 }
 $('game').onclick = () => bundled('startrail.hdm');
 $('hello').onclick = () => bundled('hello98.tfd');
-$('pause').onclick = event => exclusive(() => setRunning(!running), event.currentTarget);
+$('pause').onclick = event => exclusive(() => setRunning(!running), {playbackButton:event.currentTarget});
 async function resetMachine({focusScreen = true} = {}) {
   releaseKeys();
   if (outputGain) outputGain.gain.value = 0;
@@ -461,14 +470,14 @@ async function resetMachine({focusScreen = true} = {}) {
   await setRunning(!document.hidden);
   if (focusScreen && !panelOpen()) screen.focus({preventScroll:true});
 }
-async function exclusive(operation, playbackButton) {
+async function exclusive(operation, {playbackButton, recovery} = {}) {
   if (!core || loading || workerFailed) return;
   // Native disabling blurs the button. The transaction guard also blocks
   // activation of the focusable button while its action is pending.
   activePlaybackButton = playbackButton;
   playbackButton?.setAttribute('aria-disabled', 'true');
   loading = true; syncControls();
-  try { await operation(); } catch (error) { fail(error); }
+  try { await operation(); } catch (error) { fail(error, recovery); }
   finally {
     playbackButton?.removeAttribute('aria-disabled');
     activePlaybackButton = undefined;
@@ -484,7 +493,7 @@ $('sound').onclick = event => exclusive(async () => {
   clearError();
   if (muted) await enableAudio();
   else { muted = true; await soundState(); }
-}, event.currentTarget);
+}, {playbackButton:event.currentTarget});
 async function selectProfile() {
   releaseKeys();
   const profile = $('profile').value;
@@ -507,7 +516,7 @@ async function mayReplace(drive) {
 }
 $('eject').onclick = () => {
   const drive = pickerDrive;
-  return withDriveFocus(drive, () => exclusive(async () => {
+  return withDriveFocus(drive, recovery => exclusive(async () => {
     if (!mounted[drive]) return;
     const resume = running;
     if (drive === 2) await setRunning(false);
@@ -517,7 +526,7 @@ $('eject').onclick = () => {
       if (drive !== 2) refreshPausedMediaStatus();
       clearError();
     } finally { if (drive === 2 && !workerFailed) await setRunning(resume && !document.hidden); }
-  }));
+  }, {recovery}));
 };
 const chunkBytes = 1024 * 1024;
 async function exportBlob(drive) {
@@ -545,14 +554,14 @@ async function exportBlob(drive) {
 }
 $('export').onclick = () => {
   const drive = pickerDrive;
-  return withDriveFocus(drive, () => exclusive(async () => {
+  return withDriveFocus(drive, recovery => exclusive(async () => {
     if (!mounted[drive]) return;
     clearError();
     const data = await exportBlob(drive);
     const link = document.createElement('a'), url = URL.createObjectURL(data);
     link.href = url; link.download = mounted[drive].name; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }));
+  }, {recovery}));
 };
 function loadFile(file, target, resetOptions) {
   if (!file) return;
@@ -587,7 +596,7 @@ function loadFile(file, target, resetOptions) {
       if (!workerFailed) await setRunning(resume && !document.hidden);
       throw error;
     }
-  });
+  }, {recovery:$('drive-' + target)});
 }
 function defaultHdd(showProgress = false) {
   if (core?.metric(21) !== 1) return;

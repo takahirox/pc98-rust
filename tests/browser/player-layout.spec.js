@@ -164,6 +164,36 @@ test.describe('568 × 320 touch media picker', () => {
     await expect(drive).toBeFocused();
   });
 
+  test('returns keyboard focus to Floppy 2 after dismissing a media error', async ({page}) => {
+    await ready(page);
+    const drive = page.getByRole('button', {name:'Insert Floppy 2'});
+    for (let step = 0; step < 20 && !(await drive.evaluate(el => el === document.activeElement)); step++) {
+      await page.keyboard.press('Tab');
+    }
+    await expect(drive).toBeFocused();
+    await page.keyboard.press('Enter');
+    const picker = page.getByRole('dialog', {name:'Floppy 2'});
+    const choose = picker.getByRole('button', {name:'Choose local file for Floppy 2'});
+    await expect(choose).toBeFocused();
+    const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.keyboard.press('Enter')]);
+    await chooser.setFiles({name:'incompatible.hdi', mimeType:'application/octet-stream', buffer:Buffer.alloc(1)});
+    await expect(picker).toBeHidden();
+    const alert = page.getByRole('alert');
+    await expect(alert).toContainText('Hard disk images require IDE HDD');
+    await expect(drive).toBeFocused();
+
+    const dismiss = page.getByRole('button', {name:'Dismiss error'});
+    for (let step = 0; step < 8 && !(await dismiss.evaluate(el => el === document.activeElement)); step++) {
+      await page.keyboard.press('Shift+Tab');
+    }
+    await expect(dismiss).toBeFocused();
+    await expect(dismiss).toBeInViewport({ratio:1});
+    await page.keyboard.press('Enter');
+    await expect(alert).toBeHidden();
+    await expect(drive).toBeFocused();
+    await expect(drive).toBeInViewport({ratio:1});
+  });
+
   test('shows boot recovery at the current scroll position', async ({page}) => {
     await ready(page);
     await nextBoot(page, '0');
