@@ -19,7 +19,8 @@ This VM profile has no 286, 386, PC-9821 or IBM VGA compatibility mode.
 
 All hardware implementations are original Rust. `Cargo.lock` contains only this
 package; `cargo tree` has no emulator, Wasm binding, or other Rust dependencies.
-Assembly is original except the explicitly attributed hello-world fixture. No
+The [synthetic firmware](../guest/firmware.asm) and assembly regression probes,
+including the [input probe](../guest/input_probe.asm), are original. No
 MAME/NP2/DOSBox code, translated implementation, ROM or emulator core was used.
 FreeDOS source is consulted only for its guest BIOS call contracts, and executes
 as guest code. Hardware references are specifications and independent technical

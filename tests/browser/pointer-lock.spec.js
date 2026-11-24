@@ -35,6 +35,7 @@ async function capture(page, screen, options) {
 test('the real raw canvas captures with or without CRT and the guest receives relative motion and button edges', async ({page}) => {
   await page.setViewportSize({width:1600, height:900});
   const screen = await start(page);
+  await page.bringToFront();
   await screen.focus();
   await expect.poll(() => owner(page)).toBeNull();
   await page.locator('#screen').press('Tab');
@@ -99,8 +100,11 @@ test('the real raw canvas captures with or without CRT and the guest receives re
     const unlocked = await guest(page);
     await page.mouse.move(x, y);
     expect(await guest(page)).toMatchObject({x:unlocked.x, y:unlocked.y, buttons:0});
-    await page.keyboard.press('Escape');
+    await page.keyboard.down('Escape');
     await expect.poll(() => guest(page)).toMatchObject({key:0, keys:before.keys + 1});
+    await page.keyboard.down('Escape');
+    await page.keyboard.up('Escape');
+    await expect.poll(() => guest(page)).toMatchObject({key:0, keys:before.keys + 2});
   }
   await page.getByRole('button', {name:'Help', exact:true}).click();
   await expect(page.getByRole('dialog', {name:'Player help'})).toBeVisible();
@@ -108,6 +112,7 @@ test('the real raw canvas captures with or without CRT and the guest receives re
 
 test('real lock releases on F12, host controls, visibility, fullscreen exit, reset and Worker fault', async ({page}) => {
   const screen = await start(page);
+  await page.bringToFront();
   await capture(page, screen);
   await page.mouse.down();
   await expect.poll(() => guest(page)).toMatchObject({buttons:0x80});
@@ -235,6 +240,54 @@ test('a focused canvas retries a rejected lock without sending the acquisition b
   const before = await guest(page);
   await capture(page, screen, {position});
   expect(await guest(page)).toEqual(before);
+});
+
+test('a retry rejected after mouseup delivers a bounded click to the guest', async ({page}) => {
+  const screen = await start(page);
+  await screen.evaluate(canvas => {
+    canvas.requestPointerLock = () => {
+      canvas.requestPointerLock = () => new Promise((_, reject) => {
+        canvas.rejectLock = () => reject(new DOMException('Denied'));
+      });
+      return Promise.reject(new DOMException('Denied'));
+    };
+  });
+  const position = {x:30, y:30};
+  await screen.click({position});
+  const before = await guest(page);
+  await screen.click({position});
+  expect(await guest(page)).toEqual(before);
+  await screen.evaluate(canvas => canvas.rejectLock());
+  await expect.poll(() => guest(page)).toMatchObject({buttons:0, edges:before.edges + 2});
+  expect(await owner(page)).toBeNull();
+});
+
+test('leaving the canvas before a delayed grant keeps the acquisition button suppressed', async ({page}) => {
+  const screen = await start(page);
+  await screen.evaluate(canvas => {
+    canvas.requestPointerLock = () => { canvas.grantLock = () => {
+      Object.defineProperty(document, 'pointerLockElement', {configurable:true, value:canvas});
+      document.dispatchEvent(new Event('pointerlockchange'));
+    }; };
+  });
+  const box = await screen.boundingBox();
+  const x = box.x + box.width / 2, y = box.y + box.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width + 5, y);
+  await screen.evaluate(canvas => canvas.grantLock());
+  expect(await owner(page)).toBe('screen');
+  // The delayed grant is simulated, so return to the canvas for event delivery.
+  await page.mouse.move(x, y);
+  await page.mouse.down({button:'right'});
+  await expect.poll(() => guest(page)).toMatchObject({buttons:0x20, edges:1});
+  await page.mouse.up();
+  expect(await guest(page)).toMatchObject({buttons:0x20, edges:1});
+  await page.mouse.down();
+  await expect.poll(() => guest(page)).toMatchObject({buttons:0xa0, edges:2});
+  await page.mouse.up();
+  await page.mouse.up({button:'right'});
+  await expect.poll(() => guest(page)).toMatchObject({buttons:0});
 });
 
 test('Escape dismisses Help while a cancelled legacy request awaits its outcome', async ({page}) => {
