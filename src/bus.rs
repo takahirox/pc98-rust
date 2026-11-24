@@ -1129,9 +1129,8 @@ impl Bus {
                 let shift = (p & 1) * 8;
                 *register = (*register & !(255 << shift)) | ((v as u16) << shift);
             }
-            0x71 | 0x73 | 0x75 | 0x77 | 0x3fd9 | 0x3fdb | 0x3fdd | 0x3fdf | 0xdf => {
+            0x71 | 0x73 | 0x75 | 0x77 | 0x3fd9 | 0x3fdb | 0x3fdd | 0x3fdf => {
                 let channel = match p {
-                    0xdf => 3, // OUT imm8 truncation in the independent hello fixture.
                     0x71..=0x77 => ((p - 0x71) / 2) as usize,
                     _ => ((p - 0x3fd9) / 2) as usize,
                 };

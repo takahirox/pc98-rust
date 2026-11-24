@@ -195,22 +195,22 @@ fn mouse_latching_buttons_ppi_bsr_periodic_irq_and_reset() {
     assert_ne!(b.pics[1].irr & 32, 0);
 }
 
+fn latch_mouse(b: &mut Bus) -> (i8, i8, u8) {
+    b.output(0x7fdd, 0);
+    b.output(0x7fdd, 0x80);
+    let status = b.input(0x7fd9);
+    b.output(0x7fdd, 0xa0);
+    let x = (status & 15) | (b.input(0x7fd9) << 4);
+    b.output(0x7fdd, 0xc0);
+    let low = b.input(0x7fd9) & 15;
+    b.output(0x7fdd, 0xe0);
+    let y = low | (b.input(0x7fd9) << 4);
+    (x as i8, y as i8, status & 0xe0)
+}
+
 #[test]
 fn host_mouse_delivers_large_motion_over_latches_and_discards_pending_input_on_release() {
     let mut b = Bus::new(Profile::Pc9821ApDos);
-    let latch = |b: &mut Bus| {
-        b.output(0x7fdd, 0);
-        b.output(0x7fdd, 0x80);
-        let status = b.input(0x7fd9);
-        b.output(0x7fdd, 0xa0);
-        let x = (status & 15) | (b.input(0x7fd9) << 4);
-        b.output(0x7fdd, 0xc0);
-        let low = b.input(0x7fd9) & 15;
-        b.output(0x7fdd, 0xe0);
-        let y = low | (b.input(0x7fd9) << 4);
-        (x as i8, y as i8, status & 0xe0)
-    };
-
     b.mouse.host_motion(610, -291, 1);
     for expected in [
         (127, -128, 0x60),
@@ -220,12 +220,32 @@ fn host_mouse_delivers_large_motion_over_latches_and_discards_pending_input_on_r
         (102, 0, 0x60),
         (0, 0, 0x60),
     ] {
-        assert_eq!(latch(&mut b), expected);
+        assert_eq!(latch_mouse(&mut b), expected);
     }
     b.mouse.host_motion(-999, 999, 2);
-    assert_eq!(latch(&mut b), (-128, 127, 0xc0));
+    b.mouse.host_motion(0, 0, 3);
+    assert_eq!(latch_mouse(&mut b), (-128, 127, 0xc0));
     b.mouse.release();
-    assert_eq!(latch(&mut b), (0, 0, 0xe0));
+    for _ in 0..2 {
+        assert_eq!(latch_mouse(&mut b), (0, 0, 0xe0));
+    }
+}
+
+#[test]
+fn host_mouse_samples_a_short_click_after_all_earlier_motion() {
+    let mut b = Bus::new(Profile::Pc9821ApDos);
+    b.mouse.host_motion(512, -519, 0);
+    b.mouse.host_motion(0, 0, 1);
+    b.mouse.host_motion(0, 0, 0);
+    b.mouse.host_motion(9, -3, 0);
+
+    for _ in 0..4 {
+        assert_eq!(latch_mouse(&mut b), (127, -128, 0xe0));
+    }
+    assert_eq!(latch_mouse(&mut b), (4, -7, 0xe0));
+    assert_eq!(latch_mouse(&mut b), (0, 0, 0x60));
+    assert_eq!(latch_mouse(&mut b), (9, -3, 0xe0));
+    assert_eq!(latch_mouse(&mut b), (0, 0, 0xe0));
 }
 
 #[test]

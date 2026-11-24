@@ -1209,12 +1209,11 @@ accuracy, or commercial compatibility. All 26 fixed inventory categories, scopes
 and statuses are unchanged; the existing six-game reports retain their limits.
 Protected execution, paging and basic FPU remain required project goals.
 
-The hello source uses `OUT 3FDFh,AL`, an immediate-port encoding that truncates to
-`DFh`. That timer mirror is decoded too. PIT behavior beyond the subset above,
-DMA arbitration and request modes, precise FDC motor/rotation timing, FDC MT/head
-switching, formatter/scanner commands, GDC vector/area drawing and all GDC
-raster partitions are outside the tested subset. Unsupported FDC commands return
-an invalid-command result. No pretend FM register bank is implemented.
+PIT behavior beyond the subset above, DMA arbitration and request modes, precise
+FDC motor/rotation timing, FDC MT/head switching, formatter/scanner commands, GDC
+vector/area drawing and all GDC raster partitions are outside the tested subset.
+Unsupported FDC commands return an invalid-command result. No pretend FM
+register bank is implemented.
 
 GDC status at `0060h` and `00A0h` now reports horizontal blank (bit 6) from
 elapsed guest clocks. The supported fixed 640×400 modes approximate horizontal

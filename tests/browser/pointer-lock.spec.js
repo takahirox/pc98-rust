@@ -1,11 +1,16 @@
 import { bootInputProbe, inputReady, inputState } from './helpers/player.js';
 import { test, expect, inspect } from './helpers/runtime.js';
 
-async function start(page) {
-  await page.goto('./');
+async function start(page, {manual = false} = {}) {
+  await page.goto(manual ? './?diagnostics=1&manual=1' : './');
   await expect(page.locator('#profile')).toBeEnabled();
   await bootInputProbe(page);
-  await expect.poll(() => page.evaluate(() => pc98.text())).toContain(inputReady);
+  await expect.poll(() => manual
+    ? inspect(page, () => {
+      pc98.advance(100000);
+      return pc98.text();
+    })
+    : page.evaluate(() => pc98.text())).toContain(inputReady);
   await page.evaluate(() => {
     document.addEventListener('pointerlockchange', () => {
       document.documentElement.dataset.lockOwner = document.pointerLockElement?.id ?? '';
@@ -14,15 +19,16 @@ async function start(page) {
   return page.locator('#screen');
 }
 
-function guest(page) {
-  return inspect(page, base => {
+function guest(page, microseconds = 0) {
+  return inspect(page, ([base, advance]) => {
+    if (advance) pc98.advance(advance);
     const word = offset => pc98.read(base + offset) | pc98.read(base + offset + 1) << 8;
     return {
       key:pc98.read(base + 1), keys:word(2),
       x:word(6) << 16 >> 16, y:word(8) << 16 >> 16,
       buttons:pc98.read(base + 10), edges:word(11),
     };
-  }, inputState);
+  }, [inputState, microseconds]);
 }
 
 const owner = page => page.evaluate(() => document.pointerLockElement?.id ?? null);
@@ -219,6 +225,14 @@ for (const failure of ['legacy error event', 'rejected promise', 'unsupported'])
     await expect(page.locator('#error')).toBeHidden();
   });
 }
+
+test('a short fallback tap reaches the guest when both edges arrive between samples', async ({page}) => {
+  const screen = await start(page, {manual:true});
+  await screen.evaluate(canvas => { canvas.requestPointerLock = undefined; });
+  await screen.click();
+  expect(await guest(page)).toMatchObject({buttons:0, edges:0});
+  expect(await guest(page, 100000)).toMatchObject({buttons:0, edges:2});
+});
 
 test('a focused canvas retries a rejected lock without sending the acquisition button to the guest', async ({page}) => {
   const screen = await start(page);

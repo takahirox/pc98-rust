@@ -1,8 +1,15 @@
 //! Original PC-98 8255 bus mouse. UNDOCUMENTED 9801/9821, io_mouse.txt.
+use std::collections::VecDeque;
+
+struct HostSample {
+    motion: [i64; 2],
+    buttons: u8,
+}
+
 pub struct Mouse {
     counter: [u8; 2],
     latch: [u8; 2],
-    pending_motion: [i64; 2],
+    pending: VecDeque<HostSample>,
     pub control: u8,
     pub rate: u8,
     mode: u8,
@@ -16,7 +23,7 @@ impl Default for Mouse {
         Self {
             counter: [0; 2],
             latch: [0; 2],
-            pending_motion: [0; 2],
+            pending: VecDeque::new(),
             control: 0x10,
             rate: 0,
             mode: 0x93,
@@ -38,23 +45,27 @@ impl Mouse {
         self.buttons = buttons & 7;
         self.events += 1;
     }
-    /// The browser may deliver more than one signed counter's worth of motion
-    /// between guest reads. Leave any excess for the next guest latch.
+    /// Coalesce motion between button changes. Each state stays in order until
+    /// the guest latches it and drains its motion, even for a zero-motion tap.
     pub fn host_motion(&mut self, dx: i32, dy: i32, buttons: u8) {
-        for (pending, delta) in self.pending_motion.iter_mut().zip([dx, dy]) {
-            *pending = pending.saturating_add(i64::from(delta));
+        let buttons = buttons & 7;
+        let motion = [i64::from(dx), i64::from(dy)];
+        if let Some(sample) = self
+            .pending
+            .back_mut()
+            .filter(|sample| sample.buttons == buttons)
+        {
+            for (pending, delta) in sample.motion.iter_mut().zip(motion) {
+                *pending = pending.saturating_add(delta);
+            }
+        } else {
+            self.pending.push_back(HostSample { motion, buttons });
         }
-        self.motion(0, 0, buttons);
+        self.events += 1;
     }
     pub fn release(&mut self) {
         self.buttons = 0;
-        self.pending_motion = [0; 2];
-    }
-    fn sample_counter(&self, axis: usize) -> i64 {
-        let count = i64::from(self.counter[axis] as i8);
-        count
-            .saturating_add(self.pending_motion[axis])
-            .clamp(-128, 127)
+        self.pending.clear();
     }
     pub fn tick(&mut self, cycles: u32) -> bool {
         self.fraction += cycles as u64 * (120 >> (self.rate & 3));
@@ -69,7 +80,8 @@ impl Mouse {
             0x7fd9 => {
                 let axis = usize::from(self.control & 0x40 != 0);
                 let count = if self.control & 0x80 == 0 {
-                    self.counter[axis].wrapping_add(self.pending_motion[axis] as u8)
+                    let pending = self.pending.front().map_or(0, |sample| sample.motion[axis]);
+                    self.counter[axis].wrapping_add(pending as u8)
                 } else {
                     self.latch[axis]
                 };
@@ -86,12 +98,20 @@ impl Mouse {
     }
     fn set_control(&mut self, value: u8) {
         if self.control & 0x80 == 0 && value & 0x80 != 0 {
-            for axis in 0..2 {
-                let sample = self.sample_counter(axis);
-                self.latch[axis] = sample as u8;
-                self.pending_motion[axis] -= sample - i64::from(self.counter[axis] as i8);
-            }
+            self.latch = self.counter;
             self.counter = [0; 2];
+            if let Some(sample) = self.pending.front_mut() {
+                self.buttons = sample.buttons;
+                for (latched, pending) in self.latch.iter_mut().zip(&mut sample.motion) {
+                    let count = i64::from(*latched as i8);
+                    let total = count.saturating_add(*pending).clamp(-128, 127);
+                    *latched = total as u8;
+                    *pending -= total - count;
+                }
+                if sample.motion == [0; 2] {
+                    self.pending.pop_front();
+                }
+            }
             self.latches += 1;
         }
         self.control = value & 0xf0;
