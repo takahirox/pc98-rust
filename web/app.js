@@ -104,6 +104,8 @@ const driveButtons = [...document.querySelectorAll('[data-drive]')];
 let pickerDrive = 'auto', fileDrive = 'auto';
 const controls = ['game', 'hello', 'demos', 'pause', 'reset', 'sound', 'profile', 'file'];
 function fail(error) {
+  // Rejected requests must not overwrite the Worker recovery notice.
+  if (workerFailed) return;
   $('error-notice').hidden = false;
   $('error').textContent = String(error.message ?? error);
 }
@@ -143,11 +145,13 @@ function rpc(type, data, transfer = []) {
   });
 }
 function workerFault(error) {
+  if (workerFailed) return;
+  fail(`${error.message}. Reload to restart.`);
   workerFailed = true; running = false; ++videoEpoch; pendingFrame = null;
   if (outputGain) outputGain.gain.value = 0;
   worker?.terminate(); renderWorker?.terminate(); renderWorker = null;
   for (const waiter of pending.values()) waiter.reject(error);
-  pending.clear(); syncControls(); status('Worker stopped'); fail(`${error.message}. Reload to restart.`);
+  pending.clear(); syncControls(); status('Worker stopped');
 }
 function recycleFrame(frame, captureAt) {
   if (frame.renderer) {

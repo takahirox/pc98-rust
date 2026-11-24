@@ -112,6 +112,28 @@ test('Worker and AudioWorklet load failures are visible and recoverable',async({
   await page.evaluate(()=>window.restoreWorkletLoader()); await page.locator('#sound').click(); await expect(page.locator('#sound')).toHaveAttribute('aria-pressed', 'false');
 });
 
+test('a Worker crash during Reset keeps the reload instruction visible', async ({page}) => {
+  await page.goto('./');
+  const reset = page.getByRole('button', {name:'Reset'});
+  await expect(reset).toBeEnabled();
+  const worker = page.workers().find(w => w.url().includes('emulator-worker.js'));
+  await worker.evaluate(() => {
+    const handleMessage = self.onmessage;
+    self.onmessage = event => {
+      if (event.data.type === 'call' && event.data.data.name === 'reset') {
+        throw Error('Intentional Worker crash during Reset');
+      }
+      handleMessage(event);
+    };
+  });
+  await reset.click();
+  await expect(page.locator('#status')).toHaveText('Worker stopped');
+  await expect(reset).toBeDisabled();
+  const alert = page.getByRole('alert');
+  await expect(alert).toContainText('Intentional Worker crash during Reset');
+  await expect(alert).toContainText('Reload to restart.');
+});
+
 test('visibility, repeated reset/profile controls and runtime Worker failure cannot resurrect stale state',async({page}) => {
   await page.goto('./'); await expect(page.locator('#demos')).toBeEnabled();
   await launchDemo(page, 'game');
