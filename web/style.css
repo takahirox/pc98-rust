@@ -123,7 +123,8 @@ canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; 
 .slot.dragging, .display.dragging .screen-stage { outline: 2px solid #4ca57d; outline-offset: -3px; }
 
 .panel {
-  width: min(360px, calc(100% - 2 * max(16px, env(safe-area-inset-left), env(safe-area-inset-right))));
+  /* Size against the viewport so a cramped anchor area triggers the fallback. */
+  width: min(var(--panel-width, 360px), calc(100dvw - 2 * max(16px, env(safe-area-inset-left), env(safe-area-inset-right))));
   max-height: calc(100dvh - max(16px, env(safe-area-inset-top)) - max(16px, env(safe-area-inset-bottom)));
   overflow: auto;
   overscroll-behavior: contain;
@@ -141,23 +142,28 @@ canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; 
 .panel p:last-child { margin-bottom: 0; }
 .panel-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 #choose-file { flex: 1 0 100%; }
-#help-panel { width: min(420px, calc(100% - 32px)); }
+#help-panel { --panel-width: 420px; }
 @supports (position-area: bottom span-left) {
+  @position-try --centered-panel {
+    position-area: none;
+    inset: max(16px, env(safe-area-inset-top)) 0 max(16px, env(safe-area-inset-bottom));
+    margin: auto;
+  }
   .panel {
     position-area: bottom span-left;
-    position-try-fallbacks: top span-left, bottom span-right, top span-right;
+    position-try-fallbacks: top span-left, bottom span-right, top span-right, --centered-panel;
     margin: 5px 0;
   }
   #settings-panel {
     position-area: top right;
-    position-try-fallbacks: top span-right, bottom span-right, top span-left;
+    position-try-fallbacks: top span-right, bottom span-right, top span-left, --centered-panel;
     margin-inline-start: 6px;
   }
   .drives { anchor-name: --media-drives; }
   #media-picker {
     position-anchor: --media-drives;
     position-area: left span-bottom;
-    position-try-fallbacks: top span-right, bottom span-right;
+    position-try-fallbacks: top span-right, bottom span-right, --centered-panel;
     margin: 0 5px;
   }
 }
@@ -282,14 +288,20 @@ body:has(.full-window) { overflow: hidden; }
     max-height: 44dvh;
   }
 }
-@media (orientation: landscape) and (max-height: 520px) and (min-width: 580px) {
+@media (orientation: landscape) and (max-height: 520px) {
   main {
-    --screen-height: max(185px, 100svh - 163px);
+    --screen-height: max(120px, 100svh - 163px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
     width: min(100%, 805px);
     padding: max(5px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right))
       max(5px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
   }
   .site-header { margin-block-end: 6px; }
+  .screen-stage { height: var(--screen-height); aspect-ratio: auto; }
+  .toolbar { column-gap: 6px; }
+  .display-select span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  #volume { width: 73px; }
+}
+@media (orientation: landscape) and (max-height: 520px) and (min-width: 580px) {
   .player { grid-template-columns: minmax(0, 1fr) minmax(205px, min(34%, 270px)); grid-template-rows: auto auto 1fr; gap: 6px 12px; }
   .drives { grid-area: 1 / 2 / span 3; gap: 4px; }
   .machine-select { grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px; }
@@ -301,10 +313,6 @@ body:has(.full-window) { overflow: hidden; }
   }
   .drives > .notices p { padding-block: 5px; }
   .player:has(.drives > .notices #media-progress:not([hidden])) .player-status { visibility: visible; }
-  .screen-stage { height: var(--screen-height); aspect-ratio: auto; }
-  .toolbar { column-gap: 6px; }
-  .display-select span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-  #volume { width: 73px; }
   .slot { padding-block: 3px; }
 }
 @media (pointer: coarse) and (orientation: landscape) and (min-width: 580px) {
