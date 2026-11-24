@@ -302,6 +302,11 @@ body:has(.full-window) { overflow: hidden; }
   #volume { width: 73px; }
 }
 @media (orientation: landscape) and (max-height: 520px) and (width < 580px) {
+  .drives #media-progress {
+    position: fixed;
+    inset: auto max(10px, env(safe-area-inset-right)) max(6px, env(safe-area-inset-bottom)) auto;
+    margin: 0;
+  }
   .drives #error-notice {
     position: fixed;
     inset: auto max(10px, env(safe-area-inset-right)) max(6px, env(safe-area-inset-bottom))
