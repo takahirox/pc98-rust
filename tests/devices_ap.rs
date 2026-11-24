@@ -277,6 +277,17 @@ fn host_mouse_does_not_replay_a_live_press_while_draining_older_motion() {
 }
 
 #[test]
+fn host_mouse_preserves_a_latched_press_until_the_first_read() {
+    let mut b = Bus::new(Profile::Pc9821ApDos);
+    b.mouse.host_motion(0, 0, 1);
+    b.output(0x7fdd, 0x80);
+    b.mouse.host_motion(0, 0, 0);
+
+    assert_eq!(b.input(0x7fd9), 0x60);
+    assert_eq!(latch_mouse(&mut b), (0, 0, 0xe0));
+}
+
+#[test]
 fn host_mouse_short_tap_releases_even_if_the_guest_leaves_hc_high() {
     let mut b = Bus::new(Profile::Pc9821ApDos);
     b.mouse.host_motion(7, 0, 1);

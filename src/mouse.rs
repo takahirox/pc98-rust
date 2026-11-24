@@ -69,7 +69,14 @@ impl Mouse {
         if bits != self.live_buttons.bits {
             self.live_buttons.bits = bits;
             self.live_buttons.revision += 1;
-            self.sampled_buttons = None;
+            // Latching can remove a transition from the queue before the
+            // guest reads it. Only let live input supersede a delivered sample.
+            if self
+                .sampled_buttons
+                .is_some_and(|sample| sample.revision <= self.reported_buttons.revision)
+            {
+                self.sampled_buttons = None;
+            }
         }
     }
     /// Apply movement directly to the hardware counters.
