@@ -283,7 +283,7 @@ body:has(.full-window) { overflow: hidden; }
   }
   .keyboard-scroll-actions button { min-width: 44px; }
 }
-@media (pointer: coarse) and (orientation: portrait), (pointer: coarse) and (max-width: 579px) {
+@media (pointer: coarse) and (orientation: portrait) {
   .player:has(#keyboard-home > :not([hidden])) .display:not(:is(:fullscreen,.full-window)) .screen-stage {
     max-height: 44dvh;
   }
@@ -329,7 +329,7 @@ body:has(.full-window) { overflow: hidden; }
   .player:has(.drives > .notices #media-progress:not([hidden])) .player-status { visibility: visible; }
   .slot { padding-block: 3px; }
 }
-@media (pointer: coarse) and (orientation: landscape) and (min-width: 580px) {
+@media (pointer: coarse) and (orientation: landscape) {
   #keyboard-home { grid-area: 1 / 2; }
   #keyboard-home #keyboard-panel { max-height: var(--screen-height); }
   .player:has(#keyboard-home > :not([hidden])) {

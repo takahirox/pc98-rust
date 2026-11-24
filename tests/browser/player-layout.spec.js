@@ -747,7 +747,7 @@ for (const mode of ['native', 'fallback']) {
   });
 }
 
-for (const [width, height] of [[390, 844], [844, 390]]) {
+for (const [width, height] of [[390, 844], [568, 320], [844, 390]]) {
   test.describe(`${width} × ${height} normal touch keyboard`, () => {
     test.use({viewport:{width,height}, hasTouch:true, isMobile:true});
     test('scrolls and uses guest keys with the display in view', async ({page}) => {
@@ -771,6 +771,7 @@ for (const [width, height] of [[390, 844], [844, 390]]) {
       else expect(display.x + display.width).toBeLessThanOrEqual(keys.x);
 
       const scroll = panel.getByRole('button', {name:'Scroll keyboard down'});
+      await expect(scroll).toBeInViewport({ratio:1});
       const move = panel.getByRole('button', {name:'→', exact:true});
       const moveInView = () => move.evaluate(key => {
         const scroll = key.closest('#keyboard-scroll').getBoundingClientRect();
@@ -778,6 +779,7 @@ for (const [width, height] of [[390, 844], [844, 390]]) {
         return bounds.top >= scroll.top && bounds.bottom <= scroll.bottom;
       });
       for (let tap = 0; tap < 12 && !await moveInView(); tap++) await scroll.tap();
+      expect(await panel.locator('#keyboard-scroll').evaluate(el => el.scrollTop)).toBeGreaterThan(0);
       await expect(move).toBeInViewport({ratio:0.99});
       await expect(screen).toBeInViewport({ratio:1});
       await move.tap();
