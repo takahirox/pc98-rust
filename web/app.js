@@ -92,7 +92,7 @@ const presentationTolerance = 2;
 const captureLead = 10;
 let nextPresentation = 0;
 const pending = new Map(); let requestId = 0;
-const metrics = new Map(); let bootAttempt;
+const metrics = new Map(); let bootSource;
 const mounted = [null, null, null], held = new Set();
 const pendingShifts = new Set();
 let pointerPosition, pointerButtons = 0;
@@ -121,18 +121,10 @@ $('dismiss-error').onclick = () => {
 function acceptState(state) {
   if (!state || state.generation < generation) return;
   if (state.generation > generation) {
-    const drive = state.boot === 0x80 ? 2 : 0;
-    const disk = mounted[drive];
-    bootAttempt = {source: `${driveNames[drive]} · ${disk?.name ?? 'Empty'}`};
-    if (disk) showBootResult('Last boot attempt');
-    else $('active-boot').textContent = 'No active boot disk';
+    bootSource = undefined;
+    $('active-boot').textContent = 'Waiting to boot';
   }
   generation = state.generation;
-  if (bootAttempt) {
-    if (state.bootResult === 'failed') showBootResult('Boot failed');
-    // A frame sent through the render Worker can arrive after the stop event.
-    else if (state.bootResult === 'loaded' && bootAttempt.result !== 'Boot failed') showBootResult('Booted');
-  }
   for (const [id,value] of state.metrics) metrics.set(id,value);
   const mode = metrics.get(21) === 0 ? '640 × 400 · 8 colors · replacement Latin font'
     : metrics.get(13) ? '640 × 400 · 256 colors · PEGC'
@@ -368,6 +360,16 @@ for (const button of driveButtons) {
     mediaPicker.showPopover({source:button});
   };
 }
+mediaPicker.addEventListener('beforetoggle', event => {
+  for (const button of driveButtons) {
+    const expanded = event.newState === 'open' && button.dataset.drive === String(pickerDrive);
+    button.setAttribute('aria-expanded', String(expanded));
+    // The native target keeps a click on the current trigger within the
+    // popover's light-dismiss boundary and exposes it as expanded.
+    if (expanded) button.setAttribute('popovertarget', mediaPicker.id);
+    else button.removeAttribute('popovertarget');
+  }
+});
 for (const panel of document.querySelectorAll('[popover]')) {
   panel.addEventListener('beforetoggle', event => { if (event.newState === 'open') releaseKeys(); });
 }
@@ -437,11 +439,6 @@ function bundled(name) {
 $('game').onclick = () => bundled('startrail.hdm');
 $('hello').onclick = () => bundled('hello98.tfd');
 $('pause').onclick = event => exclusive(() => setRunning(!running), event.currentTarget);
-function showBootResult(result) {
-  if (bootAttempt.result === result) return;
-  bootAttempt.result = result;
-  $('active-boot').textContent = `${result}: ${bootAttempt.source}`;
-}
 async function resetMachine({focusScreen = true} = {}) {
   releaseKeys();
   if (outputGain) outputGain.gain.value = 0;
@@ -765,10 +762,16 @@ try {
     if (workerFailed) return;
     if (m.event === 'renderFault') { rendererFault(renderWorker,m.error); return; }
     if (m.event === 'fault') { workerFault(Error(m.error)); return; }
+    if (m.event === 'boot') {
+      if (m.generation === generation) {
+        bootSource ??= `${driveNames[m.drive]} · ${mounted[m.drive]?.name ?? 'Empty'}`;
+        $('active-boot').textContent = `${m.result === 'failed' ? 'Boot failed' : 'Booted'}: ${bootSource}`;
+      }
+      return;
+    }
     if (m.event === 'stopped') {
       if (m.state.generation < generation) return;
       acceptState(m.state);
-      if (bootAttempt && !m.state.bootResult) showBootResult('Boot failed');
       setRunning(false, 'Guest stopped').catch(fail); fail(m.error); return;
     }
     if (m.event === 'videoEpoch') {
