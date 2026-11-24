@@ -181,7 +181,7 @@ fn mouse_latching_buttons_ppi_bsr_periodic_irq_and_reset() {
     b.mouse.motion(4, 5, 0);
     for (control, nibble) in [(0x90, 15), (0xb0, 14), (0xd0, 3), (0xf0, 2)] {
         b.output(0x7fdd, control);
-        assert_eq!(b.input(0x7fd9) & 15, nibble);
+        assert_eq!(b.input(0x7fd9), 0x40 | nibble);
     }
     b.output(0x7fdd, 0);
     b.output(0x7fdf, 15); // BSR sets HC, latches next movement
@@ -237,22 +237,25 @@ fn host_mouse_delivers_large_motion_over_latches_and_discards_pending_input_on_r
 }
 
 #[test]
-fn host_mouse_buttons_stay_live_with_either_latch_level() {
+fn host_mouse_buttons_follow_live_reads_after_the_latch_ends() {
     let mut b = Bus::new(Profile::Pc9821ApDos);
     b.mouse.host_motion(11, 0, 1);
     assert_eq!(b.input(0x7fd9), 0x6b);
     assert_eq!(latch_mouse(&mut b), (11, 0, 0x60));
 
-    // HC stays high and the X count stays latched while button levels change.
+    // Both the X count and the buttons stay latched until HC goes low.
     b.output(0x7fdd, 0x80);
     b.mouse.host_motion(0, 0, 2);
-    assert_eq!(b.input(0x7fd9), 0xcb);
+    assert_eq!(b.input(0x7fd9), 0x6b);
+    b.output(0x7fdd, 0);
+    assert_eq!(b.input(0x7fd9), 0xc0);
     b.mouse.host_motion(0, 0, 0);
-    assert_eq!(b.input(0x7fd9), 0xeb);
+    assert_eq!(b.input(0x7fd9), 0xe0);
 
     b.mouse.host_motion(5, 0, 0);
     assert_eq!(latch_mouse(&mut b), (0, 0, 0xe0));
     assert_eq!(latch_mouse(&mut b), (5, 0, 0xe0));
+    b.output(0x7fdd, 0);
     b.mouse.host_motion(0, 0, 1);
     assert_eq!(b.input(0x7fd9) & 0xe0, 0x60);
     assert_eq!(latch_mouse(&mut b), (0, 0, 0x60));
@@ -265,12 +268,14 @@ fn host_mouse_does_not_replay_a_live_press_while_draining_older_motion() {
     let mut b = Bus::new(Profile::Pc9821ApDos);
     b.mouse.host_motion(300, 0, 0);
     assert_eq!(latch_mouse(&mut b), (127, 0, 0xe0));
+    b.output(0x7fdd, 0);
     b.mouse.host_motion(0, 0, 1);
     assert_eq!(b.input(0x7fd9) & 0xe0, 0x60);
 
     for x in [127, 46, 0, 0] {
         assert_eq!(latch_mouse(&mut b), (x, 0, 0x60));
     }
+    b.output(0x7fdd, 0);
     b.mouse.host_motion(0, 0, 0);
     assert_eq!(b.input(0x7fd9) & 0xe0, 0xe0);
     assert_eq!(latch_mouse(&mut b), (0, 0, 0xe0));
@@ -284,6 +289,20 @@ fn host_mouse_preserves_a_latched_press_until_the_first_read() {
     b.mouse.host_motion(0, 0, 0);
 
     assert_eq!(b.input(0x7fd9), 0x60);
+    assert_eq!(latch_mouse(&mut b), (0, 0, 0xe0));
+}
+
+#[test]
+fn host_mouse_keeps_button_level_through_all_latched_nibbles() {
+    let mut b = Bus::new(Profile::Pc9821ApDos);
+    b.mouse.host_motion(-17, 35, 1);
+    b.output(0x7fdd, 0x80);
+    assert_eq!(b.input(0x7fd9), 0x6f);
+    b.mouse.host_motion(0, 0, 0);
+    for (control, expected) in [(0xa0, 0x6e), (0xc0, 0x63), (0xe0, 0x62)] {
+        b.output(0x7fdd, control);
+        assert_eq!(b.input(0x7fd9), expected);
+    }
     assert_eq!(latch_mouse(&mut b), (0, 0, 0xe0));
 }
 
@@ -336,21 +355,36 @@ fn host_mouse_unlatched_drag_counts_motion_across_button_changes() {
 }
 
 #[test]
-fn host_mouse_live_reads_preserve_earlier_queued_button_edges() {
+fn host_mouse_button_edges_stay_in_order_across_read_modes() {
     let mut b = Bus::new(Profile::Pc9821ApDos);
     assert_eq!(latch_mouse(&mut b), (0, 0, 0xe0));
     b.mouse.host_motion(0, 0, 1);
     b.mouse.host_motion(0, 0, 0);
     b.mouse.host_motion(0, 0, 2);
 
-    // Reading the old latch shows the live right press. Relatching must
-    // still deliver the preceding left press and release in order.
-    assert_eq!(b.input(0x7fd9), 0xc0);
+    assert_eq!(b.input(0x7fd9), 0xe0); // The old latch stays stable.
+    b.output(0x7fdd, 0);
+    assert_eq!(b.input(0x7fd9), 0x60); // The first live read sees the left press.
     assert_eq!(latch_mouse(&mut b), (0, 0, 0x60));
     b.output(0x7fdd, 0);
-    assert_eq!(b.input(0x7fd9), 0xc0);
+    assert_eq!(b.input(0x7fd9), 0xe0); // Release is visible before the right press.
     assert_eq!(latch_mouse(&mut b), (0, 0, 0xe0));
     assert_eq!(latch_mouse(&mut b), (0, 0, 0xc0));
+    b.output(0x7fdd, 0);
+    assert_eq!(b.input(0x7fd9), 0xc0);
+    assert_eq!(latch_mouse(&mut b), (0, 0, 0xc0));
+}
+
+#[test]
+fn host_mouse_delivers_an_unread_latch_edge_when_switching_to_live_reads() {
+    let mut b = Bus::new(Profile::Pc9821ApDos);
+    b.mouse.host_motion(0, 0, 1);
+    b.output(0x7fdd, 0x80);
+    b.mouse.host_motion(0, 0, 0);
+    b.output(0x7fdd, 0);
+    assert_eq!(b.input(0x7fd9), 0x60);
+    assert_eq!(b.input(0x7fd9), 0xe0);
+    assert_eq!(latch_mouse(&mut b), (0, 0, 0xe0));
 }
 
 #[test]
@@ -360,8 +394,6 @@ fn host_mouse_samples_a_short_click_after_all_earlier_motion() {
     b.mouse.host_motion(0, 0, 1);
     b.mouse.host_motion(0, 0, 0);
     b.mouse.host_motion(9, -3, 0);
-    assert_eq!(b.input(0x7fd9) & 0xe0, 0xe0); // Live polling sees the final level.
-
     for _ in 0..4 {
         assert_eq!(latch_mouse(&mut b), (127, -128, 0xe0));
     }

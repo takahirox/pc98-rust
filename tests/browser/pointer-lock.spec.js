@@ -50,36 +50,38 @@ test('the real raw canvas captures with or without CRT and the guest receives re
   for (const preset of ['off', 'sharp']) {
     await page.locator('#presentation').selectOption(preset);
     if (preset === 'sharp') await expect(page.locator('#crt-screen')).toBeVisible();
-    const before = await guest(page);
-    await capture(page, screen, {position:{x:12,y:100}});
-    await expect(screen).toBeFocused();
-    expect(await guest(page)).toEqual(before); // Acquisition is capture-only.
-
     await screen.evaluate(canvas => {
       canvas.trustedMotion = null;
+      canvas.recordOutsideMotion = false;
       const filter = new AbortController();
       canvas.stopMotionFilter = () => filter.abort();
       canvas.addEventListener('mousemove', event => {
         if (!event.isTrusted) return;
-        if (!canvas.trustedMotion && event.movementX > canvas.clientWidth) {
+        if (canvas.recordOutsideMotion && event.movementX > canvas.clientWidth) {
+          canvas.recordOutsideMotion = false;
           canvas.trustedMotion = {x:event.movementX, y:event.movementY};
           return;
         }
-        // Headless Chromium compensates CDP moves with cursor recenter events.
-        // Let the original outside-canvas event reach the app by itself.
+        // Chromium can emit cursor recenter events during capture and CDP
+        // movement. Isolate the deliberate outside move and synthetic deltas.
         event.stopImmediatePropagation();
       }, {capture:true, signal:filter.signal});
     });
+    const before = await guest(page);
+    await capture(page, screen, {position:{x:12,y:100}});
+    await expect(screen).toBeFocused();
+    expect(await guest(page)).toMatchObject({buttons:0, edges:before.edges});
+
     const box = await screen.boundingBox();
     const x = box.x + 12, y = box.y + 100;
     await page.mouse.move(x + 4, y);
+    await screen.evaluate(canvas => { canvas.recordOutsideMotion = true; });
     await page.mouse.move(x + box.width + 70, y + 180);
     // A move beyond the canvas still delivers trusted relative motion to it.
     const trustedMotion = () => screen.evaluate(canvas => canvas.trustedMotion);
     await expect.poll(async () => (await trustedMotion())?.x ?? 0).toBeGreaterThan(box.width);
     const motion = await trustedMotion();
     await expect.poll(() => guest(page)).toMatchObject({x:before.x + motion.x, y:before.y + motion.y});
-    await screen.evaluate(canvas => canvas.stopMotionFilter());
     // Check the signed counter's backlog for a deterministic pair of deltas.
     const baseline = await guest(page);
     const dx = Math.ceil(box.width) + 100, dy = -273;
@@ -87,6 +89,7 @@ test('the real raw canvas captures with or without CRT and the guest receives re
       canvas.dispatchEvent(new MouseEvent('mousemove', {movementX, movementY}));
     }, [dx, dy]);
     await expect.poll(() => guest(page)).toMatchObject({x:baseline.x + dx, y:baseline.y + dy});
+    await screen.evaluate(canvas => canvas.stopMotionFilter());
 
     await page.mouse.down();
     await expect.poll(() => guest(page)).toMatchObject({buttons:0x80, edges:before.edges + 1});

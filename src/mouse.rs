@@ -30,7 +30,7 @@ pub struct Mouse {
     pending: VecDeque<HostSample>,
     host_clock: u64,
     last_sample_at: u64,
-    sampled_buttons: Option<ButtonState>,
+    latched_buttons: Option<ButtonState>,
     reported_buttons: ButtonState,
     pub control: u8,
     pub rate: u8,
@@ -48,7 +48,7 @@ impl Default for Mouse {
             pending: VecDeque::new(),
             host_clock: 0,
             last_sample_at: 0,
-            sampled_buttons: None,
+            latched_buttons: None,
             reported_buttons: ButtonState::default(),
             control: 0x10,
             rate: 0,
@@ -69,26 +69,21 @@ impl Mouse {
         if bits != self.live_buttons.bits {
             self.live_buttons.bits = bits;
             self.live_buttons.revision += 1;
-            // Latching can remove a transition from the queue before the
-            // guest reads it. Only let live input supersede a delivered sample.
-            if self
-                .sampled_buttons
-                .is_some_and(|sample| sample.revision <= self.reported_buttons.revision)
-            {
-                self.sampled_buttons = None;
-            }
         }
+    }
+    fn unread_latch(&self) -> Option<ButtonState> {
+        self.latched_buttons
+            .filter(|buttons| buttons.revision > self.reported_buttons.revision)
     }
     /// Apply movement directly to the hardware counters.
     pub fn motion(&mut self, dx: i32, dy: i32, buttons: u8) {
         self.counter[0] = self.counter[0].wrapping_add(dx as u8);
         self.counter[1] = self.counter[1].wrapping_add(dy as u8);
         self.update_buttons(buttons);
-        self.sampled_buttons = None;
         self.events += 1;
     }
-    /// Keep live button levels for direct reads and queue samples for drivers
-    /// that latch movement. Keep distinct arrival times so old motion can expire.
+    /// Queue input for both polling and latching drivers. Keep distinct
+    /// arrival times so old motion can expire.
     pub fn host_motion(&mut self, dx: i32, dy: i32, buttons: u8) {
         self.update_buttons(buttons);
         let buttons = self.live_buttons;
@@ -118,11 +113,11 @@ impl Mouse {
     pub fn release(&mut self) {
         self.update_buttons(0);
         self.pending.clear();
-        self.sampled_buttons = None;
+        self.latched_buttons = None;
         self.reported_buttons = self.live_buttons;
     }
     pub fn tick(&mut self, cycles: u32) -> bool {
-        if !self.pending.is_empty() || self.sampled_buttons.is_some() {
+        if !self.pending.is_empty() || self.latched_buttons.is_some() {
             self.host_clock += u64::from(cycles);
             // Keep motion available to both relatching and unlatched polling
             // drivers. After sampling stops, expire each arrival separately.
@@ -134,7 +129,7 @@ impl Mouse {
             // A driver holding HC high can still see the live button levels
             // after the queued sample has had time to be read.
             if self.host_clock - self.last_sample_at >= HOST_QUEUE_TIMEOUT {
-                self.sampled_buttons = None;
+                self.latched_buttons = None;
             }
         }
         self.fraction += cycles as u64 * (120 >> (self.rate & 3));
@@ -148,36 +143,32 @@ impl Mouse {
         match port {
             0x7fd9 => {
                 let axis = usize::from(self.control & 0x40 != 0);
-                let count = if self.control & 0x80 == 0 {
+                let latched = self.control & 0x80 != 0;
+                let count = if latched {
+                    self.latch[axis]
+                } else {
                     self.last_sample_at = self.host_clock;
                     let mut count = self.counter[axis];
                     for sample in &self.pending {
                         count = count.wrapping_add(sample.motion[axis] as u8);
                     }
                     count
-                } else {
-                    self.latch[axis]
                 };
-                let buttons = if let Some(sampled) = self.sampled_buttons {
-                    // Older motion can remain queued after its buttons were read.
-                    if sampled.revision > self.reported_buttons.revision {
-                        self.reported_buttons = sampled;
-                    }
-                    self.reported_buttons.bits
+                let buttons = if latched {
+                    self.latched_buttons
                 } else {
-                    // Show the live levels, but only record them as delivered if
-                    // doing so leaves no unread transition behind in the queue.
-                    let live = self.live_buttons;
-                    if live.revision > self.reported_buttons.revision
-                        && !self.pending.iter().any(|sample| {
-                            sample.buttons.revision > self.reported_buttons.revision
-                                && sample.buttons.revision < live.revision
-                        })
-                    {
-                        self.reported_buttons = live;
-                    }
-                    live.bits
-                };
+                    let unread = self.unread_latch();
+                    self.latched_buttons = None;
+                    unread
+                }
+                .unwrap_or_else(|| {
+                    self.pending
+                        .iter()
+                        .find(|sample| sample.buttons.revision > self.reported_buttons.revision)
+                        .map_or(self.live_buttons, |sample| sample.buttons)
+                });
+                self.reported_buttons = buttons;
+                let buttons = buttons.bits;
                 let bits = (if buttons & 1 != 0 { 0x80 } else { 0 })
                     | (if buttons & 2 != 0 { 0x20 } else { 0 })
                     | (if buttons & 4 != 0 { 0x40 } else { 0 });
@@ -190,18 +181,27 @@ impl Mouse {
         }
     }
     fn set_control(&mut self, value: u8) {
-        if value & 0x80 == 0 {
-            self.sampled_buttons = None;
-        } else if self.control & 0x80 == 0 {
+        if value & 0x80 != 0 && self.control & 0x80 == 0 {
             self.latch = self.counter;
             self.counter = [0; 2];
-            self.sampled_buttons = self.pending.front().map(|sample| sample.buttons);
+            // A previous latch may have consumed a sample before the guest
+            // read its buttons. Deliver that edge before consuming a later one.
+            let sample_buttons = self
+                .unread_latch()
+                .or_else(|| self.pending.front().map(|sample| sample.buttons));
+            let buttons = sample_buttons.unwrap_or(self.live_buttons);
+            // Live reads can report edges while older motion is still queued.
+            self.latched_buttons = Some(if buttons.revision < self.reported_buttons.revision {
+                self.reported_buttons
+            } else {
+                buttons
+            });
             // Consecutive arrivals with the same buttons share a latch up to
             // the signed counter limit. Leave later button edges queued.
             while let Some(sample) = self
                 .pending
                 .front_mut()
-                .filter(|sample| Some(sample.buttons) == self.sampled_buttons)
+                .filter(|sample| Some(sample.buttons) == sample_buttons)
             {
                 for (latched, pending) in self.latch.iter_mut().zip(&mut sample.motion) {
                     let count = i64::from(*latched as i8);
