@@ -40,8 +40,8 @@ button, select {
   font-size: 13px;
 }
 button, select { cursor: pointer; touch-action: manipulation; }
-button:disabled, select:disabled { opacity: .52; cursor: default; }
-button:hover:enabled, .link-button:hover { background: var(--hover); }
+button:disabled, button[aria-disabled="true"], select:disabled { opacity: .52; cursor: default; }
+button:hover:enabled:not([aria-disabled="true"]), .link-button:hover { background: var(--hover); }
 .link-button { border-color: transparent; background: transparent; padding-inline: 6px; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 input { accent-color: var(--accent); }
@@ -162,7 +162,11 @@ canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; 
 
 .notices { grid-column: 1 / -1; min-width: 0; }
 .notices:not(:has(p:not([hidden]))) { display: none; }
+.notices:has(#media-progress:not([hidden])):not(:has(#error:not([hidden]), #display-warning:not([hidden]))) {
+  display: var(--media-progress-display, none);
+}
 .notices p { margin: 0 0 6px; padding: 8px 12px; border-radius: 7px; overflow-wrap: anywhere; font-size: 13px; }
+#media-progress { display: var(--media-progress-display, none); color: var(--accent); background: #eaf0eb; }
 #error { color: #872c24; background: #f8e9e5; }
 #display-warning { color: #634921; background: #f4eedf; }
 #keyboard-home { grid-column: 1 / -1; min-width: 0; }
@@ -197,8 +201,14 @@ body:has(.full-window) { overflow: hidden; }
 @media (max-width: 740px), (orientation: portrait) and (max-width: 950px), (orientation: portrait) and (pointer: coarse) {
   main { width: min(100%, 800px); padding-block: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-bottom)); padding-inline: max(12px, env(safe-area-inset-left)) max(12px, env(safe-area-inset-right)); }
   .player { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; }
-  .drives { grid-area: 3 / 1; }
-  .secondary { grid-area: 4 / 1; }
+  .drives, .secondary { grid-area: auto; }
+  .player > .notices {
+    --media-progress-display: block;
+    position: sticky;
+    inset-block-start: max(4px, env(safe-area-inset-top));
+    z-index: 2;
+  }
+  .player:has(> .notices #media-progress:not([hidden])) .player-status { visibility: hidden; }
 }
 @media (max-width: 520px) {
   h1 { font-size: 22px; }
@@ -228,6 +238,8 @@ body:has(.full-window) { overflow: hidden; }
   .player { grid-template-columns: minmax(0, 1fr) minmax(205px, 232px); grid-template-rows: auto auto 1fr; gap: 6px 12px; }
   .drives { grid-area: 1 / 2 / span 3; }
   .secondary { grid-area: 3 / 1; }
+  .player > .notices { --media-progress-display: none; position: static; }
+  .player:has(> .notices #media-progress:not([hidden])) .player-status { visibility: visible; }
   .screen-stage { height: var(--screen-height); aspect-ratio: auto; }
   .toolbar { column-gap: 6px; }
   .display-select span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }

@@ -68,6 +68,7 @@ for (const {width, height, touch = false} of sizes) {
       expect(await geometry()).toEqual(initial);
       await uploadMedia(page, floppy('incompatible.tfd'), '2');
       await expect(page.getByRole('alert')).toContainText('IDE HDD requires an HDI or NHD image');
+      if (width === 320) await expect(page.getByRole('alert')).toBeInViewport({ratio:1});
       expect(await geometry()).toEqual(initial);
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
     });
@@ -80,11 +81,22 @@ test('guest Tab and Shift+Tab release correctly and F12 returns to host navigati
   const tabHeld = () => page.evaluate(async () => Boolean((await pc98.read(0x52b)) & 0x80));
   const shiftHeld = () => page.evaluate(async () => Boolean((await pc98.read(0x538)) & 0x01));
   await expect(screen).toBeFocused();
-  await page.keyboard.press('Shift+Tab');
+  await page.keyboard.down('Shift');
+  const before = await stats(page);
+  // Give the BIOS time to service an IRQ if the host modifier leaked.
+  await expect.poll(async () => (await stats(page)).instructions).toBeGreaterThan(before.instructions + 10000);
+  expect(await shiftHeld()).toBe(false);
+  await page.keyboard.press('Tab');
   await expect(page.getByRole('link', {name:'GitHub'})).toBeFocused();
+  await page.keyboard.up('Shift');
+  expect(await tabHeld()).toBe(false);
   await page.keyboard.press('Tab');
   await expect(screen).toBeFocused();
+  await page.keyboard.down('Shift');
   await page.keyboard.press('ArrowRight');
+  await expect.poll(shiftHeld).toBe(true);
+  await page.keyboard.up('Shift');
+  await expect.poll(shiftHeld).toBe(false);
 
   await page.keyboard.down('Tab');
   await expect.poll(tabHeld).toBe(true);
@@ -102,6 +114,90 @@ test('guest Tab and Shift+Tab release correctly and F12 returns to host navigati
   await expect.poll(shiftHeld).toBe(false);
   await page.keyboard.up('Tab');
   await page.keyboard.up('Shift');
+
+  await screen.focus();
+  await page.keyboard.down('Shift');
+  await screen.click();
+  await expect.poll(shiftHeld).toBe(true);
+  await page.keyboard.up('Shift');
+  await expect.poll(shiftHeld).toBe(false);
+});
+
+test('consecutive Space presses toggle playback and sound without moving focus', async ({page}) => {
+  await ready(page);
+  const pause = page.locator('#pause');
+  const sound = page.locator('#sound');
+  await page.keyboard.press('Tab');
+  await expect(pause).toBeFocused();
+  await page.keyboard.press('Space');
+  await expect(pause).toBeEnabled();
+  await expect(pause).toBeFocused();
+  await expect(pause).toHaveText('Resume');
+  expect((await stats(page)).running).toBe(false);
+  await page.keyboard.press('Space');
+  await expect(pause).toBeEnabled();
+  await expect(pause).toBeFocused();
+  await expect(pause).toHaveText('Pause');
+  expect((await stats(page)).running).toBe(true);
+
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Tab');
+  await expect(sound).toBeFocused();
+  await page.keyboard.press('Space');
+  await expect(sound).toHaveAttribute('aria-pressed', 'false');
+  await expect(sound).toBeEnabled();
+  await expect(sound).toBeFocused();
+  await page.keyboard.press('Space');
+  await expect(sound).toHaveAttribute('aria-pressed', 'true');
+  await expect(sound).toBeEnabled();
+  await expect(sound).toBeFocused();
+});
+
+test.describe('320 × 700 touch media feedback', () => {
+  test.use({viewport:{width:320,height:700}, hasTouch:true, isMobile:true});
+  test('keeps HDD import progress and a recovery message in view', async ({page}) => {
+    await ready(page);
+    const hdi = await readFile(new URL('../../fixtures/ide_verify/ide_verify.hdi', import.meta.url));
+    const drive = page.locator('#drive-2');
+    const choose = page.getByRole('button', {name:'Choose local file for IDE HDD'});
+    const tapToUpload = async file => {
+      await drive.tap();
+      const [chooser] = await Promise.all([page.waitForEvent('filechooser'), choose.tap()]);
+      await chooser.setFiles(file);
+    };
+    const screen = page.locator('#screen');
+    const initial = await screen.boundingBox();
+    await expect(drive).toBeInViewport({ratio:1});
+    await page.evaluate(size => {
+      const read = Blob.prototype.arrayBuffer;
+      const wait = new Promise(resolve => { window.finishHddRead = resolve; });
+      Blob.prototype.arrayBuffer = async function () {
+        if (this.size === size) {
+          Blob.prototype.arrayBuffer = read;
+          await wait;
+        }
+        return read.call(this);
+      };
+    }, hdi.length);
+    await tapToUpload({name:'probe.hdi', mimeType:'application/octet-stream', buffer:hdi});
+    const progress = page.getByText('Importing HDD…', {exact:true}).filter({visible:true});
+    await expect(progress).toBeInViewport({ratio:1});
+    expect(await screen.boundingBox()).toEqual(initial);
+    for (const id of ['drive-2', 'drive-0', 'reset', 'pause', 'sound']) {
+      await expect(page.locator('#' + id)).toBeDisabled();
+    }
+    await page.evaluate(() => window.finishHddRead());
+    await expect(progress).toBeHidden();
+    await expect(page.locator('#media-name-2')).toHaveText('probe.hdi');
+    await expect.poll(() => page.evaluate(() => pc98.text())).toContain('IDE VERIFY PASS');
+
+    await tapToUpload(floppy('incompatible.tfd'));
+    const alert = page.getByRole('alert');
+    await expect(alert).toContainText('Choose Insert media or a floppy drive for this image.');
+    await expect(alert).toBeInViewport({ratio:1});
+    expect(await screen.boundingBox()).toEqual(initial);
+    await expect(page.locator('#media-name-2')).toHaveText('probe.hdi');
+  });
 });
 
 test('keyboard navigation, picker dismissal, cancellation and selection preserve the running guest', async ({page}) => {
