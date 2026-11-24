@@ -301,9 +301,11 @@ services, bootable HDD/controller
 and persistence, EGC/GDC additions, PEGC 256-color mode, expanded ANK/CG, mouse and
 OPNA/86 PCM/game music required implementation and independent guest fixtures.
 The current Issue #11 device audit above supersedes those historical gaps.
-The existing two independent PC-98 DOS applications, native floppy/save/audio
-checks and browser demos remain regression requirements. No issue-closing keyword,
-push, PR, merge, GitHub comment or post-merge action is part of this checkpoint.
+The two independent PC-98 DOS applications and native floppy, save and audio
+checks remain regression requirements. Browser coverage uses test fixtures such
+as the [input probe](../guest/input_probe.asm) for keyboard, mouse, floppy and
+beeper behavior. No issue-closing keyword, push, PR, merge, GitHub comment or
+post-merge action was part of the PR #10 checkpoint.
 
 ### Issue #9 CPU checkpoint validation (2026-10-21)
 
