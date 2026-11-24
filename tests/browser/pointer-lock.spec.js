@@ -116,6 +116,32 @@ test('the real raw canvas captures with or without CRT and the guest receives re
   await expect(page.getByRole('dialog', {name:'Player help'})).toBeVisible();
 });
 
+test('real lock suppresses buttons held before capture until they are released', async ({page}) => {
+  const screen = await start(page, {manual:true});
+  await page.bringToFront();
+  // Keep Chromium's native context menu out of the pre-capture button chord.
+  await screen.evaluate(canvas => canvas.addEventListener('contextmenu', event => event.preventDefault()));
+  const box = await screen.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  const before = await guest(page);
+
+  await page.mouse.down({button:'right'});
+  await page.mouse.down({button:'left'});
+  await expect(page.locator('html')).toHaveAttribute('data-lock-owner', 'screen');
+  expect(await owner(page)).toBe('screen');
+  await page.mouse.up({button:'left'});
+  expect(await guest(page, 100000)).toMatchObject({buttons:0, edges:before.edges});
+  await page.mouse.up({button:'right'});
+  expect(await guest(page, 100000)).toMatchObject({buttons:0, edges:before.edges});
+
+  await page.mouse.down({button:'right'});
+  expect(await guest(page, 100000)).toMatchObject({buttons:0x20, edges:before.edges + 1});
+  await page.mouse.up({button:'right'});
+  expect(await guest(page, 100000)).toMatchObject({buttons:0, edges:before.edges + 2});
+  await page.keyboard.press('Escape');
+  await expect.poll(() => owner(page)).toBeNull();
+});
+
 test('real lock releases on F12, host controls, visibility, fullscreen exit, reset and Worker fault', async ({page}) => {
   const screen = await start(page);
   await page.bringToFront();
