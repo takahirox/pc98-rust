@@ -250,15 +250,62 @@ fn host_mouse_buttons_stay_live_with_either_latch_level() {
     b.mouse.host_motion(0, 0, 0);
     assert_eq!(b.input(0x7fd9), 0xeb);
 
-    assert_eq!(latch_mouse(&mut b), (0, 0, 0xc0));
-    assert_eq!(b.input(0x7fd9) & 0xe0, 0xc0);
     b.mouse.host_motion(5, 0, 0);
-    assert_eq!(b.input(0x7fd9) & 0xe0, 0xc0);
+    assert_eq!(latch_mouse(&mut b), (0, 0, 0xe0));
+    assert_eq!(latch_mouse(&mut b), (5, 0, 0xe0));
     b.mouse.host_motion(0, 0, 1);
     assert_eq!(b.input(0x7fd9) & 0xe0, 0x60);
-    assert_eq!(latch_mouse(&mut b), (5, 0, 0xe0));
     assert_eq!(latch_mouse(&mut b), (0, 0, 0x60));
     b.mouse.host_motion(0, 0, 0);
+    assert_eq!(latch_mouse(&mut b), (0, 0, 0xe0));
+}
+
+#[test]
+fn host_mouse_does_not_replay_a_live_press_while_draining_older_motion() {
+    let mut b = Bus::new(Profile::Pc9821ApDos);
+    b.mouse.host_motion(300, 0, 0);
+    assert_eq!(latch_mouse(&mut b), (127, 0, 0xe0));
+    b.mouse.host_motion(0, 0, 1);
+    assert_eq!(b.input(0x7fd9) & 0xe0, 0x60);
+
+    for x in [127, 46, 0, 0] {
+        assert_eq!(latch_mouse(&mut b), (x, 0, 0x60));
+    }
+    b.mouse.host_motion(0, 0, 0);
+    assert_eq!(b.input(0x7fd9) & 0xe0, 0xe0);
+    assert_eq!(latch_mouse(&mut b), (0, 0, 0xe0));
+}
+
+#[test]
+fn host_mouse_short_tap_releases_even_if_the_guest_leaves_hc_high() {
+    let mut b = Bus::new(Profile::Pc9821ApDos);
+    b.mouse.host_motion(7, 0, 1);
+    b.mouse.host_motion(0, 0, 0);
+    assert_eq!(latch_mouse(&mut b), (7, 0, 0x60));
+
+    b.output(0x7fdd, 0x80);
+    for _ in 0..8 {
+        b.tick(1_000_000);
+        b.input(0x7fd9);
+    }
+    assert_eq!(b.input(0x7fd9), 0xe7);
+    b.mouse.host_motion(5, 0, 0);
+    assert_eq!(b.input(0x7fd9), 0xe7);
+    assert_eq!(latch_mouse(&mut b), (5, 0, 0xe0));
+}
+
+#[test]
+fn host_mouse_continuously_polled_unlatched_counter_keeps_its_motion() {
+    let mut b = Bus::new(Profile::Pc9821ApDos);
+    b.mouse.host_motion(40, -19, 0);
+    for _ in 0..16 {
+        for (select, expected) in [(0, 8), (0x20, 2), (0x40, 13), (0x60, 14)] {
+            b.output(0x7fdd, 0x10 | select);
+            assert_eq!(b.input(0x7fd9), 0xe0 | expected);
+        }
+        b.tick(500_000);
+    }
+    assert_eq!(latch_mouse(&mut b), (40, -19, 0xe0));
     assert_eq!(latch_mouse(&mut b), (0, 0, 0xe0));
 }
 
@@ -269,6 +316,7 @@ fn host_mouse_samples_a_short_click_after_all_earlier_motion() {
     b.mouse.host_motion(0, 0, 1);
     b.mouse.host_motion(0, 0, 0);
     b.mouse.host_motion(9, -3, 0);
+    assert_eq!(b.input(0x7fd9) & 0xe0, 0xe0); // Live polling sees the final level.
 
     for _ in 0..4 {
         assert_eq!(latch_mouse(&mut b), (127, -128, 0xe0));

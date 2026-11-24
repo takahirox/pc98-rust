@@ -4,9 +4,15 @@ use std::collections::VecDeque;
 const HOST_QUEUE_CAPACITY: usize = 64;
 const HOST_QUEUE_TIMEOUT: u64 = 2_000_000; // 250 ms at 8 MHz
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct ButtonState {
+    bits: u8,
+    revision: u64,
+}
+
 struct HostSample {
     motion: [i64; 2],
-    buttons: u8,
+    buttons: ButtonState,
     received_at: u64,
 }
 
@@ -23,12 +29,13 @@ pub struct Mouse {
     latch: [u8; 2],
     pending: VecDeque<HostSample>,
     host_clock: u64,
-    last_latch_at: u64,
-    sampled_buttons: Option<u8>,
+    last_sample_at: u64,
+    sampled_buttons: Option<ButtonState>,
+    reported_buttons: ButtonState,
     pub control: u8,
     pub rate: u8,
     mode: u8,
-    buttons: u8,
+    live_buttons: ButtonState,
     fraction: u64,
     pub events: u64,
     pub latches: u64,
@@ -40,12 +47,13 @@ impl Default for Mouse {
             latch: [0; 2],
             pending: VecDeque::new(),
             host_clock: 0,
-            last_latch_at: 0,
+            last_sample_at: 0,
             sampled_buttons: None,
+            reported_buttons: ButtonState::default(),
             control: 0x10,
             rate: 0,
             mode: 0x93,
-            buttons: 0,
+            live_buttons: ButtonState::default(),
             fraction: 0,
             events: 0,
             latches: 0,
@@ -56,22 +64,27 @@ impl Mouse {
     pub(crate) fn clocks_until_irq(&self) -> u64 {
         (8_000_000 - self.fraction).div_ceil(120 >> (self.rate & 3))
     }
+    fn update_buttons(&mut self, buttons: u8) {
+        let bits = buttons & 7;
+        if bits != self.live_buttons.bits {
+            self.live_buttons.bits = bits;
+            self.live_buttons.revision += 1;
+            self.sampled_buttons = None;
+        }
+    }
     /// Apply movement directly to the hardware counters.
     pub fn motion(&mut self, dx: i32, dy: i32, buttons: u8) {
         self.counter[0] = self.counter[0].wrapping_add(dx as u8);
         self.counter[1] = self.counter[1].wrapping_add(dy as u8);
-        self.buttons = buttons & 7;
+        self.update_buttons(buttons);
         self.sampled_buttons = None;
         self.events += 1;
     }
     /// Keep live button levels for direct reads and queue samples for drivers
     /// that latch movement. Keep distinct arrival times so old motion can expire.
     pub fn host_motion(&mut self, dx: i32, dy: i32, buttons: u8) {
-        let buttons = buttons & 7;
-        if buttons != self.buttons {
-            self.buttons = buttons;
-            self.sampled_buttons = None;
-        }
+        self.update_buttons(buttons);
+        let buttons = self.live_buttons;
         let motion = [i64::from(dx), i64::from(dy)];
         let received_at = self.host_clock;
         if let Some(sample) = self
@@ -96,19 +109,25 @@ impl Mouse {
         self.events += 1;
     }
     pub fn release(&mut self) {
-        self.buttons = 0;
+        self.update_buttons(0);
         self.pending.clear();
         self.sampled_buttons = None;
+        self.reported_buttons = self.live_buttons;
     }
     pub fn tick(&mut self, cycles: u32) -> bool {
-        if !self.pending.is_empty() {
+        if !self.pending.is_empty() || self.sampled_buttons.is_some() {
             self.host_clock += u64::from(cycles);
-            // Allow an active driver time to drain large motion. After it
-            // stops sampling, expire each arrival on its own deadline.
+            // Keep motion available to both relatching and unlatched polling
+            // drivers. After sampling stops, expire each arrival separately.
             while self.pending.front().is_some_and(|sample| {
-                self.host_clock - sample.received_at.max(self.last_latch_at) >= HOST_QUEUE_TIMEOUT
+                self.host_clock - sample.received_at.max(self.last_sample_at) >= HOST_QUEUE_TIMEOUT
             }) {
                 self.pending.pop_front();
+            }
+            // A driver holding HC high can still see the live button levels
+            // after the queued sample has had time to be read.
+            if self.host_clock - self.last_sample_at >= HOST_QUEUE_TIMEOUT {
+                self.sampled_buttons = None;
             }
         }
         self.fraction += cycles as u64 * (120 >> (self.rate & 3));
@@ -123,6 +142,7 @@ impl Mouse {
             0x7fd9 => {
                 let axis = usize::from(self.control & 0x40 != 0);
                 let count = if self.control & 0x80 == 0 {
+                    self.last_sample_at = self.host_clock;
                     let mut count = self.counter[axis];
                     if let Some(first) = self.pending.front() {
                         for sample in self
@@ -137,9 +157,17 @@ impl Mouse {
                 } else {
                     self.latch[axis]
                 };
-                // A queued tap stays visible through all nibbles of this
-                // latch. A live button change overrides the sampled levels.
-                let buttons = self.sampled_buttons.unwrap_or(self.buttons);
+                // Draining older motion must not roll back a button edge the
+                // guest has already read. An unchanged live level can still
+                // have an unseen tap queued for the next latch.
+                let buttons = self.sampled_buttons.unwrap_or(self.live_buttons);
+                if buttons.revision > self.reported_buttons.revision
+                    && (self.sampled_buttons.is_some()
+                        || buttons.bits != self.reported_buttons.bits)
+                {
+                    self.reported_buttons = buttons;
+                }
+                let buttons = self.reported_buttons.bits;
                 let bits = (if buttons & 1 != 0 { 0x80 } else { 0 })
                     | (if buttons & 2 != 0 { 0x20 } else { 0 })
                     | (if buttons & 4 != 0 { 0x40 } else { 0 });
@@ -176,7 +204,7 @@ impl Mouse {
                 }
                 self.pending.pop_front();
             }
-            self.last_latch_at = self.host_clock;
+            self.last_sample_at = self.host_clock;
             self.latches += 1;
         }
         self.control = value & 0xf0;
