@@ -96,6 +96,13 @@ test('floppy validation, second drive, eject, and virtual PC-98 keyboard', async
   await page.keyboard.press('Escape');
   await page.locator('#toggle-keyboard').click();const right=page.locator('[data-scan="60"]');
   await right.click();await value(page,8,2);
+  await right.evaluate(button => button.click());
+  await value(page,8,3);
+  // The BIOS-held bitmap clears the Right key after semantic activation.
+  await expect.poll(() => inspect(page, () => pc98.read(0x531) & 0x10)).toBe(0);
+  await right.press('Enter');
+  await value(page,8,4);
+  await value(page,12,3);
 });
 
 test('missing or broken Wasm fails visibly and cannot masquerade as a working demo',async({page})=>{

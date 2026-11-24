@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { launchDemo, nextBoot, openSettings, uploadMedia } from './helpers/player.js';
+import { diskAction, launchDemo, nextBoot, openSettings, uploadMedia } from './helpers/player.js';
 import { mkdtemp, readFile, rm, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -60,6 +60,17 @@ async function holdHddRead(page, size) {
       return read.call(this);
     };
   }, size);
+}
+
+async function dropHdd(page, target, name) {
+  const hdi = await readFile(new URL('../../fixtures/ide_verify/ide_verify.hdi', import.meta.url));
+  await holdHddRead(page, hdi.length);
+  await target.evaluate((element, {name, base64}) => {
+    const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+    const dataTransfer = new DataTransfer();
+    dataTransfer.items.add(new File([bytes], name, {type:'application/octet-stream'}));
+    element.dispatchEvent(new DragEvent('drop', {bubbles:true, cancelable:true, dataTransfer}));
+  }, {name, base64:hdi.toString('base64')});
 }
 
 const sizes = [
@@ -164,6 +175,21 @@ test.describe('568 × 320 touch media picker', () => {
     await dismiss.tap();
     await expect(page.getByRole('alert')).toBeHidden();
     expect(await page.locator('#screen').boundingBox()).toEqual(normal);
+  });
+
+  test('keeps HDD drop progress in view without moving the screen', async ({page}) => {
+    await ready(page);
+    const screen = page.locator('#screen');
+    const initial = await screen.boundingBox();
+    await dropHdd(page, screen, 'probe.hdi');
+    const progress = page.getByRole('status').filter({hasText:'Importing HDD…'});
+    await expect(progress).toBeInViewport({ratio:1});
+    expect((await progress.boundingBox()).y).toBeGreaterThanOrEqual(initial.y + initial.height);
+    expect(await screen.boundingBox()).toEqual(initial);
+    expect(await page.evaluate(() => scrollY)).toBe(0);
+    await page.evaluate(() => window.finishHddRead());
+    await expect(progress).toBeHidden();
+    await expect.poll(() => page.evaluate(() => pc98.text())).toContain('IDE VERIFY PASS');
   });
 });
 
@@ -505,7 +531,13 @@ test('Settings records the floppy inserted before the paused VM first boots', as
   const before = await stats(page);
   await uploadMedia(page, floppy('hello.tfd'), '0');
   await expect(page.locator('#media-name-0')).toHaveText('hello.tfd');
+  await expect(page.locator('#status')).toHaveText('Paused');
+  await diskAction(page, '0', 'eject');
+  await expect(page.locator('#status')).toHaveText('No boot disk');
+  await uploadMedia(page, floppy('hello.tfd'), '0');
+  await expect(page.locator('#status')).toHaveText('Paused');
   expect((await stats(page)).running).toBe(false);
+  expect((await stats(page)).generation).toBe(before.generation);
   await page.getByRole('button', {name:'Resume'}).click();
   await expect.poll(() => page.evaluate(() => pc98.text())).toContain('Hello world!!');
   await openSettings(page);
@@ -630,6 +662,29 @@ test.describe('844 × 390 landscape recovery', () => {
   });
 });
 
+test('keyboard entry into fallback fullscreen closes Help', async ({page}) => {
+  await page.addInitScript(() => {
+    Element.prototype.requestFullscreen = () => Promise.reject(new Error('Fullscreen unavailable'));
+  });
+  await ready(page);
+  const help = page.getByRole('button', {name:'Help', exact:true});
+  const panel = page.locator('#help-panel');
+  const fullscreen = page.getByRole('button', {name:'Fullscreen', exact:true});
+  await help.press('Enter');
+  await expect(panel).toBeVisible();
+  for (let step = 0; step < 20 && !(await fullscreen.evaluate(el => el === document.activeElement)); step++) {
+    await page.keyboard.press('Tab');
+  }
+  await expect(fullscreen).toBeFocused();
+  await expect(panel).toBeVisible();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#drop')).toHaveClass(/full-window/);
+  await expect(panel).toBeHidden();
+  await expect(page.getByRole('button', {name:'Exit fullscreen'})).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(fullscreen).toBeFocused();
+});
+
 async function enterFullscreen(page, mode) {
   await page.setViewportSize({width:844,height:390});
   if (mode === 'fallback') {
@@ -647,15 +702,8 @@ async function enterFullscreen(page, mode) {
 for (const mode of ['native', 'fallback']) {
   test(`${mode} fullscreen shows HDD drop progress with the exit in view`, async ({page}) => {
     await enterFullscreen(page, mode);
-    const hdi = await readFile(new URL('../../fixtures/ide_verify/ide_verify.hdi', import.meta.url));
     const display = page.locator('#drop');
-    await holdHddRead(page, hdi.length);
-    await display.evaluate((drop, base64) => {
-      const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
-      const dataTransfer = new DataTransfer();
-      dataTransfer.items.add(new File([bytes], 'fullscreen.hdi', {type:'application/octet-stream'}));
-      drop.dispatchEvent(new DragEvent('drop', {bubbles:true, cancelable:true, dataTransfer}));
-    }, hdi.toString('base64'));
+    await dropHdd(page, display, 'fullscreen.hdi');
 
     const progress = display.getByRole('status').filter({hasText:'Importing HDD…'});
     const exit = page.getByRole('button', {name:'Exit fullscreen'});

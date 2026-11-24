@@ -60,6 +60,7 @@ function syncFullscreen() {
 }
 $('fullscreen').onclick = async event => {
   fullscreenFromKeyboard = event.detail === 0;
+  for (const panel of document.querySelectorAll(':popover-open')) panel.hidePopover();
   try { await display.requestFullscreen(); }
   catch {
     display.classList.add('full-window');
@@ -288,12 +289,21 @@ function releaseMouse() {
   pointerButtons = 0;
   pointerPosition = undefined;
 }
-async function setRunning(value, label = value ? 'Running' : 'Paused', mediaProgress = false) {
+function hasBootMedia() {
+  return Boolean(mounted[0] || (mounted[2] && core.metric(21) === 1));
+}
+function pausedStatus() {
+  return bootSource === undefined && !hasBootMedia() ? 'No boot disk' : 'Paused';
+}
+function refreshPausedMediaStatus() {
+  if (!running && bootSource === undefined) status(pausedStatus());
+}
+async function setRunning(value, label, mediaProgress = false) {
   running = value; $('pause').textContent = value ? 'Pause' : 'Resume';
   applyVolume();
   if (!value) releaseKeys();
   await rpc('running',value);
-  status(label, mediaProgress);
+  status(label ?? (value ? 'Running' : pausedStatus()), mediaProgress);
 }
 function showPicker() {
   const name = driveNames[pickerDrive], disk = mounted[pickerDrive];
@@ -484,8 +494,7 @@ async function selectProfile() {
     display.classList.remove('guest-mouse');
   }
   clearError();
-  const hasMedia = Boolean(mounted[0] || (mounted[2] && ap));
-  await setRunning(!document.hidden && hasMedia, hasMedia ? undefined : 'No boot disk');
+  await setRunning(!document.hidden && hasBootMedia());
 }
 $('profile').onchange = ({currentTarget}) => withControlFocus(currentTarget, () => exclusive(selectProfile));
 async function mayReplace(drive) {
@@ -501,6 +510,7 @@ $('eject').onclick = () => {
     try {
       if (!await mayReplace(drive)) return;
       await core.eject(drive); mounted[drive] = null;
+      if (drive !== 2) refreshPausedMediaStatus();
       clearError();
     } finally { if (drive === 2 && !workerFailed) await setRunning(resume && !document.hidden); }
   }));
@@ -549,6 +559,7 @@ function loadFile(file, target, resetOptions) {
     if (drive !== 2) {
       // Floppy insertion is live access, independent of the next boot.
       await insert(new Uint8Array(await file.arrayBuffer()), file.name, drive);
+      refreshPausedMediaStatus();
       return;
     }
     const resume = running;
@@ -676,6 +687,12 @@ for (const row of rows) {
     button.onpointerup = button.onpointercancel = button.onlostpointercapture = () => { button.classList.remove('held'); key(scan, false); };
     button.onkeydown = (e) => { if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); key(scan, true); } };
     button.onkeyup = (e) => { if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); key(scan, false); } };
+    button.onclick = (event) => {
+      // Pointer input and physical key activation already handle press and release.
+      if (event.detail !== 0 || held.has(scan)) return;
+      key(scan, true);
+      key(scan, false);
+    };
     button.onblur = () => { if (held.has(scan)) key(scan, false); };
     element.append(button);
   }
