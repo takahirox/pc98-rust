@@ -137,7 +137,7 @@ test('guest Tab and Shift+Tab release correctly and F12 returns to host navigati
   await expect.poll(shiftHeld).toBe(false);
 });
 
-test('standalone XFER and NFER reach the guest after tabbing to the screen', async ({page}) => {
+test('standalone Ctrl, GRPH, XFER and NFER reach the guest after tabbing to the screen', async ({page}) => {
   await ready(page);
   const screen = page.locator('#screen');
   await expect(screen).toBeFocused();
@@ -145,7 +145,9 @@ test('standalone XFER and NFER reach the guest after tabbing to the screen', asy
   await expect(page.getByRole('button', {name:'Pause'})).toBeFocused();
   await page.keyboard.press('Shift+Tab');
   await expect(screen).toBeFocused();
-  for (const [code, scan] of [['AltRight', 0x35], ['MetaLeft', 0x51]]) {
+  for (const [code, scan] of [
+    ['ControlLeft', 0x74], ['ControlRight', 0x74], ['AltLeft', 0x73], ['AltRight', 0x35], ['MetaLeft', 0x51],
+  ]) {
     const held = () => page.evaluate(async scan => {
       const state = await pc98.read(0x52a + Math.floor(scan / 8));
       return Boolean(state & (1 << (scan % 8)));
@@ -378,6 +380,50 @@ for (const mode of ['native', 'fallback']) {
     await expect(exit).toBeHidden();
     await expect(fullscreen).toBeFocused();
     await expect(alert).toBeVisible();
+  });
+}
+
+for (const [width, height] of [[390, 844], [844, 390]]) {
+  test.describe(`${width} × ${height} normal touch keyboard`, () => {
+    test.use({viewport:{width,height}, hasTouch:true, isMobile:true});
+    test('scrolls and uses guest keys with the display in view', async ({page}) => {
+      await ready(page);
+      await launchDemo(page, 'game', {touch:true});
+      await expect.poll(() => page.evaluate(() => pc98.text())).toContain('STAR TRAIL');
+      await page.evaluate(() => window.scrollTo(0, 0));
+      const before = await stats(page);
+      const screen = page.locator('#screen');
+      const keyboard = page.locator('#toggle-keyboard');
+      await expect(keyboard).toBeInViewport({ratio:1});
+      await keyboard.tap();
+      await expect(keyboard).toHaveAttribute('aria-expanded', 'true');
+      const panel = page.locator('#keyboard-home #keyboard-panel');
+      await expect(panel.getByRole('button', {name:'STOP', exact:true})).toBeInViewport({ratio:0.99});
+      await expect(screen).toBeInViewport({ratio:1});
+      const display = await screen.boundingBox();
+      const keys = await panel.boundingBox();
+      expect(display.width / display.height).toBeCloseTo(4/3, 2);
+      if (width < height) expect(display.y + display.height).toBeLessThanOrEqual(keys.y);
+      else expect(display.x + display.width).toBeLessThanOrEqual(keys.x);
+
+      const scroll = panel.getByRole('button', {name:'Scroll keyboard down'});
+      const move = panel.getByRole('button', {name:'→', exact:true});
+      const moveInView = () => move.evaluate(key => {
+        const scroll = key.closest('#keyboard-scroll').getBoundingClientRect();
+        const bounds = key.getBoundingClientRect();
+        return bounds.top >= scroll.top && bounds.bottom <= scroll.bottom;
+      });
+      for (let tap = 0; tap < 12 && !await moveInView(); tap++) await scroll.tap();
+      await expect(move).toBeInViewport({ratio:0.99});
+      await expect(screen).toBeInViewport({ratio:1});
+      await move.tap();
+      await expect.poll(() => page.evaluate(() => pc98.read(0x21408))).toBe(2);
+      await expect(screen).toBeInViewport({ratio:1});
+      expect(await page.evaluate(() => window.scrollY)).toBe(0);
+      await keyboard.tap();
+      await expect(panel).toBeHidden();
+      expect((await stats(page)).generation).toBe(before.generation);
+    });
   });
 }
 

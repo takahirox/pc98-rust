@@ -94,7 +94,7 @@ let nextPresentation = 0;
 const pending = new Map(); let requestId = 0;
 const metrics = new Map(); let bootByte = 0;
 const mounted = [null, null, null], held = new Set();
-const pendingModifiers = new Set();
+const pendingShifts = new Set();
 let pointerPosition, pointerButtons = 0;
 new ResizeObserver(() => { pointerPosition = undefined; }).observe(screen);
 const driveNames = ['Floppy 1', 'Floppy 2', 'IDE HDD'];
@@ -269,7 +269,7 @@ async function enableAudio() {
   muted = false; await soundState();
 }
 function releaseKeys() {
-  pendingModifiers.clear();
+  pendingShifts.clear();
   for (const scan of held) core?.key(scan, 0).catch(fail);
   held.clear(); document.querySelectorAll('.held').forEach((el) => el.classList.remove('held'));
   releaseMouse();
@@ -666,8 +666,8 @@ screen.addEventListener('focus', () => { captureTab = false; });
 function panelOpen() { return Boolean(document.querySelector('.panel:popover-open')); }
 function captureScreenKeys() {
   captureTab = true;
-  for (const code of pendingModifiers) key(codes[code],true);
-  pendingModifiers.clear();
+  for (const code of pendingShifts) key(codes[code],true);
+  pendingShifts.clear();
 }
 screen.addEventListener('pointerdown', () => {
   screen.focus({preventScroll:true});
@@ -686,21 +686,20 @@ screen.addEventListener('keydown', event => {
   const scan = codes[event.code];
   if (scan === undefined) return;
   if (!captureTab) {
-    // Right Alt and left Meta map to the standalone XFER and NFER keys.
-    const transferKey = event.code === 'AltRight' || event.code === 'MetaLeft';
-    // Hold modifiers locally until typing commits to guest input.
-    if (!transferKey && ['Shift','Control','Alt','AltGraph','Meta'].includes(event.key)) {
-      pendingModifiers.add(event.code);
+    // Keep Shift+Tab in the host until the user starts typing in the guest.
+    if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
+      pendingShifts.add(event.code);
       return;
     }
-    // A standalone transfer key leaves Tab available for host navigation.
-    if (!transferKey || pendingModifiers.size) captureScreenKeys();
+    // Other standalone modifiers are guest keys but leave host Tab available.
+    const standalone = ['ControlLeft','ControlRight','AltLeft','AltRight','MetaLeft'].includes(event.code);
+    if (!standalone || pendingShifts.size) captureScreenKeys();
   }
   event.preventDefault();
   key(scan,true);
 });
 screen.addEventListener('keyup', event => {
-  if (pendingModifiers.delete(event.code)) return;
+  if (pendingShifts.delete(event.code)) return;
   const scan = codes[event.code];
   if (!held.has(scan)) return;
   event.preventDefault();
