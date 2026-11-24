@@ -49,7 +49,7 @@ function syncFullscreen() {
   } else {
     const keyboardHome = $('keyboard-home');
     notices.removeAttribute('tabindex');
-    drives.before(notices);
+    drives.prepend(notices);
     keyboardHome.append(keyboardPanel);
   }
   for (const element of [document.querySelector('.site-header'), ...display.parentElement.children]) {
@@ -128,7 +128,11 @@ function acceptState(state) {
     else $('active-boot').textContent = 'No active boot disk';
   }
   generation = state.generation;
-  if (state.bootLoaded && bootAttempt) showBootResult('Booted');
+  if (bootAttempt) {
+    if (state.bootResult === 'failed') showBootResult('Boot failed');
+    // A frame sent through the render Worker can arrive after the stop event.
+    else if (state.bootResult === 'loaded' && bootAttempt.result !== 'Boot failed') showBootResult('Booted');
+  }
   for (const [id,value] of state.metrics) metrics.set(id,value);
   const mode = metrics.get(21) === 0 ? '640 × 400 · 8 colors · replacement Latin font'
     : metrics.get(13) ? '640 × 400 · 256 colors · PEGC'
@@ -351,9 +355,17 @@ function syncControls() {
   showPicker();
 }
 for (const button of driveButtons) {
-  button.onclick = () => {
-    pickerDrive = button.dataset.drive === 'auto' ? 'auto' : Number(button.dataset.drive);
+  button.onclick = event => {
+    event.preventDefault();
+    const drive = button.dataset.drive === 'auto' ? 'auto' : Number(button.dataset.drive);
+    if (mediaPicker.matches(':popover-open')) {
+      mediaPicker.hidePopover();
+      if (drive === pickerDrive) return;
+    }
+    pickerDrive = drive;
     showPicker();
+    button.focus({preventScroll:true});
+    mediaPicker.showPopover({source:button});
   };
 }
 for (const panel of document.querySelectorAll('[popover]')) {
@@ -363,11 +375,10 @@ $('choose-file').onclick = () => {
   fileDrive = pickerDrive;
   fileInput.click();
 };
-async function withDriveFocus(drive, operation) {
-  const trigger = $('drive-' + drive);
-  if (mediaPicker.matches(':popover-open')) mediaPicker.hidePopover();
-  // Disabling the drive button during a transaction can send focus to the body.
-  let restoreFocus = [document.body, trigger].includes(document.activeElement);
+async function withControlFocus(trigger, operation, {allowBody = false} = {}) {
+  // Disabling the initiating control can send focus to the body.
+  if (document.activeElement !== trigger && !(allowBody && document.activeElement === document.body)) return operation();
+  let restoreFocus = true;
   const focusMoved = () => { restoreFocus = false; };
   document.addEventListener('focusin', focusMoved, {once:true});
   try {
@@ -376,6 +387,10 @@ async function withDriveFocus(drive, operation) {
     document.removeEventListener('focusin', focusMoved);
     if (restoreFocus && document.activeElement === document.body) trigger.focus({preventScroll:true});
   }
+}
+function withDriveFocus(drive, operation) {
+  if (mediaPicker.matches(':popover-open')) mediaPicker.hidePopover();
+  return withControlFocus($('drive-' + drive), operation, {allowBody:true});
 }
 fileInput.onchange = () => {
   const file = fileInput.files[0];
@@ -450,9 +465,9 @@ async function exclusive(operation, playbackButton) {
   }
 }
 $('reset').onclick = () => exclusive(resetMachine);
-$('boot').onchange = () => {
-  const source = Number($('boot').value);
-  return exclusive(() => core.set_boot_source(source));
+$('boot').onchange = ({currentTarget}) => {
+  const source = Number(currentTarget.value);
+  return withControlFocus(currentTarget, () => exclusive(() => core.set_boot_source(source)));
 };
 $('sound').onclick = event => exclusive(async () => {
   clearError();
@@ -475,7 +490,7 @@ async function selectProfile() {
   const hasMedia = Boolean(mounted[0] || (mounted[2] && ap));
   await setRunning(!document.hidden && hasMedia, hasMedia ? undefined : 'No boot disk');
 }
-$('profile').onchange = () => exclusive(selectProfile);
+$('profile').onchange = ({currentTarget}) => withControlFocus(currentTarget, () => exclusive(selectProfile));
 async function mayReplace(drive) {
   return drive !== 2 || !mounted[2] || ((await core.hdi_dirty_page(0)) >>> 0) === 0xffffffff ||
     confirm(`${mounted[2].name} has guest writes. Discard them? Cancel to keep the disk and use Export disk first.`);
@@ -753,7 +768,7 @@ try {
     if (m.event === 'stopped') {
       if (m.state.generation < generation) return;
       acceptState(m.state);
-      if (bootAttempt && !m.state.bootLoaded) showBootResult('Boot failed');
+      if (bootAttempt && !m.state.bootResult) showBootResult('Boot failed');
       setRunning(false, 'Guest stopped').catch(fail); fail(m.error); return;
     }
     if (m.event === 'videoEpoch') {

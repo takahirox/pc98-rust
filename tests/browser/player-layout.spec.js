@@ -1,10 +1,25 @@
 import { test, expect } from '@playwright/test';
 import { launchDemo, nextBoot, openSettings, uploadMedia } from './helpers/player.js';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, truncate, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const hello = await readFile(new URL('../../web/media/hello98.tfd', import.meta.url));
 const floppy = name => ({name, mimeType:'application/octet-stream', buffer:hello});
 const stats = page => page.evaluate(() => pc98.stats());
+const bootError = 'Boot failed: no readable PC-98 floppy or IDE IPL';
+
+function floppyWithoutBootTrack() {
+  // A valid D88 with one sector on side 1 and no track on side 0.
+  const track = 0x2b0;
+  const buffer = Buffer.alloc(track + 16 + 1024);
+  buffer[0x1b] = 0x20;
+  buffer.writeUInt32LE(buffer.length, 0x1c);
+  buffer.writeUInt32LE(track, 0x24);
+  buffer.set([0, 1, 1, 3, 1], track);
+  buffer.writeUInt16LE(1024, track + 14);
+  return {name:'no-boot-track.d88', mimeType:'application/octet-stream', buffer};
+}
 
 async function dropUnsupportedFile(page) {
   await page.locator('#screen').evaluate(canvas => {
@@ -14,11 +29,11 @@ async function dropUnsupportedFile(page) {
   });
 }
 
-async function expectNoticeClearOfScreen(page, initial) {
+async function expectNoticeClearOfScreen(page, initial, message = 'Unsupported media extension') {
   const screen = page.locator('#screen');
   const notice = page.locator('#error-notice');
   const alert = page.getByRole('alert');
-  await expect(alert).toContainText('Unsupported media extension');
+  await expect(alert).toContainText(message);
   await expect(alert).toBeInViewport({ratio:1});
   await expect(notice).toBeInViewport({ratio:1});
   expect(await screen.boundingBox()).toEqual(initial);
@@ -228,6 +243,40 @@ test('consecutive Space presses toggle playback and sound without moving focus',
   await expect(sound).toBeFocused();
 });
 
+test('keyboard changes keep focus on Next boot and Machine', async ({page}) => {
+  await ready(page);
+  const settings = page.getByRole('button', {name:'Settings'});
+  for (let step = 0; step < 10 && !(await settings.evaluate(el => el === document.activeElement)); step++) {
+    await page.keyboard.press('Tab');
+  }
+  await expect(settings).toBeFocused();
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Tab');
+  const boot = page.getByRole('combobox', {name:'Next boot'});
+  await expect(boot).toBeFocused();
+  const before = await stats(page);
+  // Native select typeahead also works in headless Chromium on macOS,
+  // where an arrow key alone opens the options menu.
+  await page.keyboard.press('f');
+  await expect(page.locator('#boot-source')).toHaveText('Reset boots: Floppy 1 · Empty');
+  await expect(boot).toBeEnabled();
+  await expect(boot).toBeFocused();
+  expect((await stats(page)).generation).toBe(before.generation);
+
+  await page.keyboard.press('Escape');
+  await expect(settings).toBeFocused();
+  await page.keyboard.press('Tab');
+  const machine = page.getByRole('combobox', {name:'Machine'});
+  await expect(machine).toBeFocused();
+  await page.keyboard.press('p');
+  await expect(page).toHaveTitle('pc98-rust · PC-9801VM');
+  await expect(machine).toBeEnabled();
+  await expect(machine).toBeFocused();
+  expect((await stats(page)).generation).toBe(before.generation + 1);
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('button', {name:'Change IDE HDD'})).toBeFocused();
+});
+
 test.describe('320 × 700 touch media feedback', () => {
   test.use({viewport:{width:320,height:700}, hasTouch:true, isMobile:true});
   test('keeps HDD import progress and a recovery message in view', async ({page}) => {
@@ -351,17 +400,26 @@ test('keyboard navigation, picker dismissal, cancellation and selection preserve
   await expect(page.locator('#active-boot')).toHaveText('Booted: Floppy 1 · hello.tfd');
 });
 
+test('one click switches an open media picker to another drive and Escape returns focus', async ({page}) => {
+  await page.setViewportSize({width:1280,height:720});
+  await ready(page);
+  const before = await stats(page);
+  const floppy1 = page.getByRole('button', {name:'Insert Floppy 1'});
+  const floppy2 = page.getByRole('button', {name:'Insert Floppy 2'});
+  await floppy1.click();
+  await expect(page.getByRole('button', {name:'Choose local file for Floppy 1'})).toBeFocused();
+  await floppy2.click();
+  const picker = page.getByRole('dialog', {name:'Floppy 2', exact:true});
+  await expect(picker.getByRole('button', {name:'Choose local file for Floppy 2'})).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(picker).toBeHidden();
+  await expect(floppy2).toBeFocused();
+  expect((await stats(page)).generation).toBe(before.generation);
+});
+
 test('Settings keeps the failed boot source separate from the next reset', async ({page}) => {
   await ready(page);
-  // A valid D88 with one sector on side 1 and no track on side 0.
-  const track = 0x2b0;
-  const image = Buffer.alloc(track + 16 + 1024);
-  image[0x1b] = 0x20;
-  image.writeUInt32LE(image.length, 0x1c);
-  image.writeUInt32LE(track, 0x24);
-  image.set([0, 1, 1, 3, 1], track);
-  image.writeUInt16LE(1024, track + 14);
-  await uploadMedia(page, {name:'no-boot-track.d88', mimeType:'application/octet-stream', buffer:image}, '0');
+  await uploadMedia(page, floppyWithoutBootTrack(), '0');
   await expect(page.locator('#media-name-0')).toHaveText('no-boot-track.d88');
   await nextBoot(page, '0');
   await page.getByRole('button', {name:'Reset'}).click();
@@ -389,13 +447,59 @@ test('Settings keeps the failed boot source separate from the next reset', async
   await expect(attempt).toHaveText('Booted: IDE HDD · FreeDOS-128MiB.hdi');
 });
 
+test('Settings retains the firmware failure after a readable HDD IPL finds no bootable partition', async ({page}) => {
+  await ready(page);
+  const prefix = await readFile(new URL('../../web/freedos/desktop.bin', import.meta.url));
+  const manifest = JSON.parse(await readFile(new URL('../../web/freedos/manifest.json', import.meta.url)));
+  const sectorSize = prefix.readUInt32LE(16);
+  const partitionTable = prefix.readUInt32LE(8) + sectorSize;
+  prefix.fill(0, partitionTable, partitionTable + sectorSize);
+  const directory = await mkdtemp(join(tmpdir(), 'pc98-boot-'));
+  try {
+    const path = join(directory, 'no-partition.hdi');
+    await writeFile(path, prefix);
+    await truncate(path, manifest.bytes);
+    await uploadMedia(page, path, '2');
+    await expect(page.locator('#media-name-2')).toHaveText('no-partition.hdi');
+    await expect(page.getByRole('alert')).toHaveText(bootError);
+  } finally {
+    await rm(directory, {recursive:true, force:true});
+  }
+  const failed = await stats(page);
+  expect(failed.hddReads).toBe(2);
+  expect(failed.running).toBe(false);
+  await page.getByRole('button', {name:'Dismiss error'}).click();
+  await openSettings(page);
+  const attempt = page.locator('#active-boot');
+  await expect(attempt).toHaveText('Boot failed: IDE HDD · no-partition.hdi');
+  await page.locator('#boot').selectOption('0');
+  await expect(page.locator('#boot-source')).toHaveText('Reset boots: Floppy 1 · Empty');
+  expect((await stats(page)).generation).toBe(failed.generation);
+  await expect(attempt).toHaveText('Boot failed: IDE HDD · no-partition.hdi');
+});
+
 test.describe('844 × 390 landscape recovery', () => {
   test.use({viewport:{width:844,height:390}, hasTouch:true, isMobile:true});
-  test('keeps the guest image clear in the player', async ({page}) => {
+  test('keeps the image clear and media actions tappable after a boot failure', async ({page}) => {
     await ready(page);
+    await uploadMedia(page, floppyWithoutBootTrack(), '0');
+    await nextBoot(page, '0');
     const normal = await page.locator('#screen').boundingBox();
-    await dropUnsupportedFile(page);
-    await expectNoticeClearOfScreen(page, normal);
+    await page.getByRole('button', {name:'Reset'}).tap();
+    await expectNoticeClearOfScreen(page, normal, bootError);
+    for (const [label, title] of [['Insert media', 'Insert media'], ['Demos', 'Boot a demo']]) {
+      const button = page.getByRole('button', {name:label, exact:true});
+      await expect(button).toBeInViewport({ratio:1});
+      expect(await button.evaluate(el => {
+        const {x, y, width, height} = el.getBoundingClientRect();
+        return document.elementFromPoint(x + width / 2, y + height / 2)?.closest('button') === el;
+      })).toBe(true);
+      await button.tap();
+      const picker = page.getByRole('dialog', {name:title});
+      await expect(picker).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expect(picker).toBeHidden();
+    }
     await page.getByRole('button', {name:'Dismiss error'}).tap();
     await expect(page.getByRole('alert')).toBeHidden();
   });
