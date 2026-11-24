@@ -3,7 +3,7 @@
 // stopped and fault events never resolve requests. frameAck returns ownership
 // of the sole pixel buffer; audio uses its own credit-based MessagePort.
 let core, jit, jitUnavailable = false, running = false, manual = false, busy = false, timer;
-let generation = 0, bootLoaded = false, frameBuffer = new ArrayBuffer(640 * 400 * 4), frameRequested = false;
+let generation = 0, bootResult, frameBuffer = new ArrayBuffer(640 * 400 * 4), frameRequested = false;
 let lastFrameCycles, previewDue = 0, captureDue = 0, captureTimer;
 let videoPort, snapshotBuffer = null, videoEpoch = 0, frameSequence = 0;
 let inFlightSequence = 0;
@@ -50,10 +50,10 @@ function message(kind = 0) {
   return decoder.decode(new Uint8Array(core.memory.buffer, ptr, len));
 }
 function state() {
-  // Both read counters start at zero on reset. The IPL's first successful
-  // sector read loads the guest, while the BIOS drive byte is set before any I/O.
-  bootLoaded ||= core.metric(1) > 0 || core.metric(9) > 0;
-  return { generation, metrics: [13, 21, 22].map(id => [id, core.metric(id)]), boot: core.peek(0x584), bootLoaded };
+  // Read counters start at zero on reset. A sector read can precede a
+  // firmware boot failure, for example when the HDD IPL finds no partition.
+  if (!bootResult && (core.metric(1) > 0 || core.metric(9) > 0)) bootResult = 'loaded';
+  return { generation, metrics: [13, 21, 22].map(id => [id, core.metric(id)]), boot: core.peek(0x584), bootResult };
 }
 function stats() {
   const fields = {instructions:0, reads:1, writes:2, hddReads:9, hddWrites:10,
@@ -249,11 +249,13 @@ function tick() {
       }
     }
     deliverAudio();
-    presentDue();
     if (core.metric(4)) {
       running = false;
-      postMessage({event:'stopped', state:state(), error:message()});
+      const error = message();
+      if (error.startsWith('Boot failed:')) bootResult = 'failed';
+      postMessage({event:'stopped', state:state(), error});
     }
+    presentDue();
   } catch (error) { running = false; postMessage({event:'fault', error:error.message}); }
   schedule(playingAudio() ? (outstandingAudio() < 4800 && audioBuffers.length ? 0 : 5)
     : (core.metric(5) < guestDeadline ? 0 : Math.max(1,deadline-performance.now())));
@@ -411,7 +413,7 @@ async function command(type, data) {
     if (!calls.has(name)) throw Error('Unsupported core command');
     if (transaction && !['hdi_append','hdi_commit','hdi_cancel','hdi_len','hdi_dirty_page','key','mouse'].includes(name)) throw Error('Media operation in progress');
     if (['reset','set_profile','set_boot_source','eject','hdi_begin','hdi_commit','hdi_cancel'].includes(name)) invalidateVideo();
-    if (['reset','set_profile'].includes(name)) { await flushAudio(); generation++; bootLoaded = false; jit?.clear(); }
+    if (['reset','set_profile'].includes(name)) { await flushAudio(); generation++; bootResult = undefined; jit?.clear(); }
     if (transaction && (name === 'key' && args[1] || name === 'mouse' && args.some(Boolean))) throw Error('Input is paused for media transfer');
     const value = core[name](...args);
     if (name === 'hdi_commit' && value) jit?.clear();
