@@ -2,11 +2,12 @@
 use std::collections::VecDeque;
 
 const HOST_QUEUE_CAPACITY: usize = 64;
-const HOST_QUEUE_TIMEOUT: u32 = 2_000_000; // 250 ms at 8 MHz
+const HOST_QUEUE_TIMEOUT: u64 = 2_000_000; // 250 ms at 8 MHz
 
 struct HostSample {
     motion: [i64; 2],
     buttons: u8,
+    received_at: u64,
 }
 
 impl HostSample {
@@ -21,7 +22,8 @@ pub struct Mouse {
     counter: [u8; 2],
     latch: [u8; 2],
     pending: VecDeque<HostSample>,
-    pending_clocks: u32,
+    host_clock: u64,
+    last_latch_at: u64,
     sampled_buttons: Option<u8>,
     pub control: u8,
     pub rate: u8,
@@ -37,7 +39,8 @@ impl Default for Mouse {
             counter: [0; 2],
             latch: [0; 2],
             pending: VecDeque::new(),
-            pending_clocks: 0,
+            host_clock: 0,
+            last_latch_at: 0,
             sampled_buttons: None,
             control: 0x10,
             rate: 0,
@@ -62,21 +65,19 @@ impl Mouse {
         self.events += 1;
     }
     /// Keep live button levels for direct reads and queue samples for drivers
-    /// that latch movement. Motion between button changes shares one sample.
+    /// that latch movement. Keep distinct arrival times so old motion can expire.
     pub fn host_motion(&mut self, dx: i32, dy: i32, buttons: u8) {
         let buttons = buttons & 7;
         if buttons != self.buttons {
             self.buttons = buttons;
             self.sampled_buttons = None;
         }
-        if self.pending.is_empty() {
-            self.pending_clocks = HOST_QUEUE_TIMEOUT;
-        }
         let motion = [i64::from(dx), i64::from(dy)];
+        let received_at = self.host_clock;
         if let Some(sample) = self
             .pending
             .back_mut()
-            .filter(|sample| sample.buttons == buttons)
+            .filter(|sample| sample.buttons == buttons && sample.received_at == received_at)
         {
             sample.add_motion(motion);
         } else {
@@ -86,22 +87,28 @@ impl Mouse {
                 let oldest = self.pending.pop_front().unwrap();
                 self.pending.front_mut().unwrap().add_motion(oldest.motion);
             }
-            self.pending.push_back(HostSample { motion, buttons });
+            self.pending.push_back(HostSample {
+                motion,
+                buttons,
+                received_at,
+            });
         }
         self.events += 1;
     }
     pub fn release(&mut self) {
         self.buttons = 0;
         self.pending.clear();
-        self.pending_clocks = 0;
         self.sampled_buttons = None;
     }
     pub fn tick(&mut self, cycles: u32) -> bool {
-        if self.pending_clocks != 0 {
-            self.pending_clocks = self.pending_clocks.saturating_sub(cycles);
-            if self.pending_clocks == 0 {
-                self.pending.clear();
-                self.sampled_buttons = None;
+        if !self.pending.is_empty() {
+            self.host_clock += u64::from(cycles);
+            // Allow an active driver time to drain large motion. After it
+            // stops sampling, expire each arrival on its own deadline.
+            while self.pending.front().is_some_and(|sample| {
+                self.host_clock - sample.received_at.max(self.last_latch_at) >= HOST_QUEUE_TIMEOUT
+            }) {
+                self.pending.pop_front();
             }
         }
         self.fraction += cycles as u64 * (120 >> (self.rate & 3));
@@ -116,14 +123,23 @@ impl Mouse {
             0x7fd9 => {
                 let axis = usize::from(self.control & 0x40 != 0);
                 let count = if self.control & 0x80 == 0 {
-                    let pending = self.pending.front().map_or(0, |sample| sample.motion[axis]);
-                    self.counter[axis].wrapping_add(pending as u8)
+                    let mut count = self.counter[axis];
+                    if let Some(first) = self.pending.front() {
+                        for sample in self
+                            .pending
+                            .iter()
+                            .take_while(|s| s.buttons == first.buttons)
+                        {
+                            count = count.wrapping_add(sample.motion[axis] as u8);
+                        }
+                    }
+                    count
                 } else {
                     self.latch[axis]
                 };
-                // The first status read of a new sample can report a queued
-                // tap. Reads with HC held steady see the live button levels.
-                let buttons = self.sampled_buttons.take().unwrap_or(self.buttons);
+                // A queued tap stays visible through all nibbles of this
+                // latch. A live button change overrides the sampled levels.
+                let buttons = self.sampled_buttons.unwrap_or(self.buttons);
                 let bits = (if buttons & 1 != 0 { 0x80 } else { 0 })
                     | (if buttons & 2 != 0 { 0x20 } else { 0 })
                     | (if buttons & 4 != 0 { 0x40 } else { 0 });
@@ -141,24 +157,26 @@ impl Mouse {
         } else if self.control & 0x80 == 0 {
             self.latch = self.counter;
             self.counter = [0; 2];
-            if let Some(sample) = self.pending.front_mut() {
-                self.sampled_buttons = Some(sample.buttons);
+            self.sampled_buttons = self.pending.front().map(|sample| sample.buttons);
+            // Consecutive arrivals with the same buttons share a latch up to
+            // the signed counter limit. Leave later button edges queued.
+            while let Some(sample) = self
+                .pending
+                .front_mut()
+                .filter(|sample| Some(sample.buttons) == self.sampled_buttons)
+            {
                 for (latched, pending) in self.latch.iter_mut().zip(&mut sample.motion) {
                     let count = i64::from(*latched as i8);
                     let total = count.saturating_add(*pending).clamp(-128, 127);
                     *latched = total as u8;
                     *pending -= total - count;
                 }
-                if sample.motion == [0; 2] {
-                    self.pending.pop_front();
+                if sample.motion != [0; 2] {
+                    break;
                 }
+                self.pending.pop_front();
             }
-            // Extend the lifetime of the backlog only while the guest samples.
-            self.pending_clocks = if self.pending.is_empty() && self.sampled_buttons.is_none() {
-                0
-            } else {
-                HOST_QUEUE_TIMEOUT
-            };
+            self.last_latch_at = self.host_clock;
             self.latches += 1;
         }
         self.control = value & 0xf0;

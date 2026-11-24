@@ -105,7 +105,7 @@ const pending = new Map(); let requestId = 0;
 const metrics = new Map(); let bootSource;
 const mounted = [null, null, null], held = new Set();
 const pendingShifts = new Set();
-let pointerRequest, pointerLocked = false, pointerRejected = false, captureButtonHeld = false;
+let pointerRequest, pointerLocked = false, pointerRejected = false, suppressedMouseButtons = 0;
 let pointerPosition, touchPointer, pointerButtons = 0, sentMouse = false;
 let mouseX = 0, mouseY = 0, mouseFrame = 0;
 new ResizeObserver(() => { pointerPosition = undefined; }).observe(screen);
@@ -317,7 +317,7 @@ function clearMouseInput({discardPending = true} = {}) {
   const touch = touchPointer;
   pointerPosition = touchPointer = undefined;
   if (touch !== undefined && screen.hasPointerCapture(touch)) screen.releasePointerCapture(touch);
-  captureButtonHeld = false;
+  suppressedMouseButtons = 0;
   if (discardPending) {
     pointerButtons = 0;
     if (sentMouse && !workerFailed) core.mouse(0, 0, 0, true).catch(fail);
@@ -783,23 +783,23 @@ function pointerLockFailed(request) {
   if (pointerRequest !== request) return;
   pointerRequest = undefined;
   if (request.cancelled || !mouseAvailable()) return;
-  const buttonHeld = captureButtonHeld;
+  const suppressed = suppressedMouseButtons;
   releaseGuestKeys();
   // The guest may have yet to sample movement flushed before this retry.
   clearMouseInput({discardPending:false});
   pointerRejected = true;
+  suppressedMouseButtons = suppressed;
   if (request.fallbackPress) {
+    suppressedMouseButtons &= ~1;
     mouseButtons(1);
-    if (!buttonHeld) mouseButtons(0);
-  } else {
-    captureButtonHeld = buttonHeld;
+    if (!(suppressed & 1)) mouseButtons(0);
   }
 }
-function requestMouseLock() {
+function requestMouseLock(buttons) {
   // A failed retry can replay this press in bounded fallback. A successful
-  // acquisition suppresses the primary button until its matching release.
+  // acquisition suppresses every button already held until its release.
   flushMouse();
-  captureButtonHeld = true;
+  suppressedMouseButtons = buttons & 7;
   const request = {cancelled:false, fallbackPress:pointerRejected};
   pointerRequest = request;
   try {
@@ -864,10 +864,17 @@ function lockedMouse() {
 screen.addEventListener('mousemove', event => {
   if (lockedMouse() && mouseAvailable()) queueMouse(event.movementX, event.movementY);
 });
+window.addEventListener('mousedown', event => {
+  if (pointerRequest?.cancelled === false && !event.sourceCapabilities?.firesTouchEvents) {
+    suppressedMouseButtons |= event.buttons & 7;
+  }
+}, true);
 window.addEventListener('mouseup', event => {
-  if (event.button !== 0 || !captureButtonHeld || event.sourceCapabilities?.firesTouchEvents) return;
-  captureButtonHeld = false;
-  if (pointerRequest && event.target !== screen) pointerRequest.fallbackPress = false;
+  if (!suppressedMouseButtons || event.sourceCapabilities?.firesTouchEvents) return;
+  if (event.button === 0 && (suppressedMouseButtons & 1) && pointerRequest && event.target !== screen) {
+    pointerRequest.fallbackPress = false;
+  }
+  suppressedMouseButtons &= event.buttons;
 }, true);
 for (const name of ['mousedown', 'mouseup']) screen.addEventListener(name, event => {
   if (!mouseAvailable() || touchPointer !== undefined || event.sourceCapabilities?.firesTouchEvents) return;
@@ -877,13 +884,13 @@ for (const name of ['mousedown', 'mouseup']) screen.addEventListener(name, event
     if (name === 'mousedown' && event.isTrusted && event.button === 0 && !pointerButtons &&
         !pointerRequest && !document.pointerLockElement && typeof screen.requestPointerLock === 'function') {
       event.preventDefault();
-      requestMouseLock();
+      requestMouseLock(event.buttons);
       return;
     }
     if (!mouseFallback()) return;
   }
   event.preventDefault();
-  mouseButtons(event.buttons & (captureButtonHeld ? 6 : 7));
+  mouseButtons(event.buttons & ~suppressedMouseButtons & 7);
 });
 screen.addEventListener('pointerdown', event => {
   if (event.pointerType === 'mouse' || !event.isPrimary || lockedMouse() || !mouseAvailable()) return;
@@ -905,7 +912,7 @@ for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) screen.
 });
 screen.addEventListener('pointerleave', () => {
   if (lockedMouse()) return;
-  if (pointerRequest && captureButtonHeld) pointerRequest.fallbackPress = false;
+  if (pointerRequest && (suppressedMouseButtons & 1)) pointerRequest.fallbackPress = false;
   pointerPosition = undefined;
   mouseButtons(0);
 });
