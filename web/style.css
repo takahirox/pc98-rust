@@ -291,7 +291,7 @@ body:has(.full-window) { overflow: hidden; }
 @media (orientation: landscape) and (max-height: 520px) {
   main {
     --screen-height: max(120px, 100svh - 163px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
-    width: min(100%, 805px);
+    width: min(100%, 850px);
     padding: max(5px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right))
       max(5px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
   }
@@ -300,6 +300,13 @@ body:has(.full-window) { overflow: hidden; }
   .toolbar { column-gap: 6px; }
   .display-select span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
   #volume { width: 73px; }
+  #media-picker {
+    /* The drive list can extend past the viewport even after scrolling to a trigger. */
+    position-area: none;
+    position-try-fallbacks: none;
+    inset: max(16px, env(safe-area-inset-top)) 0 max(16px, env(safe-area-inset-bottom));
+    margin: auto;
+  }
 }
 @media (orientation: landscape) and (max-height: 520px) and (width < 580px) {
   .drives #media-progress {
@@ -327,7 +334,7 @@ body:has(.full-window) { overflow: hidden; }
   }
   .drives > .notices p { padding-block: 5px; }
   .player:has(.drives > .notices #media-progress:not([hidden])) .player-status { visibility: visible; }
-  .slot { padding-block: 3px; }
+  .slot { padding-block: 0; }
 }
 @media (pointer: coarse) and (orientation: landscape) {
   #keyboard-home { grid-area: 1 / 2; }

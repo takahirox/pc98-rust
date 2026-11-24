@@ -133,6 +133,10 @@ for (const {width, height, touch = false} of sizes) {
       const alert = page.getByRole('alert');
       await expect(alert).toContainText('IDE HDD requires an HDI or NHD image');
       await expect(alert).toBeInViewport({ratio:1});
+      if (width >= 740) {
+        await expect(page.locator('#error-notice')).toBeInViewport({ratio:1});
+        expect(await canvas.boundingBox()).toEqual(screen);
+      }
       expect(await geometry()).toEqual(initial);
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
       await page.getByRole('button', {name:'Dismiss error'}).click();
