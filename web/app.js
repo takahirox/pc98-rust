@@ -23,6 +23,7 @@ $('presentation').onchange = presentationSettings;
 $('phosphor-mask').onchange = presentationSettings;
 presenter.setPreset($('presentation').value,$('phosphor-mask').checked);
 const display = $('drop'), notices = $('notices'), keyboardPanel = $('keyboard-panel');
+const drives = document.querySelector('.drives');
 const keyboardToggles = [$('toggle-keyboard'), $('fullscreen-keyboard')];
 function toggleKeyboard(open) {
   releaseKeys();
@@ -43,10 +44,12 @@ function syncFullscreen() {
   toggleKeyboard(false);
   const active = fullscreenActive();
   if (active) {
+    notices.tabIndex = 0;
     display.append(notices, keyboardPanel);
   } else {
     const keyboardHome = $('keyboard-home');
-    keyboardHome.before(notices);
+    notices.removeAttribute('tabindex');
+    drives.before(notices);
     keyboardHome.append(keyboardPanel);
   }
   for (const element of [document.querySelector('.site-header'), ...display.parentElement.children]) {
@@ -78,6 +81,7 @@ document.addEventListener('keydown', event => {
   }
 }, true);
 let core, worker, running = false, audio, outputGain, audioNode, audioSetup, muted = true, loading = false;
+let activePlaybackButton;
 let contextLost = false;
 let renderWorker, videoEpoch = 0, presentedSequence = 0;
 let rendererStartupMs = 0, rendererFailure = null;
@@ -90,6 +94,7 @@ let nextPresentation = 0;
 const pending = new Map(); let requestId = 0;
 const metrics = new Map(); let bootByte = 0;
 const mounted = [null, null, null], held = new Set();
+const pendingModifiers = new Set();
 let pointerPosition, pointerButtons = 0;
 new ResizeObserver(() => { pointerPosition = undefined; }).observe(screen);
 const driveNames = ['Floppy 1', 'Floppy 2', 'IDE HDD'];
@@ -100,7 +105,13 @@ const controls = ['game', 'hello', 'demos', 'pause', 'reset', 'sound', 'profile'
 function fail(error) {
   $('error').textContent = String(error.message ?? error); $('error').hidden = false;
 }
-function status(text) { $('status').textContent = text; $('lamp').classList.toggle('active', running); }
+function status(text, mediaProgress = false) {
+  $('status').textContent = text;
+  $('lamp').classList.toggle('active', running);
+  const progress = $('media-progress');
+  progress.hidden = !mediaProgress;
+  progress.textContent = mediaProgress ? text : '';
+}
 function clearError() { $('error').hidden = true; $('error').textContent = ''; }
 function acceptState(state) {
   if (!state || state.generation < generation) return;
@@ -258,6 +269,7 @@ async function enableAudio() {
   muted = false; await soundState();
 }
 function releaseKeys() {
+  pendingModifiers.clear();
   for (const scan of held) core?.key(scan, 0).catch(fail);
   held.clear(); document.querySelectorAll('.held').forEach((el) => el.classList.remove('held'));
   releaseMouse();
@@ -267,12 +279,12 @@ function releaseMouse() {
   pointerButtons = 0;
   pointerPosition = undefined;
 }
-async function setRunning(value, label = value ? 'Running' : 'Paused') {
+async function setRunning(value, label = value ? 'Running' : 'Paused', mediaProgress = false) {
   running = value; $('pause').textContent = value ? 'Pause' : 'Resume';
   applyVolume();
   if (!value) releaseKeys();
   await rpc('running',value);
-  status(label);
+  status(label, mediaProgress);
 }
 function showPicker() {
   const name = driveNames[pickerDrive], disk = mounted[pickerDrive];
@@ -295,7 +307,10 @@ function showPicker() {
 function syncControls() {
   const ap = core?.metric(21) === 1;
   const busy = !core || loading || workerFailed;
-  for (const id of controls) $(id).disabled = busy;
+  for (const id of controls) {
+    const control = $(id);
+    control.disabled = busy && (control !== activePlaybackButton || workerFailed);
+  }
   for (const button of driveButtons) {
     const drive = Number(button.dataset.drive);
     button.disabled = busy || (drive === 2 && !ap && !mounted[2]);
@@ -391,7 +406,7 @@ function bundled(name) {
 }
 $('game').onclick = () => bundled('startrail.hdm');
 $('hello').onclick = () => bundled('hello98.tfd');
-$('pause').onclick = () => exclusive(() => setRunning(!running));
+$('pause').onclick = event => exclusive(() => setRunning(!running), event.currentTarget);
 function showActiveBoot() {
   const drive = bootByte === 0x80 ? 2 : bootByte === 0x90 ? 0 : null;
   const disk = mounted[drive];
@@ -405,22 +420,30 @@ async function resetMachine({focusScreen = true} = {}) {
   await setRunning(!document.hidden);
   if (focusScreen && !panelOpen()) screen.focus({preventScroll:true});
 }
-async function exclusive(operation) {
+async function exclusive(operation, playbackButton) {
   if (!core || loading || workerFailed) return;
+  // Native disabling blurs the button. The transaction guard also blocks
+  // activation of the focusable button while its action is pending.
+  activePlaybackButton = playbackButton;
+  playbackButton?.setAttribute('aria-disabled', 'true');
   loading = true; syncControls();
   try { await operation(); } catch (error) { fail(error); }
-  finally { loading = false; syncControls(); }
+  finally {
+    playbackButton?.removeAttribute('aria-disabled');
+    activePlaybackButton = undefined;
+    loading = false; syncControls();
+  }
 }
 $('reset').onclick = () => exclusive(resetMachine);
 $('boot').onchange = () => {
   const source = Number($('boot').value);
   return exclusive(() => core.set_boot_source(source));
 };
-$('sound').onclick = () => exclusive(async () => {
+$('sound').onclick = event => exclusive(async () => {
   clearError();
   if (muted) await enableAudio();
   else { muted = true; await soundState(); }
-});
+}, event.currentTarget);
 async function selectProfile() {
   releaseKeys();
   const profile = $('profile').value;
@@ -464,14 +487,14 @@ async function exportBlob(drive) {
   // succeeds. Blob snapshots own each bounded chunk independently of that file
   // and of the reusable Wasm transfer buffer.
   const resume = running;
-  await setRunning(false, 'Exporting HDD…');
+  await setRunning(false, 'Exporting HDD…', true);
   try {
     const len = await rpc('snapshot',true), parts = [];
     if (!len) throw Error('No hard disk image mounted.');
     for (let at = 0; at < len; at += chunkBytes) {
       const n = Math.min(chunkBytes,len-at);
       parts.push(new Blob([await rpc('readChunk',[at,n])]));
-      status(`Exporting HDD · ${Math.min(100, Math.floor((at + n) * 100 / len))}%`);
+      status(`Exporting HDD · ${Math.min(100, Math.floor((at + n) * 100 / len))}%`, true);
     }
     const blob = new Blob(parts, { type: 'application/octet-stream' });
     if (blob.size !== len) throw Error('Incomplete hard disk export; please retry.');
@@ -507,13 +530,14 @@ function loadFile(file, target, resetOptions) {
     await setRunning(false);
     try {
       if (!await mayReplace(drive)) { await setRunning(resume && !document.hidden); return; }
+      status('Importing HDD…', true);
       const transfer = bytes => rpc('input',bytes.buffer,[bytes.buffer]);
       await transfer(new Uint8Array(await file.slice(0,512).arrayBuffer()));
       await core.hdi_begin(file.size);
       for (let at = 0; at < file.size; at += chunkBytes) {
         await transfer(new Uint8Array(await file.slice(at, at + chunkBytes).arrayBuffer()));
         await core.hdi_append();
-        status(`Importing HDD · ${Math.min(100, Math.floor((at + chunkBytes) * 100 / file.size))}%`);
+        status(`Importing HDD · ${Math.min(100, Math.floor((at + chunkBytes) * 100 / file.size))}%`, true);
       }
       await core.hdi_commit();
       mounted[2] = {name: file.name};
@@ -525,14 +549,14 @@ function loadFile(file, target, resetOptions) {
     }
   });
 }
-function defaultHdd() {
+function defaultHdd(showProgress = false) {
   if (core?.metric(21) !== 1) return;
   return exclusive(async () => {
     const resume = running;
     try {
       await setRunning(false);
       if (!await mayReplace(2)) { await setRunning(resume && !document.hidden); return; }
-      clearError(); status('Loading FreeDOS HDD…');
+      clearError(); status('Loading FreeDOS HDD…', showProgress);
       const response = await fetch('freedos/manifest.json');
       if (!response.ok) throw Error(`Cannot load FreeDOS manifest: HTTP ${response.status}`);
       const manifest = await response.json();
@@ -584,7 +608,7 @@ function defaultHdd() {
 }
 $('default-hdd').onclick = () => {
   $('settings-panel').hidePopover();
-  return defaultHdd();
+  return defaultHdd(true);
 };
 for (const target of [display, ...document.querySelectorAll('[data-drop-drive]')]) {
   target.ondragover = event => {
@@ -640,9 +664,15 @@ for(const [code,scan] of Object.entries({Numpad7:0x42,Numpad8:0x43,Numpad9:0x44,
 let captureTab = false;
 screen.addEventListener('focus', () => { captureTab = false; });
 function panelOpen() { return Boolean(document.querySelector('.panel:popover-open')); }
+function captureScreenKeys() {
+  captureTab = true;
+  for (const code of pendingModifiers) key(codes[code],true);
+  pendingModifiers.clear();
+}
 screen.addEventListener('pointerdown', () => {
   screen.focus({preventScroll:true});
-  captureTab = !panelOpen();
+  if (panelOpen()) captureTab = false;
+  else captureScreenKeys();
 });
 screen.addEventListener('keydown', event => {
   if (event.defaultPrevented || panelOpen()) return;
@@ -655,12 +685,19 @@ screen.addEventListener('keydown', event => {
   if (!running || (event.code === 'Tab' && !captureTab)) return;
   const scan = codes[event.code];
   if (scan === undefined) return;
+  if (!captureTab) {
+    // Hold modifiers locally until typing commits to guest input.
+    if (['Shift','Control','Alt','AltGraph','Meta'].includes(event.key)) {
+      pendingModifiers.add(event.code);
+      return;
+    }
+    captureScreenKeys();
+  }
   event.preventDefault();
-  // Modifiers alone can be the start of host navigation, such as Shift+Tab.
-  if (!['Shift','Control','Alt','AltGraph','Meta'].includes(event.key)) captureTab = true;
   key(scan,true);
 });
 screen.addEventListener('keyup', event => {
+  if (pendingModifiers.delete(event.code)) return;
   const scan = codes[event.code];
   if (!held.has(scan)) return;
   event.preventDefault();
