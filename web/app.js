@@ -107,7 +107,7 @@ const mounted = [null, null, null], held = new Set();
 const pendingShifts = new Set();
 let pointerRequest, pointerLocked = false, pointerRejected = false, captureButtonHeld = false;
 let pointerPosition, touchPointer, pointerButtons = 0, sentMouse = false;
-let mouseX = 0, mouseY = 0, mouseFrame = 0, fallbackClickTimer = 0;
+let mouseX = 0, mouseY = 0, mouseFrame = 0;
 new ResizeObserver(() => { pointerPosition = undefined; }).observe(screen);
 const driveNames = ['Floppy 1', 'Floppy 2', 'IDE HDD'];
 const mediaPicker = $('media-picker'), fileInput = $('file');
@@ -310,8 +310,7 @@ function releaseKeys() {
 }
 function clearMouseInput() {
   if (mouseFrame) cancelAnimationFrame(mouseFrame);
-  clearTimeout(fallbackClickTimer);
-  fallbackClickTimer = mouseFrame = mouseX = mouseY = pointerButtons = 0;
+  mouseFrame = mouseX = mouseY = pointerButtons = 0;
   const touch = touchPointer;
   pointerPosition = touchPointer = undefined;
   if (touch !== undefined && screen.hasPointerCapture(touch)) screen.releasePointerCapture(touch);
@@ -781,8 +780,7 @@ function pointerLockFailed(request) {
   pointerRejected = true;
   if (request.fallbackPress) {
     mouseButtons(1);
-    // Let the guest poll the press before releasing a click that already ended.
-    if (!buttonHeld) fallbackClickTimer = setTimeout(finishFallbackClick, 32);
+    if (!buttonHeld) mouseButtons(0);
   } else {
     captureButtonHeld = buttonHeld;
   }
@@ -838,12 +836,6 @@ function mouseButtons(buttons) {
   pointerButtons = buttons;
   sendMouse(0, 0);
 }
-function finishFallbackClick() {
-  if (!fallbackClickTimer) return;
-  clearTimeout(fallbackClickTimer);
-  fallbackClickTimer = 0;
-  mouseButtons(0);
-}
 function boundedMovement(event) {
   const rect = screen.getBoundingClientRect();
   const x = (event.clientX - rect.left) / rect.width, y = (event.clientY - rect.top) / rect.height;
@@ -871,7 +863,6 @@ for (const name of ['mousedown', 'mouseup']) screen.addEventListener(name, event
   if (!mouseAvailable() || touchPointer !== undefined || event.sourceCapabilities?.firesTouchEvents) return;
   const locked = lockedMouse();
   if (pointerRequest?.cancelled === false) return;
-  finishFallbackClick();
   if (!locked) {
     if (name === 'mousedown' && event.isTrusted && event.button === 0 && !pointerButtons &&
         !pointerRequest && !document.pointerLockElement && typeof screen.requestPointerLock === 'function') {
@@ -886,7 +877,6 @@ for (const name of ['mousedown', 'mouseup']) screen.addEventListener(name, event
 });
 screen.addEventListener('pointerdown', event => {
   if (event.pointerType === 'mouse' || !event.isPrimary || lockedMouse() || !mouseAvailable()) return;
-  finishFallbackClick();
   touchPointer = event.pointerId;
   event.preventDefault(); // Suppress compatibility mouse events for this contact.
   screen.setPointerCapture(event.pointerId);

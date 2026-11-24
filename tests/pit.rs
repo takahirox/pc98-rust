@@ -47,6 +47,18 @@ fn completed_rewrite_preserves_active_count_reproduction() {
 }
 
 #[test]
+fn truncated_port_does_not_program_pit() {
+    for profile in PROFILES {
+        let mut b = Bus::new(profile);
+        let before = b.pit.clone();
+        b.output(0x00df, 0x36);
+        assert_eq!(b.pit, before);
+        b.output(0x3fdf, 0x36);
+        assert_ne!(b.pit, before);
+    }
+}
+
+#[test]
 fn specification_small_divisor_clock_count_out_traces_and_alias() {
     // Each tuple is (count, OUT, rising edge), starting with the load clock.
     // Intel mode 2: N-1 high clocks, one low clock, then reload/rise.
