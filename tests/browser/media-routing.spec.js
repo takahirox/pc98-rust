@@ -91,8 +91,10 @@ async function boot(page, marker, drive) {
   } else expect(state.stats.reads).toBeGreaterThan(0);
 }
 async function exported(page, name, image, drive = /\.(hdi|nhd)$/i.test(name) ? '2' : '0') {
+  const slot = ['Floppy 1', 'Floppy 2', 'IDE HDD'][drive];
   const download = page.waitForEvent('download');
-  await diskAction(page, drive, 'export');
+  await page.locator(`#drive-${drive}`).click();
+  await page.getByRole('button', { name: `Export disk from ${slot}`, exact: true }).click();
   const file = await download;
   expect(file.suggestedFilename()).toBe(name);
   expect((await fs.readFile(await file.path())).equals(image)).toBe(true);
@@ -131,7 +133,7 @@ test('fresh page selects Ap in DOM and Rust, Auto, matching display and released
     await expect(page.locator('#media-name-2')).toHaveText('FreeDOS-128MiB.hdi');
     await page.locator('#drive-2').click();
     await expect(page.getByRole('button', { name: 'Eject IDE HDD' })).toBeEnabled();
-    await expect(page.getByRole('button', { name: 'Export IDE HDD' })).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Export disk from IDE HDD', exact: true })).toBeEnabled();
     await page.keyboard.press('Escape');
     expect(await inspect(page, () => ({ profile: pc98.core.metric(21), memory: pc98.read(0x401),
       keyboard: Array.from({ length: 16 }, (_, i) => pc98.read(0x52a + i)) })))

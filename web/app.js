@@ -324,7 +324,7 @@ function showPicker() {
   if (name) {
     $('choose-file').setAttribute('aria-label', `Choose local file for ${name}`);
     $('eject').setAttribute('aria-label', `Eject ${name}`);
-    $('export').setAttribute('aria-label', `Export ${name}`);
+    $('export').setAttribute('aria-label', `Export disk from ${name}`);
   } else $('choose-file').removeAttribute('aria-label');
 }
 function syncControls() {
