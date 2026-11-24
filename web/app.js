@@ -462,13 +462,14 @@ function bundled(name) {
 $('game').onclick = () => bundled('startrail.hdm');
 $('hello').onclick = () => bundled('hello98.tfd');
 $('pause').onclick = event => exclusive(() => setRunning(!running), {playbackButton:event.currentTarget});
-async function resetMachine({focusScreen = true} = {}) {
+async function resetMachine({focusScreen = true, preserveHostFocus = false} = {}) {
   releaseKeys();
   if (outputGain) outputGain.gain.value = 0;
   if (pendingFrame) { recycleFrame(pendingFrame); pendingFrame = null; }
   await core.reset(); clearError();
   await setRunning(!document.hidden);
-  if (focusScreen && !panelOpen()) screen.focus({preventScroll:true});
+  const canFocusScreen = !preserveHostFocus || document.activeElement === document.body;
+  if (focusScreen && canFocusScreen && !panelOpen()) screen.focus({preventScroll:true});
 }
 async function exclusive(operation, {playbackButton, recovery} = {}) {
   if (!core || loading || workerFailed) return;
@@ -598,14 +599,14 @@ function loadFile(file, target, resetOptions) {
     }
   }, {recovery:$('drive-' + target)});
 }
-function defaultHdd(showProgress = false) {
+function defaultHdd({startup = false} = {}) {
   if (core?.metric(21) !== 1) return;
   return exclusive(async () => {
     const resume = running;
     try {
       await setRunning(false);
       if (!await mayReplace(2)) { await setRunning(resume && !document.hidden); return; }
-      clearError(); status('Loading FreeDOS HDD…', showProgress);
+      clearError(); status('Loading FreeDOS HDD…', !startup);
       const response = await fetch('freedos/manifest.json');
       if (!response.ok) throw Error(`Cannot load FreeDOS manifest: HTTP ${response.status}`);
       const manifest = await response.json();
@@ -647,7 +648,7 @@ function defaultHdd(showProgress = false) {
       }
       await core.hdi_commit();
       mounted[2] = {name: 'FreeDOS-128MiB.hdi'};
-      await resetMachine();
+      await resetMachine({preserveHostFocus:startup});
     } catch (error) {
       await core.hdi_cancel().catch(() => {});
       if (!workerFailed) await setRunning(resume && !document.hidden);
@@ -657,7 +658,7 @@ function defaultHdd(showProgress = false) {
 }
 $('default-hdd').onclick = () => {
   $('settings-panel').hidePopover();
-  return defaultHdd(true);
+  return defaultHdd();
 };
 for (const target of [display, ...document.querySelectorAll('[data-drop-drive]')]) {
   target.ondragover = event => {
@@ -837,5 +838,5 @@ try {
     suspend:async () => { await audio.suspend(); await soundState(); },
     resume:async () => { await audio.resume(); await soundState(); },
   };
-  await defaultHdd();
+  await defaultHdd({startup:true});
 } catch (error) { status('Unable to start'); fail(error); }

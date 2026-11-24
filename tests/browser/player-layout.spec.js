@@ -248,6 +248,29 @@ test.describe('320 × 700 touch settings', () => {
   });
 });
 
+test('FreeDOS auto-boot preserves keyboard focus on Display', async ({page}) => {
+  const {promise: pending, resolve: release} = Promise.withResolvers();
+  await page.route('**/freedos/desktop.bin', async route => {
+    await pending;
+    await route.continue();
+  });
+  await page.goto('./');
+  await expect(page.getByRole('status').filter({hasText:'Loading FreeDOS HDD'})).toBeVisible();
+  const display = page.getByRole('combobox', {name:'Display'});
+  for (let step = 0; step < 10 && !(await display.evaluate(el => el === document.activeElement)); step++) {
+    await page.keyboard.press('Tab');
+  }
+  await expect(display).toBeFocused();
+  await expect(display).toHaveValue('sharp');
+
+  release();
+  await expect.poll(() => page.evaluate(() => pc98.text()), {timeout:20000}).toContain('A:\\>');
+  await expect(display).toBeFocused();
+  // Native select typeahead changes the preset even on macOS, where an arrow can open the menu.
+  await page.keyboard.press('o');
+  await expect(display).toHaveValue('off');
+});
+
 test('F12 captures standalone Shift and returns to host navigation', async ({page}) => {
   await ready(page);
   const screen = page.locator('#screen');
