@@ -138,8 +138,9 @@ The physical keyboard uses PC-98 scancodes: letters/digits, arrows, Return,
 Backspace, Tab, Shift, Ctrl, F1–F10, editing keys and numeric keypad. Alt maps to
 GRPH, right Alt to XFER, left Meta to NFER; the expandable on-screen PC-98 keyboard
 also supplies Kana, NFER/XFER, STOP/COPY and Japanese punctuation. Key releases,
-modifiers and host key repeat reach the guest. Focus the screen for guest input. Tab advances through the host controls until
-you click or start typing in the screen. Press F12 to return to the player controls.
+modifiers and host key repeat reach the guest. Focus the screen for guest input.
+Tab and Shift+Tab navigate the player until you click, type, or press F12 on the
+screen to capture guest keys. Press F12 again to return to the player controls.
 Focus loss releases held keys. Hiding the tab pauses execution. The Ap DOS profile supplies licensed replacement
 Japanese CG glyphs. FEP input is not implemented.
 

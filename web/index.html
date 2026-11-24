@@ -17,7 +17,7 @@
       <button id="help" class="link-button" popovertarget="help-panel" aria-haspopup="dialog">Help</button>
       <div id="help-panel" class="panel" popover role="dialog" aria-labelledby="help-title" tabindex="-1" autofocus>
         <h2 id="help-title">Player help</h2>
-        <p>Focus the screen to type. Shift, Ctrl, Alt (GRPH), right Alt (XFER) and left Meta (NFER) map to PC-98 keys. Tab and Shift+Tab move between player controls until you click or start typing in the screen. Press F12 to return to the player controls. Open Keyboard for on-screen keys, including Kana and STOP.</p>
+        <p>Focus the screen to type. Shift, Ctrl, Alt (GRPH), right Alt (XFER) and left Meta (NFER) map to PC-98 keys. Tab and Shift+Tab navigate the player until you click, type, or press F12 on the screen to capture guest keys. Press F12 again to return to the player controls. Open Keyboard for on-screen keys, including Kana and STOP.</p>
         <p>Drag an image onto the screen or use Insert media for automatic routing. HDI/NHD images go to IDE HDD on Ap. TFD, HDM, XDF, 2HD, D88, D98 and IMG images go to Floppy 1. Drop on a drive or open its picker to choose a specific slot.</p>
         <p>Floppy insertion leaves the guest running. Choose the next boot drive in Settings, then Reset. Replacing the HDD resets the machine. Demos boot Floppy 1 immediately.</p>
         <p>Disk changes stay in browser memory. Export from the mounted drive’s picker before reloading or discarding writes. VM retains the IDE disk for when you return to Ap. Mouse input on Ap may require a guest DOS driver.</p>
@@ -29,7 +29,7 @@
 
   <section class="player" aria-label="PC-98 player">
     <div class="display" id="drop">
-      <p id="screen-input-help" hidden>Tab and Shift+Tab move between player controls until you click or start typing in the screen. Press F12 to return to the player controls.</p>
+      <p id="screen-input-help" hidden>Tab and Shift+Tab navigate the player before capture. Press F12 to capture guest keys. Press F12 again to return to the player controls.</p>
       <div class="fullscreen-controls">
         <button id="fullscreen-keyboard" aria-controls="keyboard-panel" aria-expanded="false">Keyboard</button>
         <button id="exit-fullscreen">Exit fullscreen</button>
@@ -108,7 +108,10 @@
 
     <div class="notices" id="notices" role="region" aria-label="Player notices">
       <p id="media-progress" role="status" hidden></p>
-      <p id="error" role="alert" hidden></p>
+      <div id="error-notice" hidden>
+        <p id="error" role="alert"></p>
+        <button id="dismiss-error" aria-label="Dismiss error">×</button>
+      </div>
       <p id="display-warning" role="status" hidden></p>
     </div>
 

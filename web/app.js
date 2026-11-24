@@ -103,7 +103,8 @@ const driveButtons = [...document.querySelectorAll('[data-drive]')];
 let pickerDrive = 'auto', fileDrive = 'auto';
 const controls = ['game', 'hello', 'demos', 'pause', 'reset', 'sound', 'profile', 'file'];
 function fail(error) {
-  $('error').textContent = String(error.message ?? error); $('error').hidden = false;
+  $('error-notice').hidden = false;
+  $('error').textContent = String(error.message ?? error);
 }
 function status(text, mediaProgress = false) {
   $('status').textContent = text;
@@ -112,7 +113,11 @@ function status(text, mediaProgress = false) {
   progress.hidden = !mediaProgress;
   progress.textContent = mediaProgress ? text : '';
 }
-function clearError() { $('error').hidden = true; $('error').textContent = ''; }
+function clearError() { $('error-notice').hidden = true; $('error').textContent = ''; }
+$('dismiss-error').onclick = () => {
+  clearError();
+  $(fullscreenActive() ? 'exit-fullscreen' : 'presentation').focus({preventScroll:true});
+};
 function acceptState(state) {
   if (!state || state.generation < generation) return;
   generation = state.generation; bootByte = state.boot;
@@ -350,22 +355,24 @@ $('choose-file').onclick = () => {
   fileDrive = pickerDrive;
   fileInput.click();
 };
-fileInput.onchange = async () => {
-  const file = fileInput.files[0];
-  fileInput.value = '';
-  if (!file) return;
-  const trigger = $('drive-' + fileDrive);
+async function withDriveFocus(drive, operation) {
+  const trigger = $('drive-' + drive);
   if (mediaPicker.matches(':popover-open')) mediaPicker.hidePopover();
-  // The drive button is disabled during import, which can send focus to the body.
+  // Disabling the drive button during a transaction can send focus to the body.
   let restoreFocus = [document.body, trigger].includes(document.activeElement);
   const focusMoved = () => { restoreFocus = false; };
   document.addEventListener('focusin', focusMoved, {once:true});
   try {
-    await loadFile(file, fileDrive, {focusScreen:false});
+    await operation();
   } finally {
     document.removeEventListener('focusin', focusMoved);
-    if (restoreFocus) trigger.focus({preventScroll:true});
+    if (restoreFocus && document.activeElement === document.body) trigger.focus({preventScroll:true});
   }
+}
+fileInput.onchange = () => {
+  const file = fileInput.files[0];
+  fileInput.value = '';
+  if (file) return withDriveFocus(fileDrive, () => loadFile(file, fileDrive, {focusScreen:false}));
 };
 fileInput.oncancel = () => {
   if (mediaPicker.matches(':popover-open')) $('choose-file').focus({preventScroll:true});
@@ -467,8 +474,7 @@ async function mayReplace(drive) {
 }
 $('eject').onclick = () => {
   const drive = pickerDrive;
-  mediaPicker.hidePopover();
-  return exclusive(async () => {
+  return withDriveFocus(drive, () => exclusive(async () => {
     if (!mounted[drive]) return;
     const resume = running;
     if (drive === 2) await setRunning(false);
@@ -477,7 +483,7 @@ $('eject').onclick = () => {
       await core.eject(drive); mounted[drive] = null;
       clearError();
     } finally { if (drive === 2 && !workerFailed) await setRunning(resume && !document.hidden); }
-  });
+  }));
 };
 const chunkBytes = 1024 * 1024;
 async function exportBlob(drive) {
@@ -505,15 +511,14 @@ async function exportBlob(drive) {
 }
 $('export').onclick = () => {
   const drive = pickerDrive;
-  mediaPicker.hidePopover();
-  return exclusive(async () => {
+  return withDriveFocus(drive, () => exclusive(async () => {
     if (!mounted[drive]) return;
     clearError();
     const data = await exportBlob(drive);
     const link = document.createElement('a'), url = URL.createObjectURL(data);
     link.href = url; link.download = mounted[drive].name; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-  });
+  }));
 };
 function loadFile(file, target, resetOptions) {
   if (!file) return;
@@ -678,6 +683,11 @@ screen.addEventListener('keydown', event => {
   if (event.defaultPrevented || panelOpen()) return;
   if (event.code === 'F12') {
     event.preventDefault();
+    if (event.repeat) return;
+    if (running && !captureTab) {
+      captureScreenKeys();
+      return;
+    }
     const playback = $('pause').disabled ? $('presentation') : $('pause');
     (fullscreenActive() ? $('exit-fullscreen') : playback).focus({preventScroll:true});
     return;
@@ -686,7 +696,7 @@ screen.addEventListener('keydown', event => {
   const scan = codes[event.code];
   if (scan === undefined) return;
   if (!captureTab) {
-    // Keep Shift+Tab in the host until the user starts typing in the guest.
+    // Keep Shift+Tab in the host until the screen captures guest keys.
     if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
       pendingShifts.add(event.code);
       return;
