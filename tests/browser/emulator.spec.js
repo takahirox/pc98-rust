@@ -35,7 +35,7 @@ for (const profile of ['1', '0']) {
     expect(state.beepEdges).toBe(1);
     expect(state.white).toBeGreaterThan(100);
     expect(state.audioState).toBe('running');
-    expect(state.scheduledSamples).toBeGreaterThan(1000);
+    await expect.poll(() => page.evaluate(async () => (await pc98.stats()).scheduledSamples)).toBeGreaterThan(1000);
 
     const unexpected = [];
     await page.route('**/*', route => { unexpected.push(route.request().url()); return route.abort(); });

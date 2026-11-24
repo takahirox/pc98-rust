@@ -197,9 +197,10 @@ returning to FreeCOM, guest FM PCM without BEEP, memory/A20/page/ROM boundaries,
 Japanese text-VRAM halves, CPU profile differences, and deterministic FM pitch,
 timers/busy/IRQ/release. Browser `dos-apps.spec.js` repeats DOS execution,
 Japanese glyph comparison, color/input/save/reload, video and FM Web Audio through
-the actual release Wasm at both `/` and `/pc98-rust/`. It uses bounded core slices,
-not a mocked core. Existing Star Trail, HelloWorld, FreeDOS and Pages tests remain
-required. Results for this checkpoint are recorded below after validation.
+the actual release Wasm at both `/` and `/pc98-rust/`, using bounded core slices.
+The test-only [input probe](../guest/input_probe.asm) covers Ap and VM boot,
+rendering, beeper audio, keyboard input and floppy writeback. The FreeDOS and
+Pages regressions also remain required. Historical results follow below.
 
 The current device additions and their native/Wasm acceptance are detailed in
 [the Issue #11 device audit](ap-devices.md). Unsupported physical hardware

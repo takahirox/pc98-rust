@@ -49,11 +49,19 @@ test('the real raw canvas captures with or without CRT and the guest receives re
     expect(await guest(page)).toEqual(before); // Acquisition is capture-only.
 
     await screen.evaluate(canvas => {
-      canvas.onmousemove = event => {
-        if (event.isTrusted && Math.abs(event.movementX) > canvas.clientWidth) {
-          canvas.dataset.retargeted = String(event.clientX);
+      canvas.trustedMotion = null;
+      const filter = new AbortController();
+      canvas.stopMotionFilter = () => filter.abort();
+      canvas.addEventListener('mousemove', event => {
+        if (!event.isTrusted) return;
+        if (!canvas.trustedMotion && event.movementX > canvas.clientWidth) {
+          canvas.trustedMotion = {x:event.movementX, y:event.movementY, clientX:event.clientX};
+          return;
         }
-      };
+        // Headless Chromium compensates CDP moves with cursor recenter events.
+        // Let the original outside-canvas event reach the app by itself.
+        event.stopImmediatePropagation();
+      }, {capture:true, signal:filter.signal});
     });
     const box = await screen.boundingBox();
     const x = box.x + 12, y = box.y + 100;
@@ -61,9 +69,12 @@ test('the real raw canvas captures with or without CRT and the guest receives re
     await page.mouse.move(x + box.width + 70, y + 180);
     // The pointer lock keeps sending trusted events to the canvas outside its
     // bounds, with the client coordinate anchored to the acquisition point.
-    await expect.poll(async () => Number(await screen.getAttribute('data-retargeted'))).toBeCloseTo(x, -1);
-    // Headless Chromium recenters after CDP moves. Supply a deterministic
-    // relative event under the real lock to check the signed counter's backlog.
+    const trustedMotion = () => screen.evaluate(canvas => canvas.trustedMotion);
+    await expect.poll(async () => (await trustedMotion())?.clientX).toBeCloseTo(x, -1);
+    const motion = await trustedMotion();
+    await expect.poll(() => guest(page)).toMatchObject({x:before.x + motion.x, y:before.y + motion.y});
+    await screen.evaluate(canvas => canvas.stopMotionFilter());
+    // Check the signed counter's backlog for a deterministic pair of deltas.
     const baseline = await guest(page);
     const dx = Math.ceil(box.width) + 100, dy = -273;
     await screen.evaluate((canvas, [movementX, movementY]) => {
@@ -189,6 +200,7 @@ for (const failure of ['legacy error event', 'rejected promise', 'unsupported'])
     await expect.poll(() => owner(page)).toBeNull();
     await page.mouse.move(x - 1, y);
     await page.mouse.move(x + box.width / 8, y - box.height / 8);
+    await expect.poll(async () => (await guest(page)).x).toBeCloseTo(80, -1);
     await page.mouse.down();
     await expect.poll(() => guest(page)).toMatchObject({buttons:0x80});
     const inside = await guest(page);
@@ -203,7 +215,29 @@ for (const failure of ['legacy error event', 'rejected promise', 'unsupported'])
   });
 }
 
-test('a late legacy lock after a pending request is cancelled cannot capture the replacement guest', async ({page}) => {
+test('a focused canvas retries a rejected lock without sending the acquisition button to the guest', async ({page}) => {
+  const screen = await start(page);
+  await screen.evaluate(canvas => {
+    let first = true;
+    canvas.requestPointerLock = () => {
+      if (first) {
+        first = false;
+        return Promise.reject(new DOMException('Denied'));
+      }
+      Object.defineProperty(document, 'pointerLockElement', {configurable:true, value:canvas});
+      document.dispatchEvent(new Event('pointerlockchange'));
+    };
+  });
+  const position = {x:30, y:30};
+  await screen.click({position});
+  expect(await owner(page)).toBeNull();
+  await expect(screen).toBeFocused();
+  const before = await guest(page);
+  await capture(page, screen, {position});
+  expect(await guest(page)).toEqual(before);
+});
+
+test('Escape dismisses Help while a cancelled legacy request awaits its outcome', async ({page}) => {
   const screen = await start(page);
   await screen.evaluate(canvas => {
     canvas.requestPointerLock = () => { window.finishLock = () => {
@@ -217,6 +251,13 @@ test('a late legacy lock after a pending request is cancelled cannot capture the
   });
   await screen.click();
   await expect.poll(() => page.evaluate(() => typeof window.finishLock)).toBe('function');
+  const help = page.getByRole('dialog', {name:'Player help'});
+  await page.getByRole('button', {name:'Help', exact:true}).click();
+  await expect(help).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(help).toBeHidden();
+
+  // Receiving the cancelled request's late success cannot capture a replacement guest.
   await page.locator('#profile').selectOption('0');
   await page.locator('#profile').selectOption('1');
   await page.evaluate(() => window.finishLock());

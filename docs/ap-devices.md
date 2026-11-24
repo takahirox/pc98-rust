@@ -28,14 +28,15 @@ checked-in manifests. Do not use `--update-manifest` for routine verification.
 
 Select **PC-9821Ap DOS** in the browser. For `fixtures/dos-apps/adv98.hdi`, select
 **IDE · HDI boot**, then insert the image. It boots FreeDOS and the unchanged
-ADV98 game with an original guest mouse driver. Enable **Send mouse movement and
-buttons**: relative movement selects menus, left click accepts, and right click
-opens the game menu. Movement is relative rather than a host-positioned cursor;
-the engine deliberately hides the DOS mouse cursor. Uncheck the box to use only
-the keyboard. Blur, pause and reset release buttons and keys.
+ADV98 game with an original guest mouse driver. Click the guest screen to capture
+the mouse. Relative movement selects menus, left click accepts, and right click
+opens the game menu. The engine deliberately hides the DOS mouse cursor. Press
+Esc to release the host pointer. Blur, pause and reset also release capture and
+clear held buttons and keys.
 
-Save with Esc, Return, Return; export the selected IDE disk and reinsert the HDI
-to restore saves. Reset preserves disk writes and resets device/CPU/RAM state.
+With the host pointer released, save with guest Esc, Return, Return. Export the
+selected IDE disk and reinsert the HDI to restore saves. Reset preserves disk
+writes and resets device/CPU/RAM state.
 Inserting floppy 1 or IDE chooses that medium for the next reset; floppy 2 never
 changes the boot choice. VM cannot mount a new IDE image; switching profiles
 preserves existing media and only exposes IDE to Ap.

@@ -59,9 +59,10 @@ HDD preference. Explicit boot from a test floppy and return to HDD exercise both
 Other cases cancel all three destructive HDD actions, create a file via guest
 DOS, download the complete modified 128 MiB disk, reimport it, TYPE the file,
 retain it across VM/Ap switches, restore a clean desktop, recover startup failures
-and reject a competing drop while controls are locked. Existing media routing,
-floppy-booted DOS FDD2, independent demos, CPU/device, 512 MiB/1 GiB and occupied
-512 MiB round-trip regressions remain enabled.
+and reject a competing drop while controls are locked. The test-only
+[input probe](../guest/input_probe.asm) exercises Ap and VM input, audio and disk
+writeback. Media routing, floppy-booted DOS FDD2, CPU/device, 512 MiB/1 GiB and
+occupied 512 MiB round-trip regressions also remain enabled.
 
 ## Historical Issue #130 measurements
 

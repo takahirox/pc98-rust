@@ -82,7 +82,7 @@ document.addEventListener('keydown', event => {
     event.preventDefault(); event.stopPropagation();
     return;
   }
-  if (pointerRequest || pointerLocked || document.pointerLockElement === screen) {
+  if (pointerRequest?.cancelled === false || pointerLocked || document.pointerLockElement === screen) {
     event.preventDefault(); event.stopPropagation();
     releaseKeys();
   } else if (fullscreenActive()) {
@@ -104,7 +104,7 @@ const pending = new Map(); let requestId = 0;
 const metrics = new Map(); let bootSource;
 const mounted = [null, null, null], held = new Set();
 const pendingShifts = new Set();
-let pointerRequest, pointerLocked = false, pointerRejected = false, captureClick = false;
+let pointerRequest, pointerLocked = false, pointerRejected = false, captureButtonHeld = false;
 let pointerPosition, touchPointer, pointerButtons = 0, sentMouse = false;
 let mouseX = 0, mouseY = 0, mouseFrame = 0;
 new ResizeObserver(() => { pointerPosition = undefined; }).observe(screen);
@@ -313,11 +313,12 @@ function clearMouseInput() {
   const touch = touchPointer;
   pointerPosition = touchPointer = undefined;
   if (touch !== undefined && screen.hasPointerCapture(touch)) screen.releasePointerCapture(touch);
-  captureClick = false;
+  captureButtonHeld = false;
   if (sentMouse && !workerFailed) core.mouse(0, 0, 0, true).catch(fail);
   sentMouse = false;
 }
 function releaseMouse() {
+  // Keep a cancelled request until its outcome so a late lock can be released.
   if (pointerRequest) pointerRequest.cancelled = true;
   pointerLocked = pointerRejected = false;
   clearMouseInput();
@@ -721,12 +722,10 @@ function captureScreenKeys() {
   for (const code of pendingShifts) key(codes[code],true);
   pendingShifts.clear();
 }
-screen.addEventListener('pointerdown', event => {
+screen.addEventListener('pointerdown', () => {
   screen.focus({preventScroll:true});
   if (panelOpen()) captureTab = false;
   else captureScreenKeys();
-  captureClick = event.isTrusted && event.pointerType === 'mouse' && event.button === 0 &&
-    mouseAvailable() && !mouseFallback() && !pointerRequest && !document.pointerLockElement;
 });
 screen.addEventListener('keydown', event => {
   if (event.defaultPrevented || panelOpen()) return;
@@ -775,15 +774,16 @@ function pointerLockFailed(request) {
   if (pointerRequest !== request) return;
   pointerRequest = undefined;
   if (request.cancelled || !mouseAvailable()) return;
+  const fallbackPress = pointerRejected && captureButtonHeld;
   releaseKeys();
   pointerRejected = true;
+  if (fallbackPress) mouseButtons(1);
 }
-screen.addEventListener('click', event => {
-  const acquire = captureClick && event.isTrusted && event.detail > 0 && mouseAvailable();
-  captureClick = false;
-  if (!acquire) return;
-  // Request after the acquisition button has come up. A cancelled request
-  // remains pending until the browser reports its outcome.
+function requestMouseLock() {
+  // Request on press so a still-held button can enter bounded fallback if a
+  // retry fails. A successful acquisition never sends that press or release.
+  flushMouse();
+  captureButtonHeld = true;
   const request = {cancelled:false};
   pointerRequest = request;
   try {
@@ -791,13 +791,14 @@ screen.addEventListener('click', event => {
   } catch {
     pointerLockFailed(request);
   }
-});
+}
 document.addEventListener('pointerlockchange', () => {
   if (document.pointerLockElement === screen) {
     const request = pointerRequest;
     pointerRequest = undefined;
     if (request && !request.cancelled && mouseAvailable()) {
       pointerLocked = true;
+      pointerRejected = false;
     } else {
       releaseKeys();
     }
@@ -849,9 +850,20 @@ screen.addEventListener('mousemove', event => {
 });
 for (const name of ['mousedown', 'mouseup']) screen.addEventListener(name, event => {
   if (!mouseAvailable() || touchPointer !== undefined || event.sourceCapabilities?.firesTouchEvents) return;
-  if (!lockedMouse() && !mouseFallback()) return;
+  const locked = lockedMouse();
+  if (event.button === 0 && (name === 'mouseup' || locked)) captureButtonHeld = false;
+  if (pointerRequest?.cancelled === false) return;
+  if (!locked) {
+    if (name === 'mousedown' && event.isTrusted && event.button === 0 && !pointerButtons &&
+        !pointerRequest && !document.pointerLockElement && typeof screen.requestPointerLock === 'function') {
+      event.preventDefault();
+      requestMouseLock();
+      return;
+    }
+    if (!mouseFallback()) return;
+  }
   event.preventDefault();
-  mouseButtons(event.buttons & 7);
+  mouseButtons(event.buttons & (captureButtonHeld ? 6 : 7));
 });
 screen.addEventListener('pointerdown', event => {
   if (event.pointerType === 'mouse' || !event.isPrimary || lockedMouse() || !mouseAvailable()) return;
@@ -864,7 +876,7 @@ screen.addEventListener('pointerdown', event => {
 screen.addEventListener('pointermove', event => {
   if (!mouseAvailable() || lockedMouse()) return;
   if (event.pointerId === touchPointer ||
-      (event.pointerType === 'mouse' && touchPointer === undefined && mouseFallback())) boundedMovement(event);
+      (event.pointerType === 'mouse' && touchPointer === undefined && !pointerRequest && mouseFallback())) boundedMovement(event);
 });
 for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) screen.addEventListener(name, event => {
   if (event.pointerId !== touchPointer) return;
@@ -873,6 +885,7 @@ for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) screen.
 });
 screen.addEventListener('pointerleave', () => {
   if (lockedMouse()) return;
+  captureButtonHeld = false;
   pointerPosition = undefined;
   mouseButtons(0);
 });
