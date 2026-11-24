@@ -22,7 +22,7 @@ function presentationSettings() {
 $('presentation').onchange = presentationSettings;
 $('phosphor-mask').onchange = presentationSettings;
 presenter.setPreset($('presentation').value,$('phosphor-mask').checked);
-const display = $('drop'), keyboardPanel = $('keyboard-panel');
+const display = $('drop'), notices = $('notices'), keyboardPanel = $('keyboard-panel');
 const keyboardToggles = [$('toggle-keyboard'), $('fullscreen-keyboard')];
 function toggleKeyboard(open) {
   releaseKeys();
@@ -42,16 +42,18 @@ function fullscreenActive() {
 function syncFullscreen() {
   toggleKeyboard(false);
   const active = fullscreenActive();
+  if (active) {
+    display.append(notices, keyboardPanel);
+  } else {
+    const keyboardHome = $('keyboard-home');
+    keyboardHome.before(notices);
+    keyboardHome.append(keyboardPanel);
+  }
   for (const element of [document.querySelector('.site-header'), ...display.parentElement.children]) {
     if (element !== display) element.inert = active;
   }
-  if (active) {
-    display.append(keyboardPanel);
-    (fullscreenFromKeyboard ? $('exit-fullscreen') : screen).focus({preventScroll:true});
-  } else {
-    $('keyboard-home').append(keyboardPanel);
-    (fullscreenFromKeyboard ? $('fullscreen') : screen).focus({preventScroll:true});
-  }
+  const button = $(active ? 'exit-fullscreen' : 'fullscreen');
+  (fullscreenFromKeyboard ? button : screen).focus({preventScroll:true});
 }
 $('fullscreen').onclick = async event => {
   fullscreenFromKeyboard = event.detail === 0;
@@ -333,12 +335,22 @@ $('choose-file').onclick = () => {
   fileDrive = pickerDrive;
   fileInput.click();
 };
-fileInput.onchange = () => {
+fileInput.onchange = async () => {
   const file = fileInput.files[0];
   fileInput.value = '';
   if (!file) return;
+  const trigger = $('drive-' + fileDrive);
   if (mediaPicker.matches(':popover-open')) mediaPicker.hidePopover();
-  void loadFile(file, fileDrive);
+  // The drive button is disabled during import, which can send focus to the body.
+  let restoreFocus = [document.body, trigger].includes(document.activeElement);
+  const focusMoved = () => { restoreFocus = false; };
+  document.addEventListener('focusin', focusMoved, {once:true});
+  try {
+    await loadFile(file, fileDrive, {focusScreen:false});
+  } finally {
+    document.removeEventListener('focusin', focusMoved);
+    if (restoreFocus) trigger.focus({preventScroll:true});
+  }
 };
 fileInput.oncancel = () => {
   if (mediaPicker.matches(':popover-open')) $('choose-file').focus({preventScroll:true});
@@ -385,13 +397,13 @@ function showActiveBoot() {
   const disk = mounted[drive];
   $('active-boot').textContent = disk ? `Booted: ${driveNames[drive]} · ${disk.name}` : 'No active boot disk';
 }
-async function resetMachine() {
+async function resetMachine({focusScreen = true} = {}) {
   releaseKeys();
   if (outputGain) outputGain.gain.value = 0;
   if (pendingFrame) { recycleFrame(pendingFrame); pendingFrame = null; }
   await core.reset(); showActiveBoot(); clearError();
   await setRunning(!document.hidden);
-  if (!panelOpen()) screen.focus({preventScroll:true});
+  if (focusScreen && !panelOpen()) screen.focus({preventScroll:true});
 }
 async function exclusive(operation) {
   if (!core || loading || workerFailed) return;
@@ -480,7 +492,7 @@ $('export').onclick = () => {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
 };
-function loadFile(file, target) {
+function loadFile(file, target, resetOptions) {
   if (!file) return;
   return exclusive(async () => {
     clearError();
@@ -505,7 +517,7 @@ function loadFile(file, target) {
       }
       await core.hdi_commit();
       mounted[2] = {name: file.name};
-      await resetMachine();
+      await resetMachine(resetOptions);
     } catch (error) {
       await core.hdi_cancel().catch(() => {});
       if (!workerFailed) await setRunning(resume && !document.hidden);
@@ -625,22 +637,34 @@ for (const [start,chars] of [[0x10,'QWERTYUIOP'],[0x1d,'ASDFGHJKL'],[0x29,'ZXCVB
 Array.from('1234567890').forEach((ch,i)=>codes[`Digit${ch}`]=i+1);
 for(let i=1;i<=10;i++) codes[`F${i}`]=0x61+i;
 for(const [code,scan] of Object.entries({Numpad7:0x42,Numpad8:0x43,Numpad9:0x44,Numpad4:0x46,Numpad5:0x47,Numpad6:0x48,Numpad1:0x4a,Numpad2:0x4b,Numpad3:0x4c,Numpad0:0x4e,NumpadDecimal:0x50,NumpadEnter:0x1c,NumpadAdd:0x49,NumpadSubtract:0x40,NumpadMultiply:0x45,NumpadDivide:0x41})) codes[code]=scan;
-let guestTab = false;
-screen.addEventListener('focus', () => { guestTab = false; });
+let captureTab = false;
+screen.addEventListener('focus', () => { captureTab = false; });
 function panelOpen() { return Boolean(document.querySelector('.panel:popover-open')); }
 screen.addEventListener('pointerdown', () => {
   screen.focus({preventScroll:true});
-  guestTab = !panelOpen();
+  captureTab = !panelOpen();
 });
-for (const [name,down] of [['keydown',true],['keyup',false]]) screen.addEventListener(name,event => {
-  // Tab advances through the host UI until the user clicks or types in the guest.
-  if (event.defaultPrevented || panelOpen() || (event.code === 'Tab' && (!guestTab || event.shiftKey))) return;
-  const scan = codes[event.code];
-  if (scan !== undefined) {
+screen.addEventListener('keydown', event => {
+  if (event.defaultPrevented || panelOpen()) return;
+  if (event.code === 'F12') {
     event.preventDefault();
-    if (down) guestTab = true;
-    key(scan,down);
+    const playback = $('pause').disabled ? $('presentation') : $('pause');
+    (fullscreenActive() ? $('exit-fullscreen') : playback).focus({preventScroll:true});
+    return;
   }
+  if (!running || (event.code === 'Tab' && !captureTab)) return;
+  const scan = codes[event.code];
+  if (scan === undefined) return;
+  event.preventDefault();
+  // Modifiers alone can be the start of host navigation, such as Shift+Tab.
+  if (!['Shift','Control','Alt','AltGraph','Meta'].includes(event.key)) captureTab = true;
+  key(scan,true);
+});
+screen.addEventListener('keyup', event => {
+  const scan = codes[event.code];
+  if (!held.has(scan)) return;
+  event.preventDefault();
+  key(scan,false);
 });
 for (const name of ['pointermove', 'pointerdown', 'pointerup', 'pointercancel']) screen.addEventListener(name, (event) => {
   if (!core || !running || !$('mouse').checked || $('profile').value !== '1' || panelOpen()) return;
