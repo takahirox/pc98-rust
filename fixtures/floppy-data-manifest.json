@@ -3,7 +3,7 @@
   "sources": {
     "tools/prepare_floppy_data.py": "68042ee2fdce5942a2fee93f77f263071acba5fef5a39e82b4eb7abad3405a02",
     "tools/prepare_freedos.py": "ac949b0678d437449a7607cb8ba75f04709621b7762fcb675ff0c5218dbb707c",
-    "tools/build_media.py": "cbbafd1903c9fe71c9d3fcbbdeaf6994d0d391281d20bdd86289d093285eb2cb",
+    "tools/build_media.py": "a426d4e3b4b8c23d193b9e769f82033e793e706a0b0fb2f456062ccb7c9a58fd",
     "LICENSE": "683f43140f1823d6cb474f386264b70b35eab24fc6c59d5f19d0067ba1e3e164"
   },
   "geometry": "77 cylinders, 2 heads, 8 sectors, 1024 bytes; FAT12",

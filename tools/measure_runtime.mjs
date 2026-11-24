@@ -76,7 +76,7 @@ try {
     const name=`music-scenes.${medium==='hdd'?'hdi':'hdm'}`;
     const bytes=await readFile(path.join(options.media,name));
     mediaHashes[name]=createHash('sha256').update(bytes).digest('hex');
-    await uploadMedia(page, {name,mimeType:'application/octet-stream',buffer:bytes});
+    await uploadMedia(page, {name,mimeType:'application/octet-stream',buffer:bytes}, medium==='hdd'?'2':'0');
     await waitFor(()=>page.locator('#profile').isEnabled());
     await nextBoot(page, medium==='hdd'?'1':'0');
     await waitFor(()=>page.locator('#reset').isEnabled());

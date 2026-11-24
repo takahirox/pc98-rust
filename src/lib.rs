@@ -451,8 +451,15 @@ mod wasm {
         MACHINE.with(|m| m.borrow_mut().bus.key(scan, down != 0))
     }
     #[no_mangle]
-    pub extern "C" fn mouse(dx: i32, dy: i32, buttons: u8) {
-        MACHINE.with(|m| m.borrow_mut().bus.mouse.motion(dx, dy, buttons))
+    pub extern "C" fn mouse(dx: i32, dy: i32, buttons: u8, release: bool) {
+        MACHINE.with(|m| {
+            let mouse = &mut m.borrow_mut().bus.mouse;
+            if release {
+                mouse.release();
+            } else {
+                mouse.host_motion(dx, dy, buttons);
+            }
+        })
     }
     #[no_mangle]
     pub extern "C" fn peek(addr: usize) -> u32 {

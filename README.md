@@ -1,13 +1,10 @@
 # pc98-rust
 
-An original Rust PC-98 emulator, with a local browser demo. **Star
-Trail** is a bootable guest game: its machine code draws text and bitmap VRAM,
-reads PC-98 keyboard input, beeps, and saves through the emulated floppy controller.
-The browser displays the Rust framebuffer and plays the core's clocked PCM.
-There are no emulation dependencies, proprietary ROMs, font dumps, or server-side
-execution.
+An original Rust PC-98 emulator with a browser player. The browser displays
+the Rust framebuffer and plays the core’s clocked PCM. The emulator runs
+locally without proprietary ROMs, font dumps, or emulation libraries.
 
-The anticipated public demo is <https://takahirox.github.io/pc98-rust/> once the
+The public player is <https://takahirox.github.io/pc98-rust/> once the
 GitHub Pages deployment succeeds. **Publication is currently unverified**; the
 pre-merge checks below do not establish that the public URL works.
 
@@ -76,8 +73,7 @@ expands into the existing sparse Rust disk. See [desktop validation](docs/deskto
 
 - **Insert and change media.** Each drive shows its current image. Use that
   slot’s **Insert…** or **Change…** button to choose a local file, or drop the
-  image on the slot. Drop a file on the screen or use **Insert media** for automatic
-  routing. HDI and NHD go to IDE HDD on Ap. TFD, HDM, XDF, 2HD, D88, D98 and IMG
+  image on the slot. Drop a file on the screen for automatic routing. HDI and NHD go to IDE HDD on Ap. TFD, HDM, XDF, 2HD, D88, D98 and IMG
   go to Floppy 1. Explicit destinations reject incompatible formats. Canceling
   the chooser or closing a picker leaves the guest and disk alone.
 - **Boot and reset.** Floppy insertion is live. **Settings** shows the drive
@@ -87,12 +83,6 @@ expands into the existing sparse Rust disk. See [desktop validation](docs/deskto
   and `C:`. DOS owns those assignments, so they can differ when booting a floppy.
   Switching to **PC-9801VM** resets the guest and boots Floppy 1. Returning to
   Ap restores its boot preference and retained IDE disk.
-- **Boot a demo.** **Demos** opens Star Trail and Hello world + BEEP. Either
-  replaces Floppy 1 and restarts the machine from it. In Star Trail, use the
-  arrows to move `@`, collect three `*` stars and avoid `#` walls. Press **R**
-  to restart the game. Hello world + BEEP uses the independently authored MIT
-  HelloWorld-PC98 fixture. To return to DOS, choose IDE HDD in Settings and
-  press Reset.
 - **Keep disk writes.** Choose **Export disk** in the corresponding slot’s
   picker. Export preserves floppy protection, disk headers and all logical
   HDD bytes, including guest writes. **Eject** leaves the guest running.
@@ -103,11 +93,12 @@ expands into the existing sparse Rust disk. See [desktop validation](docs/deskto
   and 1 GiB images. See [large disk evidence](docs/large-hdi.md).
 
 Guest media and writes stay in browser memory. Export and reinsert to keep
-them across visits. Reload starts a clean desktop. Star Trail records moves
-and score in sector 8. Demo and boot assets are served from the same origin.
+them across visits. Reload starts a clean desktop.
 The speaker button enables audio after a user gesture and toggles mute.
-**Volume** adjusts output from 0% to 300%. **Settings** also offers Ap mouse
-input. INT 33h applications require a guest DOS mouse driver.
+**Volume** adjusts output from 0% to 300%. On Ap, click the screen to capture
+the mouse and press **Esc** to release it. Touch input and browsers without
+capture can send bounded input on the canvas. INT 33h applications require a
+guest DOS mouse driver.
 
 The Ap desktop loads pinned PC-98 HimemX before `DOS=HIGH`. At the clean DOS
 prompt, `MEMSIZE` measures and successfully allocates **619,664 conventional
@@ -161,6 +152,7 @@ and [player layout validation](docs/player-layout-validation.md).
 python3 -m unittest discover -s tools -p test_fixture_fetch.py
 # Build the independent MIT boot probes offline.
 python3 tools/prepare_crt_fixture.py
+python3 tools/prepare_input_fixture.py
 python3 tools/prepare_dma_fixture.py
 python3 tools/prepare_gdtr_fixture.py
 python3 tools/prepare_idtr_fixture.py
@@ -764,8 +756,6 @@ FreeDOS on Ap, including return to the shell and reset. See the
 For a native/headless run of the same core:
 
 ```sh
-cargo run --release --bin headless -- web/media/hello98.tfd 100000
-cargo run --release --bin headless -- web/media/startrail.hdm 200000
 cargo run --release --bin headless -- fixtures/freedos/minimal.hdm 5000000
 ```
 
@@ -906,9 +896,7 @@ The Pages build installs the Wasm target and NASM, runs `npm ci` and
 and OIDC permissions. The `github-pages` environment records the output URL;
 deployments are serialized and have no manual reviewer gate. Generated
 `web/core.wasm` stays gitignored. No generated branch, backend, proprietary ROM,
-emulator library, `target/` or `fixtures/freedos/` is published. The two cleared
-demo disks and their license notices are included; optional GPL test fixtures
-remain outside the distributable. HTML, script, styles, Wasm and media references
+emulator library, `target/` or `fixtures/freedos/` is published. Generated test fixtures stay outside the distributable. HTML, script, styles, Wasm and media references
 are relative, so local serving and `/pc98-rust/` use the same files.
 
 The repository setting must be **Settings → Pages → Build and deployment →
@@ -943,7 +931,7 @@ required reviewers. A successful local build does not prove publication.
 
 **Required post-merge operational follow-up for Issue #5 (pending):** check that
 the merge's `main` push starts the Pages workflow, inspect its result and verify
-the public project URL loads real Wasm, Star Trail and keyboard/audio behavior.
+the public project URL loads real Wasm, boots FreeDOS and supports keyboard/audio input.
 If deployment, source enablement, HTTP access or runtime behavior fails, create a
 new `task`-labeled Issue with the run URL, error and reproduction and address it
 independently. This follow-up does not block review approval, Issue closure or
@@ -951,8 +939,7 @@ merge. Until it is performed successfully, report publication as unverified.
 
 ## Attribution and contributing
 
-Original emulator, firmware, glyphs and Star Trail / PROBE sources are MIT licensed.
-The hello-world boot sector and its source retain their separate MIT notice.
+The original emulator, firmware, glyphs and PROBE sources are MIT licensed.
 The downloaded FreeDOS/FreeCOM guests are GPLv2 or later and keep corresponding
 source archives beside the generated image. See [file-level audit](docs/licenses.md).
 

@@ -22,7 +22,7 @@ test('Ap Auto: cleared FreeDOS HDD kernel handoff and responsive shell cold/rese
   const at = manifest.header_bytes + (manifest.partition_lba + 26) * 512;
   const kernel = image.subarray(at, at + manifest.files['KERNEL  SYS'].bytes);
   expect(image.length).toBeGreaterThan(4 * 1024 * 1024);
-  await uploadMedia(page, { name: 'shell.hdi', mimeType: 'application/octet-stream', buffer: image });
+  await uploadMedia(page, { name: 'shell.hdi', mimeType: 'application/octet-stream', buffer: image }, '2');
   await expect(page.locator('#media-name-2')).toHaveText('shell.hdi');
   for (let run = 0; run < 2; run++) {
     if (run) await page.locator('#reset').click();

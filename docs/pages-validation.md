@@ -1,7 +1,7 @@
 # Issue #5 configuration and pre-merge validation
 
-The Pages implementation builds the existing Rust core and cleared static demo.
-It uploads only `web/` and does not change emulator behavior or licensing.
+This report records the initial Pages implementation for Issue #5. The
+workflow uploads the built `web/` directory. See the README for the current player.
 
 ## Repository configuration
 

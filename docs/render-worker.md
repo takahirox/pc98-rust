@@ -116,9 +116,10 @@ with the same rasterizer, optimized Wasm, guest pacing and instrumentation as th
 worker path. It is an architecture control, not a historical binary benchmark.
 There is no accelerated stepping inside the observed playback windows.
 
-Workloads: VM STAR TRAIL with guest-clocked beeper audio; Ap 98VIDEOP decoding eight
-graphics frames with PCM and returning to DOS; Ap ADV98 `music-scenes.hdm` with
-FM/SSG BGM and a bitmap/sprite scene transition. Only silent ADV98 DOS/compiler/title
+The script measures the VM input probe with guest-clocked beeper audio, Ap
+98VIDEOP decoding eight graphics frames with PCM before returning to DOS, and Ap
+ADV98 `music-scenes.hdm` with FM/SSG BGM and a bitmap/sprite scene transition.
+The historical VM measurements below used a different guest workload. Only silent ADV98 DOS/compiler/title
 setup advances via the existing bounded inspection API; live playback uses the
 production scheduler. Each observation covers at least eight wall seconds, samples
 PCM occupancy every 250 ms, and includes a mid-window ADV98 Enter transition.

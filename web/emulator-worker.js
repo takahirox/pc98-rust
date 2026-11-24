@@ -432,7 +432,7 @@ async function command(type, data) {
     if (transaction && !['hdi_append','hdi_commit','hdi_cancel','hdi_len','hdi_dirty_page','key','mouse'].includes(name)) throw Error('Media operation in progress');
     if (['reset','set_profile','set_boot_source','eject','hdi_begin','hdi_commit','hdi_cancel'].includes(name)) invalidateVideo();
     if (resets) { await flushAudio(); generation++; bootResult = undefined; jit?.clear(); }
-    if (transaction && (name === 'key' && args[1] || name === 'mouse' && args.some(Boolean))) throw Error('Input is paused for media transfer');
+    if (transaction && (name === 'key' && args[1] || name === 'mouse' && !args[3] && args.some(Boolean))) throw Error('Input is paused for media transfer');
     const value = core[name](...args);
     if (resets) bootDrive = core.peek(0x584) === 0x80 ? 2 : 0;
     if (name === 'hdi_commit' && value) jit?.clear();

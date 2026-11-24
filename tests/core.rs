@@ -17,6 +17,9 @@ fn run(m: &mut Machine, n: u32) {
     m.step(n);
     assert!(m.error.is_none(), "{:?}", m.error)
 }
+fn input_disk() -> Vec<u8> {
+    std::fs::read("fixtures/input_probe/input.hdm").expect("run tools/prepare_input_fixture.py")
+}
 fn boot(image: &[u8]) -> Machine {
     let mut m = Machine::default();
     m.insert(0, image.to_vec(), "test.hdm").unwrap();
@@ -310,7 +313,7 @@ fn pit_keyboard_and_beeper() {
 }
 #[test]
 fn bios_keyboard_returns_punctuation_and_keypad_characters() {
-    let mut m = boot(include_bytes!("../web/media/hello98.tfd"));
+    let mut m = boot(&input_disk());
     // Guest reads INT 18h keys and stores the returned scan/ASCII words in RAM.
     let code = [
         0x31, 0xc0, 0x8e, 0xc0, 0xbf, 0x00, 0x06, 0xb4, 0, 0xcd, 0x18, 0xab, 0xeb, 0xf9,
@@ -469,10 +472,10 @@ fn fdc_dma_read_write_seek_and_errors() {
     ));
 }
 #[test]
-fn independent_hello_boot_executes_and_draws() {
-    let mut m = boot(include_bytes!("../web/media/hello98.tfd"));
-    assert!(m.bus.text().starts_with("Hello world!!"));
-    assert_eq!(m.bus.fdc.reads, 1);
+fn floppy_boot_draws_text_and_programs_the_beeper() {
+    let mut m = boot(&input_disk());
+    assert!(m.bus.text().starts_with("INPUT PROBE READY"));
+    assert_eq!(m.bus.fdc.reads, 8);
     assert!(m.cpu.retired > 150);
     assert!(m.bus.beep);
     assert_eq!(m.bus.pit.beep_hz(), 97);
@@ -482,48 +485,38 @@ fn independent_hello_boot_executes_and_draws() {
         .as_chunks::<4>()
         .0
         .contains(&[255, 255, 255, 255]));
-    assert_eq!(m.bus.read(0xa0000), b'H');
+    assert_eq!(m.bus.read(0xa0000), b'I');
 }
+
 #[test]
-fn guest_game_playthrough_and_media_export() {
-    let mut m = boot(include_bytes!("../web/media/startrail.hdm"));
-    let base = 0x21400;
-    assert_eq!(m.bus.read(base + 8), 1);
+fn guest_keyboard_changes_vram_and_persists_sector_across_export_and_reset() {
+    let mut m = boot(&input_disk());
+    let state = 0x1ff00;
+    assert_eq!(m.bus.read(state), 1);
     let before = m.render().to_vec();
-    for _ in 0..3 {
-        press(&mut m, 0x3c);
+    for (i, scan) in [0x3c, 0x3d, 0x3a, 0x3b]
+        .into_iter()
+        .cycle()
+        .take(17)
+        .enumerate()
+    {
+        press(&mut m, scan);
+        assert_eq!(m.bus.read(state + 1), scan);
+        assert_eq!(m.bus.read(state + 2), i as u8 + 1);
     }
-    assert_eq!(m.bus.read(base + 10), 1);
-    assert_eq!(m.bus.beep_edges, 2);
     assert_ne!(m.render(), before);
-    for _ in 0..2 {
-        press(&mut m, 0x3d)
-    }
-    for _ in 0..4 {
-        press(&mut m, 0x3c)
-    }
-    for _ in 0..3 {
-        press(&mut m, 0x3d)
-    }
-    for _ in 0..2 {
-        press(&mut m, 0x3c)
-    }
-    for _ in 0..3 {
-        press(&mut m, 0x3a)
-    }
-    assert_eq!(m.bus.read(base + 10), 3);
-    assert_eq!(m.bus.read(base + 14), 1);
-    assert!(m.bus.text().contains("YOU WIN!"));
-    let disk = m.bus.disks[0].as_ref().unwrap();
-    assert_eq!(disk.bytes[7 * 1024 + 10], 3);
-    assert!(m.bus.fdc.writes >= 17);
-    let exported = disk.bytes.clone();
+    assert_eq!(m.bus.fdc.writes, 17);
+    let exported = m.bus.disks[0].as_ref().unwrap().bytes.clone();
+    let mut expected = input_disk();
+    expected[7 * 1024] = 17;
+    assert_eq!(exported, expected);
     let mut restored = boot(&exported);
-    assert_eq!(restored.bus.read(0x21800 + 10), 3);
+    assert_eq!(restored.bus.read(state + 4), 17);
     assert_eq!(restored.bus.disks[0].as_ref().unwrap().bytes, exported);
     restored.reset();
     run(&mut restored, 100_000);
-    assert_eq!(restored.bus.read(base + 10), 0);
+    assert_eq!(restored.bus.read(state + 2), 0);
+    assert_eq!(restored.bus.read(state + 4), 17);
 }
 #[test]
 fn corrupt_media_and_instruction_fail_safely() {
@@ -772,12 +765,7 @@ fn no_disk_boot_fails_visibly_and_reset_preserves_drive_two() {
     let mut m = Machine::default();
     m.step(1000);
     assert!(m.error.as_ref().unwrap().contains("Boot failed"));
-    m.insert(
-        0,
-        include_bytes!("../web/media/hello98.tfd").to_vec(),
-        "hello.tfd",
-    )
-    .unwrap();
+    m.insert(0, input_disk(), "input.hdm").unwrap();
     m.insert(1, vec![0; 1261568], "blank.hdm").unwrap();
     m.reset();
     run(&mut m, 100_000);

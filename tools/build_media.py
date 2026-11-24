@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reproduce our MIT guest/firmware and cleared third-party boot disk, offline."""
+"""Reproduce the synthetic firmware and static license notices, offline."""
 import argparse
 import hashlib
 from pathlib import Path
@@ -15,17 +15,10 @@ def assemble(source):
         return out.read_bytes()
 
 def products():
-    game = assemble('guest/game.asm')
-    assert len(game) == 8192
-    hello = (ROOT / 'fixtures/hello98/boot.bin').read_bytes()
-    assert hashlib.sha256(hello).hexdigest() == 'bdf20204b963227b826623f2a16a43f9d9cf8e0d4f1fef337b9fbd2276606cda'
     return {
         'guest/firmware.bin': assemble('guest/firmware.asm'),
         'web/LICENSE.txt': (ROOT / 'LICENSE').read_bytes(),
-        'web/hello98-LICENSE.txt': (ROOT / 'fixtures/hello98/LICENSE').read_bytes(),
         'web/shinonome-LICENSE.txt': (ROOT / 'fixtures/fonts/LICENSE').read_bytes() + b'\n' + (ROOT / 'fixtures/fonts/AUTHORS').read_bytes(),
-        'web/media/startrail.hdm': game + bytes(1261568 - len(game)),
-        'web/media/hello98.tfd': hello + bytes(1261568 - len(hello)),
     }
 
 if __name__ == '__main__':

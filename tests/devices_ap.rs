@@ -196,6 +196,39 @@ fn mouse_latching_buttons_ppi_bsr_periodic_irq_and_reset() {
 }
 
 #[test]
+fn host_mouse_delivers_large_motion_over_latches_and_discards_pending_input_on_release() {
+    let mut b = Bus::new(Profile::Pc9821ApDos);
+    let latch = |b: &mut Bus| {
+        b.output(0x7fdd, 0);
+        b.output(0x7fdd, 0x80);
+        let status = b.input(0x7fd9);
+        b.output(0x7fdd, 0xa0);
+        let x = (status & 15) | (b.input(0x7fd9) << 4);
+        b.output(0x7fdd, 0xc0);
+        let low = b.input(0x7fd9) & 15;
+        b.output(0x7fdd, 0xe0);
+        let y = low | (b.input(0x7fd9) << 4);
+        (x as i8, y as i8, status & 0xe0)
+    };
+
+    b.mouse.host_motion(610, -291, 1);
+    for expected in [
+        (127, -128, 0x60),
+        (127, -128, 0x60),
+        (127, -35, 0x60),
+        (127, 0, 0x60),
+        (102, 0, 0x60),
+        (0, 0, 0x60),
+    ] {
+        assert_eq!(latch(&mut b), expected);
+    }
+    b.mouse.host_motion(-999, 999, 2);
+    assert_eq!(latch(&mut b), (-128, 127, 0xc0));
+    b.mouse.release();
+    assert_eq!(latch(&mut b), (0, 0, 0xe0));
+}
+
+#[test]
 fn pegc_bank_windows_palette_pages_and_rom_holes_stay_bounded() {
     let mut b = Bus::new(Profile::Pc9821ApDos);
     b.output(0x6a, 0x21);

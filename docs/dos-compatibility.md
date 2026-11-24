@@ -109,8 +109,8 @@ cargo run --bin headless -- fixtures/dos-apps/adv98.hdm 16000000 --ap
 
 Neither the GPL DOS images nor application archives are copied into `web/` or
 published by Pages. Browser tests upload local fixture bytes through the same
-file input users use. Publication still contains the two existing MIT demo disks,
-the compiled core and notices, including the Shinonome license/authors.
+file input users use. Publication includes the FreeDOS desktop, the compiled core, and notices
+including the Shinonome license and author list.
 
 ## Candidate provenance and rights
 

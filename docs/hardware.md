@@ -1782,11 +1782,8 @@ file creation, drawing, gameplay, or save/reload follows from this control.
 
 ## Accepted software and media
 
-- MIT HelloWorld-PC98: exact upstream first boot sector on an otherwise zeroed
-  77×2×8×1024 disk; text VRAM writes and PIT beep prove independent guest execution.
-- Original MIT Star Trail: boot loader reads a second stage, uses direct text/bitmap
-  VRAM, BIOS keyboard/beep and sector writes. Gameplay/save assertions inspect
-  guest-owned record `1FC0:1800` (`PC98GAME`) and saved sector 8 (`STAR98SV`).
+- The original input probe tests floppy boot and sector writeback, direct text
+  and bitmap VRAM, the PIT beeper, BIOS keyboard, and Ap bus mouse reads.
 - FreeDOS(98) kernel build 2043 DBCS, 2022-01-20, plus FreeCOM 0.85a DBCS,
   2022-01-17: minimal real-mode floppy reaches `A:\>`, runs original PROBE.COM
   through DOS and returns to FreeCOM. XMS drivers and unrelated utilities are

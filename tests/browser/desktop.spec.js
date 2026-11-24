@@ -1,4 +1,4 @@
-import { diskAction, launchDemo, nextBoot, openSettings, uploadMedia } from './helpers/player.js';
+import { diskAction, bootInputProbe, nextBoot, openSettings, uploadMedia } from './helpers/player.js';
 import { test, expect, inspect, mediaGuestState } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -133,12 +133,11 @@ test('fresh installed desktop: exact kernel handoff, responsive DOS, live floppi
       await command(page,'a:');
     }
     expect(await inspect(page, ()=>pc98.stats().writes)).toBe(0);
-    await launchDemo(page, 'hello');
-    // The bundled image is fetched asynchronously. Wait for media loading and
-    // reset to finish before inspecting the Worker-owned Wasm core.
-    await expect(page.locator('#media-name-0')).toHaveText('hello98.tfd');
+    await bootInputProbe(page);
+    // Wait for the reset before inspecting the Worker-owned Wasm core.
+    await expect(page.locator('#media-name-0')).toHaveText('input.hdm');
     await expect(page.locator('#reset')).toBeEnabled();
-    await until(page,'Hello world!!');
+    await until(page,'INPUT PROBE READY');
     await nextBoot(page, '1'); await page.locator('#reset').click();
     await until(page,'A:\\>'); await command(page,'echo back'); await until(page,'back');
     expect(errors).toEqual([]);
@@ -184,7 +183,7 @@ test('dirty desktop: cancel replacement/eject/restore, export guest writes, reim
   await expect(hdd).toBeFocused();
   await openSettings(page); await page.locator('#default-hdd').click(); await expect.poll(()=>dialogs.length).toBe(2);
   await expect(page.locator('#profile')).toBeEnabled();
-  await uploadMedia(page, 'fixtures/freedos/shell.hdi');
+  await uploadMedia(page, 'fixtures/freedos/shell.hdi', '2');
   await expect.poll(()=>dialogs.length).toBe(3);
   await expect(page.locator('#profile')).toBeEnabled();
   await expect(page.locator('#media-name-2')).toHaveText('FreeDOS-128MiB.hdi');
@@ -201,7 +200,7 @@ test('dirty desktop: cancel replacement/eject/restore, export guest writes, reim
   await keyboardHddAction('eject');
   await expect(hdd).toHaveAccessibleName('Insert IDE HDD');
   await expect(hdd).toBeFocused();
-  await uploadMedia(page, file);
+  await uploadMedia(page, file, '2');
   await expect(page.locator('#media-name-2')).toHaveText('saved.hdi');
   await until(page,'A:\\>'); await command(page,'type saved.txt'); await until(page,'\nsaved');
   await page.locator('#profile').selectOption('0');
@@ -273,7 +272,7 @@ test('startup locks profile/media changes and ignores a competing drop until ass
   await page.route('**/freedos/desktop.bin',async route=>{await pending;await route.continue();});
   await page.goto('./');
   await expect(page.locator('#status')).toContainText('Loading FreeDOS HDD');
-  for(const id of ['profile','boot','file','drive-auto','drive-0','drive-1','drive-2','demos','reset']) await expect(page.locator('#'+id)).toBeDisabled();
+  for(const id of ['profile','boot','file','drive-0','drive-1','drive-2','reset']) await expect(page.locator('#'+id)).toBeDisabled();
   await page.locator('#drop').evaluate(drop=>{
     const transfer=new DataTransfer();transfer.items.add(new File([new Uint8Array(1261568)],'competing.hdm'));
     drop.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer}));

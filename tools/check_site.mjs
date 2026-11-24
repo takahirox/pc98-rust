@@ -8,15 +8,14 @@ const desktop = JSON.parse(await readFile(new URL('../fixtures/desktop-publicati
 const expected = [
   ...Object.keys(desktop).map(name => `freedos/${name}`),
   'index.html', 'app.js', 'presenter.js', 'emulator-worker.js', 'render-worker.js', 'audio-worklet.js', 'jit.js', 'block-jit.js', 'block-compiler.js', 'block-linker.js', 'style.css', 'core.wasm',
-  'licenses.html', 'LICENSE.txt', 'hello98-LICENSE.txt', 'shinonome-LICENSE.txt',
-  'media/hello98.tfd', 'media/startrail.hdm',
+  'licenses.html', 'LICENSE.txt', 'shinonome-LICENSE.txt',
 ].sort();
 async function files(directory, prefix = '') {
   const result = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const name = prefix + entry.name;
     if (entry.isDirectory()) {
-      assert(['media', 'freedos'].includes(name), `Unexpected publication directory: ${name}`);
+      assert(name === 'freedos', `Unexpected publication directory: ${name}`);
       result.push(...await files(new URL(`${entry.name}/`, directory), `${name}/`));
     } else {
       assert(entry.isFile(), `Publication must contain only regular files: ${name}`);

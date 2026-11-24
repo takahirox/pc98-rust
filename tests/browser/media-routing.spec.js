@@ -1,16 +1,16 @@
-import { diskAction, launchDemo, nextBoot, uploadMedia } from './helpers/player.js';
+import { diskAction, inputDisk, nextBoot, uploadMedia } from './helpers/player.js';
 import { inspect, mediaGuestState } from './helpers/runtime.js';
 // Issue #120: production Wasm, original MIT guests only; no host guest results.
 import { test, expect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 
-const hello = await fs.readFile(new URL('../../web/media/hello98.tfd', import.meta.url));
+const floppy = await inputDisk();
 const hdi = await fs.readFile(new URL('../../fixtures/ide_verify/ide_verify.hdi', import.meta.url));
 const manifest = JSON.parse(await fs.readFile(new URL('../../fixtures/ide-verify-manifest.json', import.meta.url)));
 expect(createHash('sha256').update(hdi).digest('hex')).toBe(manifest.image_sha256);
 
-// Wrap the unchanged MIT HelloWorld-PC98 raw sectors in normal MFM D88 headers.
+// Wrap the MIT input probe’s raw sectors in normal MFM D88 headers.
 function d88(raw) {
   const image = Buffer.alloc(0x2b0 + 154 * 8 * (16 + 1024));
   image[0x1a] = 1; // Preserve write protection through export.
@@ -28,7 +28,7 @@ function d88(raw) {
   }
   return image;
 }
-const wrapped = d88(hello);
+const wrapped = d88(floppy);
 
 async function ready(page) {
   const errors = [];
@@ -42,11 +42,12 @@ async function ready(page) {
   expect(await inspect(page, () => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
   return errors;
 }
-async function upload(page, path, name, buffer, drive = 'auto') {
+async function upload(page, path, name, buffer, drive) {
   if (path === 'picker') {
-    await uploadMedia(page, { name, mimeType: 'application/octet-stream', buffer }, drive);
+    await uploadMedia(page, { name, mimeType: 'application/octet-stream', buffer },
+      drive ?? (/\.(hdi|nhd)$/i.test(name) ? '2' : '0'));
   } else {
-    await page.locator(drive === 'auto' ? '#drop' : `#slot-${drive}`).evaluate((drop, { name, base64 }) => {
+    await page.locator(drive === undefined ? '#drop' : `#slot-${drive}`).evaluate((drop, { name, base64 }) => {
       const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
       const dataTransfer = new DataTransfer();
       dataTransfer.items.add(new File([bytes], name));
@@ -54,7 +55,7 @@ async function upload(page, path, name, buffer, drive = 'auto') {
     }, { name, base64: buffer.toString('base64') });
   }
   // Event dispatch returns before chunked HDI import and the guest reset finish.
-  await expect(page.locator('#drive-auto')).toBeEnabled();
+  await expect(page.locator('#profile')).toBeEnabled();
 }
 async function expectEmpty(page, drive) {
   await diskAction(page, drive, 'eject');
@@ -120,7 +121,7 @@ test('Ap mounts and boots an NHD, retains it after a malformed replacement, and 
   await exported(page, 'boot.NHD', image);
 });
 
-test('fresh page selects Ap in DOM and Rust, Auto, matching display and released input', async ({ page }) => {
+test('fresh page selects Ap in DOM and Rust, matching display and released input', async ({ page }) => {
   const errors = await ready(page);
   for (let run = 0; run < 2; run++) {
     if (run) await page.locator('#reset').click();
@@ -128,8 +129,6 @@ test('fresh page selects Ap in DOM and Rust, Auto, matching display and released
     await expect(page).toHaveTitle('pc98-rust · PC-9821Ap DOS');
     await expect(page.locator('#profile option:checked')).toHaveText('PC-9821Ap');
     await expect(page.locator('#display-mode')).toContainText('16 colors · Shinonome Japanese CG');
-    await expect(page.locator('#mouse')).toBeEnabled();
-    await expect(page.locator('#mouse')).not.toBeChecked();
     await expect(page.locator('#media-name-2')).toHaveText('FreeDOS-128MiB.hdi');
     await page.locator('#drive-2').click();
     await expect(page.getByRole('button', { name: 'Eject IDE HDD' })).toBeEnabled();
@@ -143,20 +142,20 @@ test('fresh page selects Ap in DOM and Rust, Auto, matching display and released
 });
 
 for (const path of ['picker', 'drop']) {
-  test(`Auto ${path}: every floppy extension mounts live then explicitly boots real guest cold/reset, D88 exports intact`, async ({ page }) => {
+  test(`${path}: every floppy extension mounts live then explicitly boots real guest cold/reset, D88 exports intact`, async ({ page }) => {
     test.setTimeout(120000);
     const errors = await ready(page);
     for (const extension of ['TfD', 'HDm', 'xDf', '2Hd', 'D88', 'd98', 'IMG']) {
-      const image = /d88|d98/i.test(extension) ? wrapped : hello;
-      const name = `hello.${extension}`;
+      const image = /d88|d98/i.test(extension) ? wrapped : floppy;
+      const name = `floppy.${extension}`;
       await upload(page, path, name, image);
       await mounted(page, name, 'Floppy 1');
       await nextBoot(page, '0');
       await page.locator('#reset').click();
       await expect(page.locator('#boot-source')).toHaveText(`Reset boots: Floppy 1 · ${name}`);
-      await boot(page, 'Hello world!!', 0);
+      await boot(page, 'INPUT PROBE READY', 0);
       await page.locator('#reset').click();
-      await boot(page, 'Hello world!!', 0);
+      await boot(page, 'INPUT PROBE READY', 0);
       if (extension === 'D88') await exported(page, name, image);
     }
     // Validate the other supported raw sizes through Rust, retaining exact bytes.
@@ -164,7 +163,7 @@ for (const path of ['picker', 'drop']) {
     // mount/export controls, not claims of guest boot support for 512-byte sectors.
     for (const size of [80 * 2 * 15 * 512, 80 * 2 * 8 * 512]) {
       const image = Buffer.alloc(size);
-      hello.copy(image, 0, 0, Math.min(size, hello.length));
+      floppy.copy(image, 0, 0, Math.min(size, floppy.length));
       await upload(page, path, `geometry-${size}.img`, image);
       await mounted(page, `geometry-${size}.img`, 'Floppy 1');
       expect(await inspect(page, () => pc98.read(0x584))).toBe(0x90);
@@ -179,7 +178,7 @@ for (const path of ['picker', 'drop']) {
     expect(errors).toEqual([]);
   });
 
-  test(`Auto ${path}: HDI boots IDE cold/reset and media actions resolve to HDD`, async ({ page }) => {
+  test(`${path}: HDI boots IDE cold/reset and media actions resolve to HDD`, async ({ page }) => {
     const errors = await ready(page);
     await upload(page, path, 'probe.HdI', hdi);
     await mounted(page, 'probe.HdI', 'IDE HDD');
@@ -193,38 +192,38 @@ for (const path of ['picker', 'drop']) {
     expect(errors).toEqual([]);
   });
 
-  test(`manual ${path}: destinations, FDD2 no reboot, multiple disks, Auto reset and profile retention`, async ({ page }) => {
+  test(`manual ${path}: destinations, FDD2 no reboot, multiple disks, explicit reset and profile retention`, async ({ page }) => {
     test.setTimeout(120000);
     const errors = await ready(page);
-    await upload(page, path, 'first.tfd', hello, '0');
+    await upload(page, path, 'first.tfd', floppy, '0');
     await mounted(page, 'first.tfd', 'Floppy 1');
     await nextBoot(page, '0');
     await page.locator('#reset').click();
-    await boot(page, 'Hello world!!', 0);
+    await boot(page, 'INPUT PROBE READY', 0);
     await upload(page, path, 'boot.hdi', hdi, '2');
     await mounted(page, 'boot.hdi', 'IDE HDD');
     await nextBoot(page, '1');
     await page.locator('#reset').click();
     await boot(page, 'IDE VERIFY PASS', 2);
     const before = await mediaGuestState(page);
-    await upload(page, path, 'second.tfd', hello, '1');
+    await upload(page, path, 'second.tfd', floppy, '1');
     await mounted(page, 'second.tfd', 'Floppy 2');
     expect(await mediaGuestState(page)).toEqual(before);
     await expect(page.locator('#boot-source')).toHaveText('Reset boots: IDE HDD · boot.hdi');
-    await exported(page, 'second.tfd', hello, '1');
+    await exported(page, 'second.tfd', floppy, '1');
     await mounted(page, 'second.tfd', 'Floppy 2');
     await page.locator('#reset').click();
     await boot(page, 'IDE VERIFY PASS', 2);
     await diskAction(page, '1', 'eject');
     expect(await inspect(page, () => pc98.exportDisk(1))).toEqual([]);
     await exported(page, 'boot.hdi', hdi);
-    await exported(page, 'first.tfd', hello);
-    await upload(page, path, 'floppy-boot.tfd', hello, '0');
+    await exported(page, 'first.tfd', floppy);
+    await upload(page, path, 'floppy-boot.tfd', floppy, '0');
     await nextBoot(page, '0');
     await page.locator('#reset').click();
-    await boot(page, 'Hello world!!', 0);
+    await boot(page, 'INPUT PROBE READY', 0);
     await page.locator('#reset').click();
-    await boot(page, 'Hello world!!', 0); // Mounted IDE must not steal boot.
+    await boot(page, 'INPUT PROBE READY', 0); // Mounted IDE must not steal boot.
     await expect(page.locator('#boot-source')).toHaveText('Reset boots: Floppy 1 · floppy-boot.tfd');
     await upload(page, path, 'boot.hdi', hdi, '2');
     await nextBoot(page, '1');
@@ -234,12 +233,8 @@ for (const path of ['picker', 'drop']) {
     // to exercise BIOS keyboard handling while retaining the HDD for Ap.
     await nextBoot(page, '0');
     await page.locator('#reset').click();
-    await boot(page, 'Hello world!!', 0);
+    await boot(page, 'INPUT PROBE READY', 0);
     await nextBoot(page, '1');
-    await page.locator('#settings').click();
-    await page.locator('#mouse').check();
-    await page.keyboard.press('Escape');
-    await expect(page.locator('#settings-panel')).toBeHidden();
     await page.locator('#screen').focus();
     await page.keyboard.down('ArrowRight');
     expect(await inspect(page, () => {
@@ -251,13 +246,11 @@ for (const path of ['picker', 'drop']) {
     await expect(page).toHaveTitle('pc98-rust · PC-9801VM');
     await expect(page.locator('#profile option:checked')).toHaveText('PC-9801VM');
     await expect(page.locator('#display-mode')).toContainText('8 colors');
-    await expect(page.locator('#mouse')).toBeDisabled();
-    await expect(page.locator('#mouse')).not.toBeChecked();
     expect(await inspect(page, () => pc98.core.metric(21))).toBe(0);
     await expect(page.locator('#media-name-2')).toHaveText('Requires Ap · boot.hdi');
     await expect(page.locator('#boot-source')).toHaveText('Reset boots: Floppy 1 · floppy-boot.tfd');
     await exported(page, 'boot.hdi', hdi); // Switching profile never deletes IDE.
-    await boot(page, 'Hello world!!', 0);
+    await boot(page, 'INPUT PROBE READY', 0);
     expect(await inspect(page, () => Array.from({ length: 16 }, (_, i) => pc98.read(0x52a + i))))
       .toEqual(Array(16).fill(0));
     await page.keyboard.up('ArrowRight');
@@ -274,27 +267,27 @@ for (const path of ['picker', 'drop']) {
     expect(await inspect(page, () => pc98.stats().reads)).toBe(0);
     await nextBoot(page, '0');
     await page.locator('#reset').click();
-    await boot(page, 'Hello world!!', 0);
+    await boot(page, 'INPUT PROBE READY', 0);
     expect(errors).toEqual([]);
   });
 
   test(`${path}: parser errors, limits and manual mismatches preserve media and profile`, async ({ page }) => {
     test.setTimeout(120000);
     const errors = await ready(page);
-    await upload(page, path, 'good.tfd', hello);
+    await upload(page, path, 'good.tfd', floppy);
     await mounted(page, 'good.tfd', 'Floppy 1');
     const cases = [
-      ['auto', 'bad.d88', Buffer.alloc(100), 'truncated D88'],
-      ['auto', 'bad.d98', Buffer.alloc(0x2b0), 'D88 size mismatch'],
-      ['auto', 'bad.img', Buffer.alloc(100), 'unsupported raw geometry'],
-      ['auto', 'bad.hdi', Buffer.alloc(100), 'invalid HDI geometry'],
-      ['auto', 'large.hdi', Buffer.alloc(5 * 1024 * 1024), 'invalid HDI geometry'],
-      ['auto', 'large.hdm', Buffer.alloc(4 * 1024 * 1024 + 1), 'Floppy image exceeds 4 MiB'],
-      ['auto', 'large.hdi', Buffer.alloc(32 * 1024 * 1024 + 1), 'invalid HDI geometry'],
-      ['auto', 'program.exe', Buffer.alloc(100), 'Unsupported media extension'],
+      [undefined, 'bad.d88', Buffer.alloc(100), 'truncated D88'],
+      [undefined, 'bad.d98', Buffer.alloc(0x2b0), 'D88 size mismatch'],
+      [undefined, 'bad.img', Buffer.alloc(100), 'unsupported raw geometry'],
+      [undefined, 'bad.hdi', Buffer.alloc(100), 'invalid HDI geometry'],
+      [undefined, 'large.hdi', Buffer.alloc(5 * 1024 * 1024), 'invalid HDI geometry'],
+      [undefined, 'large.hdm', Buffer.alloc(4 * 1024 * 1024 + 1), 'Floppy image exceeds 4 MiB'],
+      [undefined, 'large.hdi', Buffer.alloc(32 * 1024 * 1024 + 1), 'invalid HDI geometry'],
+      [undefined, 'program.exe', Buffer.alloc(100), 'Unsupported media extension'],
       ['0', 'wrong.hdi', hdi, 'Hard disk images require IDE HDD'],
       ['1', 'wrong.hdi', hdi, 'Hard disk images require IDE HDD'],
-      ['2', 'wrong.tfd', hello, 'IDE HDD requires an HDI'],
+      ['2', 'wrong.tfd', floppy, 'IDE HDD requires an HDI'],
     ];
     for (const [drive, name, image, error] of cases) {
       await upload(page, path, name, image, drive);
@@ -302,9 +295,10 @@ for (const path of ['picker', 'drop']) {
       await expect(page.locator('#profile')).toHaveValue('1');
     }
     await expect(page.locator('#media-name-0')).toHaveText('good.tfd');
-    await exported(page, 'good.tfd', hello);
+    await exported(page, 'good.tfd', floppy);
     await page.locator('#profile').selectOption('0');
-    for (const drive of ['auto', '0', '1', '2']) {
+    const drives = path === 'drop' ? [undefined, '0', '1', '2'] : ['0', '1', '2'];
+    for (const drive of drives) {
       if (path === 'picker' && drive === '2') {
         await page.locator('#drive-2').click();
         await expect(page.locator('#choose-file')).toBeDisabled();
@@ -316,29 +310,6 @@ for (const path of ['picker', 'drop']) {
       }
       await expect(page.locator('#profile')).toHaveValue('0');
       expect(await inspect(page, () => pc98.core.metric(21))).toBe(0);
-    }
-    expect(errors).toEqual([]);
-  });
-}
-
-for (const profile of ['1', '0']) {
-  test(`${profile === '1' ? 'Ap' : 'VM'}: both bundled demos boot Floppy 1 and preserve the other slots`, async ({ page }) => {
-    const errors = await ready(page);
-    await upload(page, 'picker', 'previous.hdi', hdi);
-    await mounted(page, 'previous.hdi', 'IDE HDD');
-    await boot(page, 'IDE VERIFY PASS', 2);
-    await upload(page, 'picker', 'data.tfd', hello, '1');
-    await mounted(page, 'data.tfd', 'Floppy 2');
-    if (profile === '0') await page.locator('#profile').selectOption(profile);
-    for (const [button, name, marker] of [['game', 'startrail.hdm', 'STAR TRAIL'], ['hello', 'hello98.tfd', 'Hello world!!']]) {
-      await launchDemo(page, button);
-      await mounted(page, name, 'Floppy 1');
-      await boot(page, marker, 0);
-      await page.locator('#reset').click();
-      await boot(page, marker, 0);
-      await expect(page.locator('#profile')).toHaveValue(profile);
-      await expect(page.locator('#media-name-1')).toHaveText('data.tfd');
-      await expect(page.locator('#media-name-2')).toContainText('previous.hdi');
     }
     expect(errors).toEqual([]);
   });

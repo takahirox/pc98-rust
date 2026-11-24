@@ -18,9 +18,10 @@
       <div id="help-panel" class="panel" popover role="dialog" aria-labelledby="help-title" tabindex="-1" autofocus>
         <h2 id="help-title">Player help</h2>
         <p>Focus the screen to type. Shift, Ctrl, Alt (GRPH), right Alt (XFER) and left Meta (NFER) map to PC-98 keys. Tab and Shift+Tab navigate the player until you click, type, or press F12 on the screen to capture guest keys. Press F12 again to return to the player controls. Open Keyboard for on-screen keys, including Kana and STOP.</p>
-        <p>Drag an image onto the screen or use Insert media for automatic routing. HDI/NHD images go to IDE HDD on Ap. TFD, HDM, XDF, 2HD, D88, D98 and IMG images go to Floppy 1. Drop on a drive or open its picker to choose a specific slot.</p>
-        <p>Floppy insertion leaves the guest running. Choose the next boot drive in Settings, then Reset. Replacing the HDD resets the machine. Demos boot Floppy 1 immediately.</p>
-        <p>Disk changes stay in browser memory. Export from the mounted drive’s picker before reloading or discarding writes. VM retains the IDE disk for when you return to Ap. Mouse input on Ap may require a guest DOS driver.</p>
+        <p>Drag an image onto the screen for automatic routing. HDI/NHD images go to IDE HDD on Ap. TFD, HDM, XDF, 2HD, D88, D98 and IMG images go to Floppy 1. Drop on a drive or open its picker to choose a specific slot.</p>
+        <p>Floppy insertion leaves the guest running. Choose the next boot drive in Settings, then Reset. Replacing the HDD resets the machine.</p>
+        <p>Disk changes stay in browser memory. Export from the mounted drive’s picker before reloading or discarding writes. VM retains the IDE disk for when you return to Ap.</p>
+        <p>Click the screen to capture the mouse on Ap. Press Esc to release it. If capture is unavailable or you use touch, input stays within the screen. DOS software may require a guest mouse driver.</p>
         <p><a href="licenses.html">Licenses &amp; media credits</a> · <a href="https://github.com/takahirox/pc98-rust#build-and-play">Compatibility and controls</a></p>
       </div>
       <a href="https://github.com/takahirox/pc98-rust">GitHub</a>
@@ -84,7 +85,6 @@
         <button id="default-hdd" disabled>Restore FreeDOS HDD</button>
         <hr>
         <label class="setting-check"><input id="phosphor-mask" type="checkbox"> Faint RGB phosphor mask</label>
-        <label id="mouse-setting" class="setting-check"><input id="mouse" type="checkbox" disabled> Send mouse input to Ap guest</label>
         <p id="display-mode" class="display-detail"></p>
         <p id="presentation-status" class="display-detail">Preparing display…</p>
       </div>
@@ -133,12 +133,8 @@
         <div class="slot-info"><h2 id="slot-label-1">Floppy 2</h2><p id="media-name-1" class="media-name" title="Empty">Empty</p></div>
         <button id="drive-1" data-drive="1" aria-controls="media-picker" aria-expanded="false" aria-haspopup="dialog" aria-label="Insert Floppy 2" disabled>Insert…</button>
       </div>
-      <div class="media-actions">
-        <button id="drive-auto" data-drive="auto" aria-controls="media-picker" aria-expanded="false" aria-haspopup="dialog" disabled>Insert media</button>
-        <button id="demos" popovertarget="demo-picker" aria-haspopup="dialog" disabled>Demos</button>
-      </div>
       <div id="media-picker" class="panel" popover role="dialog" aria-labelledby="media-title" aria-describedby="picker-disk media-hint">
-        <h2 id="media-title">Insert media</h2>
+        <h2 id="media-title">Floppy 1</h2>
         <p id="picker-disk" class="boot-detail" hidden></p>
         <p id="media-hint"></p>
         <div class="panel-actions">
@@ -148,14 +144,6 @@
         </div>
       </div>
       <input id="file" type="file" accept=".tfd,.hdm,.xdf,.2hd,.d88,.d98,.img,.hdi,.nhd" aria-label="Local disk image" hidden disabled>
-      <div id="demo-picker" class="panel" popover role="dialog" aria-labelledby="demo-title" aria-describedby="demo-hint">
-        <h2 id="demo-title">Boot a demo</h2>
-        <p id="demo-hint">Each demo replaces Floppy 1 and restarts the machine.</p>
-        <div class="panel-actions">
-          <button id="game" autofocus disabled>Star Trail</button>
-          <button id="hello" disabled>Hello world + BEEP</button>
-        </div>
-      </div>
     </aside>
   </section>
 </main>

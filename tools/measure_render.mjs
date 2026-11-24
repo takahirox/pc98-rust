@@ -1,6 +1,6 @@
 // Opt-in, real release-Wasm comparison. Run after npm run build and fixture preparation.
 // node tools/measure_render.mjs --browser=chromium --repeat=3 --seconds=8 --output=target/render-chromium.json
-import { launchDemo, nextBoot, uploadMedia } from '../tests/browser/helpers/player.js';
+import { bootInputProbe, nextBoot, uploadMedia } from '../tests/browser/helpers/player.js';
 import {chromium,firefox} from '@playwright/test';
 import {spawn} from 'node:child_process';
 import {readFile,writeFile} from 'node:fs/promises';
@@ -23,7 +23,7 @@ let presentationProbe;
 try {
   await waitFor(async()=>{if(server.exitCode!==null)throw Error('Benchmark server exited; port 8072 must be free');try{return (await fetch('http://127.0.0.1:8072/')).ok;}catch{return false;}});
   browser=await ({chromium,firefox}[engine]).launch({headless:true});
-  for(let run=0;run<repeat;run++) for(const workload of ['vm-startrail','ap-video','ap-music']) {
+  for(let run=0;run<repeat;run++) for(const workload of ['vm-input-probe','ap-video','ap-music']) {
     // Alternate order to reduce warmup/thermal bias.
     for(const mode of run%2 ? ['worker','inline'] : ['inline','worker']) {
       const page=await browser.newPage();
@@ -32,11 +32,11 @@ try {
       await page.goto(`http://127.0.0.1:8072/?diagnostics=1&renderer=${mode}`);
       await page.locator('#profile').waitFor({state:'visible'});
       await waitFor(()=>page.locator('#profile').isEnabled());
-      if(workload==='vm-startrail') {
+      if(workload==='vm-input-probe') {
         await page.locator('#profile').selectOption('0');
-        await waitFor(()=>page.locator('#demos').isEnabled());
-        await launchDemo(page, 'game');
-        await waitFor(()=>page.evaluate(()=>pc98.text().then(s=>s.includes('STAR TRAIL'))));
+        await waitFor(()=>page.locator('#profile').isEnabled());
+        await bootInputProbe(page, {sound:true});
+        await waitFor(()=>page.evaluate(()=>pc98.text().then(s=>s.includes('INPUT PROBE READY'))));
       } else {
         const disk=workload==='ap-video'?'98videop':'music-scenes';
         await uploadMedia(page, {name:`${disk}.hdm`,mimeType:'application/octet-stream',buffer:await readFile(`fixtures/dos-apps/${disk}.hdm`)});
@@ -115,7 +115,7 @@ try {
         emuWasmBytes:await emu.evaluate(()=>pc98.core.memory.buffer.byteLength),
         renderWasmBytes:render?(end.renderStats.wasmBytes??0):0,
         // Full snapshot bytes copied each frame, excluding immutable module code.
-        snapshotBytes:mode==='worker'?(workload==='vm-startrail'?219952:547632):0,
+        snapshotBytes:mode==='worker'?(workload==='vm-input-probe'?219952:547632):0,
         transferCapacityBytes:mode==='worker'?547632+640*400*4:640*400*4,
       };
       if(render && !presentationProbe) {

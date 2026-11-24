@@ -54,7 +54,7 @@ The same running shell reads independently generated original FAT data through
 actual FDC I/O in both floppies, swaps D88/raw media, verifies complete unchanged
 exports (including a protected D88), ejects, observes the real DOS no-media
 critical error, reinserts and retries. No insertion changes execution/text or
-HDD preference. Explicit floppy demo boot and return to HDD exercise both IPLs.
+HDD preference. Explicit boot from a test floppy and return to HDD exercise both IPLs.
 
 Other cases cancel all three destructive HDD actions, create a file via guest
 DOS, download the complete modified 128 MiB disk, reimport it, TYPE the file,

@@ -2,6 +2,7 @@
 pub struct Mouse {
     counter: [u8; 2],
     latch: [u8; 2],
+    pending_motion: [i64; 2],
     pub control: u8,
     pub rate: u8,
     mode: u8,
@@ -15,6 +16,7 @@ impl Default for Mouse {
         Self {
             counter: [0; 2],
             latch: [0; 2],
+            pending_motion: [0; 2],
             control: 0x10,
             rate: 0,
             mode: 0x93,
@@ -29,16 +31,30 @@ impl Mouse {
     pub(crate) fn clocks_until_irq(&self) -> u64 {
         (8_000_000 - self.fraction).div_ceil(120 >> (self.rate & 3))
     }
-    /// Host supplies relative movement and DOM button bits; all consumption is
-    /// through the guest PPI and optional periodic IRQ13, never application RAM.
+    /// Apply movement directly to the hardware counters.
     pub fn motion(&mut self, dx: i32, dy: i32, buttons: u8) {
         self.counter[0] = self.counter[0].wrapping_add(dx as u8);
         self.counter[1] = self.counter[1].wrapping_add(dy as u8);
         self.buttons = buttons & 7;
         self.events += 1;
     }
+    /// The browser may deliver more than one signed counter's worth of motion
+    /// between guest reads. Leave any excess for the next guest latch.
+    pub fn host_motion(&mut self, dx: i32, dy: i32, buttons: u8) {
+        for (pending, delta) in self.pending_motion.iter_mut().zip([dx, dy]) {
+            *pending = pending.saturating_add(i64::from(delta));
+        }
+        self.motion(0, 0, buttons);
+    }
     pub fn release(&mut self) {
         self.buttons = 0;
+        self.pending_motion = [0; 2];
+    }
+    fn sample_counter(&self, axis: usize) -> i64 {
+        let count = i64::from(self.counter[axis] as i8);
+        count
+            .saturating_add(self.pending_motion[axis])
+            .clamp(-128, 127)
     }
     pub fn tick(&mut self, cycles: u32) -> bool {
         self.fraction += cycles as u64 * (120 >> (self.rate & 3));
@@ -53,7 +69,7 @@ impl Mouse {
             0x7fd9 => {
                 let axis = usize::from(self.control & 0x40 != 0);
                 let count = if self.control & 0x80 == 0 {
-                    self.counter[axis]
+                    self.counter[axis].wrapping_add(self.pending_motion[axis] as u8)
                 } else {
                     self.latch[axis]
                 };
@@ -70,7 +86,11 @@ impl Mouse {
     }
     fn set_control(&mut self, value: u8) {
         if self.control & 0x80 == 0 && value & 0x80 != 0 {
-            self.latch = self.counter;
+            for axis in 0..2 {
+                let sample = self.sample_counter(axis);
+                self.latch[axis] = sample as u8;
+                self.pending_motion[axis] -= sample - i64::from(self.counter[axis] as i8);
+            }
             self.counter = [0; 2];
             self.latches += 1;
         }
