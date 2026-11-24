@@ -140,9 +140,9 @@ required for this Issue.
 The default Ap disk now loads the unmodified pinned PC-98 HimemX 3.34 before
 `DOS=HIGH`, followed by the same FreeCOM command line. Restore FreeDOS HDD uses
 this identical audited template. No CPU/BIOS/bus corrections or EMM386/UMB/EMS
-assumptions were necessary. VM's built-in demos and every historical low-DOS
-control retain their original bytes/configurations. An uploaded/exported HDD
-keeps its own configuration; restoring the default explicitly replaces it.
+assumptions were necessary. Every historical low-DOS control retains its original
+bytes and configuration. An uploaded/exported HDD keeps its own configuration.
+Restoring the default explicitly replaces it.
 
 ### Independent conventional allocation
 

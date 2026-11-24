@@ -144,30 +144,33 @@ impl Mouse {
                 let count = if self.control & 0x80 == 0 {
                     self.last_sample_at = self.host_clock;
                     let mut count = self.counter[axis];
-                    if let Some(first) = self.pending.front() {
-                        for sample in self
-                            .pending
-                            .iter()
-                            .take_while(|s| s.buttons == first.buttons)
-                        {
-                            count = count.wrapping_add(sample.motion[axis] as u8);
-                        }
+                    for sample in &self.pending {
+                        count = count.wrapping_add(sample.motion[axis] as u8);
                     }
                     count
                 } else {
                     self.latch[axis]
                 };
-                // Draining older motion must not roll back a button edge the
-                // guest has already read. An unchanged live level can still
-                // have an unseen tap queued for the next latch.
-                let buttons = self.sampled_buttons.unwrap_or(self.live_buttons);
-                if buttons.revision > self.reported_buttons.revision
-                    && (self.sampled_buttons.is_some()
-                        || buttons.bits != self.reported_buttons.bits)
-                {
-                    self.reported_buttons = buttons;
-                }
-                let buttons = self.reported_buttons.bits;
+                let buttons = if let Some(sampled) = self.sampled_buttons {
+                    // Older motion can remain queued after its buttons were read.
+                    if sampled.revision > self.reported_buttons.revision {
+                        self.reported_buttons = sampled;
+                    }
+                    self.reported_buttons.bits
+                } else {
+                    // Show the live levels, but only record them as delivered if
+                    // doing so leaves no unread transition behind in the queue.
+                    let live = self.live_buttons;
+                    if live.revision > self.reported_buttons.revision
+                        && !self.pending.iter().any(|sample| {
+                            sample.buttons.revision > self.reported_buttons.revision
+                                && sample.buttons.revision < live.revision
+                        })
+                    {
+                        self.reported_buttons = live;
+                    }
+                    live.bits
+                };
                 let bits = (if buttons & 1 != 0 { 0x80 } else { 0 })
                     | (if buttons & 2 != 0 { 0x20 } else { 0 })
                     | (if buttons & 4 != 0 { 0x40 } else { 0 });

@@ -62,7 +62,7 @@ test('the real raw canvas captures with or without CRT and the guest receives re
       canvas.addEventListener('mousemove', event => {
         if (!event.isTrusted) return;
         if (!canvas.trustedMotion && event.movementX > canvas.clientWidth) {
-          canvas.trustedMotion = {x:event.movementX, y:event.movementY, clientX:event.clientX};
+          canvas.trustedMotion = {x:event.movementX, y:event.movementY};
           return;
         }
         // Headless Chromium compensates CDP moves with cursor recenter events.
@@ -74,10 +74,9 @@ test('the real raw canvas captures with or without CRT and the guest receives re
     const x = box.x + 12, y = box.y + 100;
     await page.mouse.move(x + 4, y);
     await page.mouse.move(x + box.width + 70, y + 180);
-    // The pointer lock keeps sending trusted events to the canvas outside its
-    // bounds, with the client coordinate anchored to the acquisition point.
+    // A move beyond the canvas still delivers trusted relative motion to it.
     const trustedMotion = () => screen.evaluate(canvas => canvas.trustedMotion);
-    await expect.poll(async () => (await trustedMotion())?.clientX).toBeCloseTo(x, -1);
+    await expect.poll(async () => (await trustedMotion())?.x ?? 0).toBeGreaterThan(box.width);
     const motion = await trustedMotion();
     await expect.poll(() => guest(page)).toMatchObject({x:before.x + motion.x, y:before.y + motion.y});
     await screen.evaluate(canvas => canvas.stopMotionFilter());

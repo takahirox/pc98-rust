@@ -310,6 +310,39 @@ fn host_mouse_continuously_polled_unlatched_counter_keeps_its_motion() {
 }
 
 #[test]
+fn host_mouse_unlatched_drag_counts_motion_across_button_changes() {
+    let mut b = Bus::new(Profile::Pc9821ApDos);
+    b.mouse.host_motion(10, 0, 0);
+    assert_eq!(b.input(0x7fd9), 0xea);
+    b.mouse.host_motion(0, 0, 1);
+    b.mouse.host_motion(3, 0, 1);
+    assert_eq!(b.input(0x7fd9), 0x6d);
+    b.mouse.host_motion(0, 0, 0);
+    b.mouse.host_motion(5, 0, 0);
+    assert_eq!(b.input(0x7fd9), 0xe2);
+    b.output(0x7fdd, 0x30);
+    assert_eq!(b.input(0x7fd9), 0xe1);
+}
+
+#[test]
+fn host_mouse_live_reads_preserve_earlier_queued_button_edges() {
+    let mut b = Bus::new(Profile::Pc9821ApDos);
+    assert_eq!(latch_mouse(&mut b), (0, 0, 0xe0));
+    b.mouse.host_motion(0, 0, 1);
+    b.mouse.host_motion(0, 0, 0);
+    b.mouse.host_motion(0, 0, 2);
+
+    // Reading the old latch shows the live right press. Relatching must
+    // still deliver the preceding left press and release in order.
+    assert_eq!(b.input(0x7fd9), 0xc0);
+    assert_eq!(latch_mouse(&mut b), (0, 0, 0x60));
+    b.output(0x7fdd, 0);
+    assert_eq!(b.input(0x7fd9), 0xc0);
+    assert_eq!(latch_mouse(&mut b), (0, 0, 0xe0));
+    assert_eq!(latch_mouse(&mut b), (0, 0, 0xc0));
+}
+
+#[test]
 fn host_mouse_samples_a_short_click_after_all_earlier_motion() {
     let mut b = Bus::new(Profile::Pc9821ApDos);
     b.mouse.host_motion(512, -519, 0);
