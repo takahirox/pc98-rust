@@ -168,10 +168,20 @@ test('dirty desktop: cancel replacement/eject/restore, export guest writes, reim
   await ready(page); await until(page,'A:\\>');
   await command(page,'echo saved>saved.txt'); await command(page,'type saved.txt'); await until(page,'saved');
   expect(await inspect(page, ()=>(pc98.core.hdi_dirty_page(0) >>> 0))).not.toBe(0xffffffff);
+  const hdd = page.locator('#drive-2');
+  async function keyboardHddAction(action) {
+    await hdd.press('Enter');
+    await expect(page.locator('#choose-file')).toBeFocused();
+    await page.keyboard.press('Tab');
+    if (action === 'export') await page.keyboard.press('Tab');
+    await expect(page.locator(`#${action}`)).toBeFocused();
+    await page.keyboard.press('Enter');
+  }
   const dialogs=[];
   page.on('dialog',async d=>{dialogs.push(d.message());await d.dismiss();});
-  await diskAction(page, '2', 'eject'); await expect.poll(()=>dialogs.length).toBe(1);
-  await expect(page.locator('#profile')).toBeEnabled();
+  await keyboardHddAction('eject'); await expect.poll(()=>dialogs.length).toBe(1);
+  await expect(hdd).toHaveAccessibleName('Change IDE HDD');
+  await expect(hdd).toBeFocused();
   await openSettings(page); await page.locator('#default-hdd').click(); await expect.poll(()=>dialogs.length).toBe(2);
   await expect(page.locator('#profile')).toBeEnabled();
   await uploadMedia(page, 'fixtures/freedos/shell.hdi');
@@ -179,15 +189,19 @@ test('dirty desktop: cancel replacement/eject/restore, export guest writes, reim
   await expect(page.locator('#profile')).toBeEnabled();
   await expect(page.locator('#media-name-2')).toHaveText('FreeDOS-128MiB.hdi');
   expect(dialogs).toHaveLength(3); expect(dialogs.every(t=>t.includes('guest writes'))).toBe(true);
-  const downloadEvent=page.waitForEvent('download'); await diskAction(page, '2', 'export');
+  const downloadEvent=page.waitForEvent('download'); await keyboardHddAction('export');
   const download=await downloadEvent; expect(await download.failure()).toBeNull();
+  await expect(hdd).toBeFocused();
   const file=info.outputPath('saved.hdi'); await download.saveAs(file);
   expect((await fs.stat(file)).size).toBe(manifest.bytes);
   // All logical bytes export, and DOS changes make the saved disk differ.
   const bytes=await fs.readFile(file); expect(createHash('sha256').update(bytes).digest('hex')).not.toBe(manifest.image_sha256);
   const accepted=[];
   page.removeAllListeners('dialog'); page.on('dialog',async d=>{accepted.push(d.message());await d.accept();});
-  await diskAction(page, '2', 'eject'); await uploadMedia(page, file);
+  await keyboardHddAction('eject');
+  await expect(hdd).toHaveAccessibleName('Insert IDE HDD');
+  await expect(hdd).toBeFocused();
+  await uploadMedia(page, file);
   await expect(page.locator('#media-name-2')).toHaveText('saved.hdi');
   await until(page,'A:\\>'); await command(page,'type saved.txt'); await until(page,'\nsaved');
   await page.locator('#profile').selectOption('0');

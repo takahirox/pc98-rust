@@ -81,15 +81,19 @@ for (const {width, height, touch = false} of sizes) {
       expect(await mounted.evaluate(el => el.scrollWidth > el.clientWidth)).toBe(true);
       expect(await geometry()).toEqual(initial);
       await uploadMedia(page, floppy('incompatible.tfd'), '2');
-      await expect(page.getByRole('alert')).toContainText('IDE HDD requires an HDI or NHD image');
-      if (width === 320) await expect(page.getByRole('alert')).toBeInViewport({ratio:1});
+      const alert = page.getByRole('alert');
+      await expect(alert).toContainText('IDE HDD requires an HDI or NHD image');
+      await expect(alert).toBeInViewport({ratio:1});
       expect(await geometry()).toEqual(initial);
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
+      await page.getByRole('button', {name:'Dismiss error'}).click();
+      await expect(alert).toBeHidden();
+      expect(await geometry()).toEqual(initial);
     });
   });
 }
 
-test('guest Tab and Shift+Tab release correctly and F12 returns to host navigation', async ({page}) => {
+test('F12 captures standalone Shift and returns to host navigation', async ({page}) => {
   await ready(page);
   const screen = page.locator('#screen');
   const tabHeld = () => page.evaluate(async () => Boolean((await pc98.read(0x52b)) & 0x80));
@@ -105,6 +109,18 @@ test('guest Tab and Shift+Tab release correctly and F12 returns to host navigati
   await page.keyboard.up('Shift');
   expect(await tabHeld()).toBe(false);
   await page.keyboard.press('Tab');
+  await expect(screen).toBeFocused();
+  await page.keyboard.press('F12');
+  await expect(screen).toBeFocused();
+  for (const shift of ['ShiftLeft', 'ShiftRight']) {
+    await page.keyboard.down(shift);
+    await expect.poll(shiftHeld).toBe(true);
+    await page.keyboard.up(shift);
+    await expect.poll(shiftHeld).toBe(false);
+  }
+  await page.keyboard.press('F12');
+  await expect(page.getByRole('button', {name:'Pause'})).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
   await expect(screen).toBeFocused();
   await page.keyboard.down('Shift');
   await page.keyboard.press('ArrowRight');
