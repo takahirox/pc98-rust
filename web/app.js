@@ -736,10 +736,15 @@ async function replaceHdd(prepare, selection, confirmation, resetOptions) {
       disk.checkpoint = hddStorage.current.active;
     } else {
       disk = await prepare();
-      if (selection && !await selectHddStartup(selection)) return;
+      if (selection) {
+        const proceed = await selectHddStartup(selection).catch(error => confirm(
+          `Could not update HDD startup. ${error.message}\n\nMount this disk for this session only? The saved checkpoints and startup choice are retained.`
+        ));
+        if (!proceed) return;
+      }
     }
-    // Publish a new startup choice only after the replacement is fully staged.
-    // Commit then mounts those same validated bytes while the guest is paused.
+    // Mount the validated disk while the guest is paused, after publishing the
+    // startup choice or getting confirmation for a session-only mount.
     await core.hdi_commit();
     committed = true;
     mounted[2] = disk;

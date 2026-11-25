@@ -51,15 +51,28 @@ async function exportImage(page) {
   return readFile(await download.path());
 }
 
-async function confirmAction(page, action, accept, message) {
-  const seen = new Promise(resolve => page.once('dialog', async dialog => {
-    const text = dialog.message();
-    await (accept ? dialog.accept() : dialog.dismiss());
-    resolve(text);
-  }));
-  await action();
-  expect(await seen).toContain(message);
-  await expect(page.locator('#profile')).toBeEnabled();
+async function confirmAction(page, action, accept, message, ...additionalPrompts) {
+  const prompts = [[accept, message], ...additionalPrompts];
+  const seen = [];
+  const handle = async dialog => {
+    const [accepted] = prompts[seen.length] ?? [];
+    seen.push(dialog.message());
+    await (accepted ? dialog.accept() : dialog.dismiss());
+  };
+  page.on('dialog', handle);
+  try {
+    await action();
+    await expect.poll(() => seen.length).toBe(prompts.length);
+    await expect(page.locator('#profile')).toBeEnabled();
+    prompts.forEach(([, expected], index) => expect(seen[index]).toContain(expected));
+  } finally { page.off('dialog', handle); }
+}
+
+function readCatalog(page) {
+  return page.evaluate(async () => {
+    const {HddStorage} = await import('./hdd-storage.js');
+    return new HddStorage().startup(() => {});
+  });
 }
 
 test('bundled FreeDOS boots a locally saved DOS copy across reload', async ({page}, info) => {
@@ -96,6 +109,108 @@ test('without Web Locks, FreeDOS boots only when the startup catalog allows it',
   await page.reload();
   await ready(page, 'Empty');
   await expect(page.locator('#error')).toContainText('HDD startup failed. Catalog unavailable');
+});
+
+test('unavailable OPFS allows confirmed session-only recovery with both checkpoints intact', async ({page}, info) => {
+  test.skip(info.project.name !== 'local', 'Storage transaction fault coverage runs once.');
+  await page.goto('./');
+  await ready(page, 'FreeDOS-128MiB.hdi');
+  await uploadMedia(page, uploaded, '2');
+  await ready(page, uploaded.name);
+  await save(page);
+  await dos(page, 'echo newer>keep.txt');
+  await dos(page, 'type keep.txt', '\nnewer');
+  await save(page);
+  const before = await readCatalog(page);
+  expect(before.previous.name).toBe(uploaded.name);
+
+  await page.addInitScript(() => {
+    if (location.search === '?opfs-unavailable') {
+      navigator.storage.getDirectory = async () => {
+        throw new DOMException('OPFS unavailable', 'NotReadableError');
+      };
+    }
+  });
+  await page.goto('./?opfs-unavailable');
+  await ready(page, 'Empty');
+  await expect(page.locator('#error')).toContainText('HDD startup failed. OPFS unavailable');
+
+  await openSettings(page);
+  await confirmAction(page, () => page.locator('#default-hdd').click(), true, 'Boot a fresh FreeDOS HDD on startup?',
+    [true, 'for this session only']);
+  await ready(page, 'FreeDOS-128MiB.hdi');
+  await expect.poll(() => page.evaluate(() => pc98.text())).toContain('FreeDOS desktop ready');
+  expect(await readCatalog(page)).toEqual(before);
+
+  await page.reload();
+  await ready(page, 'Empty');
+  const backup = {...uploaded, name:'backup.nhd'};
+  await confirmAction(page, () => uploadMedia(page, backup, '2'), true, 'Replace the saved startup HDD',
+    [false, 'for this session only']);
+  await ready(page, 'Empty');
+  expect(await readCatalog(page)).toEqual(before);
+
+  await confirmAction(page, () => uploadMedia(page, backup, '2'), true, 'Replace the saved startup HDD',
+    [true, 'for this session only']);
+  await ready(page, backup.name);
+  await expect.poll(() => page.evaluate(() => pc98.text())).toContain('HDD SHELL READY');
+  expect(await readCatalog(page)).toEqual(before);
+
+  await page.goto('./');
+  await ready(page, uploaded.name);
+  await dos(page, 'type keep.txt', '\nnewer');
+  await confirmAction(page, () => diskAction(page, '2', 'recover-hdd'), true, 'Make the previous HDD checkpoint the startup disk?');
+  expect(await exportImage(page)).toEqual(nhd);
+});
+
+test('terminating the storage Worker during a write releases the live disk for export and retry', async ({page}, info) => {
+  test.skip(info.project.name !== 'local', 'Storage transaction fault coverage runs once.');
+  await page.goto('./');
+  await ready(page, 'FreeDOS-128MiB.hdi');
+  await uploadMedia(page, uploaded, '2');
+  await ready(page, uploaded.name);
+  await save(page);
+  const before = await readCatalog(page);
+  await dos(page, 'echo newer>keep.txt');
+  await dos(page, 'type keep.txt', '\nnewer');
+  const liveImage = await exportImage(page);
+  expect(liveImage).not.toEqual(nhd);
+
+  await page.clock.install();
+  await page.evaluate(() => {
+    const NativeWorker = window.Worker;
+    window.Worker = class extends NativeWorker {
+      constructor(url, options) {
+        super(url, options);
+        if (!url.pathname?.endsWith('/hdd-storage-worker.js')) return;
+        let replies = 0;
+        this.addEventListener('message', event => {
+          // Drop the first write acknowledgement after the real Worker staged bytes.
+          if (++replies !== 2 || event.data.error) return;
+          event.stopImmediatePropagation();
+          this.terminate();
+          window.Worker = NativeWorker;
+          window.storageWorkerTerminated = true;
+        });
+      }
+    };
+  });
+  await diskAction(page, '2', 'save-hdd');
+  await expect.poll(() => page.evaluate(() => window.storageWorkerTerminated)).toBe(true);
+  await expect(page.locator('#profile')).toBeDisabled();
+  await page.clock.fastForward('00:31');
+
+  await expect(page.locator('#error')).toContainText('HDD save failed. HDD storage Worker timed out');
+  await ready(page, uploaded.name);
+  await expect(page.locator('#pause')).toHaveText('Pause');
+  expect(await readCatalog(page)).toEqual(before);
+  expect(await exportImage(page)).toEqual(liveImage);
+
+  await save(page);
+  expect((await readCatalog(page)).previous).toEqual(before.active);
+  await page.reload();
+  await ready(page, uploaded.name);
+  expect(await exportImage(page)).toEqual(liveImage);
 });
 
 test('imported NHD saves exact guest changes, restores a good checkpoint, and honors startup selection', async ({page}, info) => {
@@ -195,11 +310,7 @@ test('saving a startup fallback preserves the newer checkpoint through a transie
   await dos(page, 'type keep.txt', '\nnewer');
   await save(page);
 
-  const catalog = () => page.evaluate(async () => {
-    const {HddStorage} = await import('./hdd-storage.js');
-    return new HddStorage().startup(() => {});
-  });
-  const before = await catalog();
+  const before = await readCatalog(page);
   await page.addInitScript(name => {
     const original = FileSystemFileHandle.prototype.getFile;
     FileSystemFileHandle.prototype.getFile = function () {
@@ -215,11 +326,11 @@ test('saving a startup fallback preserves the newer checkpoint through a transie
   await diskAction(page, '2', 'save-hdd');
   await expect(page.locator('#profile')).toBeEnabled();
   await expect(page.locator('#error')).toContainText('HDD save failed. Temporary HDD read error');
-  expect(await catalog()).toEqual(before);
+  expect(await readCatalog(page)).toEqual(before);
 
   await page.evaluate(() => window.restoreCheckpointReads());
   await save(page);
-  const after = await catalog();
+  const after = await readCatalog(page);
   expect(after.active.digests).toEqual(before.previous.digests);
   expect(after.previous).toEqual(before.active);
   await confirmAction(page, () => diskAction(page, '2', 'recover-hdd'), true, 'Make the previous HDD checkpoint the startup disk?');
