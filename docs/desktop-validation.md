@@ -54,14 +54,15 @@ The same running shell reads independently generated original FAT data through
 actual FDC I/O in both floppies, swaps D88/raw media, verifies complete unchanged
 exports (including a protected D88), ejects, observes the real DOS no-media
 critical error, reinserts and retries. No insertion changes execution/text or
-HDD preference. Explicit floppy demo boot and return to HDD exercise both IPLs.
+HDD preference. Explicit boot from a test floppy and return to HDD exercise both IPLs.
 
 Other cases cancel all three destructive HDD actions, create a file via guest
 DOS, download the complete modified 128 MiB disk, reimport it, TYPE the file,
 retain it across VM/Ap switches, restore a clean desktop, recover startup failures
-and reject a competing drop while controls are locked. Existing media routing,
-floppy-booted DOS FDD2, independent demos, CPU/device, 512 MiB/1 GiB and occupied
-512 MiB round-trip regressions remain enabled.
+and reject a competing drop while controls are locked. The test-only
+[input probe](../guest/input_probe.asm) exercises Ap and VM input, audio and disk
+writeback. Media routing, floppy-booted DOS FDD2, CPU/device, 512 MiB/1 GiB and
+occupied 512 MiB round-trip regressions also remain enabled.
 
 ## Historical Issue #130 measurements
 
@@ -139,9 +140,9 @@ required for this Issue.
 The default Ap disk now loads the unmodified pinned PC-98 HimemX 3.34 before
 `DOS=HIGH`, followed by the same FreeCOM command line. Restore FreeDOS HDD uses
 this identical audited template. No CPU/BIOS/bus corrections or EMM386/UMB/EMS
-assumptions were necessary. VM's built-in demos and every historical low-DOS
-control retain their original bytes/configurations. An uploaded/exported HDD
-keeps its own configuration; restoring the default explicitly replaces it.
+assumptions were necessary. Every historical low-DOS control retains its original
+bytes and configuration. An uploaded/exported HDD keeps its own configuration.
+Restoring the default explicitly replaces it.
 
 ### Independent conventional allocation
 

@@ -64,20 +64,15 @@ subsystems; no new private-HDD incompatibility has been demonstrated here.
 
 ## Reproduce and use
 
+Follow the [README test instructions](../README.md#reproduce-the-checks) to
+prepare all required fixtures and run the full native and browser test suites.
+
+To prepare the DOS application disks for the interactive steps below, run
+these commands from the repository root:
+
 ```sh
 python3 tools/prepare_freedos.py
 python3 tools/prepare_dos_apps.py
-python3 tools/prepare_cpu_fixture.py
-python3 tools/prepare_hdd_fixture.py
-python3 tools/prepare_music_fixture.py
-python3 tools/prepare_device_fixture.py
-python3 tools/build_font.py --check
-cargo test --locked
-cargo clippy --all-targets -- -D warnings
-cargo fmt --check
-npm ci
-npx playwright install chromium
-npm test
 ```
 
 The DOS-app preparation command checks all downloads and generated images against
@@ -87,8 +82,9 @@ DOS sources beside the FreeDOS image. Source archives are read by exact member
 name, never unpacked onto the host by the preparation script. Download size is
 capped at 8 MiB per archive; inserted floppies retain the existing 4 MiB limit.
 
-In the browser select **PC-9821Ap DOS · experimental**, then insert one of
-`fixtures/dos-apps/{adv98,98videop,fm98}.hdm` in drive 1. These disks auto-run their
+In the browser select **PC-9821Ap**, then insert one of
+`fixtures/dos-apps/{adv98,98videop,fm98}.hdm` in **Floppy 1**. In **Settings**, set
+**Next boot** to **Floppy 1**, then press **Reset**. These disks auto-run their
 application through FreeCOM. In ADV98 press Return to start, Return to advance
 Japanese dialogue, and arrows/Return to choose Look, Talk or Move. Talk progresses
 the sample's branching story. Esc opens the system menu; Return selects Save and
@@ -97,9 +93,9 @@ the title screen. The source scenario is a small playable ADV sample, not a
 complete commercial-length game. The original `adv98.hdm` is silent without a
 driver. The new `music.hdm` includes
 a published guest PMD driver and original compiled score, started by the unchanged
-game; see [device instructions](ap-devices.md). Enable sound and insert
-`fm98.hdm` to hear its independent
-FM routines in the separate DOS test. These are distinct compatibility claims.
+game; see [device instructions](ap-devices.md). Enable sound and boot `fm98.hdm`
+from **Floppy 1** to hear its independent FM routines in the separate DOS test.
+These are distinct compatibility claims.
 
 Headless uses the same core, with an explicit profile:
 
@@ -109,8 +105,8 @@ cargo run --bin headless -- fixtures/dos-apps/adv98.hdm 16000000 --ap
 
 Neither the GPL DOS images nor application archives are copied into `web/` or
 published by Pages. Browser tests upload local fixture bytes through the same
-file input users use. Publication still contains the two existing MIT demo disks,
-the compiled core and notices, including the Shinonome license/authors.
+file input users use. Publication includes the FreeDOS desktop, the compiled core, and notices
+including the Shinonome license and author list.
 
 ## Candidate provenance and rights
 
@@ -197,9 +193,10 @@ returning to FreeCOM, guest FM PCM without BEEP, memory/A20/page/ROM boundaries,
 Japanese text-VRAM halves, CPU profile differences, and deterministic FM pitch,
 timers/busy/IRQ/release. Browser `dos-apps.spec.js` repeats DOS execution,
 Japanese glyph comparison, color/input/save/reload, video and FM Web Audio through
-the actual release Wasm at both `/` and `/pc98-rust/`. It uses bounded core slices,
-not a mocked core. Existing Star Trail, HelloWorld, FreeDOS and Pages tests remain
-required. Results for this checkpoint are recorded below after validation.
+the actual release Wasm at both `/` and `/pc98-rust/`, using bounded core slices.
+The test-only [input probe](../guest/input_probe.asm) covers Ap and VM boot,
+rendering, beeper audio, keyboard input and floppy writeback. The FreeDOS and
+Pages regressions also remain required. Historical results follow below.
 
 The current device additions and their native/Wasm acceptance are detailed in
 [the Issue #11 device audit](ap-devices.md). Unsupported physical hardware
@@ -300,9 +297,11 @@ services, bootable HDD/controller
 and persistence, EGC/GDC additions, PEGC 256-color mode, expanded ANK/CG, mouse and
 OPNA/86 PCM/game music required implementation and independent guest fixtures.
 The current Issue #11 device audit above supersedes those historical gaps.
-The existing two independent PC-98 DOS applications, native floppy/save/audio
-checks and browser demos remain regression requirements. No issue-closing keyword,
-push, PR, merge, GitHub comment or post-merge action is part of this checkpoint.
+The two independent PC-98 DOS applications and native floppy, save and audio
+checks remain regression requirements. Browser coverage uses test fixtures such
+as the [input probe](../guest/input_probe.asm) for keyboard, mouse, floppy and
+beeper behavior. No issue-closing keyword, push, PR, merge, GitHub comment or
+post-merge action was part of the PR #10 checkpoint.
 
 ### Issue #9 CPU checkpoint validation (2026-10-21)
 

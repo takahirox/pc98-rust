@@ -15,7 +15,7 @@ dismissal and focus return. The picker holds its destination through the local
 file chooser. The same keyboard panel moves into fullscreen when needed. Short windows have
 44 px scroll buttons beside the keys so swiping across guest keys is unnecessary.
 Settings shows the active boot image and the source of the next Reset.
-Ap mouse input is available there while Ap is selected.
+On Ap, click the canvas to capture the mouse and press Esc to release it.
 
 ## Release-Wasm screenshots
 

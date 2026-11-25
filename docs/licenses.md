@@ -7,14 +7,16 @@ The only npm dependency is Playwright and its test tooling, not a runtime core.
 
 ## Original files
 
-`src/`, `guest/firmware.asm`, `guest/game.asm`, `guest/probe.asm`, `tools/`, tests,
+`src/`, `guest/firmware.asm`, `guest/probe.asm`, `tools/`, tests,
 the web host, documentation and the original replacement glyph shapes use the
 repository [MIT license](../LICENSE), copyright 2026 pc98-rust contributors.
-`guest/firmware.bin` and `web/media/startrail.hdm` are generated solely from those
-assembly sources and zero padding. There are no external game assets. The font is
+`guest/firmware.bin` is assembled from the original firmware source. The font is
 new Latin-only glyph data in `src/font.rs`; it is not copied from NEC or another
-font package. `tools/build_media.py --check` reproduces these binaries offline
+font package. `tools/build_media.py --check` reproduces the firmware and static notices offline
 using NASM and detects stale checked-in artifacts.
+
+The MIT input regression probe (`guest/input_probe.asm`) is assembled offline by
+`tools/prepare_input_fixture.py` and used only by the native and browser tests.
 
 The additional original `guest/hdd-ipl.asm`, `guest/mouse98.asm`,
 `guest/memory98.asm`, `guest/timer.asm` and `guest/play.mml` are also MIT. Their generated DOS
@@ -107,31 +109,6 @@ assembly, repository MIT license and manifest beside
 ROM or copied emulator implementation is used. Generated test media stays outside
 `web/` and is not published.
 
-## HelloWorld-PC98
-
-Upstream: [TakedaHiromasa/HelloWorld-PC98](https://github.com/TakedaHiromasa/HelloWorld-PC98),
-commit **4f1ea8e8d3196d4f2b53b17d9ac08e38d43df247**. Only these artifacts are copied:
-
-| Local file | Origin and treatment |
-| --- | --- |
-| `fixtures/hello98/hello98.nas` | Unmodified `src/hello98.nas`, independently authored assembly |
-| `fixtures/hello98/LICENSE` | Unmodified upstream MIT license, including its original `Copyright (c) 2018` notice |
-| `fixtures/hello98/boot.bin` | Bytes 0–1023 of upstream `src/hello98.TFD`; reviewed against the source's boot/header, text-print loop, PIT/beep setup, HLT loop and message |
-| `web/media/hello98.tfd` | That exact boot sector plus zero padding to 1,261,568 bytes; all other filesystem/tooling/slack data excluded |
-| `web/hello98-LICENSE.txt` | Copy of the same MIT notice in the static distribution |
-
-The original full TFD SHA-256 is
-`81db6564aed59fb44085253b2488d31fe622a883d22d31d363b3de0ae0823f29`.
-The imported first 1024 bytes hash is
-`bdf20204b963227b826623f2a16a43f9d9cf8e0d4f1fef337b9fbd2276606cda`.
-The cleared rebuilt image hash is
-`8003c97b0c028a379e2572bf0f2cf86a32d0a624d408c7273de756f37413d406`.
-The reproducible image construction preserves the independently authored machine
-code byte-for-byte, including the immediate OUT port truncation. We do not copy
-upstream `hood`, assembler binaries, other tools, or other disk filesystem data.
-The native and browser tests boot this disk and assert real text pixels and beep.
-This is bare-metal floppy software, **not a firmware ROM**.
-
 ## FreeDOS(98): downloaded test guest, GPLv2 or later
 
 `tools/prepare_freedos.py` fetches pinned public guest releases and matching source
@@ -220,18 +197,6 @@ redistributable and convertible under its original public-domain/non-exercise
 license. Original source, AUTHORS and LICENSE are retained; generated JIS data
 is embedded in Rust/Wasm. The static distribution includes that notice and author
 list. No NEC font ROM or chip ROM/sample data was added.
-
-## Original VM playable-demo selection
-
-During the original VM work,
-[ADV98](https://github.com/yarufu/pc98/blob/main/README.md) was identified as a
-DOS-based 16-color engine, tested on PC-9821 systems with optional sound boards. It is not an 8-color
-VM acceptance candidate. [Space Panicco's specific rights notice](https://github.com/gikonekos/Space-Panicco-Archive/blob/main/RIGHTS.md)
-does not provide a clear unrestricted redistribution basis for its original
-binaries, so none are copied. Archival availability or freeware status is not a
-license. HelloWorld-PC98 has clear MIT licensing but is not a game. No suitable
-existing game was validated for both rights and this profile, so the accepted
-fallback is the entirely original MIT Star Trail guest.
 
 No NEC BIOS/font, commercial DOS, period commercial game, third-party sample
 artwork or unclear-rights freeware is bundled. Users can insert their own legally

@@ -1,4 +1,4 @@
-import { launchDemo, openSettings } from './helpers/player.js';
+import { bootInputProbe, openSettings } from './helpers/player.js';
 import {test,expect,inspect} from './helpers/runtime.js';
 
 const stats = page => page.evaluate(()=>pc98.stats());
@@ -76,9 +76,8 @@ test('live presets preserve raw frames, guest state and input across VM/Ap and c
   expect(await page.locator('#presentation').inputValue()).toBe('sharp');
   await expect(page.locator('#crt-screen')).toBeVisible();
   // Exercise actual keyboard delivery with the filtered screen active.
-  await launchDemo(page, 'hello');
-  await expect.poll(()=>page.evaluate(()=>pc98.text())).toContain('Hello world!!');
-  await launchDemo(page, 'game');
+  await bootInputProbe(page);
+  await expect.poll(()=>page.evaluate(()=>pc98.text())).toContain('INPUT PROBE READY');
   await page.locator('#screen').focus(); await page.keyboard.press('ArrowRight');
   expect((await stats(page)).presenterStats.active).toBe(true);
   const live=await stats(page);
@@ -160,8 +159,8 @@ test.describe('touch fullscreen fallback',()=>{
       Element.prototype.requestFullscreen = () => Promise.reject(new DOMException('Fullscreen unavailable','NotAllowedError'));
     });
     await ready(page);
-    await launchDemo(page, 'game', {touch: true});
-    await expect(page.locator('#demos')).toBeEnabled();
+    await bootInputProbe(page, {touch:true});
+    await expect(page.locator('#profile')).toBeEnabled();
     await expect.poll(()=>stats(page).then(s=>s.running)).toBe(true);
     const before=await stats(page);
     await expect(page.locator('#exit-fullscreen')).toBeHidden();
@@ -215,8 +214,8 @@ for (const fault of ['unsupported','compile','link','allocation','render']) test
   await expect(page.locator('#presentation-status')).toContainText('showing original pixels');
   await expect.poll(()=>stats(page).then(s=>s.presentationStats.frames)).toBeGreaterThan(before.presentationStats.frames+2);
   expect((await stats(page)).presenterStats.fallback).toBe(true);
-  await launchDemo(page, 'hello');
-  await expect.poll(()=>page.evaluate(()=>pc98.text())).toContain('Hello world!!');
+  await bootInputProbe(page);
+  await expect.poll(()=>page.evaluate(()=>pc98.text())).toContain('INPUT PROBE READY');
   await expect(page.locator('#error')).toBeHidden();
 });
 

@@ -1,4 +1,4 @@
-import { openSettings, uploadMedia } from './helpers/player.js';
+import { uploadMedia } from './helpers/player.js';
 import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import { exportHdd } from './helpers/disk.js';
@@ -11,7 +11,7 @@ async function boot(page, name, sound = false, extension = 'hdm') {
   await page.locator('#profile').selectOption('1');
   if (sound) await page.locator('#sound').click();
   const buffer = await fs.readFile(new URL(`../../fixtures/dos-apps/${name}.${extension}`, import.meta.url));
-  await uploadMedia(page, { name: `${name}.${extension}`, mimeType: 'application/octet-stream', buffer }, extension === 'hdi' ? '2' : 'auto');
+  await uploadMedia(page, { name: `${name}.${extension}`, mimeType: 'application/octet-stream', buffer }, extension === 'hdi' ? '2' : '0');
   if (extension !== 'hdi') {
     await inspect(page, () => pc98.core.set_boot_source(0));
     await page.locator('#reset').click();
@@ -192,10 +192,9 @@ test('Ap IDE HDD boots DOS and ADV98; mouse reaches IRQ driver and game; export 
     }
     throw Error('resident mouse driver not found');
   });
-  await openSettings(page);
-  await page.locator('#mouse').check();
-  await page.keyboard.press('Escape');
-  // Enabling mouse input may scroll the canvas above the viewport.
+  // Exercise the bounded mouse fallback with the real DOS IRQ driver.
+  await page.locator('#screen').evaluate(screen => { screen.requestPointerLock = undefined; });
+  await page.locator('#screen').focus();
   await page.locator('#screen').scrollIntoViewIfNeeded();
   const box = await page.locator('#screen').boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
@@ -218,7 +217,7 @@ test('Ap IDE HDD boots DOS and ADV98; mouse reaches IRQ driver and game; export 
   expect(save.subarray(0,8).toString()).toBe('ADV98SAV');
   expect(hdiFile(saved, 'HDDSAVE TXT').toString()).toBe('DURABLE DOS WRITE\r\n');
   expect((await inspect(page, () => pc98.stats())).mouseLatches).toBeGreaterThan(0);
-  await uploadMedia(page, { name: 'saved.hdi', mimeType: 'application/octet-stream', buffer: saved });
+  await uploadMedia(page, { name: 'saved.hdi', mimeType: 'application/octet-stream', buffer: saved }, '2');
   await waitTitle(page);
   await press(page, 'ArrowRight'); await press(page, 'Enter'); await press(page, 'Enter');
   expect(await hash(page)).not.toBe(title);
@@ -226,7 +225,7 @@ test('Ap IDE HDD boots DOS and ADV98; mouse reaches IRQ driver and game; export 
   await expect(page.locator('#error')).toBeHidden();
   // Rejected geometry must preserve the mounted disk and avoid a Wasm trap.
   const bad = Buffer.from(saved); bad.writeUInt32LE(0xffffffff, 28);
-  await uploadMedia(page, { name: 'bad.hdi', mimeType: 'application/octet-stream', buffer: bad });
+  await uploadMedia(page, { name: 'bad.hdi', mimeType: 'application/octet-stream', buffer: bad }, '2');
   await expect(page.locator('#error')).toContainText('invalid HDI geometry');
   await expect(page.locator('#media-name-2')).toHaveText('saved.hdi');
   expect(hdiFile(await exportHdd(page), 'SAVE1   DAT')).toEqual(save);

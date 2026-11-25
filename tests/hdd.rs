@@ -827,11 +827,11 @@ fn ide_edge_identify_read_write_transfer_boundaries() {
 #[test]
 fn media_insertion_preserves_explicit_boot_and_missing_device_never_falls_back() {
     let mut m = Machine::new(Profile::Pc9821ApDos);
-    let floppy = std::fs::read("web/media/hello98.tfd").unwrap();
+    let floppy = std::fs::read("fixtures/input_probe/input.hdm").unwrap();
     m.insert(2, fixture(), "disk.hdi").unwrap();
     assert!(!m.bus.boot_hdd, "mounting HDD must not change preference");
     m.set_boot_hdd(true);
-    m.insert(0, floppy.clone(), "hello.tfd").unwrap();
+    m.insert(0, floppy.clone(), "input.hdm").unwrap();
     m.reset();
     assert_eq!(m.bus.mem[0x584], 0x80);
     m.bus.ide.mount(None);

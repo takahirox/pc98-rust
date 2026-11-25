@@ -1,11 +1,11 @@
 import { test, expect } from '@playwright/test';
-import { diskAction, launchDemo, nextBoot, openSettings, uploadMedia } from './helpers/player.js';
+import { diskAction, bootInputProbe, inputDisk, inputState, nextBoot, openSettings, uploadMedia } from './helpers/player.js';
 import { mkdtemp, readFile, rm, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const hello = await readFile(new URL('../../web/media/hello98.tfd', import.meta.url));
-const floppy = name => ({name, mimeType:'application/octet-stream', buffer:hello});
+const input = await inputDisk();
+const floppy = name => ({name, mimeType:'application/octet-stream', buffer:input});
 const stats = page => page.evaluate(() => pc98.stats());
 const bootError = 'Boot failed: no readable PC-98 floppy or IDE IPL';
 
@@ -356,6 +356,8 @@ test('F12 captures standalone Shift and returns to host navigation', async ({pag
   await page.keyboard.up('Tab');
   await page.keyboard.up('Shift');
 
+  // Check click-to-focus keyboard capture independently of browser lock policy.
+  await screen.evaluate(canvas => { canvas.requestPointerLock = undefined; });
   await screen.focus();
   await page.keyboard.down('Shift');
   await screen.click();
@@ -482,7 +484,7 @@ test.describe('320 × 700 touch media feedback', () => {
 
     await tapToUpload(floppy('incompatible.tfd'));
     const alert = page.getByRole('alert');
-    await expect(alert).toContainText('Choose Insert media or a floppy drive for this image.');
+    await expect(alert).toContainText('Choose Floppy 1 or Floppy 2 for this image.');
     await expect(alert).toBeInViewport({ratio:1});
     expect(await screen.boundingBox()).toEqual(initial);
     await expect(page.locator('#media-name-2')).toHaveText('probe.hdi');
@@ -562,17 +564,17 @@ test('keyboard navigation, picker dismissal, cancellation and selection preserve
   expect(after.audioEpoch).toBe(before.audioEpoch);
   expect(after.instructions).toBeGreaterThan(before.instructions);
 
-  await uploadMedia(page, floppy('hello.tfd'), '0');
+  await uploadMedia(page, floppy('input.hdm'), '0');
   await nextBoot(page, '0');
   await openSettings(page);
   await expect(page.locator('#active-boot')).toHaveText('Booted: IDE HDD · FreeDOS-128MiB.hdi');
-  await expect(page.locator('#boot-source')).toHaveText('Reset boots: Floppy 1 · hello.tfd');
+  await expect(page.locator('#boot-source')).toHaveText('Reset boots: Floppy 1 · input.hdm');
   await page.keyboard.press('Escape');
   expect((await stats(page)).generation).toBe(before.generation);
   await page.getByRole('button', {name:'Reset'}).click();
-  await expect.poll(() => page.evaluate(() => pc98.text())).toContain('Hello world!!');
+  await expect.poll(() => page.evaluate(() => pc98.text())).toContain('INPUT PROBE READY');
   await openSettings(page);
-  await expect(page.locator('#active-boot')).toHaveText('Booted: Floppy 1 · hello.tfd');
+  await expect(page.locator('#active-boot')).toHaveText('Booted: Floppy 1 · input.hdm');
 });
 
 test('only the active media picker trigger is expanded and Escape returns focus', async ({page}) => {
@@ -588,27 +590,27 @@ test('only the active media picker trigger is expanded and Escape returns focus'
     const {nodes} = await session.send('Accessibility.getPartialAXTree', {nodeId,fetchRelatives:false});
     return nodes[0].properties?.find(property => property.name === 'expanded')?.value.value ?? false;
   }));
-  await expect.poll(expanded).toEqual([false, false, false, false]);
+  await expect.poll(expanded).toEqual([false, false, false]);
   await floppy1.click();
   await expect(page.getByRole('button', {name:'Choose local file for Floppy 1'})).toBeFocused();
-  await expect.poll(expanded).toEqual([false, true, false, false]);
+  await expect.poll(expanded).toEqual([false, true, false]);
   await floppy2.click();
   const picker = page.getByRole('dialog', {name:'Floppy 2', exact:true});
   await expect(picker.getByRole('button', {name:'Choose local file for Floppy 2'})).toBeFocused();
-  await expect.poll(expanded).toEqual([false, false, true, false]);
+  await expect.poll(expanded).toEqual([false, false, true]);
   await page.keyboard.press('Escape');
   await expect(picker).toBeHidden();
   await expect(floppy2).toBeFocused();
-  await expect.poll(expanded).toEqual([false, false, false, false]);
-  await page.getByRole('button', {name:'Insert media', exact:true}).click();
-  await expect.poll(expanded).toEqual([false, false, false, true]);
+  await expect.poll(expanded).toEqual([false, false, false]);
+  await page.locator('#drive-2').click();
+  await expect.poll(expanded).toEqual([true, false, false]);
   await page.getByRole('heading', {name:'pc98-rust', exact:true}).click();
-  await expect(page.getByRole('dialog', {name:'Insert media'})).toBeHidden();
-  await expect.poll(expanded).toEqual([false, false, false, false]);
+  await expect(page.getByRole('dialog', {name:'IDE HDD'})).toBeHidden();
+  await expect.poll(expanded).toEqual([false, false, false]);
   await floppy1.click();
-  await expect.poll(expanded).toEqual([false, true, false, false]);
+  await expect.poll(expanded).toEqual([false, true, false]);
   await floppy1.click();
-  await expect.poll(expanded).toEqual([false, false, false, false]);
+  await expect.poll(expanded).toEqual([false, false, false]);
   await session.detach();
   expect((await stats(page)).generation).toBe(before.generation);
 });
@@ -619,26 +621,26 @@ test('Settings records the floppy inserted before the paused VM first boots', as
   await page.getByRole('combobox', {name:'Machine'}).selectOption('0');
   await expect(page.locator('#status')).toHaveText('No boot disk');
   const before = await stats(page);
-  await uploadMedia(page, floppy('hello.tfd'), '0');
-  await expect(page.locator('#media-name-0')).toHaveText('hello.tfd');
+  await uploadMedia(page, floppy('input.hdm'), '0');
+  await expect(page.locator('#media-name-0')).toHaveText('input.hdm');
   await expect(page.locator('#status')).toHaveText('Paused');
   await diskAction(page, '0', 'eject');
   await expect(page.locator('#status')).toHaveText('No boot disk');
-  await uploadMedia(page, floppy('hello.tfd'), '0');
+  await uploadMedia(page, floppy('input.hdm'), '0');
   await expect(page.locator('#status')).toHaveText('Paused');
   expect((await stats(page)).running).toBe(false);
   expect((await stats(page)).generation).toBe(before.generation);
   await page.getByRole('button', {name:'Resume'}).click();
-  await expect.poll(() => page.evaluate(() => pc98.text())).toContain('Hello world!!');
+  await expect.poll(() => page.evaluate(() => pc98.text())).toContain('INPUT PROBE READY');
   await openSettings(page);
   const attempt = page.locator('#active-boot');
-  await expect(attempt).toHaveText('Booted: Floppy 1 · hello.tfd');
+  await expect(attempt).toHaveText('Booted: Floppy 1 · input.hdm');
   await page.keyboard.press('Escape');
 
   await uploadMedia(page, floppy('replacement.tfd'), '0');
   await expect(page.locator('#media-name-0')).toHaveText('replacement.tfd');
   await openSettings(page);
-  await expect(attempt).toHaveText('Booted: Floppy 1 · hello.tfd');
+  await expect(attempt).toHaveText('Booted: Floppy 1 · input.hdm');
   await expect(page.locator('#boot-source')).toHaveText('Reset boots: Floppy 1 · replacement.tfd');
   expect((await stats(page)).generation).toBe(before.generation);
 });
@@ -662,8 +664,8 @@ test('Settings keeps the failed boot source separate from the next reset', async
   await expect(attempt).toHaveText('Boot failed: Floppy 1 · no-boot-track.d88');
   await page.keyboard.press('Escape');
 
-  await uploadMedia(page, floppy('hello.tfd'), '0');
-  await expect(page.locator('#media-name-0')).toHaveText('hello.tfd');
+  await uploadMedia(page, floppy('input.hdm'), '0');
+  await expect(page.locator('#media-name-0')).toHaveText('input.hdm');
   await openSettings(page);
   await expect(attempt).toHaveText('Boot failed: Floppy 1 · no-boot-track.d88');
   await page.keyboard.press('Escape');
@@ -752,7 +754,7 @@ test.describe('844 × 390 landscape recovery', () => {
     const normal = await page.locator('#screen').boundingBox();
     await page.getByRole('button', {name:'Reset'}).tap();
     await expectNoticeClearOfScreen(page, normal, bootError);
-    for (const [label, title] of [['Insert media', 'Insert media'], ['Demos', 'Boot a demo']]) {
+    for (const [label, title] of [['Change IDE HDD', 'IDE HDD'], ['Change Floppy 1', 'Floppy 1'], ['Insert Floppy 2', 'Floppy 2']]) {
       const button = page.getByRole('button', {name:label, exact:true});
       await expect(button).toBeInViewport({ratio:1});
       expect(await button.evaluate(el => {
@@ -928,8 +930,8 @@ for (const [width, height] of [[390, 844], [568, 320], [844, 390]]) {
     test.use({viewport:{width,height}, hasTouch:true, isMobile:true});
     test('scrolls and uses guest keys with the display in view', async ({page}) => {
       await ready(page);
-      await launchDemo(page, 'game', {touch:true});
-      await expect.poll(() => page.evaluate(() => pc98.text())).toContain('STAR TRAIL');
+      await bootInputProbe(page, {touch:true});
+      await expect.poll(() => page.evaluate(() => pc98.text())).toContain('INPUT PROBE READY');
       await page.evaluate(() => window.scrollTo(0, 0));
       const before = await stats(page);
       const screen = page.locator('#screen');
@@ -959,7 +961,7 @@ for (const [width, height] of [[390, 844], [568, 320], [844, 390]]) {
       await expect(move).toBeInViewport({ratio:0.99});
       await expect(screen).toBeInViewport({ratio:1});
       await move.tap();
-      await expect.poll(() => page.evaluate(() => pc98.read(0x21408))).toBe(2);
+      await expect.poll(() => page.evaluate(address => pc98.read(address), inputState + 2)).toBe(1);
       await expect(screen).toBeInViewport({ratio:1});
       expect(await page.evaluate(() => window.scrollY)).toBe(0);
       await keyboard.tap();
@@ -973,8 +975,8 @@ test.describe('fullscreen touch keyboard', () => {
   test.use({viewport:{width:844,height:390}, hasTouch:true, isMobile:true});
   test('uses guest keys and exits fullscreen without resetting', async ({page}) => {
     await ready(page);
-    await launchDemo(page, 'game', {touch:true});
-    await expect.poll(() => page.evaluate(() => pc98.text())).toContain('STAR TRAIL');
+    await bootInputProbe(page, {touch:true});
+    await expect.poll(() => page.evaluate(() => pc98.text())).toContain('INPUT PROBE READY');
     const before = await stats(page);
     await page.getByRole('button', {name:'Fullscreen', exact:true}).tap();
     const exit = page.getByRole('button', {name:'Exit fullscreen'});
@@ -991,7 +993,7 @@ test.describe('fullscreen touch keyboard', () => {
     expect(await page.locator('#keyboard-scroll').evaluate(el => el.scrollTop)).toBeGreaterThan(0);
     const move = page.locator('#keyboard-panel').getByRole('button', {name:'→', exact:true});
     await move.tap();
-    await expect.poll(() => page.evaluate(() => pc98.read(0x21408))).toBe(2);
+    await expect.poll(() => page.evaluate(address => pc98.read(address), inputState + 2)).toBe(1);
     await expect(exit).toBeInViewport({ratio:1});
     await exit.tap();
     await expect(exit).toBeHidden();

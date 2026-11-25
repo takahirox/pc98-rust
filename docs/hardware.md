@@ -19,7 +19,8 @@ This VM profile has no 286, 386, PC-9821 or IBM VGA compatibility mode.
 
 All hardware implementations are original Rust. `Cargo.lock` contains only this
 package; `cargo tree` has no emulator, Wasm binding, or other Rust dependencies.
-Assembly is original except the explicitly attributed hello-world fixture. No
+The [synthetic firmware](../guest/firmware.asm) and assembly regression probes,
+including the [input probe](../guest/input_probe.asm), are original. No
 MAME/NP2/DOSBox code, translated implementation, ROM or emulator core was used.
 FreeDOS source is consulted only for its guest BIOS call contracts, and executes
 as guest code. Hardware references are specifications and independent technical
@@ -1208,12 +1209,11 @@ accuracy, or commercial compatibility. All 26 fixed inventory categories, scopes
 and statuses are unchanged; the existing six-game reports retain their limits.
 Protected execution, paging and basic FPU remain required project goals.
 
-The hello source uses `OUT 3FDFh,AL`, an immediate-port encoding that truncates to
-`DFh`. That timer mirror is decoded too. PIT behavior beyond the subset above,
-DMA arbitration and request modes, precise FDC motor/rotation timing, FDC MT/head
-switching, formatter/scanner commands, GDC vector/area drawing and all GDC
-raster partitions are outside the tested subset. Unsupported FDC commands return
-an invalid-command result. No pretend FM register bank is implemented.
+PIT behavior beyond the subset above, DMA arbitration and request modes, precise
+FDC motor/rotation timing, FDC MT/head switching, formatter/scanner commands, GDC
+vector/area drawing and all GDC raster partitions are outside the tested subset.
+Unsupported FDC commands return an invalid-command result. No pretend FM
+register bank is implemented.
 
 GDC status at `0060h` and `00A0h` now reports horizontal blank (bit 6) from
 elapsed guest clocks. The supported fixed 640×400 modes approximate horizontal
@@ -1782,11 +1782,8 @@ file creation, drawing, gameplay, or save/reload follows from this control.
 
 ## Accepted software and media
 
-- MIT HelloWorld-PC98: exact upstream first boot sector on an otherwise zeroed
-  77×2×8×1024 disk; text VRAM writes and PIT beep prove independent guest execution.
-- Original MIT Star Trail: boot loader reads a second stage, uses direct text/bitmap
-  VRAM, BIOS keyboard/beep and sector writes. Gameplay/save assertions inspect
-  guest-owned record `1FC0:1800` (`PC98GAME`) and saved sector 8 (`STAR98SV`).
+- The original input probe tests floppy boot and sector writeback, direct text
+  and bitmap VRAM, the PIT beeper, BIOS keyboard, and Ap bus mouse reads.
 - FreeDOS(98) kernel build 2043 DBCS, 2022-01-20, plus FreeCOM 0.85a DBCS,
   2022-01-17: minimal real-mode floppy reaches `A:\>`, runs original PROBE.COM
   through DOS and returns to FreeCOM. XMS drivers and unrelated utilities are

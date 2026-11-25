@@ -1,4 +1,4 @@
-import { launchDemo, nextBoot, uploadMedia } from './helpers/player.js';
+import { bootInputProbe, nextBoot, uploadMedia } from './helpers/player.js';
 import {test,expect,inspect} from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 
@@ -58,8 +58,8 @@ test('Worker progresses through DOS graphics and PCM with rAF stopped and DOM ev
 });
 
 test('audio mute, pause, resume, reset and interrupted AudioContext flush the sink',async({page}) => {
-  await page.goto('./'); await expect(page.locator('#demos')).toBeEnabled();
-  await launchDemo(page, 'hello');
+  await page.goto('./'); await expect(page.locator('#profile')).toBeEnabled();
+  await bootInputProbe(page, {sound:true});
   await expect.poll(()=>page.evaluate(()=>pc98.stats().then(s=>s.audioEnergy))).toBeGreaterThan(1);
   for (const id of ['sound','sound','pause','pause','reset']) {
     const before=await page.evaluate(()=>pc98.stats());
@@ -82,11 +82,11 @@ test('frame snapshots survive memory growth, reset and delayed presentation on V
   await page.goto('./'); await expect(page.locator('#profile')).toBeEnabled();
   for (const profile of ['0','1']) {
     await page.locator('#profile').selectOption(profile);
-    await launchDemo(page, 'hello');
-    await expect.poll(()=>page.evaluate(()=>pc98.text())).toContain('Hello world!!');
+    await bootInputProbe(page);
+    await expect.poll(()=>page.evaluate(()=>pc98.text())).toContain('INPUT PROBE READY');
     await inspect(page,() => pc98.core.input_buffer(8*1024*1024));
     await page.locator('#reset').click();
-    await expect.poll(()=>page.evaluate(()=>pc98.text())).toContain('Hello world!!');
+    await expect.poll(()=>page.evaluate(()=>pc98.text())).toContain('INPUT PROBE READY');
     await expect.poll(()=>page.locator('#screen').evaluate(canvas=>{
       const data=canvas.getContext('2d').getImageData(0,0,640,16).data;
       return data.some((n,i)=>i%4!==3 && n!==0);
@@ -98,8 +98,8 @@ test('frame snapshots survive memory growth, reset and delayed presentation on V
 test('Worker and AudioWorklet load failures are visible and recoverable',async({page}) => {
   await page.route('**/emulator-worker.js',r=>r.fulfill({status:404,body:'missing'}));
   await page.goto('./'); await expect(page.locator('#error')).toBeVisible();
-  await expect(page.locator('#demos')).toBeDisabled();
-  await page.unrouteAll(); await page.reload(); await expect(page.locator('#demos')).toBeEnabled();
+  await expect(page.locator('#profile')).toBeDisabled();
+  await page.unrouteAll(); await page.reload(); await expect(page.locator('#profile')).toBeEnabled();
   // Chromium's AudioWorklet fetches bypass Playwright routing. Exercise the
   // real browser loader with a missing local asset, then restore its URL.
   await page.evaluate(()=>{
@@ -135,9 +135,9 @@ test('a Worker crash during Reset keeps the reload instruction visible', async (
 });
 
 test('visibility, repeated reset/profile controls and runtime Worker failure cannot resurrect stale state',async({page}) => {
-  await page.goto('./'); await expect(page.locator('#demos')).toBeEnabled();
-  await launchDemo(page, 'game');
-  await expect.poll(()=>page.evaluate(()=>pc98.text())).toContain('STAR TRAIL');
+  await page.goto('./'); await expect(page.locator('#profile')).toBeEnabled();
+  await bootInputProbe(page, {sound:true});
+  await expect.poll(()=>page.evaluate(()=>pc98.text())).toContain('INPUT PROBE READY');
   const before=await page.evaluate(()=>pc98.stats());
   await page.evaluate(()=>{const button=document.getElementById('reset');button.click();button.click();});
   await expect(page.locator('#profile')).toBeEnabled();
@@ -169,7 +169,7 @@ test('visibility, repeated reset/profile controls and runtime Worker failure can
   await expect(page.locator('#error')).toContainText('Intentional runtime Worker failure');
   await expect(page.locator('#error')).toContainText('Reload to restart.');
   await expect(page.locator('#status')).toHaveText('Worker stopped');
-  for (const id of ['game','reset','file','profile']) await expect(page.locator('#'+id)).toBeDisabled();
-  await page.reload(); await expect(page.locator('#demos')).toBeEnabled();
+  for (const id of ['reset','file','profile']) await expect(page.locator('#'+id)).toBeDisabled();
+  await page.reload(); await expect(page.locator('#profile')).toBeEnabled();
   await expect.poll(()=>page.evaluate(()=>pc98.text()),{timeout:20000}).toContain('A:\\>');
 });

@@ -77,7 +77,16 @@ async function exitFullscreen() {
 }
 $('exit-fullscreen').onclick = () => exitFullscreen().catch(fail);
 document.addEventListener('keydown', event => {
-  if (event.key === 'Escape' && fullscreenActive()) {
+  if (event.key !== 'Escape') return;
+  // Chromium can consume the initial unlock keydown before it reaches the page.
+  if (event.repeat && !held.has(codes.Escape)) {
+    event.preventDefault(); event.stopPropagation();
+    return;
+  }
+  if (pointerRequest?.cancelled === false || pointerLocked || document.pointerLockElement === screen) {
+    event.preventDefault(); event.stopPropagation();
+    releaseKeys();
+  } else if (fullscreenActive()) {
     event.preventDefault(); event.stopPropagation(); exitFullscreen().catch(fail);
   }
 }, true);
@@ -96,13 +105,18 @@ const pending = new Map(); let requestId = 0;
 const metrics = new Map(); let bootSource;
 const mounted = [null, null, null], held = new Set();
 const pendingShifts = new Set();
-let pointerPosition, pointerButtons = 0;
-new ResizeObserver(() => { pointerPosition = undefined; }).observe(screen);
+let pointerRequest, pointerLocked = false, pointerRejected = false, suppressedMouseButtons = 0;
+let pointerPosition, touchPointer, pointerButtons = 0, sentMouse = false;
+let mouseX = 0, mouseY = 0, mouseFrame = 0;
+new ResizeObserver(() => {
+  pointerPosition = undefined;
+  if (pointerRequest?.fallback) pointerRequest.fallback.position = undefined;
+}).observe(screen);
 const driveNames = ['Floppy 1', 'Floppy 2', 'IDE HDD'];
 const mediaPicker = $('media-picker'), fileInput = $('file');
 const driveButtons = [...document.querySelectorAll('[data-drive]')];
-let pickerDrive = 'auto', fileDrive = 'auto';
-const controls = ['game', 'hello', 'demos', 'pause', 'reset', 'sound', 'profile', 'file'];
+let pickerDrive = 0, fileDrive;
+const controls = ['pause', 'reset', 'sound', 'profile', 'file'];
 let errorFocus;
 function fail(error, focusTarget) {
   // Rejected requests must not overwrite the Worker recovery notice.
@@ -156,6 +170,7 @@ function workerFault(error) {
   if (workerFailed) return;
   fail(`${error.message}. Reload to restart.`);
   workerFailed = true; running = false; ++videoEpoch; pendingFrame = null;
+  releaseKeys();
   if (outputGain) outputGain.gain.value = 0;
   worker?.terminate(); renderWorker?.terminate(); renderWorker = null;
   for (const waiter of pending.values()) waiter.reject(error);
@@ -290,16 +305,36 @@ async function enableAudio() {
   }
   muted = false; await soundState();
 }
-function releaseKeys() {
+function releaseGuestKeys() {
   pendingShifts.clear();
   for (const scan of held) core?.key(scan, 0).catch(fail);
   held.clear(); document.querySelectorAll('.held').forEach((el) => el.classList.remove('held'));
+}
+function releaseKeys() {
+  releaseGuestKeys();
   releaseMouse();
 }
+function clearMouseInput({discardPending = true} = {}) {
+  if (mouseFrame) cancelAnimationFrame(mouseFrame);
+  mouseFrame = mouseX = mouseY = 0;
+  const touch = touchPointer;
+  pointerPosition = touchPointer = undefined;
+  if (touch !== undefined && screen.hasPointerCapture(touch)) screen.releasePointerCapture(touch);
+  if (discardPending) {
+    pointerButtons = 0;
+    if (sentMouse && !workerFailed) core.mouse(0, 0, 0, true).catch(fail);
+    sentMouse = false;
+  } else {
+    mouseButtons(0);
+  }
+}
 function releaseMouse() {
-  if (pointerButtons) core?.mouse(0, 0, 0).catch(fail);
-  pointerButtons = 0;
-  pointerPosition = undefined;
+  // Keep a cancelled request until its outcome so a late lock can be released.
+  if (pointerRequest) pointerRequest.cancelled = true;
+  pointerLocked = pointerRejected = false;
+  suppressedMouseButtons = 0;
+  clearMouseInput();
+  if (document.pointerLockElement === screen) document.exitPointerLock();
 }
 function hasBootMedia() {
   return Boolean(mounted[0] || (mounted[2] && core.metric(21) === 1));
@@ -319,21 +354,18 @@ async function setRunning(value, label, mediaProgress = false) {
 }
 function showPicker() {
   const name = driveNames[pickerDrive], disk = mounted[pickerDrive];
-  $('media-title').textContent = name ?? 'Insert media';
+  $('media-title').textContent = name;
   $('picker-disk').hidden = !disk;
   $('picker-disk').textContent = disk?.name ?? '';
-  $('media-hint').textContent = pickerDrive === 'auto' ? 'Hard disk images go to IDE HDD. Floppy images go to Floppy 1.'
-    : pickerDrive === 2 ? 'Choose an HDI or NHD image. Replacing the disk restarts the machine.'
+  $('media-hint').textContent = pickerDrive === 2 ? 'Choose an HDI or NHD image. Replacing the disk restarts the machine.'
       : 'Choose a floppy image to insert while the guest is running.';
   $('choose-file').disabled = loading || workerFailed || (pickerDrive === 2 && core?.metric(21) !== 1);
   if (pickerDrive === 2 && core?.metric(21) !== 1) $('media-hint').textContent = 'Switch to PC-9821Ap to use this drive.';
   $('eject').hidden = $('export').hidden = !disk;
   $('eject').disabled = $('export').disabled = loading || workerFailed || !disk;
-  if (name) {
-    $('choose-file').setAttribute('aria-label', `Choose local file for ${name}`);
-    $('eject').setAttribute('aria-label', `Eject ${name}`);
-    $('export').setAttribute('aria-label', `Export disk from ${name}`);
-  } else $('choose-file').removeAttribute('aria-label');
+  $('choose-file').setAttribute('aria-label', `Choose local file for ${name}`);
+  $('eject').setAttribute('aria-label', `Eject ${name}`);
+  $('export').setAttribute('aria-label', `Export disk from ${name}`);
 }
 function syncControls() {
   const ap = core?.metric(21) === 1;
@@ -345,7 +377,6 @@ function syncControls() {
   for (const button of driveButtons) {
     const drive = Number(button.dataset.drive);
     button.disabled = busy || (drive === 2 && !ap && !mounted[2]);
-    if (Number.isNaN(drive)) continue;
     const name = $('media-name-' + drive);
     const disk = mounted[drive];
     name.textContent = disk?.name ?? 'Empty';
@@ -357,8 +388,6 @@ function syncControls() {
     button.textContent = disk ? 'Change…' : 'Insert…';
     button.setAttribute('aria-label', `${disk ? 'Change' : 'Insert'} ${driveNames[drive]}`);
   }
-  $('mouse-setting').hidden = !ap;
-  $('mouse').disabled = !ap || workerFailed;
   $('boot').disabled = $('default-hdd').disabled = busy || !ap;
   const preference = core?.metric(22);
   if (preference !== undefined) {
@@ -371,7 +400,7 @@ function syncControls() {
 for (const button of driveButtons) {
   button.onclick = event => {
     event.preventDefault();
-    const drive = button.dataset.drive === 'auto' ? 'auto' : Number(button.dataset.drive);
+    const drive = Number(button.dataset.drive);
     if (mediaPicker.matches(':popover-open')) {
       mediaPicker.hidePopover();
       if (drive === pickerDrive) return;
@@ -428,10 +457,10 @@ fileInput.oncancel = () => {
 function resolveDrive(name, target) {
   const hardDisk = /\.(hdi|nhd)$/i.test(name), floppy = /\.(tfd|hdm|xdf|2hd|d88|d98|img)$/i.test(name);
   if (!hardDisk && !floppy) throw Error('Unsupported media extension. Use HDI, NHD or a supported floppy image.');
-  const drive = target === 'auto' ? (hardDisk ? 2 : 0) : target;
+  const drive = target ?? (hardDisk ? 2 : 0);
   if (hardDisk && core.metric(21) !== 1) throw Error('IDE requires PC-9821Ap DOS for hard disk images.');
-  if (drive === 2 && !hardDisk) throw Error('IDE HDD requires an HDI or NHD image. Choose Insert media or a floppy drive for this image.');
-  if (drive !== 2 && hardDisk) throw Error('Hard disk images require IDE HDD. Choose Insert media or IDE HDD for this image.');
+  if (drive === 2 && !hardDisk) throw Error('IDE HDD requires an HDI or NHD image. Choose Floppy 1 or Floppy 2 for this image.');
+  if (drive !== 2 && hardDisk) throw Error('Hard disk images require IDE HDD. Choose the IDE HDD slot for this image.');
   return drive;
 }
 function checkSize(size, drive) {
@@ -445,22 +474,6 @@ async function insert(bytes, name, drive) {
   await rpc('insert',{drive,format:/\.(d88|d98)$/i.test(name) ? 1 : 0});
   mounted[drive] = {name};
 }
-function bundled(name) {
-  $('demo-picker').hidePopover();
-  return exclusive(async () => {
-    clearError();
-    // Audio is initialized inside the user gesture, before waiting for assets.
-    const enable = enableAudio().then(() => null,error => error);
-    const response = await fetch(`media/${name}`);
-    if (!response.ok) throw Error(`Cannot load demo: HTTP ${response.status}`);
-    await insert(new Uint8Array(await response.arrayBuffer()), name, 0);
-    await core.set_boot_source(0); await resetMachine();
-    const audioError = await enable;
-    if (audioError) fail(audioError);
-  });
-}
-$('game').onclick = () => bundled('startrail.hdm');
-$('hello').onclick = () => bundled('hello98.tfd');
 $('pause').onclick = event => exclusive(() => setRunning(!running), {playbackButton:event.currentTarget});
 async function resetMachine({focusScreen = true, preserveHostFocus = false} = {}) {
   releaseKeys();
@@ -477,7 +490,7 @@ async function exclusive(operation, {playbackButton, recovery} = {}) {
   // activation of the focusable button while its action is pending.
   activePlaybackButton = playbackButton;
   playbackButton?.setAttribute('aria-disabled', 'true');
-  loading = true; syncControls();
+  loading = true; releaseKeys(); syncControls();
   try { await operation(); } catch (error) { fail(error, recovery); }
   finally {
     playbackButton?.removeAttribute('aria-disabled');
@@ -503,10 +516,6 @@ async function selectProfile() {
   } finally { $('profile').value = String(core.metric(21)); }
   const ap = $('profile').value === '1';
   document.title = `pc98-rust · ${ap ? 'PC-9821Ap DOS' : 'PC-9801VM'}`;
-  if (!ap) {
-    $('mouse').checked = false;
-    display.classList.remove('guest-mouse');
-  }
   clearError();
   await setRunning(!document.hidden && hasBootMedia());
 }
@@ -597,7 +606,7 @@ function loadFile(file, target, resetOptions) {
       if (!workerFailed) await setRunning(resume && !document.hidden);
       throw error;
     }
-  }, {recovery:$('drive-' + target)});
+  }, {recovery:target === undefined ? screen : $('drive-' + target)});
 }
 function defaultHdd({startup = false} = {}) {
   if (core?.metric(21) !== 1) return;
@@ -675,7 +684,7 @@ for (const target of [display, ...document.querySelectorAll('[data-drop-drive]')
     target.classList.remove('dragging');
     if (!fileInput.disabled) {
       if (mediaPicker.matches(':popover-open')) mediaPicker.hidePopover();
-      void loadFile(event.dataTransfer.files[0], target === display ? 'auto' : Number(target.dataset.dropDrive));
+      void loadFile(event.dataTransfer.files[0], target === display ? undefined : Number(target.dataset.dropDrive));
     }
   };
 }
@@ -766,25 +775,204 @@ screen.addEventListener('keyup', event => {
   event.preventDefault();
   key(scan,false);
 });
-for (const name of ['pointermove', 'pointerdown', 'pointerup', 'pointercancel']) screen.addEventListener(name, (event) => {
-  if (!core || !running || !$('mouse').checked || $('profile').value !== '1' || panelOpen()) return;
-  const bounds = screen.getBoundingClientRect();
-  const point = [(event.clientX-bounds.left) * screen.width / bounds.width, (event.clientY-bounds.top) * screen.height / bounds.height];
-  const delta = pointerPosition ? point.map((n, i) => Math.max(-127, Math.min(127, Math.round(n - pointerPosition[i])))) : [0, 0];
-  pointerPosition = point;
-  if (name === 'pointerdown') { screen.focus(); screen.setPointerCapture(event.pointerId); }
-  pointerButtons = name === 'pointercancel' ? 0 : event.buttons;
-  core.mouse(delta[0], delta[1], pointerButtons).catch(fail);
-  event.preventDefault();
+function mouseAvailable() {
+  return running && !loading && !workerFailed && !document.hidden && core?.metric(21) === 1 &&
+    document.activeElement === screen && !panelOpen();
+}
+function mouseFallback() {
+  return pointerRejected || typeof screen.requestPointerLock !== 'function';
+}
+function pointerLockFailed(request) {
+  if (pointerRequest !== request) return;
+  pointerRequest = undefined;
+  if (request.cancelled || !mouseAvailable()) return;
+  const {fallback} = request;
+  releaseGuestKeys();
+  // The guest may have yet to sample movement flushed before this retry.
+  clearMouseInput({discardPending:false});
+  pointerRejected = true;
+  if (fallback) {
+    pointerPosition = fallback.position;
+    // Buttons still held in the replay must receive their eventual release.
+    suppressedMouseButtons &= ~fallback.samples.at(-1).buttons;
+    for (const {buttons, x, y} of fallback.samples) {
+      mouseButtons(buttons);
+      queueMouse(x, y);
+    }
+    flushMouse();
+  }
+}
+function requestMouseLock(event) {
+  // On retries, coalesce bounded motion between button changes. Replay in
+  // order on denial, or discard the whole gesture if the browser grants lock.
+  flushMouse();
+  suppressedMouseButtons = event.buttons & 7;
+  const fallback = pointerRejected ? {samples:[{buttons:1, x:0, y:0}]} : undefined;
+  const request = {cancelled:false, fallback};
+  pointerRequest = request;
+  pointerPosition = undefined;
+  if (fallback) boundedMovement(event, fallback);
+  try {
+    const completion = screen.requestPointerLock();
+    request.usesErrorEvent = completion === undefined;
+    completion?.catch(() => pointerLockFailed(request));
+  } catch {
+    pointerLockFailed(request);
+  }
+}
+document.addEventListener('pointerlockchange', () => {
+  if (document.pointerLockElement === screen) {
+    const request = pointerRequest;
+    pointerRequest = undefined;
+    if (request && !request.cancelled && mouseAvailable()) {
+      pointerLocked = true;
+      pointerRejected = false;
+      // A touch may have started while the browser was deciding. End its
+      // capture and guest input while keeping held mouse buttons suppressed.
+      if (touchPointer !== undefined) clearMouseInput();
+      pointerPosition = undefined;
+    } else {
+      // Cancellation already released input. A late grant only needs to unlock.
+      document.exitPointerLock();
+    }
+  } else if (pointerLocked) {
+    releaseKeys();
+  }
 });
-screen.addEventListener('pointerleave', () => { pointerPosition = undefined; });
-screen.addEventListener('contextmenu', event => { if ($('mouse').checked) event.preventDefault(); });
-$('mouse').onchange = () => {
-  display.classList.toggle('guest-mouse', $('mouse').checked);
-  releaseMouse();
-};
+document.addEventListener('pointerlockerror', () => {
+  // A promise rejection identifies its request. Its unscoped error event
+  // can arrive after another request has started.
+  if (pointerRequest?.usesErrorEvent) pointerLockFailed(pointerRequest);
+});
+function flushMouse() {
+  if (mouseFrame) cancelAnimationFrame(mouseFrame);
+  mouseFrame = 0;
+  const x = Math.round(mouseX), y = Math.round(mouseY);
+  mouseX -= x; mouseY -= y;
+  if (x || y) sendMouse(x, y);
+}
+function sendMouse(x, y) {
+  sentMouse = true;
+  core.mouse(x, y, pointerButtons).catch(fail);
+}
+function queueMouse(x, y) {
+  mouseX += x; mouseY += y;
+  if (!mouseFrame) mouseFrame = requestAnimationFrame(flushMouse);
+}
+function mouseButtons(buttons) {
+  if (buttons === pointerButtons) return;
+  flushMouse(); // Preserve movement before this button edge in the Worker queue.
+  pointerButtons = buttons;
+  sendMouse(0, 0);
+}
+function stageMouseButtons(fallback, buttons) {
+  if (buttons !== fallback.samples.at(-1).buttons) fallback.samples.push({buttons, x:0, y:0});
+}
+function boundedMovement(event, fallback) {
+  const rect = screen.getBoundingClientRect();
+  const x = (event.clientX - rect.left) / rect.width, y = (event.clientY - rect.top) / rect.height;
+  const previous = fallback ? fallback.position : pointerPosition;
+  const point = x >= 0 && x < 1 && y >= 0 && y < 1 ? [x * screen.width, y * screen.height] : undefined;
+  if (fallback) fallback.position = point;
+  else pointerPosition = point;
+  if (!point) {
+    if (fallback) stageMouseButtons(fallback, 0);
+    else mouseButtons(0);
+  } else if (previous) {
+    const dx = point[0] - previous[0], dy = point[1] - previous[1];
+    if (fallback) {
+      const sample = fallback.samples.at(-1);
+      sample.x += dx;
+      sample.y += dy;
+    } else {
+      queueMouse(dx, dy);
+    }
+  }
+}
+function lockedMouse() {
+  return pointerLocked && document.pointerLockElement === screen;
+}
+screen.addEventListener('mousemove', event => {
+  if (lockedMouse() && mouseAvailable()) queueMouse(event.movementX, event.movementY);
+});
+window.addEventListener('mousedown', event => {
+  if (pointerRequest?.cancelled === false && !event.sourceCapabilities?.firesTouchEvents) {
+    suppressedMouseButtons |= event.buttons & 7;
+  }
+}, true);
+window.addEventListener('mouseup', event => {
+  if (!suppressedMouseButtons || event.sourceCapabilities?.firesTouchEvents) return;
+  suppressedMouseButtons &= event.buttons;
+}, true);
+for (const name of ['mousedown', 'mouseup']) screen.addEventListener(name, event => {
+  if (!mouseAvailable() || event.sourceCapabilities?.firesTouchEvents) return;
+  // Bounded input only adds the button pressed on the canvas, even if others are held.
+  const pressed = name === 'mousedown' ? [1, 4, 2][event.button] ?? 0 : 0;
+  if (pointerRequest?.cancelled === false) {
+    const {fallback} = pointerRequest;
+    if (fallback) {
+      stageMouseButtons(fallback, event.buttons & (fallback.samples.at(-1).buttons | pressed));
+    }
+    return;
+  }
+  if (touchPointer !== undefined) return;
+  const locked = lockedMouse();
+  if (!locked) {
+    if (name === 'mousedown' && event.isTrusted && event.button === 0 && !pointerButtons &&
+        !pointerRequest && !document.pointerLockElement && typeof screen.requestPointerLock === 'function') {
+      event.preventDefault();
+      requestMouseLock(event);
+      return;
+    }
+    if (!mouseFallback()) return;
+    if (name === 'mousedown' && !pointerPosition) boundedMovement(event);
+  }
+  event.preventDefault();
+  const eligibleButtons = locked ? 7 : pointerButtons | pressed;
+  mouseButtons(event.buttons & eligibleButtons & ~suppressedMouseButtons);
+});
+screen.addEventListener('pointerdown', event => {
+  if (event.pointerType === 'mouse' || !event.isPrimary || lockedMouse() || !mouseAvailable()) return;
+  touchPointer = event.pointerId;
+  event.preventDefault(); // Suppress compatibility mouse events for this contact.
+  screen.setPointerCapture(event.pointerId);
+  pointerPosition = undefined; // Start this contact independently of any mouse hover.
+  boundedMovement(event);
+  mouseButtons(event.buttons & 7);
+});
+screen.addEventListener('pointermove', event => {
+  if (!mouseAvailable() || lockedMouse()) return;
+  if (event.pointerId === touchPointer) boundedMovement(event);
+  else if (event.pointerType === 'mouse') {
+    const fallback = pointerRequest?.cancelled === false ? pointerRequest.fallback : undefined;
+    if (fallback || (!pointerRequest && touchPointer === undefined && mouseFallback())) boundedMovement(event, fallback);
+  }
+});
+for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) screen.addEventListener(name, event => {
+  if (event.pointerId !== touchPointer) return;
+  mouseButtons(0);
+  touchPointer = pointerPosition = undefined;
+});
+screen.addEventListener('pointerleave', event => {
+  if (lockedMouse()) return;
+  const fallback = pointerRequest?.cancelled === false ? pointerRequest.fallback : undefined;
+  if (fallback && event.pointerType === 'mouse') {
+    fallback.position = undefined;
+    stageMouseButtons(fallback, 0);
+  }
+  if (touchPointer !== undefined ? event.pointerId !== touchPointer : event.pointerType !== 'mouse') return;
+  pointerPosition = undefined;
+  mouseButtons(0);
+});
+screen.addEventListener('contextmenu', event => {
+  if (mouseAvailable() && (lockedMouse() || mouseFallback())) event.preventDefault();
+});
 screen.addEventListener('blur',releaseKeys); window.addEventListener('blur',releaseKeys);
-document.addEventListener('visibilitychange',()=>{if(document.hidden && core && running)setRunning(false).catch(fail);});
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) return;
+  if (core && running) setRunning(false).catch(fail);
+  else releaseKeys();
+});
 try {
   worker = new Worker(new URL('emulator-worker.js',import.meta.url),{type:'module'});
   worker.onerror = event => { event.preventDefault(); workerFault(Error(event.message || 'Emulation Worker failed')); };
@@ -830,7 +1018,7 @@ try {
   window.pc98 = {text:() => rpc('text'), read:addr => rpc('read',addr), stats:async () => ({...await rpc('stats'),rendererStartupMs,rendererFailure,renderStats:{...renderStats},presentationStats:{...presentationStats},presenterStats:presenter.diagnosticsState()}),
     exportBlob:async (drive=2) => {
       if (loading) throw Error('Media operation already in progress');
-      loading = true; syncControls();
+      loading = true; releaseKeys(); syncControls();
       try { return await exportBlob(drive); } finally { loading = false; syncControls(); }
     },
   };

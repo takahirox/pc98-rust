@@ -7,14 +7,14 @@ test('default production Worker JIT matches interpreter clocks, registers, pixel
     const enabled=mode!=='&jit=0';
     await page.goto(`./?diagnostics&manual${mode}`);
     await expect(page.locator('#profile')).toBeEnabled();
-    await page.locator('#profile').selectOption('1');await expect(page.locator('#drive-auto')).toBeEnabled();
+    await page.locator('#profile').selectOption('1');await expect(page.locator('#drive-0')).toBeEnabled();
     const disk=Buffer.alloc(1261568);
     // Original MIT loop with a CS memory override, stack, TEST/NOT/NEG and SHR/RCL.
     // CLI keeps external input outside this fixed-work probe.
     disk.set([0xfa,0xbc,0,0x80,0x01,0xd8,0xe8,11,0,0x31,0xc1,0x46,0x4a,0x09,0xc3,0x83,0xc7,1,0xeb,0xf0,
       0x2e,0x85,0x06,1,0,0x51,0xf6,0xc4,0x81,0xf7,0xd5,0xf7,0xdd,0xd0,0xe8,0xd1,0xd3,0x59,0xc3]);
     await uploadMedia(page, {name:'jit.hdm',mimeType:'application/octet-stream',buffer:disk}, '0');
-    await expect(page.locator('#drive-auto')).toBeEnabled();
+    await expect(page.locator('#drive-0')).toBeEnabled();
     await inspect(page,()=>pc98.core.set_boot_source(0));await page.locator('#reset').click();
     for(let n=0;n<24;n++)await inspect(page,()=>pc98.core.step_scheduler(80000,10000));
     const result=await inspect(page,()=>{
