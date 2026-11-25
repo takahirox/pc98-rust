@@ -286,7 +286,7 @@ test('a fallback drag after resuming starts at the press without a preceding hov
   expect(await guest(page, 100000)).toMatchObject({buttons:0, edges:before.edges + 2, x:pressed.x});
 });
 
-test('a successful retry discards the acquisition press and pending fallback movement', async ({page}) => {
+test('a successful retry discards pending fallback buttons and movement', async ({page}) => {
   const screen = await start(page, {manual:true});
   await screen.evaluate(canvas => {
     let first = true;
@@ -309,10 +309,43 @@ test('a successful retry discards the acquisition press and pending fallback mov
   const box = await screen.boundingBox();
   await page.mouse.down();
   await page.mouse.move(box.x + position.x + box.width / 8, box.y + position.y);
+  await page.mouse.down({button:'right'});
   await screen.evaluate(canvas => canvas.grantLock());
   await expect(page.locator('html')).toHaveAttribute('data-lock-owner', 'screen');
   await page.mouse.up();
+  await page.mouse.up({button:'right'});
   expect(await guest(page, 100000)).toEqual(before);
+  await page.mouse.down({button:'right'});
+  expect(await guest(page, 100000)).toMatchObject({buttons:0x20, edges:before.edges + 1});
+  await page.mouse.up({button:'right'});
+  expect(await guest(page, 100000)).toMatchObject({buttons:0, edges:before.edges + 2});
+});
+
+test('a denied retry replays both primary and right button transitions in order', async ({page}) => {
+  const screen = await start(page, {manual:true});
+  await screen.evaluate(canvas => {
+    canvas.requestPointerLock = () => {
+      canvas.requestPointerLock = () => new Promise((_, reject) => {
+        canvas.rejectLock = () => reject(new DOMException('Denied'));
+      });
+      return Promise.reject(new DOMException('Denied'));
+    };
+  });
+  await screen.click();
+  const before = await guest(page);
+  await page.mouse.down();
+  await page.mouse.down({button:'right'});
+  await page.mouse.up();
+  await page.mouse.up({button:'right'});
+  await screen.evaluate(canvas => canvas.rejectLock());
+  const expectedButtons = [0x80, 0xa0, 0x20, 0];
+  for (const [index, buttons] of expectedButtons.entries()) {
+    const edges = before.edges + index + 1;
+    await expect.poll(async () => (await guest(page, 1000)).edges, {intervals:[0]}).toBe(edges);
+    expect((await guest(page)).buttons).toBe(buttons);
+  }
+  expect(await guest(page, 100000)).toMatchObject({buttons:0, edges:before.edges + 4});
+  expect(await owner(page)).toBeNull();
 });
 
 test('a retry rejected after mouseup replays fallback movement in button order', async ({page}) => {
@@ -425,6 +458,41 @@ test('Escape dismisses Help while a cancelled legacy request awaits its outcome'
 
 test.describe('touch', () => {
   test.use({hasTouch:true, isMobile:true, viewport:{width:390,height:844}});
+  test('a delayed mouse lock releases active touch capture and accepts locked clicks', async ({page}) => {
+    const screen = await start(page, {manual:true});
+    await screen.evaluate(canvas => {
+      canvas.requestPointerLock = () => { canvas.grantLock = () => {
+        Object.defineProperty(document, 'pointerLockElement', {configurable:true, value:canvas});
+        document.dispatchEvent(new Event('pointerlockchange'));
+      }; };
+      canvas.addEventListener('pointerdown', event => {
+        if (event.pointerType === 'touch') canvas.dataset.testContact = event.pointerId;
+      });
+    });
+    const box = await screen.boundingBox();
+    const x = Math.round(box.x + box.width / 2), y = Math.round(box.y + box.height / 2);
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Input.dispatchTouchEvent', {type:'touchStart', touchPoints:[{x, y}]});
+    expect(await guest(page, 100000)).toMatchObject({buttons:0x80, edges:1});
+    const touchCaptured = () => screen.evaluate(canvas => canvas.hasPointerCapture(Number(canvas.dataset.testContact)));
+    expect(await touchCaptured()).toBe(true);
+
+    await screen.evaluate(canvas => canvas.grantLock());
+    expect(await owner(page)).toBe('screen');
+    expect(await guest(page, 100000)).toMatchObject({buttons:0, edges:2});
+    expect(await touchCaptured()).toBe(false);
+    await page.mouse.down({button:'right'});
+    expect(await guest(page, 100000)).toMatchObject({buttons:0x20, edges:3});
+    await page.mouse.up();
+    await cdp.send('Input.dispatchTouchEvent', {type:'touchEnd', touchPoints:[]});
+    expect(await guest(page, 100000)).toMatchObject({buttons:0x20, edges:3});
+    await page.mouse.up({button:'right'});
+    expect(await guest(page, 100000)).toMatchObject({buttons:0, edges:4});
+    await cdp.detach();
+  });
+
   test('real touch sends bounded input and leaves the host controls accessible', async ({page}) => {
     const screen = await start(page);
     await screen.evaluate(canvas => {
