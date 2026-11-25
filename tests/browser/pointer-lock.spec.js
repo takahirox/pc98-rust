@@ -262,6 +262,30 @@ test('a short fallback tap reaches the guest when both edges arrive between samp
   expect(await guest(page, 100000)).toMatchObject({buttons:0, edges:2});
 });
 
+test('a fallback drag after resuming starts at the press without a preceding hover', async ({page}) => {
+  const screen = await start(page, {manual:true});
+  await screen.evaluate(canvas => { canvas.requestPointerLock = undefined; });
+  const box = await screen.boundingBox();
+  const x = box.x + box.width / 2, y = box.y + box.height / 2;
+  await page.mouse.move(x, y);
+  const pause = page.locator('#pause');
+  await pause.press('Space');
+  await expect(pause).toHaveText('Resume');
+  await expect(pause).toBeEnabled();
+  await pause.press('Space');
+  await expect(pause).toHaveText('Pause');
+  await expect(pause).toBeEnabled();
+  const before = await guest(page);
+
+  await page.mouse.down();
+  await page.mouse.move(x + box.width / 8, y);
+  await expect.poll(async () => (await guest(page, 100000)).x - before.x).toBeCloseTo(80, -1);
+  const pressed = await guest(page);
+  expect(pressed).toMatchObject({buttons:0x80, edges:before.edges + 1});
+  await page.mouse.up();
+  expect(await guest(page, 100000)).toMatchObject({buttons:0, edges:before.edges + 2, x:pressed.x});
+});
+
 test('a successful retry discards the acquisition press and pending fallback movement', async ({page}) => {
   const screen = await start(page, {manual:true});
   await screen.evaluate(canvas => {
@@ -358,7 +382,7 @@ test('leaving the canvas before a delayed grant keeps the acquisition button sup
 });
 
 test('Escape dismisses Help while a cancelled legacy request awaits its outcome', async ({page}) => {
-  const screen = await start(page);
+  const screen = await start(page, {manual:true});
   await screen.evaluate(canvas => {
     canvas.requestPointerLock = () => { window.finishLock = () => {
       Object.defineProperty(document, 'pointerLockElement', {configurable:true, value:canvas});
@@ -377,12 +401,25 @@ test('Escape dismisses Help while a cancelled legacy request awaits its outcome'
   await page.keyboard.press('Escape');
   await expect(help).toBeHidden();
 
-  // Receiving the cancelled request's late success cannot capture a replacement guest.
+  // A late grant must leave the replacement guest's held input alone.
   await page.locator('#profile').selectOption('0');
   await page.locator('#profile').selectOption('1');
+  await expect.poll(() => inspect(page, () => {
+    pc98.advance(100000);
+    return pc98.text();
+  })).toContain(inputReady);
+  const rightKey = () => inspect(page, () => {
+    pc98.advance(100000);
+    return pc98.read(0x531) & 0x10; // BIOS bitmap entry for scan 0x3c.
+  });
+  await screen.focus();
+  await page.keyboard.down('ArrowRight');
+  await expect.poll(rightKey).toBe(0x10);
   await page.evaluate(() => window.finishLock());
   expect(await owner(page)).toBeNull();
-  await expect.poll(() => page.evaluate(() => pc98.text())).toContain(inputReady);
+  expect(await rightKey()).toBe(0x10);
+  await page.keyboard.up('ArrowRight');
+  await expect.poll(rightKey).toBe(0);
   expect(await guest(page)).toMatchObject({buttons:0, edges:0, x:0, y:0});
 });
 

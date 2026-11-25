@@ -828,7 +828,8 @@ document.addEventListener('pointerlockchange', () => {
       pointerRejected = false;
       pointerPosition = undefined;
     } else {
-      releaseKeys();
+      // Cancellation already released input. A late grant only needs to unlock.
+      document.exitPointerLock();
     }
   } else if (pointerLocked) {
     releaseKeys();
@@ -908,6 +909,7 @@ for (const name of ['mousedown', 'mouseup']) screen.addEventListener(name, event
       return;
     }
     if (!mouseFallback()) return;
+    if (name === 'mousedown' && !pointerPosition) boundedMovement(event);
   }
   event.preventDefault();
   mouseButtons(event.buttons & ~suppressedMouseButtons & 7);
