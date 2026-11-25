@@ -864,6 +864,7 @@ for (const target of [display, ...document.querySelectorAll('[data-drop-drive]')
     target.classList.remove('dragging');
     if (!fileInput.disabled) {
       if (mediaPicker.matches(':popover-open')) mediaPicker.hidePopover();
+      hddActionsPanel.hidePopover();
       void loadFile(event.dataTransfer.files[0], target === display ? undefined : Number(target.dataset.dropDrive));
     }
   };
