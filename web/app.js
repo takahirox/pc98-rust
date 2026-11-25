@@ -615,15 +615,13 @@ $('save-hdd').onclick = () => withDriveFocus(2, recovery => exclusive(async () =
   try {
     await withHddSnapshot('Saving HDD', async (length, read) => {
       const writes = await core.hdi_write_count();
-      if (disk.checkpoint === hddStorage.current.active && writes === disk.savedWrites) {
-        await hddStorage.update(() => null);
-        return;
-      }
       disk.checkpoint = await hddStorage.save(disk.name, length, async (at,n) => {
         const bytes = await read(at,n);
         hddProgress('Saving HDD', at+n, length);
         return bytes;
-      }, (at,n) => hddProgress('Verifying HDD', at+n, length), disk.checkpoint);
+      }, (at,n,total) => hddProgress('Verifying HDD', at+n, total), {
+        mountedCheckpoint:disk.checkpoint, unchanged:writes === disk.savedWrites,
+      });
       disk.savedWrites = writes;
     });
     status(running ? 'Running · HDD saved' : 'Paused · HDD saved');
@@ -768,9 +766,9 @@ $('default-hdd').onclick = () => {
   }, {recovery:$('settings')});
 };
 async function startupHdd() {
-  let fallback;
+  let fallback, startup;
   try {
-    await hddStorage.startup(async ({active,previous}) => {
+    startup = await hddStorage.startup(async ({active,previous}) => {
       if (active === 'empty' || active === 'default') return;
       await replaceHdd(async () => {
         try { return await stageSavedHdd(active); }
@@ -786,7 +784,7 @@ async function startupHdd() {
   } catch (error) {
     throw Error(`HDD startup failed. ${error.message}. Saved data is retained. Try Restore previous checkpoint in the IDE HDD picker, Restore FreeDOS HDD in Settings, or insert a backup.`);
   }
-  if (hddStorage.current.active === 'default') {
+  if (startup.active === 'default') {
     await replaceHdd(() => stageFreeDos(true), undefined, undefined, {preserveHostFocus:true}).catch(freedosFailure);
   }
   if (fallback) fail(`Latest HDD checkpoint could not be read (${fallback}). The previous checkpoint was restored. Export disk for a backup or use Save disk to make it the startup disk.`, $('drive-2'));
