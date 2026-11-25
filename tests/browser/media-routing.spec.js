@@ -144,6 +144,19 @@ test('fresh page selects Ap in DOM and Rust, matching display and released input
   expect(errors).toEqual([]);
 });
 
+test('dropping a replacement HDD on Display closes HDD actions and returns focus to the screen', async ({ page }) => {
+  await ready(page);
+  const actions = page.getByRole('dialog', {name: 'HDD actions'});
+  await page.getByRole('button', {name: 'HDD actions'}).press('Enter');
+  await expect(actions.getByRole('button', {name: 'Export disk'})).toBeFocused();
+
+  await upload(page, 'drop', 'replacement.hdi', hdi);
+
+  await mounted(page, 'replacement.hdi', 'IDE HDD');
+  await expect(actions).toBeHidden();
+  await expect(page.getByRole('img', {name: 'PC-98 screen'})).toBeFocused();
+});
+
 for (const path of ['picker', 'drop']) {
   test(`${path}: every floppy extension mounts live then explicitly boots real guest cold/reset, D88 exports intact`, async ({ page }) => {
     test.setTimeout(120000);
