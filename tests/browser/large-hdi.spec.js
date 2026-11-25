@@ -163,9 +163,7 @@ test('512 MiB local HDI: real guest high I/O, reset, full streamed export/reimpo
     expect(await digest(output)).toBe(expected);
     await diskAction(page, '2', 'eject');
     await expect(page.locator('#media-name-2')).toHaveText('Empty');
-    await page.locator('#drive-2').click();
-    await expect(page.locator('#export')).toBeHidden();
-    await page.keyboard.press('Escape');
+    await expect(page.locator('#hdd-actions')).toBeHidden();
     memory.reset(); start=performance.now();
     await uploadMedia(page, output, '2');
     await expect(page.locator('#media-name-2')).toHaveText('exported.hdi',{timeout:60000});

@@ -168,19 +168,19 @@ test('dirty desktop: cancel replacement/eject/restore, export guest writes, reim
   await command(page,'echo saved>saved.txt'); await command(page,'type saved.txt'); await until(page,'saved');
   expect(await inspect(page, ()=>(pc98.core.hdi_dirty_page(0) >>> 0))).not.toBe(0xffffffff);
   const hdd = page.locator('#drive-2');
+  const actions = page.getByRole('button', {name:'HDD actions'});
   async function keyboardHddAction(action) {
-    await hdd.press('Enter');
-    await expect(page.locator('#choose-file')).toBeFocused();
-    await page.keyboard.press('Tab');
-    if (action === 'export') await page.keyboard.press('Tab');
-    await expect(page.locator(`#${action}`)).toBeFocused();
+    await actions.press('Enter');
+    await expect(page.locator('#export-hdd')).toBeFocused();
+    if (action === 'eject') await page.keyboard.press('Tab');
+    await expect(page.locator(`#${action}-hdd`)).toBeFocused();
     await page.keyboard.press('Enter');
   }
   const dialogs=[];
   page.on('dialog',async d=>{dialogs.push(d.message());await d.dismiss();});
   await keyboardHddAction('eject'); await expect.poll(()=>dialogs.length).toBe(1);
   await expect(hdd).toHaveAccessibleName('Change IDE HDD');
-  await expect(hdd).toBeFocused();
+  await expect(actions).toBeFocused();
   await openSettings(page); await page.locator('#default-hdd').click(); await expect.poll(()=>dialogs.length).toBe(2);
   await expect(page.locator('#profile')).toBeEnabled();
   await uploadMedia(page, 'fixtures/freedos/shell.hdi', '2');
@@ -190,7 +190,7 @@ test('dirty desktop: cancel replacement/eject/restore, export guest writes, reim
   expect(dialogs).toHaveLength(3); expect(dialogs.every(t=>t.includes('guest writes'))).toBe(true);
   const downloadEvent=page.waitForEvent('download'); await keyboardHddAction('export');
   const download=await downloadEvent; expect(await download.failure()).toBeNull();
-  await expect(hdd).toBeFocused();
+  await expect(actions).toBeFocused();
   const file=info.outputPath('saved.hdi'); await download.saveAs(file);
   expect((await fs.stat(file)).size).toBe(manifest.bytes);
   // All logical bytes export, and DOS changes make the saved disk differ.

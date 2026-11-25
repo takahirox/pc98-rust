@@ -108,8 +108,16 @@ for (const {width, height, touch = false} of sizes) {
         expect(media.x).toBeGreaterThan(screen.x + screen.width);
         expect((await page.locator('#settings').boundingBox()).y).toBeLessThan(height);
       } else expect(media.y).toBeGreaterThanOrEqual(toolbar.y + toolbar.height);
+      const hdd = await page.locator('#slot-2').boundingBox();
+      for (const id of ['save-hdd', 'drive-2', 'hdd-actions']) {
+        const control = page.locator('#' + id);
+        await expect(control).toBeVisible();
+        const bounds = await control.boundingBox();
+        expect(bounds.x).toBeGreaterThanOrEqual(hdd.x);
+        expect(bounds.x + bounds.width).toBeLessThanOrEqual(hdd.x + hdd.width);
+      }
       if (touch) {
-        for (const id of ['pause','reset','sound','fullscreen','drive-0','toggle-keyboard']) {
+        for (const id of ['pause','reset','sound','fullscreen','drive-0','toggle-keyboard','save-hdd','drive-2','hdd-actions']) {
           const control = await page.locator('#'+id).boundingBox();
           expect(control.height).toBeGreaterThanOrEqual(44);
           expect(control.width).toBeGreaterThanOrEqual(44);
@@ -470,7 +478,8 @@ test.describe('320 × 700 touch media feedback', () => {
     const initial = await screen.boundingBox();
     await expect(drive).toBeInViewport({ratio:1});
     await holdHddRead(page, hdi.length);
-    await tapToUpload({name:'probe.hdi', mimeType:'application/octet-stream', buffer:hdi});
+    const name = 'very-long-hdd-filename-'.repeat(8) + '.hdi';
+    await tapToUpload({name, mimeType:'application/octet-stream', buffer:hdi});
     const progress = page.getByText('Importing HDD…', {exact:true}).filter({visible:true});
     await expect(progress).toBeInViewport({ratio:1});
     expect(await screen.boundingBox()).toEqual(initial);
@@ -479,7 +488,9 @@ test.describe('320 × 700 touch media feedback', () => {
     }
     await page.evaluate(() => window.finishHddRead());
     await expect(progress).toBeHidden();
-    await expect(page.locator('#media-name-2')).toHaveText('probe.hdi');
+    await expect(page.locator('#media-name-2')).toHaveText(name);
+    expect(await page.locator('#media-name-2').evaluate(el => el.scrollWidth > el.clientWidth)).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(320);
     await expect.poll(() => page.evaluate(() => pc98.text())).toContain('IDE VERIFY PASS');
 
     await tapToUpload(floppy('incompatible.tfd'));
@@ -487,7 +498,7 @@ test.describe('320 × 700 touch media feedback', () => {
     await expect(alert).toContainText('Choose Floppy 1 or Floppy 2 for this image.');
     await expect(alert).toBeInViewport({ratio:1});
     expect(await screen.boundingBox()).toEqual(initial);
-    await expect(page.locator('#media-name-2')).toHaveText('probe.hdi');
+    await expect(page.locator('#media-name-2')).toHaveText(name);
   });
 });
 
@@ -604,9 +615,21 @@ test('only the active media picker trigger is expanded and Escape returns focus'
   await expect.poll(expanded).toEqual([false, false, false]);
   await page.locator('#drive-2').click();
   await expect.poll(expanded).toEqual([true, false, false]);
+  const hddPicker = page.getByRole('dialog', {name:'IDE HDD', exact:true});
+  await expect(hddPicker.getByRole('button')).toHaveText(['Choose local file…']);
   await page.getByRole('heading', {name:'pc98-rust', exact:true}).click();
-  await expect(page.getByRole('dialog', {name:'IDE HDD'})).toBeHidden();
+  await expect(hddPicker).toBeHidden();
   await expect.poll(expanded).toEqual([false, false, false]);
+  const actions = page.getByRole('button', {name:'HDD actions'});
+  const actionsPanel = page.getByRole('dialog', {name:'HDD actions'});
+  await actions.press('Enter');
+  await expect(actionsPanel.getByRole('button')).toHaveText(['Export disk', 'Eject']);
+  await expect(actionsPanel.getByRole('button', {name:'Export disk'})).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(actionsPanel.getByRole('button', {name:'Eject'})).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(actionsPanel).toBeHidden();
+  await expect(actions).toBeFocused();
   await floppy1.click();
   await expect.poll(expanded).toEqual([false, true, false]);
   await floppy1.click();

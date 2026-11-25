@@ -119,6 +119,13 @@ canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; 
 .slot h2 { margin: 0; font-size: 13px; font-weight: 650; }
 .media-name { margin: 2px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
 .slot.dragging, .display.dragging .screen-stage { outline: 2px solid #4ca57d; outline-offset: -3px; }
+#slot-2 { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+.hdd-controls { display: flex; gap: 5px; }
+.hdd-controls > button { white-space: nowrap; }
+#save-hdd { border-color: var(--accent); background: var(--accent); color: #fff; }
+#save-hdd:hover:enabled { background: #24533f; }
+#hdd-actions { font-size: 20px; line-height: 1; }
+#hdd-save-status { margin: 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 
 .panel {
   /* Size against the viewport so a cramped anchor area triggers the fallback. */
@@ -141,6 +148,9 @@ canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; 
 .panel-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 #choose-file { flex: 1 0 100%; }
 #help-panel { --panel-width: 420px; }
+#hdd-actions-panel { --panel-width: 220px; padding: 6px; }
+#hdd-actions-panel:popover-open { display: grid; gap: 3px; }
+#hdd-actions-panel button { border-color: transparent; text-align: start; }
 @supports (position-area: bottom span-left) {
   @position-try --centered-panel {
     position-area: none;
@@ -163,6 +173,9 @@ canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; 
     position-area: left span-bottom;
     position-try-fallbacks: top span-right, bottom span-right, --centered-panel;
     margin: 0 5px;
+  }
+  #hdd-actions-panel {
+    position-try-fallbacks: top span-left, bottom span-right, top span-right, bottom, top, --centered-panel;
   }
 }
 .boot-select, .setting-check { display: flex; align-items: center; gap: 8px; }

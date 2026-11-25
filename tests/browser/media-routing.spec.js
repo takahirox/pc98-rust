@@ -60,6 +60,10 @@ async function upload(page, path, name, buffer, drive) {
 async function expectEmpty(page, drive) {
   await diskAction(page, drive, 'eject');
   await expect(page.locator(`#media-name-${drive}`)).toHaveText('Empty');
+  if (drive === '2') {
+    await expect(page.locator('#hdd-actions')).toBeHidden();
+    return;
+  }
   await page.locator(`#drive-${drive}`).click();
   await expect(page.locator('#export')).toBeHidden();
   await page.keyboard.press('Escape');
@@ -92,10 +96,8 @@ async function boot(page, marker, drive) {
   } else expect(state.stats.reads).toBeGreaterThan(0);
 }
 async function exported(page, name, image, drive = /\.(hdi|nhd)$/i.test(name) ? '2' : '0') {
-  const slot = ['Floppy 1', 'Floppy 2', 'IDE HDD'][drive];
   const download = page.waitForEvent('download');
-  await page.locator(`#drive-${drive}`).click();
-  await page.getByRole('button', { name: `Export disk from ${slot}`, exact: true }).click();
+  await diskAction(page, drive, 'export');
   const file = await download;
   expect(file.suggestedFilename()).toBe(name);
   expect((await fs.readFile(await file.path())).equals(image)).toBe(true);
@@ -130,15 +132,29 @@ test('fresh page selects Ap in DOM and Rust, matching display and released input
     await expect(page.locator('#profile option:checked')).toHaveText('PC-9821Ap');
     await expect(page.locator('#display-mode')).toContainText('16 colors · Shinonome Japanese CG');
     await expect(page.locator('#media-name-2')).toHaveText('FreeDOS-128MiB.hdi');
-    await page.locator('#drive-2').click();
-    await expect(page.getByRole('button', { name: 'Eject IDE HDD' })).toBeEnabled();
-    await expect(page.getByRole('button', { name: 'Export disk from IDE HDD', exact: true })).toBeEnabled();
+    await page.locator('#hdd-actions').click();
+    const actions = page.getByRole('dialog', {name:'HDD actions'});
+    await expect(actions.getByRole('button', {name:'Eject'})).toBeEnabled();
+    await expect(actions.getByRole('button', {name:'Export disk'})).toBeEnabled();
     await page.keyboard.press('Escape');
     expect(await inspect(page, () => ({ profile: pc98.core.metric(21), memory: pc98.read(0x401),
       keyboard: Array.from({ length: 16 }, (_, i) => pc98.read(0x52a + i)) })))
       .toEqual({ profile: 1, memory: 24, keyboard: Array(16).fill(0) });
   }
   expect(errors).toEqual([]);
+});
+
+test('dropping a replacement HDD on Display closes HDD actions and returns focus to the screen', async ({ page }) => {
+  await ready(page);
+  const actions = page.getByRole('dialog', {name: 'HDD actions'});
+  await page.getByRole('button', {name: 'HDD actions'}).press('Enter');
+  await expect(actions.getByRole('button', {name: 'Export disk'})).toBeFocused();
+
+  await upload(page, 'drop', 'replacement.hdi', hdi);
+
+  await mounted(page, 'replacement.hdi', 'IDE HDD');
+  await expect(actions).toBeHidden();
+  await expect(page.getByRole('img', {name: 'PC-98 screen'})).toBeFocused();
 });
 
 for (const path of ['picker', 'drop']) {
