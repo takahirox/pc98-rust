@@ -1,4 +1,5 @@
 export const chunkBytes = 1024 * 1024;
+const workerReplyTimeoutMs = 30_000;
 const storageName = 'pc98-ide-hdd-v1';
 const slots = [0, 1, 2];
 const fileName = slot => `checkpoint-${slot}.bin`;
@@ -114,13 +115,24 @@ async function stageCheckpoint(handle, name, bytes, read, verifying) {
   worker.onerror = event => { event.preventDefault(); fail(Error(event.message || 'HDD storage Worker stopped')); };
   worker.onmessageerror = () => fail(Error('Invalid HDD storage Worker reply'));
   worker.onmessage = ({data}) => {
-    if (data.error) pending.reject(Error(data.error));
-    else pending.resolve();
+    if (data.error) fail(Error(data.error));
+    else pending?.resolve();
   };
-  const send = (data, transfer = []) => fault ? Promise.reject(fault) : new Promise((resolve,reject) => {
-    pending = {resolve,reject};
-    worker.postMessage(data, transfer);
-  });
+  const send = async (data, transfer = []) => {
+    if (fault) throw fault;
+    let timeout;
+    try {
+      await new Promise((resolve,reject) => {
+        pending = {resolve,reject};
+        // A terminated Worker can leave a request unanswered without an error event.
+        timeout = setTimeout(() => fail(Error('HDD storage Worker timed out')), workerReplyTimeoutMs);
+        worker.postMessage(data, transfer);
+      });
+    } finally {
+      clearTimeout(timeout);
+      pending = undefined;
+    }
+  };
 
   const digests = [];
   try {
