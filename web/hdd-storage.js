@@ -80,6 +80,11 @@ export async function openCheckpoint(image) {
   };
 }
 
+function checkpointCandidates({active, previous}) {
+  // A startup fallback can be mounted while the active checkpoint is temporarily unreadable.
+  return [active, previous].filter(checkpoint => slotOf(checkpoint) !== undefined);
+}
+
 async function firstValidCheckpoint(candidates, verifying = () => {}) {
   for (const checkpoint of candidates) {
     try {
@@ -173,17 +178,10 @@ export class HddStorage {
     });
   }
 
-  checkpointCandidates(current, mountedCheckpoint) {
-    const candidates = [current.active, current.previous];
-    // Prefer the mounted generation when startup recovered the older image.
-    if (mountedCheckpoint === this.current.previous) candidates.reverse();
-    return candidates.filter(checkpoint => slotOf(checkpoint) !== undefined);
-  }
-
-  select(active, mountedCheckpoint) {
+  select(active) {
     return this.update(async current => {
       if (current.active === active) return;
-      const candidates = this.checkpointCandidates(current, mountedCheckpoint);
+      const candidates = checkpointCandidates(current);
       // Keep a sole candidate as-is. Verify before dropping a competing generation.
       const previous = candidates.length === 2 ? await firstValidCheckpoint(candidates) : candidates[0] ?? null;
       return {active, previous};
@@ -209,8 +207,7 @@ export class HddStorage {
       }
     };
     return this.update(async current => {
-      const candidates = this.checkpointCandidates(current, mountedCheckpoint);
-      const previous = await firstValidCheckpoint(candidates, verifying);
+      const previous = await firstValidCheckpoint(checkpointCandidates(current), verifying);
       if (previous && previous === current.active && mountedCheckpoint === this.current.active && unchanged) return;
 
       dir = await directory(true);

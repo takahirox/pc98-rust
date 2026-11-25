@@ -552,7 +552,7 @@ async function selectHddStartup(active) {
   if (!hddStorage.current) {
     return confirm('Browser HDD storage is unavailable. Apply this change for this session only? The saved startup choice could not be updated.');
   }
-  await hddStorage.select(active, mounted[2]?.checkpoint);
+  await hddStorage.select(active);
   return true;
 }
 $('eject').onclick = () => {

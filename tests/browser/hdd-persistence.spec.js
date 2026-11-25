@@ -184,6 +184,48 @@ test('imported NHD saves exact guest changes, restores a good checkpoint, and ho
   await ready(page, 'FreeDOS-128MiB.hdi');
 });
 
+test('saving a startup fallback preserves the newer checkpoint through a transient read error', async ({page}, info) => {
+  test.skip(info.project.name !== 'local', 'Storage transaction fault coverage runs once.');
+  await page.goto('./');
+  await ready(page, 'FreeDOS-128MiB.hdi');
+  await uploadMedia(page, uploaded, '2');
+  await ready(page, uploaded.name);
+  await save(page);
+  await dos(page, 'echo newer>keep.txt');
+  await dos(page, 'type keep.txt', '\nnewer');
+  await save(page);
+
+  const catalog = () => page.evaluate(async () => {
+    const {HddStorage} = await import('./hdd-storage.js');
+    return new HddStorage().startup(() => {});
+  });
+  const before = await catalog();
+  await page.addInitScript(name => {
+    const original = FileSystemFileHandle.prototype.getFile;
+    FileSystemFileHandle.prototype.getFile = function () {
+      if (this.name === name) return Promise.reject(new DOMException('Temporary HDD read error', 'NotReadableError'));
+      return original.call(this);
+    };
+    window.restoreCheckpointReads = () => { FileSystemFileHandle.prototype.getFile = original; };
+  }, `checkpoint-${before.active.slot}.bin`);
+  await page.reload();
+  await ready(page, uploaded.name);
+  await expect(page.locator('#error')).toContainText('previous checkpoint was restored');
+
+  await diskAction(page, '2', 'save-hdd');
+  await expect(page.locator('#profile')).toBeEnabled();
+  await expect(page.locator('#error')).toContainText('HDD save failed. Temporary HDD read error');
+  expect(await catalog()).toEqual(before);
+
+  await page.evaluate(() => window.restoreCheckpointReads());
+  await save(page);
+  const after = await catalog();
+  expect(after.active.digests).toEqual(before.previous.digests);
+  expect(after.previous).toEqual(before.active);
+  await confirmAction(page, () => diskAction(page, '2', 'recover-hdd'), true, 'Make the previous HDD checkpoint the startup disk?');
+  await dos(page, 'type keep.txt', '\nnewer');
+});
+
 async function storageTab(page, url) {
   await page.goto(url);
   await page.evaluate(async () => {
@@ -286,7 +328,7 @@ test('switching startup to FreeDOS after losing the mounted checkpoint retains r
     const root = await navigator.storage.getDirectory();
     const dir = await root.getDirectoryHandle('pc98-ide-hdd-v1');
     await dir.removeEntry(`checkpoint-${mounted.slot}.bin`);
-    await storage.select('default', mounted);
+    await storage.select('default');
     return older;
   });
   await storageTab(page, url);
