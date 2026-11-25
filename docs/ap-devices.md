@@ -26,23 +26,25 @@ that assembler for DEBUG. No emulator or chip implementation is downloaded.
 Preparation fails if input, file, adapted source or image hashes differ from the
 checked-in manifests. Do not use `--update-manifest` for routine verification.
 
-Select **PC-9821Ap DOS** in the browser. For `fixtures/dos-apps/adv98.hdi`, select
-**IDE · HDI boot**, then insert the image. It boots FreeDOS and the unchanged
-ADV98 game with an original guest mouse driver. Click the guest screen to capture
-the mouse. Relative movement selects menus, left click accepts, and right click
-opens the game menu. The engine deliberately hides the DOS mouse cursor. Press
-Esc to release the host pointer. Blur, pause and reset also release capture and
-clear held buttons and keys.
+Select **PC-9821Ap** from **Machine** in the browser. In **Settings**, set
+**Next boot** to **IDE HDD**. On the **IDE HDD** slot, click **Insert…** or
+**Change…**, choose **Choose local file…**, and select
+`fixtures/dos-apps/adv98.hdi`. Replacing the HDD resets the machine and boots
+FreeDOS and the unchanged ADV98 game with an original guest mouse driver. Click
+the guest screen to capture the mouse. Relative movement selects menus, left
+click accepts, and right click opens the game menu. The engine deliberately
+hides the DOS mouse cursor. Press Esc to release the host pointer. Blur, pause
+and reset also release capture and clear held buttons and keys.
 
 With the host pointer released, save with guest Esc, Return, Return. Export the
 selected IDE disk and reinsert the HDI to restore saves. Reset preserves disk
 writes and resets device/CPU/RAM state.
-Inserting floppy 1 or IDE chooses that medium for the next reset; floppy 2 never
-changes the boot choice. VM cannot mount a new IDE image; switching profiles
-preserves existing media and only exposes IDE to Ap.
+Floppy insertion leaves the guest running. Switching profiles preserves mounted
+media. IDE is available on Ap.
 
-Insert `music.hdm` in floppy 1 and enable sound. FreeDOS runs MC on the original
-MIT `guest/play.mml`, installs the published PMD guest driver and starts ADV98.
+Insert `music.hdm` in **Floppy 1**, select **Floppy 1** in **Settings → Next boot**,
+and click **Reset**. Enable sound. FreeDOS runs MC on the original MIT
+`guest/play.mml`, installs the published PMD guest driver and starts ADV98.
 The title is silent. Starting the scenario executes its existing `#bgm PLAY.M`
 command, loads the compiled score through guest DOS, and calls the guest PMD API.
 PMD's timer interrupt sequences FM and SSG notes. No host driver/API or original

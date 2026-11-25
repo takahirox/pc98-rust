@@ -76,6 +76,35 @@ impl Mouse {
         self.latched_buttons
             .filter(|buttons| buttons.revision > self.reported_buttons.revision)
     }
+    fn read_buttons(&mut self, latched: bool) -> ButtonState {
+        // Keep button bits stable during a motion nibble read. A polling
+        // driver can then see later edges with HC still high.
+        if let Some(buttons) = self
+            .latched_buttons
+            .filter(|_| latched && self.host_clock - self.last_sample_at < BUTTON_LATCH_WINDOW)
+        {
+            return buttons;
+        }
+        let buttons = if let Some(buttons) = self.unread_latch() {
+            buttons
+        } else if let Some(sample) = self.pending.iter().find(|sample| {
+            sample.buttons.revision > self.reported_buttons.revision
+                || (latched && sample.motion != [0; 2])
+        }) {
+            if sample.buttons.revision <= self.reported_buttons.revision {
+                // HC high only exposes the latched count. Wait for a relatch
+                // to drain older motion without letting button-only polls
+                // keep that motion alive indefinitely.
+                return self.reported_buttons;
+            }
+            sample.buttons
+        } else {
+            self.live_buttons
+        };
+        self.latched_buttons = latched.then_some(buttons);
+        self.last_sample_at = self.host_clock;
+        buttons
+    }
     /// Apply movement directly to the hardware counters.
     pub fn motion(&mut self, dx: i32, dy: i32, buttons: u8) {
         self.counter[0] = self.counter[0].wrapping_add(dx as u8);
@@ -160,26 +189,7 @@ impl Mouse {
                     }
                     count
                 };
-                // Keep button bits stable during a motion nibble read. A
-                // polling driver can then see later edges with HC still high.
-                let buttons = self
-                    .latched_buttons
-                    .filter(|_| {
-                        latched && self.host_clock - self.last_sample_at < BUTTON_LATCH_WINDOW
-                    })
-                    .unwrap_or_else(|| {
-                        let buttons = self.unread_latch().unwrap_or_else(|| {
-                            self.pending
-                                .iter()
-                                .find(|sample| {
-                                    sample.buttons.revision > self.reported_buttons.revision
-                                })
-                                .map_or(self.live_buttons, |sample| sample.buttons)
-                        });
-                        self.latched_buttons = latched.then_some(buttons);
-                        self.last_sample_at = self.host_clock;
-                        buttons
-                    });
+                let buttons = self.read_buttons(latched);
                 self.reported_buttons = buttons;
                 let buttons = buttons.bits;
                 let bits = (if buttons & 1 != 0 { 0x80 } else { 0 })

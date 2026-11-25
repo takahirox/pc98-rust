@@ -370,6 +370,38 @@ fn host_mouse_polling_with_hc_high_sees_both_click_edges() {
 }
 
 #[test]
+fn host_mouse_polls_with_hc_high_keep_the_drag_held_until_all_motion_is_latched() {
+    let mut b = Bus::new(Profile::Pc9821ApDos);
+    b.mouse.host_motion(0, 0, 1);
+    b.tick(1);
+    b.mouse.host_motion(300, 0, 1);
+    b.mouse.host_motion(0, 0, 0);
+
+    for (x, polled_buttons) in [(127, 0x60), (127, 0x60), (46, 0xe0)] {
+        assert_eq!(latch_mouse(&mut b), (x, 0, 0x60));
+        b.tick(8_001); // Poll after the latch's 1 ms button window.
+        assert_eq!(read_mouse_latch(&mut b), (x, 0, polled_buttons));
+    }
+    assert_eq!(latch_mouse(&mut b), (0, 0, 0xe0));
+}
+
+#[test]
+fn host_mouse_undrained_motion_expires_during_hc_high_button_polls() {
+    let mut b = Bus::new(Profile::Pc9821ApDos);
+    b.mouse.host_motion(300, 0, 1);
+    b.mouse.host_motion(0, 0, 0);
+    assert_eq!(latch_mouse(&mut b), (127, 0, 0x60));
+
+    for _ in 0..4 {
+        b.tick(400_000); // Every 50 ms, poll the button without relatching movement.
+        assert_eq!(b.input(0x7fd9) & 0xe0, 0x60);
+    }
+    b.tick(400_000);
+    assert_eq!(b.input(0x7fd9) & 0xe0, 0xe0);
+    assert_eq!(latch_mouse(&mut b), (0, 0, 0xe0));
+}
+
+#[test]
 fn host_mouse_continuously_polled_unlatched_counter_keeps_its_motion() {
     let mut b = Bus::new(Profile::Pc9821ApDos);
     b.mouse.host_motion(40, -19, 0);
