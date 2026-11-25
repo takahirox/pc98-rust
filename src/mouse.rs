@@ -4,6 +4,7 @@ use std::collections::VecDeque;
 const HOST_QUEUE_CAPACITY: usize = 64;
 const HOST_QUEUE_TIMEOUT: u64 = 2_000_000; // 250 ms at 8 MHz
 const BUTTON_LATCH_WINDOW: u64 = 8_000; // 1 ms at 8 MHz
+const ALL_MOTION_NIBBLES: u8 = 0b1111;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 struct ButtonState {
@@ -32,7 +33,7 @@ pub struct Mouse {
     host_clock: u64,
     last_sample_at: u64,
     latched_buttons: Option<ButtonState>,
-    latch_motion_unread: bool,
+    unread_motion_nibbles: u8,
     reported_buttons: ButtonState,
     pub control: u8,
     pub rate: u8,
@@ -51,7 +52,7 @@ impl Default for Mouse {
             host_clock: 0,
             last_sample_at: 0,
             latched_buttons: None,
-            latch_motion_unread: false,
+            unread_motion_nibbles: 0,
             reported_buttons: ButtonState::default(),
             control: 0x10,
             rate: 0,
@@ -79,13 +80,17 @@ impl Mouse {
             .filter(|buttons| buttons.revision > self.reported_buttons.revision)
     }
     fn read_buttons(&mut self, latched: bool) -> ButtonState {
-        // Keep button bits stable during a motion nibble read. A polling
-        // driver can then see later edges with HC still high.
+        // Each unread motion nibble keeps the original buttons even when
+        // reads are spaced out. A driver polling an already-read nibble can
+        // see later edges with HC still high after the short latch window.
         if let Some(buttons) = self.latched_buttons.filter(|_| latched) {
-            // A delayed first read still belongs to the latched motion.
-            if self.latch_motion_unread {
-                self.latch_motion_unread = false;
-                self.last_sample_at = self.host_clock;
+            let nibble = 1 << ((self.control >> 5) & 3);
+            if self.unread_motion_nibbles & nibble != 0 {
+                if self.unread_motion_nibbles == ALL_MOTION_NIBBLES {
+                    self.last_sample_at = self.host_clock;
+                }
+                self.unread_motion_nibbles &= !nibble;
+                return buttons;
             }
             if self.host_clock - self.last_sample_at < BUTTON_LATCH_WINDOW {
                 return buttons;
@@ -107,7 +112,11 @@ impl Mouse {
         } else {
             self.live_buttons
         };
-        self.latched_buttons = latched.then_some(buttons);
+        let latched_buttons = latched.then_some(buttons);
+        if self.latched_buttons != latched_buttons {
+            self.unread_motion_nibbles = 0;
+        }
+        self.latched_buttons = latched_buttons;
         self.last_sample_at = self.host_clock;
         buttons
     }
@@ -157,7 +166,7 @@ impl Mouse {
         self.pending.clear();
         self.latch = [0; 2];
         self.latched_buttons = None;
-        self.latch_motion_unread = false;
+        self.unread_motion_nibbles = 0;
         self.reported_buttons = self.live_buttons;
     }
     pub fn tick(&mut self, cycles: u32) -> bool {
@@ -173,7 +182,7 @@ impl Mouse {
             // An inactive driver need not keep an old button snapshot.
             if self.host_clock - self.last_sample_at >= HOST_QUEUE_TIMEOUT {
                 self.latched_buttons = None;
-                self.latch_motion_unread = false;
+                self.unread_motion_nibbles = 0;
             }
         }
         self.fraction += cycles as u64 * (120 >> (self.rate & 3));
@@ -245,7 +254,11 @@ impl Mouse {
                 }
                 self.pending.pop_front();
             }
-            self.latch_motion_unread = self.latch != [0; 2];
+            self.unread_motion_nibbles = if self.latch != [0; 2] {
+                ALL_MOTION_NIBBLES
+            } else {
+                0
+            };
             self.last_sample_at = self.host_clock;
             self.latches += 1;
         }
