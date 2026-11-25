@@ -76,6 +76,19 @@ export async function openCheckpoint(image) {
   };
 }
 
+async function checkpointIsValid(checkpoint, verifying) {
+  try {
+    const image = await openCheckpoint(checkpoint);
+    for (let at = 0; at < image.size; at += chunkBytes) {
+      const bytes = await image.read(at);
+      verifying(at, bytes.byteLength, image.size);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function stageCheckpoint(handle, name, bytes, read, verifying) {
   const worker = new Worker(new URL('hdd-storage-worker.js',import.meta.url), {type:'module'});
   let pending, fault;
@@ -112,7 +125,7 @@ async function stageCheckpoint(handle, name, bytes, read, verifying) {
     if (await checksum(await file.slice(at, at + chunkBytes).arrayBuffer()) !== digests[at / chunkBytes]) {
       throw Error('Staged HDD checksum mismatch');
     }
-    verifying(at, Math.min(chunkBytes, bytes - at));
+    verifying(at, Math.min(chunkBytes, bytes - at), bytes);
   }
   return {name, bytes, digests, savedAt:Date.now()};
 }
@@ -123,9 +136,16 @@ export class HddStorage {
   current;
 
   async startup(restore) {
+    if (!navigator.locks) {
+      const current = await readManifest();
+      // These choices need no checkpoint file access or writable catalog.
+      if (current.active === 'default' || current.active === 'empty') return current;
+      throw Error('Restoring a saved HDD requires Web Locks');
+    }
     return locked('shared', async () => {
       this.current = await readManifest();
       await restore(this.current);
+      return this.current;
     });
   }
 
@@ -159,7 +179,7 @@ export class HddStorage {
     });
   }
 
-  save(name, bytes, read, verifying, mountedCheckpoint) {
+  save(name, bytes, read, verifying, {mountedCheckpoint, unchanged} = {}) {
     let dir;
     const discardUnreferenced = async ({active,previous}) => {
       for (const slot of slots) {
@@ -170,6 +190,17 @@ export class HddStorage {
       }
     };
     return this.update(async current => {
+      const candidates = [current.active, current.previous];
+      // Prefer the mounted generation when startup recovered the older image.
+      if (mountedCheckpoint === this.current.previous) candidates.reverse();
+      let previous = null;
+      for (const checkpoint of candidates) {
+        if (slotOf(checkpoint) === undefined || !await checkpointIsValid(checkpoint, verifying)) continue;
+        if (checkpoint === current.active && mountedCheckpoint === this.current.active && unchanged) return;
+        previous = checkpoint;
+        break;
+      }
+
       dir = await directory(true);
       await discardUnreferenced(current);
       // Keep both catalog references intact throughout staging. A crash can
@@ -178,11 +209,6 @@ export class HddStorage {
       const slot = slots.find(candidate => !occupied.includes(candidate));
       const handle = await dir.getFileHandle(fileName(slot), {create:true});
       const active = {...await stageCheckpoint(handle, name, bytes, read, verifying), slot};
-      // A save after automatic recovery retains the checkpoint that actually
-      // validated, rather than the failed latest generation.
-      const previous = [current.active, current.previous].find(image =>
-        slotOf(image) !== undefined && slotOf(image) === slotOf(mountedCheckpoint)) ??
-        (slotOf(current.active) !== undefined ? current.active : current.previous);
       return {active, previous};
     }, discardUnreferenced).then(() => this.current.active);
   }

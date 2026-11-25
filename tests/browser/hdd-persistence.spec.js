@@ -79,6 +79,25 @@ test('bundled FreeDOS boots a locally saved DOS copy across reload', async ({pag
     .some(entry => entry.name.endsWith('/freedos/desktop.bin')))).toBe(false);
 });
 
+test('without Web Locks, FreeDOS boots only when the startup catalog allows it', async ({page}, info) => {
+  test.skip(info.project.name !== 'local', 'The Web Locks fallback is independent of the serving path.');
+  await page.addInitScript(() => Object.defineProperty(navigator, 'locks', {value:undefined}));
+  await page.goto('./');
+  await ready(page, 'FreeDOS-128MiB.hdi');
+  await expect(page.locator('#error')).toBeHidden();
+  await expect.poll(() => page.evaluate(() => pc98.text())).toContain('FreeDOS desktop ready');
+  await page.locator('#drive-2').click();
+  await expect(page.locator('#save-hdd')).toBeDisabled();
+  await expect(page.locator('#hdd-save-status')).toContainText('HDD storage unavailable');
+
+  await page.addInitScript(() => {
+    indexedDB.open = () => { throw Error('Catalog unavailable'); };
+  });
+  await page.reload();
+  await ready(page, 'Empty');
+  await expect(page.locator('#error')).toContainText('HDD startup failed. Catalog unavailable');
+});
+
 test('imported NHD saves exact guest changes, restores a good checkpoint, and honors startup selection', async ({page}, info) => {
   test.skip(info.project.name !== 'pages', 'The local project covers bundled HDD startup and fault injection.');
   test.setTimeout(100000);
@@ -98,6 +117,17 @@ test('imported NHD saves exact guest changes, restores a good checkpoint, and ho
   expect(savedImage.subarray(0,512)).toEqual(header);
   expect(sum(savedImage)).not.toBe(sum(nhd));
 
+  // Simulate checkpoint loss while the saved disk is still mounted and unchanged.
+  await page.evaluate(async () => {
+    const {HddStorage} = await import('./hdd-storage.js');
+    const catalog = new HddStorage();
+    await catalog.startup(async ({active}) => {
+      const root = await navigator.storage.getDirectory();
+      const dir = await root.getDirectoryHandle('pc98-ide-hdd-v1');
+      await dir.removeEntry(`checkpoint-${active.slot}.bin`);
+    });
+  });
+  await save(page);
   await page.reload();
   await ready(page, uploaded.name);
   await dos(page, 'type keep.txt', '\npersisted');
@@ -162,11 +192,11 @@ async function storageTab(page, url) {
     await storage.startup(() => {});
     window.checkpointTest = {
       storage,
-      async value() {
-        const image = await openCheckpoint(storage.current.active);
+      async value(checkpoint = storage.current.active) {
+        const image = await openCheckpoint(checkpoint);
         return new Uint8Array(await image.read(0))[0];
       },
-      save(value, stall = false) {
+      save(value, {stall = false, ...options} = {}) {
         return storage.save('test.hdi', chunkBytes + 512, (at,length) => {
           // The second producer request means the real OPFS Worker already
           // acknowledged the first write. Leave its file open until tab close.
@@ -175,11 +205,38 @@ async function storageTab(page, url) {
             return new Promise(() => {});
           }
           return new Uint8Array(length).fill(value).buffer;
-        }, () => {});
+        }, () => {}, options);
       },
     };
   });
 }
+
+test('saving after losing the latest checkpoint retains the older verified image', async ({page, baseURL}, info) => {
+  test.skip(info.project.name !== 'local', 'Storage transaction fault coverage runs once.');
+  await storageTab(page, new URL('licenses.html', baseURL).href);
+  const result = await page.evaluate(async () => {
+    const {storage, save, value} = checkpointTest;
+    const older = await save(1);
+    const newest = await save(2);
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle('pc98-ide-hdd-v1');
+    await dir.removeEntry(`checkpoint-${newest.slot}.bin`);
+    const replacement = await save(3, {mountedCheckpoint:newest});
+
+    const files = await Array.fromAsync(dir.keys());
+    return {
+      retained:storage.current.previous?.slot === older.slot,
+      savedValue:await value(),
+      retainedValue:await value(storage.current.previous),
+      files:files.sort(),
+      expectedFiles:[older, replacement].map(({slot}) => `checkpoint-${slot}.bin`).sort(),
+    };
+  });
+  expect(result.retained).toBe(true);
+  expect(result.savedValue).toBe(3);
+  expect(result.retainedValue).toBe(1);
+  expect(result.files).toEqual(result.expectedFiles);
+});
 
 test('staging interruption, catalog failure and concurrent writes preserve the durable generation', async ({page, context, baseURL}, info) => {
   test.skip(info.project.name !== 'local', 'Storage transaction fault coverage runs once.');
@@ -188,7 +245,7 @@ test('staging interruption, catalog failure and concurrent writes preserve the d
   await page.evaluate(async () => { await checkpointTest.save(1); });
   const other = await context.newPage();
   await storageTab(other, url);
-  await page.evaluate(() => { void checkpointTest.save(2, true); });
+  await page.evaluate(() => { void checkpointTest.save(2, {stall:true}); });
   await expect.poll(() => page.evaluate(() => window.stagedHdd)).toBe(true);
   await expect(other.evaluate(() => checkpointTest.save(3))).rejects.toThrow('Another tab');
   await page.close();
