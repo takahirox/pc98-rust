@@ -1,4 +1,0 @@
-# Preserve audited upstream source/notices byte-for-byte, including whitespace.
-fixtures/fonts/AUTHORS -whitespace
-fixtures/fonts/LICENSE -whitespace
-web/shinonome-LICENSE.txt -whitespace
