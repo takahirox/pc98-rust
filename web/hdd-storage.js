@@ -5,6 +5,8 @@ const fileName = slot => `checkpoint-${slot}.bin`;
 const slotOf = image => slots.includes(image?.slot) ? image.slot : undefined;
 const initial = {revision:null, active:'default', previous:null};
 
+class InvalidCheckpoint extends Error {}
+
 async function manifest(value) {
   const db = await new Promise((resolve,reject) => {
     const request = indexedDB.open(storageName, 1);
@@ -51,7 +53,7 @@ const checksum = async bytes => Array.from(new Uint8Array(await crypto.subtle.di
 
 async function verifiedFile(handle, image) {
   const file = await handle.getFile();
-  if (file.size !== image.bytes) throw Error('Incorrect saved HDD length');
+  if (file.size !== image.bytes) throw new InvalidCheckpoint('Incorrect saved HDD length');
   return file;
 }
 
@@ -60,7 +62,7 @@ export async function openCheckpoint(image) {
       !Number.isFinite(image.savedAt) || !Number.isInteger(image.bytes) ||
       image.bytes < 512 || image.bytes > 0xffffffff ||
       !Array.isArray(image.digests) || image.digests.length !== Math.ceil(image.bytes / chunkBytes)) {
-    throw Error('Invalid HDD checkpoint metadata');
+    throw new InvalidCheckpoint('Invalid HDD checkpoint metadata');
   }
   const handle = await (await directory()).getFileHandle(fileName(image.slot));
   const file = await verifiedFile(handle, image);
@@ -70,23 +72,31 @@ export async function openCheckpoint(image) {
     async read(at) {
       const bytes = await file.slice(at, at + chunkBytes).arrayBuffer();
       if (bytes.byteLength !== Math.min(chunkBytes, image.bytes - at) ||
-          await checksum(bytes) !== image.digests[at / chunkBytes]) throw Error('Saved HDD checksum mismatch');
+          await checksum(bytes) !== image.digests[at / chunkBytes]) {
+        throw new InvalidCheckpoint('Saved HDD checksum mismatch');
+      }
       return bytes;
     },
   };
 }
 
-async function checkpointIsValid(checkpoint, verifying) {
-  try {
-    const image = await openCheckpoint(checkpoint);
-    for (let at = 0; at < image.size; at += chunkBytes) {
-      const bytes = await image.read(at);
-      verifying(at, bytes.byteLength, image.size);
+async function firstValidCheckpoint(candidates, verifying = () => {}) {
+  for (const checkpoint of candidates) {
+    try {
+      const image = await openCheckpoint(checkpoint);
+      for (let at = 0; at < image.size; at += chunkBytes) {
+        const bytes = await image.read(at);
+        verifying(at, bytes.byteLength, image.size);
+      }
+      return checkpoint;
+    } catch (error) {
+      // Inconclusive I/O failures must abort before changing the catalog or files.
+      if (error instanceof InvalidCheckpoint ||
+          (error instanceof DOMException && error.name === 'NotFoundError')) continue;
+      throw error;
     }
-    return true;
-  } catch {
-    return false;
   }
+  return null;
 }
 
 async function stageCheckpoint(handle, name, bytes, read, verifying) {
@@ -163,11 +173,20 @@ export class HddStorage {
     });
   }
 
+  checkpointCandidates(current, mountedCheckpoint) {
+    const candidates = [current.active, current.previous];
+    // Prefer the mounted generation when startup recovered the older image.
+    if (mountedCheckpoint === this.current.previous) candidates.reverse();
+    return candidates.filter(checkpoint => slotOf(checkpoint) !== undefined);
+  }
+
   select(active, mountedCheckpoint) {
-    return this.update(current => {
+    return this.update(async current => {
       if (current.active === active) return;
-      return {active, previous:mountedCheckpoint ??
-        (current.active && typeof current.active === 'object' ? current.active : current.previous)};
+      const candidates = this.checkpointCandidates(current, mountedCheckpoint);
+      // Keep a sole candidate as-is. Verify before dropping a competing generation.
+      const previous = candidates.length === 2 ? await firstValidCheckpoint(candidates) : candidates[0] ?? null;
+      return {active, previous};
     });
   }
 
@@ -190,16 +209,9 @@ export class HddStorage {
       }
     };
     return this.update(async current => {
-      const candidates = [current.active, current.previous];
-      // Prefer the mounted generation when startup recovered the older image.
-      if (mountedCheckpoint === this.current.previous) candidates.reverse();
-      let previous = null;
-      for (const checkpoint of candidates) {
-        if (slotOf(checkpoint) === undefined || !await checkpointIsValid(checkpoint, verifying)) continue;
-        if (checkpoint === current.active && mountedCheckpoint === this.current.active && unchanged) return;
-        previous = checkpoint;
-        break;
-      }
+      const candidates = this.checkpointCandidates(current, mountedCheckpoint);
+      const previous = await firstValidCheckpoint(candidates, verifying);
+      if (previous && previous === current.active && mountedCheckpoint === this.current.active && unchanged) return;
 
       dir = await directory(true);
       await discardUnreferenced(current);

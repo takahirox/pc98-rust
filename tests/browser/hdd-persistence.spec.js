@@ -194,7 +194,9 @@ async function storageTab(page, url) {
       storage,
       async value(checkpoint = storage.current.active) {
         const image = await openCheckpoint(checkpoint);
-        return new Uint8Array(await image.read(0))[0];
+        const first = new Uint8Array(await image.read(0))[0];
+        for (let at = chunkBytes; at < image.size; at += chunkBytes) await image.read(at);
+        return first;
       },
       save(value, {stall = false, ...options} = {}) {
         return storage.save('test.hdi', chunkBytes + 512, (at,length) => {
@@ -236,6 +238,65 @@ test('saving after losing the latest checkpoint retains the older verified image
   expect(result.savedValue).toBe(3);
   expect(result.retainedValue).toBe(1);
   expect(result.files).toEqual(result.expectedFiles);
+});
+
+test('a temporary read error preserves both committed checkpoints for retry', async ({page, baseURL}, info) => {
+  test.skip(info.project.name !== 'local', 'Storage transaction fault coverage runs once.');
+  const url = new URL('licenses.html', baseURL).href;
+  await storageTab(page, url);
+  const before = await page.evaluate(async () => {
+    await checkpointTest.save(1);
+    await checkpointTest.save(2);
+    return checkpointTest.storage.current;
+  });
+  await expect(page.evaluate(async () => {
+    const {storage, save} = checkpointTest;
+    const names = [storage.current.active, storage.current.previous].map(({slot}) => `checkpoint-${slot}.bin`);
+    const original = FileSystemFileHandle.prototype.getFile;
+    FileSystemFileHandle.prototype.getFile = function () {
+      if (names.includes(this.name)) return Promise.reject(new DOMException('Temporary HDD read error', 'NotReadableError'));
+      return original.call(this);
+    };
+    try { await save(3); }
+    finally { FileSystemFileHandle.prototype.getFile = original; }
+  })).rejects.toThrow('Temporary HDD read error');
+
+  await storageTab(page, url);
+  expect(await page.evaluate(() => checkpointTest.storage.current)).toEqual(before);
+  expect(await page.evaluate(async () => {
+    const {storage, value} = checkpointTest;
+    return [await value(), await value(storage.current.previous)];
+  })).toEqual([2, 1]);
+  await page.evaluate(async () => { await checkpointTest.save(3); });
+  await storageTab(page, url);
+  expect(await page.evaluate(async () => {
+    const {storage, value} = checkpointTest;
+    return [await value(), await value(storage.current.previous)];
+  })).toEqual([3, 2]);
+});
+
+test('switching startup to FreeDOS after losing the mounted checkpoint retains recovery', async ({page, baseURL}, info) => {
+  test.skip(info.project.name !== 'local', 'Storage transaction fault coverage runs once.');
+  const url = new URL('licenses.html', baseURL).href;
+  await storageTab(page, url);
+  const older = await page.evaluate(async () => {
+    const {storage, save} = checkpointTest;
+    const older = await save(1);
+    const mounted = await save(2);
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle('pc98-ide-hdd-v1');
+    await dir.removeEntry(`checkpoint-${mounted.slot}.bin`);
+    await storage.select('default', mounted);
+    return older;
+  });
+  await storageTab(page, url);
+  expect(await page.evaluate(() => checkpointTest.storage.current)).toMatchObject({active:'default', previous:older});
+  expect(await page.evaluate(async () => {
+    const {storage, save, value} = checkpointTest;
+    await save(3);
+    await storage.recover(value);
+    return await value();
+  })).toBe(1);
 });
 
 test('staging interruption, catalog failure and concurrent writes preserve the durable generation', async ({page, context, baseURL}, info) => {
