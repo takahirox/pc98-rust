@@ -64,21 +64,15 @@ subsystems; no new private-HDD incompatibility has been demonstrated here.
 
 ## Reproduce and use
 
+Follow the [README test instructions](../README.md#reproduce-the-checks) to
+prepare all required fixtures and run the full native and browser test suites.
+
+To prepare the DOS application disks for the interactive steps below, run
+these commands from the repository root:
+
 ```sh
 python3 tools/prepare_freedos.py
 python3 tools/prepare_dos_apps.py
-python3 tools/prepare_cpu_fixture.py
-python3 tools/prepare_hdd_fixture.py
-python3 tools/prepare_music_fixture.py
-python3 tools/prepare_device_fixture.py
-python3 tools/prepare_input_fixture.py
-python3 tools/build_font.py --check
-cargo test --locked
-cargo clippy --all-targets -- -D warnings
-cargo fmt --check
-npm ci
-npx playwright install chromium
-npm test
 ```
 
 The DOS-app preparation command checks all downloads and generated images against
