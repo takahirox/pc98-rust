@@ -321,6 +321,37 @@ test('a successful retry discards pending fallback buttons and movement', async 
   expect(await guest(page, 100000)).toMatchObject({buttons:0, edges:before.edges + 2});
 });
 
+test('a late error event from a denied request leaves the next capture click host-only', async ({page}) => {
+  const screen = await start(page, {manual:true});
+  await screen.evaluate(canvas => {
+    canvas.requestPointerLock = () => {
+      canvas.requestPointerLock = () => new Promise(resolve => {
+        canvas.grantLock = () => {
+          Object.defineProperty(document, 'pointerLockElement', {configurable:true, value:canvas});
+          resolve();
+          document.dispatchEvent(new Event('pointerlockchange'));
+        };
+      });
+      return Promise.reject(new DOMException('Denied'));
+    };
+    document.exitPointerLock = () => {
+      delete document.pointerLockElement;
+      document.dispatchEvent(new Event('pointerlockchange'));
+    };
+  });
+  await screen.click();
+  const before = await guest(page, 100000);
+  expect(before).toMatchObject({buttons:0, edges:0});
+  await screen.click();
+  await screen.evaluate(canvas => {
+    // Chromium can dispatch the first request's error after rejecting its promise.
+    document.dispatchEvent(new Event('pointerlockerror'));
+    canvas.grantLock();
+  });
+  expect.soft(await owner(page)).toBe('screen');
+  expect(await guest(page, 100000)).toMatchObject({buttons:0, edges:0});
+});
+
 test('a denied retry replays both primary and right button transitions in order', async ({page}) => {
   const screen = await start(page, {manual:true});
   await screen.evaluate(canvas => {

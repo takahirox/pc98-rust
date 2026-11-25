@@ -813,7 +813,9 @@ function requestMouseLock(event) {
   pointerPosition = undefined;
   if (fallback) boundedMovement(event, fallback);
   try {
-    screen.requestPointerLock()?.catch(() => pointerLockFailed(request));
+    const completion = screen.requestPointerLock();
+    request.usesErrorEvent = completion === undefined;
+    completion?.catch(() => pointerLockFailed(request));
   } catch {
     pointerLockFailed(request);
   }
@@ -838,7 +840,9 @@ document.addEventListener('pointerlockchange', () => {
   }
 });
 document.addEventListener('pointerlockerror', () => {
-  if (pointerRequest) pointerLockFailed(pointerRequest);
+  // A promise rejection identifies its request. Its unscoped error event
+  // can arrive after another request has started.
+  if (pointerRequest?.usesErrorEvent) pointerLockFailed(pointerRequest);
 });
 function flushMouse() {
   if (mouseFrame) cancelAnimationFrame(mouseFrame);
