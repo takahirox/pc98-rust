@@ -388,16 +388,22 @@ fn host_mouse_polls_with_hc_high_keep_the_drag_held_until_all_motion_is_latched(
 #[test]
 fn host_mouse_keeps_the_drag_held_through_delayed_latch_reads() {
     let mut b = Bus::new(Profile::Pc9821ApDos);
-    b.mouse.host_motion(300, 0, 1);
+    b.mouse.host_motion(300, -300, 1);
     b.mouse.host_motion(0, 0, 0);
     for _ in 0..2 {
-        assert_eq!(latch_mouse(&mut b), (127, 0, 0x60));
+        assert_eq!(latch_mouse(&mut b), (127, -128, 0x60));
     }
 
     b.output(0x7fdd, 0);
     b.output(0x7fdd, 0x80);
-    // Delay 2 ms before each nibble of the final 46 counts.
-    for (control, expected) in [(0x80, 0x6e), (0xa0, 0x62), (0xc0, 0x60), (0xe0, 0x60)] {
+    // Read the final (46, -44) with 2 ms between reads, including a repeated X high.
+    for (control, expected) in [
+        (0x80, 0x6e),
+        (0xa0, 0x62),
+        (0xa0, 0x62),
+        (0xc0, 0x64),
+        (0xe0, 0x6d),
+    ] {
         b.tick(16_000);
         b.output(0x7fdd, control);
         assert_eq!(b.input(0x7fd9), expected);

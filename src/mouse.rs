@@ -80,9 +80,6 @@ impl Mouse {
             .filter(|buttons| buttons.revision > self.reported_buttons.revision)
     }
     fn read_buttons(&mut self, latched: bool) -> ButtonState {
-        // Each unread motion nibble keeps the original buttons even when
-        // reads are spaced out. A driver polling an already-read nibble can
-        // see later edges with HC still high after the short latch window.
         if let Some(buttons) = self.latched_buttons.filter(|_| latched) {
             let nibble = 1 << ((self.control >> 5) & 3);
             if self.unread_motion_nibbles & nibble != 0 {
@@ -92,7 +89,11 @@ impl Mouse {
                 self.unread_motion_nibbles &= !nibble;
                 return buttons;
             }
-            if self.host_clock - self.last_sample_at < BUTTON_LATCH_WINDOW {
+            // Once two selectors have been read, keep the buttons stable
+            // through repeats until the scan finishes. Single-selector polls
+            // can see later edges with HC high after the short latch window.
+            let scan_in_progress = matches!(self.unread_motion_nibbles.count_ones(), 1 | 2);
+            if scan_in_progress || self.host_clock - self.last_sample_at < BUTTON_LATCH_WINDOW {
                 return buttons;
             }
         }
