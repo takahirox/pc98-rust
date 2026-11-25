@@ -11,6 +11,11 @@ export async function uploadMedia(page, files, drive = '0') {
 }
 
 export async function diskAction(page, drive, action) {
+  if (Number(drive) === 2) {
+    await page.locator('#hdd-actions').click();
+    await page.locator(action === 'recover-hdd' ? '#recover-hdd' : `#${action}-hdd`).click();
+    return;
+  }
   await page.locator(`#drive-${drive}`).click();
   await page.locator(`#${action}`).click();
 }

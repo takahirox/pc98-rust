@@ -37,10 +37,13 @@ async function dos(page, command, output) {
 }
 
 async function save(page) {
-  await diskAction(page, '2', 'save-hdd');
+  const button = page.locator('#save-hdd');
+  await button.press('Enter');
   await expect(page.locator('#status')).toContainText('HDD saved');
+  await expect(page.locator('#hdd-save-status')).toHaveText('Saved');
   await expect(page.locator('#profile')).toBeEnabled();
   await expect(page.locator('#error')).toBeHidden();
+  await expect(button).toBeFocused();
 }
 
 async function exportImage(page) {
@@ -80,13 +83,18 @@ test('bundled FreeDOS boots a locally saved DOS copy across reload', async ({pag
   await page.goto('./');
   await ready(page, 'FreeDOS-128MiB.hdi');
   await dos(page, 'copy probe.com local.com', 'probe.com =>> local.com\nA:\\>');
+  await expect(page.locator('#hdd-save-status')).toHaveText('Unsaved changes');
   await save(page);
   await expect(page.locator('#pause')).toHaveText('Pause');
   await page.locator('#profile').selectOption('0');
   await expect(page.locator('#media-name-2')).toContainText('FreeDOS-128MiB.hdi');
+  await expect(page.locator('#save-hdd')).toBeDisabled();
+  await expect(page.locator('#hdd-save-status')).toHaveText('Save requires Ap');
   await page.locator('#profile').selectOption('1');
+  await expect(page.locator('#hdd-save-status')).toHaveText('Saved');
   await page.reload();
   await ready(page, 'FreeDOS-128MiB.hdi');
+  await expect(page.locator('#hdd-save-status')).toHaveText('Saved');
   await dos(page, 'local', 'PC98 DOS PROBE OK');
   expect(await page.evaluate(() => performance.getEntriesByType('resource')
     .some(entry => entry.name.endsWith('/freedos/desktop.bin')))).toBe(false);
@@ -99,7 +107,6 @@ test('without Web Locks, FreeDOS boots only when the startup catalog allows it',
   await ready(page, 'FreeDOS-128MiB.hdi');
   await expect(page.locator('#error')).toBeHidden();
   await expect.poll(() => page.evaluate(() => pc98.text())).toContain('FreeDOS desktop ready');
-  await page.locator('#drive-2').click();
   await expect(page.locator('#save-hdd')).toBeDisabled();
   await expect(page.locator('#hdd-save-status')).toContainText('HDD storage unavailable');
 
@@ -195,16 +202,19 @@ test('terminating the storage Worker during a write releases the live disk for e
       }
     };
   });
-  await diskAction(page, '2', 'save-hdd');
+  await page.locator('#save-hdd').click();
   await expect.poll(() => page.evaluate(() => window.storageWorkerTerminated)).toBe(true);
-  await expect(page.locator('#profile')).toBeDisabled();
+  await expect(page.locator('#hdd-save-status')).toHaveText('Saving…');
+  await expect(page.locator('#save-hdd')).toBeDisabled();
   await page.clock.fastForward('00:31');
 
   await expect(page.locator('#error')).toContainText('HDD save failed. HDD storage Worker timed out');
   await ready(page, uploaded.name);
+  await expect(page.locator('#hdd-save-status')).toHaveText('Save failed · Retry or export');
   await expect(page.locator('#pause')).toHaveText('Pause');
   expect(await readCatalog(page)).toEqual(before);
   expect(await exportImage(page)).toEqual(liveImage);
+  await expect(page.locator('#hdd-save-status')).toHaveText('Save failed · Retry or export');
 
   await save(page);
   expect((await readCatalog(page)).previous).toEqual(before.active);
@@ -220,11 +230,14 @@ test('imported NHD saves exact guest changes, restores a good checkpoint, and ho
   await ready(page, 'FreeDOS-128MiB.hdi');
   await uploadMedia(page, uploaded, '2');
   await ready(page, uploaded.name);
+  await expect(page.locator('#hdd-save-status')).toHaveText('Not saved');
   await dos(page, 'echo persisted>keep.txt');
   await dos(page, 'type keep.txt', '\npersisted');
 
   await page.locator('#pause').click();
   const savedImage = await exportImage(page);
+  await page.locator('#drive-1').click();
+  await page.keyboard.press('Escape');
   await save(page);
   await expect(page.locator('#pause')).toHaveText('Resume');
   const sum = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -249,11 +262,10 @@ test('imported NHD saves exact guest changes, restores a good checkpoint, and ho
   expect(sum(await exportImage(page))).toBe(sum(savedImage));
   await dos(page, 'echo newer>keep.txt');
   await dos(page, 'type keep.txt', '\nnewer');
-  await page.locator('#drive-2').click();
-  await expect(page.locator('#hdd-save-status')).toContainText('Unsaved guest writes');
-  await page.keyboard.press('Escape');
+  await expect(page.locator('#hdd-save-status')).toHaveText('Unsaved changes');
   await confirmAction(page, () => diskAction(page, '2', 'eject'), false, 'unsaved guest writes');
   await ready(page, uploaded.name);
+  await expect(page.locator('#hdd-save-status')).toHaveText('Unsaved changes');
   await save(page);
 
   // Damage a payload byte without changing the length or the container header.
@@ -274,6 +286,7 @@ test('imported NHD saves exact guest changes, restores a good checkpoint, and ho
   await page.reload();
   await ready(page, uploaded.name);
   await expect(page.locator('#error')).toContainText('previous checkpoint was restored');
+  await expect(page.locator('#hdd-save-status')).toHaveText('Previous checkpoint');
   await dos(page, 'type keep.txt', '\npersisted');
   await save(page);
 
@@ -281,13 +294,18 @@ test('imported NHD saves exact guest changes, restores a good checkpoint, and ho
   // accepted replacement and the intentionally empty startup until it is saved.
   await confirmAction(page, () => uploadMedia(page, {...uploaded, name:'replacement.nhd'}, '2'), false, 'Replace the saved startup HDD');
   await ready(page, uploaded.name);
+  await expect(page.locator('#hdd-save-status')).toHaveText('Saved');
   await confirmAction(page, () => uploadMedia(page, {...uploaded, name:'replacement.nhd'}, '2'), true, 'Replace the saved startup HDD');
   await ready(page, 'replacement.nhd');
+  await expect(page.locator('#hdd-save-status')).toHaveText('Not saved');
   await page.reload();
   await ready(page, 'Empty');
+  await expect(page.locator('#save-hdd')).toBeHidden();
+  await expect(page.locator('#hdd-save-status')).toBeHidden();
 
   await diskAction(page, '2', 'recover-hdd');
   await ready(page, uploaded.name);
+  await expect(page.locator('#hdd-save-status')).toHaveText('Saved');
   await dos(page, 'type keep.txt', '\npersisted');
   await confirmAction(page, () => diskAction(page, '2', 'eject'), true, 'Eject the saved startup HDD');
   await page.reload();
@@ -323,7 +341,7 @@ test('saving a startup fallback preserves the newer checkpoint through a transie
   await ready(page, uploaded.name);
   await expect(page.locator('#error')).toContainText('previous checkpoint was restored');
 
-  await diskAction(page, '2', 'save-hdd');
+  await page.locator('#save-hdd').click();
   await expect(page.locator('#profile')).toBeEnabled();
   await expect(page.locator('#error')).toContainText('HDD save failed. Temporary HDD read error');
   expect(await readCatalog(page)).toEqual(before);

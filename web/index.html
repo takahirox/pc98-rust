@@ -20,8 +20,8 @@
         <p>Focus the screen to type. Shift, Ctrl, Alt (GRPH), right Alt (XFER) and left Meta (NFER) map to PC-98 keys. Tab and Shift+Tab navigate the player until you click, type, or press F12 on the screen to capture guest keys. Press F12 again to return to the player controls. Open Keyboard for on-screen keys, including Kana and STOP.</p>
         <p>Drag an image onto the screen for automatic routing. HDI/NHD images go to IDE HDD on Ap. TFD, HDM, XDF, 2HD, D88, D98 and IMG images go to Floppy 1. Drop on a drive or open its picker to choose a specific slot.</p>
         <p>Floppy insertion leaves the guest running. Choose the next boot drive in Settings, then Reset. Replacing the HDD resets the machine.</p>
-        <p>After DOS finishes writing, open the IDE HDD picker and choose <strong>Save disk</strong>. The guest pauses while the browser saves and verifies the image. The last saved HDD boots automatically on this browser and site. A replacement needs its own save. Eject leaves the next startup empty. Restore FreeDOS HDD in Settings selects a fresh FreeDOS startup. VM retains the IDE disk for when you return to Ap.</p>
-        <p>Use <strong>Restore previous checkpoint</strong> in the IDE HDD picker if a save contains an incomplete DOS file or FAT update. If the latest checkpoint is unreadable, the player tries the previous one. Only one tab can change the saved startup disk at a time. Browser storage can be cleared or evicted. Use <strong>Export disk</strong> from a drive’s picker for external backups. Floppy changes stay in memory.</p>
+        <p>After DOS finishes writing, click <strong>Save</strong> directly in the IDE HDD slot. The guest pauses while the browser saves and verifies the image. The last saved HDD boots automatically on this browser and site. Use <strong>Change…</strong> to choose a replacement and <strong>Save</strong> to keep it for the next visit. Restore FreeDOS HDD in Settings selects a fresh FreeDOS startup. VM retains the IDE disk for when you return to Ap.</p>
+        <p>Open <strong>HDD actions</strong> (⋮) to export a backup, eject the disk and leave the next startup empty, or restore the previous checkpoint after an incomplete DOS file or FAT update. If the latest checkpoint is unreadable, the player tries the previous one. Only one tab can change the saved startup disk at a time. Browser storage can be cleared or evicted. Use <strong>Export disk</strong> in a floppy’s picker to keep floppy changes across visits.</p>
         <p>Click the screen to capture the mouse on Ap. Press Esc to release it. If capture is unavailable or you use touch, input stays within the screen. DOS software may require a guest mouse driver.</p>
         <p><a href="licenses.html">Licenses &amp; media credits</a> · <a href="https://github.com/takahirox/pc98-rust#build-and-play">Compatibility and controls</a></p>
       </div>
@@ -124,7 +124,17 @@
       </label>
       <div id="slot-2" class="slot" role="group" aria-labelledby="slot-label-2" data-drop-drive="2">
         <div class="slot-info"><h2 id="slot-label-2">IDE HDD</h2><p id="media-name-2" class="media-name" title="Loading HDD…">Loading HDD…</p></div>
-        <button id="drive-2" data-drive="2" aria-controls="media-picker" aria-expanded="false" aria-haspopup="dialog" aria-label="Insert IDE HDD" disabled>Insert…</button>
+        <div class="hdd-controls">
+          <button id="save-hdd" aria-describedby="hdd-save-status" hidden disabled>Save</button>
+          <button id="drive-2" data-drive="2" aria-controls="media-picker" aria-expanded="false" aria-haspopup="dialog" aria-label="Insert IDE HDD" disabled>Insert…</button>
+          <button id="hdd-actions" class="icon-button" popovertarget="hdd-actions-panel" aria-haspopup="dialog" aria-label="HDD actions" hidden disabled>⋮</button>
+        </div>
+        <p id="hdd-save-status" role="status" hidden></p>
+        <div id="hdd-actions-panel" class="panel" popover role="dialog" aria-label="HDD actions">
+          <button id="export-hdd" autofocus>Export disk</button>
+          <button id="eject-hdd">Eject</button>
+          <button id="recover-hdd">Restore previous checkpoint</button>
+        </div>
       </div>
       <div id="slot-0" class="slot" role="group" aria-labelledby="slot-label-0" data-drop-drive="0">
         <div class="slot-info"><h2 id="slot-label-0">Floppy 1</h2><p id="media-name-0" class="media-name" title="Empty">Empty</p></div>
@@ -134,17 +144,14 @@
         <div class="slot-info"><h2 id="slot-label-1">Floppy 2</h2><p id="media-name-1" class="media-name" title="Empty">Empty</p></div>
         <button id="drive-1" data-drive="1" aria-controls="media-picker" aria-expanded="false" aria-haspopup="dialog" aria-label="Insert Floppy 2" disabled>Insert…</button>
       </div>
-      <div id="media-picker" class="panel" popover role="dialog" aria-labelledby="media-title" aria-describedby="picker-disk media-hint hdd-save-status">
+      <div id="media-picker" class="panel" popover role="dialog" aria-labelledby="media-title" aria-describedby="picker-disk media-hint">
         <h2 id="media-title">Floppy 1</h2>
         <p id="picker-disk" class="boot-detail" hidden></p>
         <p id="media-hint"></p>
-        <p id="hdd-save-status" class="boot-detail" hidden></p>
         <div class="panel-actions">
           <button id="choose-file" autofocus>Choose local file…</button>
           <button id="eject" hidden>Eject</button>
           <button id="export" hidden>Export disk</button>
-          <button id="save-hdd" hidden>Save disk</button>
-          <button id="recover-hdd" hidden>Restore previous checkpoint</button>
         </div>
       </div>
       <input id="file" type="file" accept=".tfd,.hdm,.xdf,.2hd,.d88,.d98,.img,.hdi,.nhd" aria-label="Local disk image" hidden disabled>

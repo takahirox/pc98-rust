@@ -84,27 +84,29 @@ expands into the existing sparse Rust disk. See [desktop validation](docs/deskto
   Switching to **PC-9801VM** resets the guest and boots Floppy 1. Returning to
   Ap restores its boot preference and retained IDE disk.
 - **Keep the IDE HDD across visits.** Wait for DOS to finish writing, then
-  choose **Save disk** in the IDE HDD picker. Saving pauses the guest and
-  verifies the complete HDI or NHD in browser-local storage. The last saved
-  disk boots automatically on the next visit in the same browser profile and
-  origin. Save again after further guest changes. Replacing, ejecting or
-  restoring an HDD with unsaved guest writes asks before discarding them.
+  click **Save** directly in the IDE HDD slot. The line beneath the controls
+  shows the save status. Saving pauses the guest and verifies the complete
+  HDI or NHD in browser-local storage. The last saved disk boots automatically
+  on the next visit in the same browser profile and origin. Save again after
+  further guest changes. Replacing, ejecting or restoring an HDD with unsaved
+  guest writes asks before discarding them.
 - **Choose the next startup disk.** Save an imported replacement to reopen
   it automatically. Until then, the next startup has an empty IDE drive.
-  **Eject** also selects an empty drive for startup. **Restore FreeDOS HDD**
-  in Settings selects a fresh FreeDOS desktop and can retry a failed template
-  download. **Restore previous checkpoint** in the IDE HDD picker can bring
-  back the previous save, including after ejecting or replacing it.
+  **Eject** under **HDD actions** (⋮) also selects an empty drive for startup.
+  **Restore FreeDOS HDD** in Settings selects a fresh FreeDOS desktop and can
+  retry a failed template download. **Restore previous checkpoint** under
+  **HDD actions** can bring back the previous save, including after ejecting or
+  replacing it.
 - **Back up and recover.** If the latest checkpoint cannot be read, the player
   tries the previous checkpoint and reports the failure. A checkpoint captures
   the disk as DOS left it, including any incomplete FAT or file updates. Only
   one tab can change the saved HDD at a time. If another tab changed it, export
   any live changes you want to keep before reloading. Browser storage can be
   cleared or evicted. A save can temporarily use space for three disk images.
-  **Export disk** writes an external backup with the
-  original headers and all guest writes. Use it to keep floppy writes across
-  visits and to keep HDD backups outside the browser. HDI and NHD use 512-byte
-  sectors and supported IDE geometry. See [large disk evidence](docs/large-hdi.md)
+  **Export disk** writes an external backup with the original headers and all
+  guest writes. Find it under **HDD actions** for the IDE HDD or in each floppy’s
+  picker. HDI and NHD use 512-byte sectors and supported IDE geometry.
+  See [large disk evidence](docs/large-hdi.md)
   for chunked import and export of 512 MiB and 1 GiB images.
 
 The speaker button enables audio after a user gesture and toggles mute.

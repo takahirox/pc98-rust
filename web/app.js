@@ -116,8 +116,10 @@ new ResizeObserver(() => {
 }).observe(screen);
 const driveNames = ['Floppy 1', 'Floppy 2', 'IDE HDD'];
 const mediaPicker = $('media-picker'), fileInput = $('file');
+const hddActions = $('hdd-actions'), hddActionsPanel = $('hdd-actions-panel'), saveHdd = $('save-hdd');
 const driveButtons = [...document.querySelectorAll('[data-drive]')];
 let pickerDrive = 0, fileDrive;
+let savingHdd = false, hddStatusTimer, hddStatusPending = false;
 const controls = ['pause', 'reset', 'sound', 'profile', 'file'];
 let errorFocus;
 function fail(error, focusTarget) {
@@ -355,29 +357,57 @@ async function setRunning(value, label, mediaProgress = false) {
   status(label ?? (value ? 'Running' : pausedStatus()), mediaProgress);
 }
 function showPicker() {
-  const name = driveNames[pickerDrive], disk = mounted[pickerDrive];
+  const name = driveNames[pickerDrive], disk = mounted[pickerDrive], hdd = pickerDrive === 2;
   $('media-title').textContent = name;
   $('picker-disk').hidden = !disk;
   $('picker-disk').textContent = disk?.name ?? '';
-  $('media-hint').textContent = pickerDrive === 2 ? 'Choose an HDI or NHD image. Replacing the disk restarts the machine. Save the replacement to reopen it next time.'
+  $('media-hint').textContent = hdd ? 'Choose an HDI or NHD image. Replacing the disk restarts the machine. Save the replacement to reopen it next time.'
       : 'Choose a floppy image to insert while the guest is running.';
-  $('choose-file').disabled = loading || workerFailed || (pickerDrive === 2 && core?.metric(21) !== 1);
-  if (pickerDrive === 2 && core?.metric(21) !== 1) $('media-hint').textContent = 'Switch to PC-9821Ap to use this drive.';
-  $('eject').hidden = $('export').hidden = !disk;
+  $('choose-file').disabled = loading || workerFailed || (hdd && core?.metric(21) !== 1);
+  if (hdd && core?.metric(21) !== 1) $('media-hint').textContent = 'Switch to PC-9821Ap to use this drive.';
+  $('eject').hidden = $('export').hidden = hdd || !disk;
   $('eject').disabled = $('export').disabled = loading || workerFailed || !disk;
-  const hdd = pickerDrive === 2, busy = loading || workerFailed, ap = core?.metric(21) === 1;
-  $('save-hdd').hidden = !hdd || !disk;
-  $('save-hdd').disabled = busy || !disk || !hddStorage.current;
-  $('recover-hdd').hidden = !hdd || !hddStorage.current?.previous;
-  $('recover-hdd').disabled = busy || !ap;
-  $('hdd-save-status').hidden = !hdd;
-  const checkpoint = disk?.checkpoint;
-  const saved = checkpoint ? `Saved ${new Date(checkpoint.savedAt).toLocaleString()}` : '';
-  $('hdd-save-status').textContent = !hdd ? '' : !hddStorage.current ? 'HDD storage unavailable · Export disk for a backup.'
-    : disk ? saved || 'Changes stay in this tab until you save the disk.' : '';
   $('choose-file').setAttribute('aria-label', `Choose local file for ${name}`);
   $('eject').setAttribute('aria-label', `Eject ${name}`);
   $('export').setAttribute('aria-label', `Export disk from ${name}`);
+}
+function updateHddStatus() {
+  const disk = mounted[2], line = $('hdd-save-status');
+  let label = '';
+  if (disk) {
+    if (workerFailed) label = 'Save unavailable';
+    else if (core.metric(21) !== 1) label = 'Save requires Ap';
+    else if (savingHdd) label = 'Saving…';
+    else if (disk.saveFailed) label = 'Save failed · Retry or export';
+    else if (!hddStorage.current) label = 'HDD storage unavailable';
+    else if (disk.dirty) label = 'Unsaved changes';
+    else if (!disk.checkpoint) label = 'Not saved';
+    else label = disk.checkpoint === hddStorage.current.active ? 'Saved' : 'Previous checkpoint';
+  }
+  line.hidden = !label;
+  if (line.textContent !== label) line.textContent = label;
+}
+function scheduleHddStatus() {
+  clearTimeout(hddStatusTimer);
+  const disk = mounted[2];
+  // Once the write counter changes, the disk stays dirty until a save or new mount.
+  if (!disk || disk.dirty || workerFailed || loading || document.hidden ||
+      !hddStorage.current || core.metric(21) !== 1 || hddStatusPending) return;
+  hddStatusTimer = setTimeout(async () => {
+    hddStatusPending = true;
+    const savedWrites = disk.savedWrites;
+    try {
+      const writes = await core.hdi_write_count();
+      if (mounted[2] === disk && disk.savedWrites === savedWrites && !loading && !workerFailed) {
+        disk.dirty = writes !== (savedWrites ?? 0);
+        updateHddStatus();
+      }
+    } catch { /* A status refresh is optional. Media operations check writes while paused. */ }
+    finally {
+      hddStatusPending = false;
+      if (running) scheduleHddStatus();
+    }
+  }, 1000);
 }
 function syncControls() {
   const ap = core?.metric(21) === 1;
@@ -400,6 +430,19 @@ function syncControls() {
     button.textContent = disk ? 'Change…' : 'Insert…';
     button.setAttribute('aria-label', `${disk ? 'Change' : 'Insert'} ${driveNames[drive]}`);
   }
+  const disk = mounted[2], canRecover = ap && Boolean(hddStorage.current?.previous);
+  const exportHdd = $('export-hdd'), ejectHdd = $('eject-hdd'), recoverHdd = $('recover-hdd');
+  saveHdd.hidden = !disk;
+  saveHdd.disabled = busy || !disk || !ap || !hddStorage.current;
+  hddActions.hidden = !disk && !canRecover;
+  hddActions.disabled = busy;
+  exportHdd.hidden = ejectHdd.hidden = !disk;
+  recoverHdd.hidden = !canRecover;
+  exportHdd.disabled = ejectHdd.disabled = recoverHdd.disabled = busy;
+  exportHdd.toggleAttribute('autofocus', Boolean(disk));
+  recoverHdd.toggleAttribute('autofocus', !disk && canRecover);
+  updateHddStatus();
+  scheduleHddStatus();
   $('boot').disabled = $('default-hdd').disabled = busy || !ap;
   const preference = core?.metric(22);
   if (preference !== undefined) {
@@ -421,14 +464,6 @@ for (const button of driveButtons) {
     showPicker();
     button.focus({preventScroll:true});
     mediaPicker.showPopover({source:button});
-    if (drive === 2 && mounted[2]?.checkpoint) {
-      const disk = mounted[2];
-      core.hdi_write_count().then(writes => {
-        if (pickerDrive === 2 && mounted[2] === disk && writes !== disk.savedWrites) {
-          $('hdd-save-status').textContent += ' · Unsaved guest writes';
-        }
-      }).catch(fail);
-    }
   };
 }
 mediaPicker.addEventListener('beforetoggle', event => {
@@ -448,7 +483,7 @@ $('choose-file').onclick = () => {
   fileDrive = pickerDrive;
   fileInput.click();
 };
-async function withControlFocus(trigger, operation, {allowBody = false} = {}) {
+async function withControlFocus(trigger, operation, {allowBody = false, fallback = trigger} = {}) {
   // Disabling the initiating control can send focus to the body.
   if (document.activeElement !== trigger && !(allowBody && document.activeElement === document.body)) return operation();
   let restoreFocus = true;
@@ -458,13 +493,21 @@ async function withControlFocus(trigger, operation, {allowBody = false} = {}) {
     await operation();
   } finally {
     document.removeEventListener('focusin', focusMoved);
-    if (restoreFocus && document.activeElement === document.body) trigger.focus({preventScroll:true});
+    if (restoreFocus && document.activeElement === document.body) {
+      (trigger.hidden ? fallback : trigger).focus({preventScroll:true});
+    }
   }
 }
 function withDriveFocus(drive, operation) {
   if (mediaPicker.matches(':popover-open')) mediaPicker.hidePopover();
   const button = $('drive-' + drive);
   return withControlFocus(button, () => operation(button), {allowBody:true});
+}
+function withDiskActionFocus(drive, operation) {
+  if (drive !== 2) return withDriveFocus(drive, operation);
+  hddActionsPanel.hidePopover();
+  const fallback = core.metric(21) === 1 ? $('drive-2') : $('profile');
+  return withControlFocus(hddActions, () => operation(hddActions), {allowBody:true, fallback});
 }
 fileInput.onchange = () => {
   const file = fileInput.files[0];
@@ -542,10 +585,11 @@ async function selectProfile() {
 $('profile').onchange = ({currentTarget}) => withControlFocus(currentTarget, () => exclusive(selectProfile));
 async function mayReplaceHdd(startupChoice) {
   const disk = mounted[2], active = hddStorage.current?.active;
-  const dirty = disk && await core.hdi_write_count() !== (disk.savedWrites ?? 0);
+  if (disk) disk.dirty = await core.hdi_write_count() !== (disk.savedWrites ?? 0);
+  const dirty = disk?.dirty;
   const changesStartup = active && typeof active === 'object';
   if (!dirty && !changesStartup) return true;
-  const writes = dirty ? `${disk.name} has unsaved guest writes. Discard them? Cancel to keep the disk and use Save disk or Export disk first.` : '';
+  const writes = dirty ? `${disk.name} has unsaved guest writes. Discard them? Cancel to keep the disk and use Save or Export disk first.` : '';
   return confirm([writes, changesStartup ? startupChoice : ''].filter(Boolean).join('\n\n'));
 }
 async function selectHddStartup(active) {
@@ -555,9 +599,8 @@ async function selectHddStartup(active) {
   await hddStorage.select(active);
   return true;
 }
-$('eject').onclick = () => {
-  const drive = pickerDrive;
-  return withDriveFocus(drive, recovery => exclusive(async () => {
+function ejectDisk(drive) {
+  return withDiskActionFocus(drive, recovery => exclusive(async () => {
     if (!mounted[drive]) return;
     const resume = running;
     if (drive === 2) await setRunning(false);
@@ -569,7 +612,9 @@ $('eject').onclick = () => {
       clearError();
     } finally { if (drive === 2 && !workerFailed) await setRunning(resume && !document.hidden); }
   }, {recovery}));
-};
+}
+$('eject').onclick = () => ejectDisk(pickerDrive);
+$('eject-hdd').onclick = () => ejectDisk(2);
 function hddProgress(label, at, bytes) {
   status(`${label} · ${Math.floor(at * 100 / bytes)}%`, true);
 }
@@ -609,29 +654,37 @@ async function exportBlob(drive) {
     throw Error(`Cannot export hard disk: ${error.message}. Disk remains mounted; free browser resources and retry.`);
   }
 }
-$('save-hdd').onclick = () => withDriveFocus(2, recovery => exclusive(async () => {
-  const disk = mounted[2];
-  clearError();
-  try {
-    await withHddSnapshot('Saving HDD', async (length, read) => {
-      const writes = await core.hdi_write_count();
-      disk.checkpoint = await hddStorage.save(disk.name, length, async (at,n) => {
-        const bytes = await read(at,n);
-        hddProgress('Saving HDD', at+n, length);
-        return bytes;
-      }, (at,n,total) => hddProgress('Verifying HDD', at+n, total), {
-        mountedCheckpoint:disk.checkpoint, unchanged:writes === disk.savedWrites,
+saveHdd.onclick = () => {
+  if (saveHdd.disabled) return;
+  mediaPicker.hidePopover();
+  hddActionsPanel.hidePopover();
+  return withControlFocus(saveHdd, () => exclusive(async () => {
+    const disk = mounted[2];
+    clearError();
+    savingHdd = true;
+    updateHddStatus();
+    try {
+      await withHddSnapshot('Saving HDD', async (length, read) => {
+        const writes = await core.hdi_write_count();
+        disk.checkpoint = await hddStorage.save(disk.name, length, async (at,n) => {
+          const bytes = await read(at,n);
+          hddProgress('Saving HDD', at+n, length);
+          return bytes;
+        }, (at,n,total) => hddProgress('Verifying HDD', at+n, total), {
+          mountedCheckpoint:disk.checkpoint, unchanged:writes === disk.savedWrites,
+        });
+        disk.savedWrites = writes;
+        disk.dirty = disk.saveFailed = false;
       });
-      disk.savedWrites = writes;
-    });
-    status(running ? 'Running · HDD saved' : 'Paused · HDD saved');
-  } catch (error) {
-    throw Error(`HDD save failed. ${error.message}. The live disk and previous save are retained. Use Export disk for a backup.`);
-  }
-}, {recovery}));
-$('export').onclick = () => {
-  const drive = pickerDrive;
-  return withDriveFocus(drive, recovery => exclusive(async () => {
+      status(running ? 'Running · HDD saved' : 'Paused · HDD saved');
+    } catch (error) {
+      disk.saveFailed = true;
+      throw Error(`HDD save failed. ${error.message}. The live disk and previous save are retained. Use Export disk for a backup.`);
+    } finally { savingHdd = false; }
+  }, {recovery:saveHdd}));
+};
+function exportDisk(drive) {
+  return withDiskActionFocus(drive, recovery => exclusive(async () => {
     if (!mounted[drive]) return;
     clearError();
     const data = await exportBlob(drive);
@@ -639,7 +692,9 @@ $('export').onclick = () => {
     link.href = url; link.download = mounted[drive].name; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }, {recovery}));
-};
+}
+$('export').onclick = () => exportDisk(pickerDrive);
+$('export-hdd').onclick = () => exportDisk(2);
 function loadFile(file, target, resetOptions) {
   if (!file) return;
   return exclusive(async () => {
@@ -656,7 +711,7 @@ function loadFile(file, target, resetOptions) {
       await stageHdd(file.size, () => file.slice(0,512).arrayBuffer(),
         at => file.slice(at, at + chunkBytes).arrayBuffer(), 'Importing HDD');
       return {name:file.name};
-    }, 'empty', 'Replace the saved startup HDD? Use Save disk on the replacement to reopen it next time.', resetOptions);
+    }, 'empty', 'Replace the saved startup HDD? Use Save on the replacement to reopen it next time.', resetOptions);
   }, {recovery:target === undefined ? screen : $('drive-' + target)});
 }
 const transferHdd = buffer => rpc('input',buffer,[buffer]);
@@ -756,7 +811,7 @@ async function replaceHdd(prepare, selection, confirmation, resetOptions) {
     }
   }
 }
-$('recover-hdd').onclick = () => withDriveFocus(2, recovery => exclusive(async () => {
+$('recover-hdd').onclick = () => withDiskActionFocus(2, recovery => exclusive(async () => {
   clearError();
   await replaceHdd(stageSavedHdd, 'previous', 'Make the previous HDD checkpoint the startup disk?', {focusScreen:false});
 }, {recovery}));
@@ -787,12 +842,12 @@ async function startupHdd() {
       }, undefined, undefined, {preserveHostFocus:true});
     });
   } catch (error) {
-    throw Error(`HDD startup failed. ${error.message}. Saved data is retained. Try Restore previous checkpoint in the IDE HDD picker, Restore FreeDOS HDD in Settings, or insert a backup.`);
+    throw Error(`HDD startup failed. ${error.message}. Saved data is retained. Try Restore previous checkpoint under HDD actions, Restore FreeDOS HDD in Settings, or insert a backup.`);
   }
   if (startup.active === 'default') {
     await replaceHdd(() => stageFreeDos(true), undefined, undefined, {preserveHostFocus:true}).catch(freedosFailure);
   }
-  if (fallback) fail(`Latest HDD checkpoint could not be read (${fallback}). The previous checkpoint was restored. Export disk for a backup or use Save disk to make it the startup disk.`, $('drive-2'));
+  if (fallback) fail(`Latest HDD checkpoint could not be read (${fallback}). The previous checkpoint was restored. Export disk for a backup or use Save to make it the startup disk.`, $('drive-2'));
 }
 for (const target of [display, ...document.querySelectorAll('[data-drop-drive]')]) {
   target.ondragover = event => {
@@ -1094,6 +1149,7 @@ screen.addEventListener('contextmenu', event => {
 });
 screen.addEventListener('blur',releaseKeys); window.addEventListener('blur',releaseKeys);
 document.addEventListener('visibilitychange', () => {
+  scheduleHddStatus();
   if (!document.hidden) return;
   if (core && running) setRunning(false).catch(fail);
   else releaseKeys();
