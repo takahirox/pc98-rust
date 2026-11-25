@@ -906,11 +906,11 @@ window.addEventListener('mouseup', event => {
 }, true);
 for (const name of ['mousedown', 'mouseup']) screen.addEventListener(name, event => {
   if (!mouseAvailable() || event.sourceCapabilities?.firesTouchEvents) return;
+  // Bounded input only adds the button pressed on the canvas, even if others are held.
+  const pressed = name === 'mousedown' ? [1, 4, 2][event.button] ?? 0 : 0;
   if (pointerRequest?.cancelled === false) {
     const {fallback} = pointerRequest;
     if (fallback) {
-      // A press can add only its own button, even if others are held from outside the canvas.
-      const pressed = name === 'mousedown' ? [1, 4, 2][event.button] ?? 0 : 0;
       stageMouseButtons(fallback, event.buttons & (fallback.samples.at(-1).buttons | pressed));
     }
     return;
@@ -928,7 +928,8 @@ for (const name of ['mousedown', 'mouseup']) screen.addEventListener(name, event
     if (name === 'mousedown' && !pointerPosition) boundedMovement(event);
   }
   event.preventDefault();
-  mouseButtons(event.buttons & ~suppressedMouseButtons & 7);
+  const eligibleButtons = locked ? 7 : pointerButtons | pressed;
+  mouseButtons(event.buttons & eligibleButtons & ~suppressedMouseButtons);
 });
 screen.addEventListener('pointerdown', event => {
   if (event.pointerType === 'mouse' || !event.isPrimary || lockedMouse() || !mouseAvailable()) return;

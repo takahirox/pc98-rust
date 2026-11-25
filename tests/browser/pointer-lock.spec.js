@@ -254,6 +254,30 @@ for (const failure of ['legacy error event', 'rejected promise', 'unsupported'])
   });
 }
 
+test('fallback drag re-entry keeps a button released until it is pressed again', async ({page}) => {
+  const screen = await start(page, {manual:true});
+  await screen.evaluate(canvas => { canvas.requestPointerLock = undefined; });
+  const box = await screen.boundingBox();
+  const x = box.x + box.width / 2, y = box.y + box.height / 2;
+
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  expect(await guest(page, 100000)).toMatchObject({buttons:0x80, edges:1});
+  await page.mouse.move(box.x + box.width + 5, y);
+  expect(await guest(page, 100000)).toMatchObject({buttons:0, edges:2});
+
+  await page.mouse.move(x, y);
+  await page.mouse.down({button:'right'});
+  expect(await guest(page, 100000)).toMatchObject({buttons:0x20, edges:3});
+  await page.mouse.up();
+  expect(await guest(page, 100000)).toMatchObject({buttons:0x20, edges:3});
+  await page.mouse.down();
+  expect(await guest(page, 100000)).toMatchObject({buttons:0xa0, edges:4});
+  await page.mouse.up({button:'right'});
+  await page.mouse.up();
+  expect(await guest(page, 100000)).toMatchObject({buttons:0, edges:6});
+});
+
 test('a short fallback tap reaches the guest when both edges arrive between samples', async ({page}) => {
   const screen = await start(page, {manual:true});
   await screen.evaluate(canvas => { canvas.requestPointerLock = undefined; });
