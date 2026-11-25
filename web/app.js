@@ -1,4 +1,5 @@
 import {Presenter,defaultPreset,presets} from './presenter.js';
+import {HddStorage,chunkBytes,openCheckpoint} from './hdd-storage.js';
 const $ = (id) => document.getElementById(id);
 const screen = $('screen');
 const presenter = new Presenter(screen,$('crt-screen'),$('screen-surface'),
@@ -104,6 +105,7 @@ let nextPresentation = 0;
 const pending = new Map(); let requestId = 0;
 const metrics = new Map(); let bootSource;
 const mounted = [null, null, null], held = new Set();
+const hddStorage = new HddStorage();
 const pendingShifts = new Set();
 let pointerRequest, pointerLocked = false, pointerRejected = false, suppressedMouseButtons = 0;
 let pointerPosition, touchPointer, pointerButtons = 0, sentMouse = false;
@@ -357,12 +359,22 @@ function showPicker() {
   $('media-title').textContent = name;
   $('picker-disk').hidden = !disk;
   $('picker-disk').textContent = disk?.name ?? '';
-  $('media-hint').textContent = pickerDrive === 2 ? 'Choose an HDI or NHD image. Replacing the disk restarts the machine.'
+  $('media-hint').textContent = pickerDrive === 2 ? 'Choose an HDI or NHD image. Replacing the disk restarts the machine. Save the replacement to reopen it next time.'
       : 'Choose a floppy image to insert while the guest is running.';
   $('choose-file').disabled = loading || workerFailed || (pickerDrive === 2 && core?.metric(21) !== 1);
   if (pickerDrive === 2 && core?.metric(21) !== 1) $('media-hint').textContent = 'Switch to PC-9821Ap to use this drive.';
   $('eject').hidden = $('export').hidden = !disk;
   $('eject').disabled = $('export').disabled = loading || workerFailed || !disk;
+  const hdd = pickerDrive === 2, busy = loading || workerFailed, ap = core?.metric(21) === 1;
+  $('save-hdd').hidden = !hdd || !disk;
+  $('save-hdd').disabled = busy || !disk || !hddStorage.current;
+  $('recover-hdd').hidden = !hdd || !hddStorage.current?.previous;
+  $('recover-hdd').disabled = busy || !ap;
+  $('hdd-save-status').hidden = !hdd;
+  const checkpoint = disk?.checkpoint;
+  const saved = checkpoint ? `Saved ${new Date(checkpoint.savedAt).toLocaleString()}` : '';
+  $('hdd-save-status').textContent = !hdd ? '' : !hddStorage.current ? 'HDD storage unavailable · Export disk for a backup.'
+    : disk ? saved || 'Changes stay in this tab until you save the disk.' : '';
   $('choose-file').setAttribute('aria-label', `Choose local file for ${name}`);
   $('eject').setAttribute('aria-label', `Eject ${name}`);
   $('export').setAttribute('aria-label', `Export disk from ${name}`);
@@ -409,6 +421,14 @@ for (const button of driveButtons) {
     showPicker();
     button.focus({preventScroll:true});
     mediaPicker.showPopover({source:button});
+    if (drive === 2 && mounted[2]?.checkpoint) {
+      const disk = mounted[2];
+      core.hdi_write_count().then(writes => {
+        if (pickerDrive === 2 && mounted[2] === disk && writes !== disk.savedWrites) {
+          $('hdd-save-status').textContent += ' · Unsaved guest writes';
+        }
+      }).catch(fail);
+    }
   };
 }
 mediaPicker.addEventListener('beforetoggle', event => {
@@ -520,9 +540,20 @@ async function selectProfile() {
   await setRunning(!document.hidden && hasBootMedia());
 }
 $('profile').onchange = ({currentTarget}) => withControlFocus(currentTarget, () => exclusive(selectProfile));
-async function mayReplace(drive) {
-  return drive !== 2 || !mounted[2] || ((await core.hdi_dirty_page(0)) >>> 0) === 0xffffffff ||
-    confirm(`${mounted[2].name} has guest writes. Discard them? Cancel to keep the disk and use Export disk first.`);
+async function mayReplaceHdd(startupChoice) {
+  const disk = mounted[2], active = hddStorage.current?.active;
+  const dirty = disk && await core.hdi_write_count() !== (disk.savedWrites ?? 0);
+  const changesStartup = active && typeof active === 'object';
+  if (!dirty && !changesStartup) return true;
+  const writes = dirty ? `${disk.name} has unsaved guest writes. Discard them? Cancel to keep the disk and use Save disk or Export disk first.` : '';
+  return confirm([writes, changesStartup ? startupChoice : ''].filter(Boolean).join('\n\n'));
+}
+async function selectHddStartup(active) {
+  if (!hddStorage.current) {
+    return confirm('Browser HDD storage is unavailable. Apply this change for this session only? The saved startup choice could not be updated.');
+  }
+  await hddStorage.select(active, mounted[2]?.checkpoint);
+  return true;
 }
 $('eject').onclick = () => {
   const drive = pickerDrive;
@@ -531,37 +562,75 @@ $('eject').onclick = () => {
     const resume = running;
     if (drive === 2) await setRunning(false);
     try {
-      if (!await mayReplace(drive)) return;
+      if (drive === 2 && (!await mayReplaceHdd('Eject the saved startup HDD? It will be available as a previous checkpoint.') ||
+          !await selectHddStartup('empty'))) return;
       await core.eject(drive); mounted[drive] = null;
       if (drive !== 2) refreshPausedMediaStatus();
       clearError();
     } finally { if (drive === 2 && !workerFailed) await setRunning(resume && !document.hidden); }
   }, {recovery}));
 };
-const chunkBytes = 1024 * 1024;
+function hddProgress(label, at, bytes) {
+  status(`${label} · ${Math.floor(at * 100 / bytes)}%`, true);
+}
+async function withHddSnapshot(label, operation) {
+  const resume = running;
+  await setRunning(false, `${label}…`, true);
+  try {
+    const length = await rpc('snapshot',true);
+    if (!length) throw Error('No hard disk image mounted.');
+    return await operation(length, (at,n) => rpc('readChunk',[at,n]));
+  } finally {
+    if (!workerFailed) {
+      await rpc('snapshot',false);
+      await setRunning(resume && !document.hidden);
+    }
+  }
+}
 async function exportBlob(drive) {
   if (drive !== 2) return new Blob([await rpc('export',drive)]);
   // Snapshot the mounted bytes while paused. Local File slices can become
   // unreadable after saving over the input file, even after Blob construction
   // succeeds. Blob snapshots own each bounded chunk independently of that file
   // and of the reusable Wasm transfer buffer.
-  const resume = running;
-  await setRunning(false, 'Exporting HDD…', true);
   try {
-    const len = await rpc('snapshot',true), parts = [];
-    if (!len) throw Error('No hard disk image mounted.');
-    for (let at = 0; at < len; at += chunkBytes) {
-      const n = Math.min(chunkBytes,len-at);
-      parts.push(new Blob([await rpc('readChunk',[at,n])]));
-      status(`Exporting HDD · ${Math.min(100, Math.floor((at + n) * 100 / len))}%`, true);
-    }
-    const blob = new Blob(parts, { type: 'application/octet-stream' });
-    if (blob.size !== len) throw Error('Incomplete hard disk export; please retry.');
-    return blob;
+    return await withHddSnapshot('Exporting HDD', async (len, read) => {
+      const parts = [];
+      for (let at = 0; at < len; at += chunkBytes) {
+        const n = Math.min(chunkBytes,len-at);
+        parts.push(new Blob([await read(at,n)]));
+        hddProgress('Exporting HDD', at+n, len);
+      }
+      const blob = new Blob(parts, { type: 'application/octet-stream' });
+      if (blob.size !== len) throw Error('Incomplete hard disk export; please retry.');
+      return blob;
+    });
   } catch (error) {
     throw Error(`Cannot export hard disk: ${error.message}. Disk remains mounted; free browser resources and retry.`);
-  } finally { await rpc('snapshot',false); await setRunning(resume && !document.hidden); }
+  }
 }
+$('save-hdd').onclick = () => withDriveFocus(2, recovery => exclusive(async () => {
+  const disk = mounted[2];
+  clearError();
+  try {
+    await withHddSnapshot('Saving HDD', async (length, read) => {
+      const writes = await core.hdi_write_count();
+      if (disk.checkpoint === hddStorage.current.active && writes === disk.savedWrites) {
+        await hddStorage.update(() => null);
+        return;
+      }
+      disk.checkpoint = await hddStorage.save(disk.name, length, async (at,n) => {
+        const bytes = await read(at,n);
+        hddProgress('Saving HDD', at+n, length);
+        return bytes;
+      }, (at,n) => hddProgress('Verifying HDD', at+n, length), disk.checkpoint);
+      disk.savedWrites = writes;
+    });
+    status(running ? 'Running · HDD saved' : 'Paused · HDD saved');
+  } catch (error) {
+    throw Error(`HDD save failed. ${error.message}. The live disk and previous save are retained. Use Export disk for a backup.`);
+  }
+}, {recovery}));
 $('export').onclick = () => {
   const drive = pickerDrive;
   return withDriveFocus(drive, recovery => exclusive(async () => {
@@ -585,90 +654,143 @@ function loadFile(file, target, resetOptions) {
       refreshPausedMediaStatus();
       return;
     }
-    const resume = running;
-    await setRunning(false);
-    try {
-      if (!await mayReplace(drive)) { await setRunning(resume && !document.hidden); return; }
-      status('Importing HDD…', true);
-      const transfer = bytes => rpc('input',bytes.buffer,[bytes.buffer]);
-      await transfer(new Uint8Array(await file.slice(0,512).arrayBuffer()));
-      await core.hdi_begin(file.size);
-      for (let at = 0; at < file.size; at += chunkBytes) {
-        await transfer(new Uint8Array(await file.slice(at, at + chunkBytes).arrayBuffer()));
-        await core.hdi_append();
-        status(`Importing HDD · ${Math.min(100, Math.floor((at + chunkBytes) * 100 / file.size))}%`, true);
-      }
-      await core.hdi_commit();
-      mounted[2] = {name: file.name};
-      await resetMachine(resetOptions);
-    } catch (error) {
-      await core.hdi_cancel().catch(() => {});
-      if (!workerFailed) await setRunning(resume && !document.hidden);
-      throw error;
-    }
+    await replaceHdd(async () => {
+      await stageHdd(file.size, () => file.slice(0,512).arrayBuffer(),
+        at => file.slice(at, at + chunkBytes).arrayBuffer(), 'Importing HDD');
+      return {name:file.name};
+    }, 'empty', 'Replace the saved startup HDD? Use Save disk on the replacement to reopen it next time.', resetOptions);
   }, {recovery:target === undefined ? screen : $('drive-' + target)});
 }
-function defaultHdd({startup = false} = {}) {
-  if (core?.metric(21) !== 1) return;
-  return exclusive(async () => {
-    const resume = running;
-    try {
-      await setRunning(false);
-      if (!await mayReplace(2)) { await setRunning(resume && !document.hidden); return; }
-      clearError(); status('Loading FreeDOS HDD…', !startup);
-      const response = await fetch('freedos/manifest.json');
-      if (!response.ok) throw Error(`Cannot load FreeDOS manifest: HTTP ${response.status}`);
-      const manifest = await response.json();
-      if (manifest.bytes !== 128 * 1024 * 1024 + 4096 ||
-          !Number.isInteger(manifest.prefix_bytes) ||
-          manifest.prefix_bytes <= 32 || manifest.prefix_bytes > chunkBytes ||
-          manifest.prefix_bytes % 65536 ||
-          JSON.stringify(manifest.geometry) !== '[512,16,32,512]') throw Error('Invalid FreeDOS template geometry/size');
-      const template = await fetch('freedos/desktop.bin');
-      if (!template.ok) throw Error(`Cannot load FreeDOS template: HTTP ${template.status}`);
-      // Bound even a misconfigured server response before any large allocation.
-      const reader = template.body.getReader(), parts = [];
-      let received = 0;
-      try {
-        while (true) {
-          const {done, value} = await reader.read();
-          if (done) break;
-          received += value.length;
-          if (received > manifest.prefix_bytes) throw Error('FreeDOS template exceeds expected size');
-          parts.push(value);
-        }
-      } finally { await reader.cancel(); }
-      if (received !== manifest.prefix_bytes) throw Error('Truncated FreeDOS template');
-      const prefix = new Uint8Array(received);
-      let offset = 0;
-      for (const part of parts) { prefix.set(part, offset); offset += part.length; }
-      const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', prefix)),
-        byte => byte.toString(16).padStart(2, '0')).join('');
-      if (digest !== manifest.prefix_sha256) throw Error('FreeDOS template checksum mismatch');
-      const transfer = bytes => rpc('input',bytes.buffer,[bytes.buffer]);
-      await transfer(prefix.slice(0,32));
-      await core.hdi_begin(manifest.bytes);
-      await transfer(prefix);
-      await core.hdi_append();
-      const zero = new Uint8Array(chunkBytes);
-      for (let at = received; at < manifest.bytes; at += chunkBytes) {
-        await transfer(zero.slice(0, Math.min(chunkBytes, manifest.bytes-at)));
-        await core.hdi_append();
-      }
-      await core.hdi_commit();
-      mounted[2] = {name: 'FreeDOS-128MiB.hdi'};
-      await resetMachine({preserveHostFocus:startup});
-    } catch (error) {
+const transferHdd = buffer => rpc('input',buffer,[buffer]);
+async function stageHdd(size, header, read, label) {
+  status(`${label}…`, true);
+  await transferHdd(await header());
+  await core.hdi_begin(size);
+  for (let at = 0; at < size; at += chunkBytes) {
+    const bytes = await read(at);
+    const end = at + bytes.byteLength;
+    await transferHdd(bytes);
+    await core.hdi_append();
+    hddProgress(label, end, size);
+  }
+  await core.hdi_validate();
+}
+async function stageFreeDos(startup = false) {
+  status('Loading FreeDOS HDD…', !startup);
+  const response = await fetch('freedos/manifest.json');
+  if (!response.ok) throw Error(`Cannot load FreeDOS manifest: HTTP ${response.status}`);
+  const manifest = await response.json();
+  if (manifest.bytes !== 128 * 1024 * 1024 + 4096 ||
+      !Number.isInteger(manifest.prefix_bytes) ||
+      manifest.prefix_bytes <= 32 || manifest.prefix_bytes > chunkBytes ||
+      manifest.prefix_bytes % 65536 ||
+      JSON.stringify(manifest.geometry) !== '[512,16,32,512]') throw Error('Invalid FreeDOS template geometry/size');
+  const template = await fetch('freedos/desktop.bin');
+  if (!template.ok) throw Error(`Cannot load FreeDOS template: HTTP ${template.status}`);
+  // Bound even a misconfigured server response before any large allocation.
+  const reader = template.body.getReader(), parts = [];
+  let received = 0;
+  try {
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      received += value.length;
+      if (received > manifest.prefix_bytes) throw Error('FreeDOS template exceeds expected size');
+      parts.push(value);
+    }
+  } finally { await reader.cancel(); }
+  if (received !== manifest.prefix_bytes) throw Error('Truncated FreeDOS template');
+  const prefix = new Uint8Array(received);
+  let offset = 0;
+  for (const part of parts) { prefix.set(part, offset); offset += part.length; }
+  const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', prefix)),
+    byte => byte.toString(16).padStart(2, '0')).join('');
+  if (digest !== manifest.prefix_sha256) throw Error('FreeDOS template checksum mismatch');
+  await transferHdd(prefix.slice(0,32).buffer);
+  await core.hdi_begin(manifest.bytes);
+  await transferHdd(prefix.buffer);
+  await core.hdi_append();
+  const zero = new Uint8Array(chunkBytes);
+  for (let at = received; at < manifest.bytes; at += chunkBytes) {
+    await transferHdd(zero.slice(0, Math.min(chunkBytes, manifest.bytes-at)).buffer);
+    await core.hdi_append();
+  }
+  await core.hdi_validate();
+  return {name:'FreeDOS-128MiB.hdi'};
+}
+async function stageSavedHdd(checkpoint) {
+  const image = await openCheckpoint(checkpoint);
+  await stageHdd(image.size, image.header, image.read, 'Restoring saved HDD');
+  return {name:checkpoint.name, checkpoint, savedWrites:0};
+}
+async function replaceHdd(prepare, selection, confirmation, resetOptions) {
+  const resume = running;
+  await setRunning(false);
+  let committed = false;
+  try {
+    if (confirmation && !await mayReplaceHdd(confirmation)) return;
+    let disk;
+    if (selection === 'previous') {
+      await hddStorage.recover(async checkpoint => {
+        disk = await prepare(checkpoint);
+      });
+      // Keep the reference used by the save button's unchanged-disk check.
+      disk.checkpoint = hddStorage.current.active;
+    } else {
+      disk = await prepare();
+      if (selection && !await selectHddStartup(selection)) return;
+    }
+    // Publish a new startup choice only after the replacement is fully staged.
+    // Commit then mounts those same validated bytes while the guest is paused.
+    await core.hdi_commit();
+    committed = true;
+    mounted[2] = disk;
+    await resetMachine(resetOptions);
+  } finally {
+    if (!committed && !workerFailed) {
       await core.hdi_cancel().catch(() => {});
       if (!workerFailed) await setRunning(resume && !document.hidden);
-      throw Error(`${error.message}. Disk retained. Use Restore FreeDOS HDD to retry, or insert local media.`);
     }
-  });
+  }
+}
+$('recover-hdd').onclick = () => withDriveFocus(2, recovery => exclusive(async () => {
+  clearError();
+  await replaceHdd(stageSavedHdd, 'previous', 'Make the previous HDD checkpoint the startup disk?', {focusScreen:false});
+}, {recovery}));
+function freedosFailure(error) {
+  throw Error(`${error.message}. Disk retained. Use Restore FreeDOS HDD to retry, or insert local media.`);
 }
 $('default-hdd').onclick = () => {
   $('settings-panel').hidePopover();
-  return defaultHdd();
+  return exclusive(async () => {
+    clearError();
+    await replaceHdd(stageFreeDos, 'default', 'Boot a fresh FreeDOS HDD on startup? The saved HDD will be available as a previous checkpoint.').catch(freedosFailure);
+  }, {recovery:$('settings')});
 };
+async function startupHdd() {
+  let fallback;
+  try {
+    await hddStorage.startup(async ({active,previous}) => {
+      if (active === 'empty' || active === 'default') return;
+      await replaceHdd(async () => {
+        try { return await stageSavedHdd(active); }
+        catch (error) {
+          await core.hdi_cancel();
+          if (!previous) throw error;
+          const disk = await stageSavedHdd(previous);
+          fallback = error.message;
+          return disk;
+        }
+      }, undefined, undefined, {preserveHostFocus:true});
+    });
+  } catch (error) {
+    throw Error(`HDD startup failed. ${error.message}. Saved data is retained. Try Restore previous checkpoint in the IDE HDD picker, Restore FreeDOS HDD in Settings, or insert a backup.`);
+  }
+  if (hddStorage.current.active === 'default') {
+    await replaceHdd(() => stageFreeDos(true), undefined, undefined, {preserveHostFocus:true}).catch(freedosFailure);
+  }
+  if (fallback) fail(`Latest HDD checkpoint could not be read (${fallback}). The previous checkpoint was restored. Export disk for a backup or use Save disk to make it the startup disk.`, $('drive-2'));
+}
 for (const target of [display, ...document.querySelectorAll('[data-drop-drive]')]) {
   target.ondragover = event => {
     if (!event.dataTransfer.types.includes('Files')) return;
@@ -1026,5 +1148,5 @@ try {
     suspend:async () => { await audio.suspend(); await soundState(); },
     resume:async () => { await audio.resume(); await soundState(); },
   };
-  await defaultHdd({startup:true});
+  await exclusive(startupHdd, {recovery:$('drive-2')});
 } catch (error) { status('Unable to start'); fail(error); }

@@ -7,7 +7,7 @@ const site = new URL('../web/', import.meta.url);
 const desktop = JSON.parse(await readFile(new URL('../fixtures/desktop-publication.json', import.meta.url)));
 const expected = [
   ...Object.keys(desktop).map(name => `freedos/${name}`),
-  'index.html', 'app.js', 'presenter.js', 'emulator-worker.js', 'render-worker.js', 'audio-worklet.js', 'jit.js', 'block-jit.js', 'block-compiler.js', 'block-linker.js', 'style.css', 'core.wasm',
+  'index.html', 'app.js', 'presenter.js', 'emulator-worker.js', 'render-worker.js', 'audio-worklet.js', 'jit.js', 'block-jit.js', 'block-compiler.js', 'block-linker.js', 'hdd-storage.js', 'hdd-storage-worker.js', 'style.css', 'core.wasm',
   'licenses.html', 'LICENSE.txt', 'shinonome-LICENSE.txt',
 ].sort();
 async function files(directory, prefix = '') {
@@ -35,7 +35,7 @@ assert.deepEqual([...wasm.subarray(0, 8)], [0, 97, 115, 109, 1, 0, 0, 0]);
 // Compile the entire module; a magic header alone is not a valid Wasm binary.
 const module = await WebAssembly.compile(wasm);
 const exported = WebAssembly.Module.exports(module).map(entry => entry.name);
-for (const name of ['memory', 'insert', 'step', 'frame', 'key', 'mouse', 'reset', 'set_profile', 'export_disk', 'set_boot_source', 'video_snapshot', 'video_snapshot_len', 'video_render', 'jit_begin_slice', 'jit_next', 'jit_register', 'jit_enter', 'jit_layout', 'block_begin_slice', 'block_start', 'block_finish']) {
+for (const name of ['memory', 'insert', 'step', 'frame', 'key', 'mouse', 'reset', 'set_profile', 'export_disk', 'set_boot_source', 'hdi_validate', 'hdi_read_chunk', 'hdi_write_count', 'video_snapshot', 'video_snapshot_len', 'video_render', 'jit_begin_slice', 'jit_next', 'jit_register', 'jit_enter', 'jit_layout', 'block_begin_slice', 'block_start', 'block_finish']) {
   assert(exported.includes(name), `Missing emulator export: ${name}`);
 }
 console.log(`Publication checked: ${expected.length} approved assets; valid emulator Wasm (${wasm.length} bytes)`);
@@ -53,6 +53,12 @@ const block = await readFile(new URL('block-jit.js',site),'utf8');
 assert(block.includes("from './jit.js'"));
 assert(block.includes("from './block-compiler.js'"));
 assert(!/WebAssembly\.|core\.(step|frame|memory)|createBufferSource/.test(app), 'DOM must not execute Wasm or batch audio');
+const storage = await readFile(new URL('hdd-storage.js',site),'utf8');
+const storageWorker = await readFile(new URL('hdd-storage-worker.js',site),'utf8');
+assert(app.includes("from './hdd-storage.js'"));
+assert(storage.includes("new URL('hdd-storage-worker.js',import.meta.url)"));
+assert(!/\b(fetch|XMLHttpRequest|WebSocket|sendBeacon|localStorage)\b/.test(storage + storageWorker),
+  'HDD checkpoints must stay in browser-local binary storage');
 
 const renderer = await readFile(new URL('render-worker.js',site),'utf8');
 assert(renderer.includes("new URL('core.wasm', import.meta.url)"));

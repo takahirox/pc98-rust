@@ -274,7 +274,7 @@ function tick() {
     : (core.metric(5) < guestDeadline ? 0 : Math.max(1,deadline-performance.now())));
 }
 const calls = new Set(['key','mouse','set_boot_source','set_profile','reset','eject',
-  'hdi_begin','hdi_append','hdi_commit','hdi_cancel','hdi_len','hdi_dirty_page']);
+  'hdi_begin','hdi_append','hdi_validate','hdi_commit','hdi_cancel','hdi_len','hdi_dirty_page','hdi_write_count']);
 async function command(type, data) {
   if (type === 'init') {
     const response = await fetch(new URL('core.wasm', import.meta.url));
@@ -429,7 +429,7 @@ async function command(type, data) {
     const {name,args} = data;
     const resets = name === 'reset' || name === 'set_profile';
     if (!calls.has(name)) throw Error('Unsupported core command');
-    if (transaction && !['hdi_append','hdi_commit','hdi_cancel','hdi_len','hdi_dirty_page','key','mouse'].includes(name)) throw Error('Media operation in progress');
+    if (transaction && !['hdi_append','hdi_validate','hdi_commit','hdi_cancel','hdi_len','hdi_dirty_page','hdi_write_count','key','mouse'].includes(name)) throw Error('Media operation in progress');
     if (['reset','set_profile','set_boot_source','eject','hdi_begin','hdi_commit','hdi_cancel'].includes(name)) invalidateVideo();
     if (resets) { await flushAudio(); generation++; bootResult = undefined; jit?.clear(); }
     if (transaction && (name === 'key' && args[1] || name === 'mouse' && !args[3] && args.some(Boolean))) throw Error('Input is paused for media transfer');
@@ -438,7 +438,7 @@ async function command(type, data) {
     if (name === 'hdi_commit' && value) jit?.clear();
     if (name === 'hdi_begin' && value) transaction = 'import';
     if (name === 'hdi_commit' && value || name === 'hdi_cancel') transaction = null;
-    if (['hdi_begin','hdi_append','hdi_commit'].includes(name) && !value) throw Error(message(2));
+    if (['hdi_begin','hdi_append','hdi_validate','hdi_commit'].includes(name) && !value) throw Error(message(2));
     if (['reset','set_profile','eject'].includes(name)) present();
     schedule(); return value;
   }

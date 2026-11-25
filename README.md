@@ -83,17 +83,30 @@ expands into the existing sparse Rust disk. See [desktop validation](docs/deskto
   and `C:`. DOS owns those assignments, so they can differ when booting a floppy.
   Switching to **PC-9801VM** resets the guest and boots Floppy 1. Returning to
   Ap restores its boot preference and retained IDE disk.
-- **Keep disk writes.** Choose **Export disk** in the corresponding slot’s
-  picker. Export preserves floppy protection, disk headers and all logical
-  HDD bytes, including guest writes. **Eject** leaves the guest running.
-  Replacing, ejecting or restoring a dirty HDD asks before discarding writes.
-  Cancel to keep it mounted, then export. **Restore FreeDOS HDD** in Settings
-  also retries a failed FreeDOS download. HDI and NHD use 512-byte sectors and
-  supported IDE geometry. Chunked import/export has been tested with 512 MiB
-  and 1 GiB images. See [large disk evidence](docs/large-hdi.md).
+- **Keep the IDE HDD across visits.** Wait for DOS to finish writing, then
+  choose **Save disk** in the IDE HDD picker. Saving pauses the guest and
+  verifies the complete HDI or NHD in browser-local storage. The last saved
+  disk boots automatically on the next visit in the same browser profile and
+  origin. Save again after further guest changes. Replacing, ejecting or
+  restoring an HDD with unsaved guest writes asks before discarding them.
+- **Choose the next startup disk.** Save an imported replacement to reopen
+  it automatically. Until then, the next startup has an empty IDE drive.
+  **Eject** also selects an empty drive for startup. **Restore FreeDOS HDD**
+  in Settings selects a fresh FreeDOS desktop and can retry a failed template
+  download. **Restore previous checkpoint** in the IDE HDD picker can bring
+  back the previous save, including after ejecting or replacing it.
+- **Back up and recover.** If the latest checkpoint cannot be read, the player
+  tries the previous checkpoint and reports the failure. A checkpoint captures
+  the disk as DOS left it, including any incomplete FAT or file updates. Only
+  one tab can change the saved HDD at a time. If another tab changed it, export
+  any live changes you want to keep before reloading. Browser storage can be
+  cleared or evicted. A save can temporarily use space for three disk images.
+  **Export disk** writes an external backup with the
+  original headers and all guest writes. Use it to keep floppy writes across
+  visits and to keep HDD backups outside the browser. HDI and NHD use 512-byte
+  sectors and supported IDE geometry. See [large disk evidence](docs/large-hdi.md)
+  for chunked import and export of 512 MiB and 1 GiB images.
 
-Guest media and writes stay in browser memory. Export and reinsert to keep
-them across visits. Reload starts a clean desktop.
 The speaker button enables audio after a user gesture and toggles mute.
 **Volume** adjusts output from 0% to 300%. On Ap, click the screen to capture
 the mouse and press **Esc** to release it. Touch input and browsers without
@@ -688,15 +701,14 @@ and [Issue #81 validation](docs/validation.md#issue-81-bios-floppy-dma-handoff).
 `npm run build` checks reproducible media, compiles the real Rust/Wasm core,
 optimizes the linked module with the lockfile-pinned Binaryen tool installed by
 `npm ci`, and runs `npm run check:site`. The optimization reduces host execution
-cost without changing guest instruction clocks or audio pacing. The latter check
-verifies a nonempty, compilable Wasm module
-with the emulator and snapshot exports and exactly 27 approved distributable
-assets, including both Workers, the AudioWorklet, and the intentionally published
-desktop template, manifest, GPL notices and complete matching source downloads.
-All guest/source hashes
-are pinned; neither test-only DOS disks nor arbitrary files are published.
-Unexpected files, directories or symlinks fail the check. `npm test` runs the same browser acceptance suite at the
-local root and at a simulated Pages project subpath whose root asset URLs fail.
+cost without changing guest instruction clocks or audio pacing. The site check
+verifies a compilable Wasm module with the emulator and snapshot exports and
+31 approved distributable assets. These include the emulator, renderer and HDD
+storage Workers, the AudioWorklet, and the desktop template, manifest, GPL
+notices and complete matching source downloads. The check pins guest and
+source hashes and rejects unexpected files, directories, and symlinks.
+`npm test` runs browser acceptance at the local root and at a simulated Pages
+project subpath whose root asset URLs fail.
 To repeat just the project-path browser checks after building, run
 `npx playwright test --project=pages`.
 For the diagnosed HDD export timeout and its byte-preserving harness correction,
@@ -859,15 +871,17 @@ The [parity comparison](docs/browser-block-parity.md) records learned branch
 successors and bounded BIOS query transactions against fresh NP2kai controls.
 These measurements are separate from calibrated real-time game playback.
 
-HDD replacement/eject first pauses at a Worker boundary, then checks dirty pages
-and retains the discard confirmation. Import stages acknowledged transferable
-chunks of at most 1 MiB before atomic commit; failure cancels staging and retains
-the mounted disk. Export holds a Worker snapshot boundary while bounded chunks
-become independent Blob parts, retaining guest writes and original bytes even
-when saving over the input file. Floppy insertion remains live and does not
-change the selected boot source. Hiding the page releases input and pauses;
-returning requires an explicit Resume. Import/export completion cannot resume a
-hidden page. Controls remain disabled until their operation is acknowledged.
+HDD replacement and eject pause at a Worker boundary and compare the mounted
+image’s write counter with the last acknowledged save. Import stages and validates
+transferable chunks of at most 1 MiB before publishing the startup selection and
+mounting. Export holds a Worker snapshot boundary while chunks become independent
+Blob parts. Saving uses the same paused boundary. A dedicated storage Worker
+flushes a staged OPFS file, then the player checks its length and per-chunk SHA-256
+digests before a strict IndexedDB transaction publishes it. Two checkpoint
+generations and one reusable staging slot bound storage. Web Locks serialize
+publication and catalog revisions reject writes from stale tabs. Floppy insertion
+remains live. Hiding the page releases input and pauses. Returning requires an
+explicit Resume. Completion of a media operation cannot resume a hidden page.
 
 `window.pc98.text()`, `.read(address)` and `.stats()` now return Promises;
 `.exportBlob(drive)` remains asynchronous. There is no DOM `pc98.core` or Wasm

@@ -261,7 +261,7 @@ impl HdiImport {
         self.received = end;
         Ok(())
     }
-    pub fn finish(self) -> Result<HardDisk, String> {
+    pub fn validate(&self) -> Result<(), String> {
         if self.received != self.disk.len {
             return Err("HDI import truncated; mounted disk retained".into());
         }
@@ -276,6 +276,10 @@ impl HdiImport {
         if !matches {
             return Err("Hard disk header changed during import".into());
         }
+        Ok(())
+    }
+    pub fn finish(self) -> Result<HardDisk, String> {
+        self.validate()?;
         Ok(self.disk)
     }
 }

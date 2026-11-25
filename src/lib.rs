@@ -599,6 +599,15 @@ mod wasm {
         PENDING.with(|p| *p.borrow_mut() = None);
     }
     #[no_mangle]
+    pub extern "C" fn hdi_validate() -> u32 {
+        import_result(PENDING.with(|p| {
+            p.borrow()
+                .as_ref()
+                .ok_or_else(|| "No HDI import in progress".to_string())
+                .and_then(hdd::HdiImport::validate)
+        }))
+    }
+    #[no_mangle]
     pub extern "C" fn hdi_commit() -> u32 {
         let result = PENDING.with(|p| {
             p.borrow_mut()
@@ -632,6 +641,10 @@ mod wasm {
     #[no_mangle]
     pub extern "C" fn hdi_len() -> usize {
         MACHINE.with(|m| m.borrow().bus.ide.disk.as_ref().map_or(0, |d| d.len()))
+    }
+    #[no_mangle]
+    pub extern "C" fn hdi_write_count() -> f64 {
+        MACHINE.with(|m| m.borrow().bus.ide.disk.as_ref().map_or(0, |d| d.writes) as f64)
     }
     #[no_mangle]
     pub extern "C" fn hdi_resident_bytes() -> usize {
