@@ -32,6 +32,11 @@ Wasm build.
 | Phone landscape 844 × 390 | [Before](player-screenshots/before-landscape.png) | [After](player-screenshots/after-landscape.png) |
 | Narrow portrait 320 × 700 | [Before](player-screenshots/before-narrow.png) | [After](player-screenshots/after-narrow.png) |
 
+The IDE HDD captures use the bundled FreeDOS desktop. [Issue #239](https://github.com/takahirox/pc98-rust/issues/239)
+
+- A FreeDOS file copy leaves unsaved changes at 1280 × 720. [Desktop capture](player-screenshots/hdd-actions-desktop.png)
+- The Saved status and open HDD actions appear at 320 × 700. [Touch capture](player-screenshots/hdd-actions-narrow.png)
+
 ## Automated coverage
 
 The browser suite uses the release-Wasm app at `/` and `/pc98-rust/`.
