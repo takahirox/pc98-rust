@@ -120,6 +120,7 @@ impl Mouse {
     pub fn release(&mut self) {
         self.update_buttons(0);
         self.pending.clear();
+        self.latch = [0; 2];
         self.latched_buttons = None;
         self.reported_buttons = self.live_buttons;
     }

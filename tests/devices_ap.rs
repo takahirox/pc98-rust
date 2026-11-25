@@ -198,6 +198,10 @@ fn mouse_latching_buttons_ppi_bsr_periodic_irq_and_reset() {
 fn latch_mouse(b: &mut Bus) -> (i8, i8, u8) {
     b.output(0x7fdd, 0);
     b.output(0x7fdd, 0x80);
+    read_mouse_latch(b)
+}
+
+fn read_mouse_latch(b: &mut Bus) -> (i8, i8, u8) {
     let [x_low, x_high, y_low, y_high] = [0x80, 0xa0, 0xc0, 0xe0].map(|control| {
         b.output(0x7fdd, control);
         b.input(0x7fd9)
@@ -234,6 +238,18 @@ fn host_mouse_delivers_large_motion_over_latches_and_discards_pending_input_on_r
     for _ in 0..2 {
         assert_eq!(latch_mouse(&mut b), (0, 0, 0xe0));
     }
+}
+
+#[test]
+fn host_mouse_release_discards_unread_motion_with_hc_high() {
+    let mut b = Bus::new(Profile::Pc9821ApDos);
+    b.mouse.host_motion(37, -11, 1);
+    b.output(0x7fdd, 0x80);
+
+    b.mouse.release();
+
+    assert_ne!(b.input(0x7fdd) & 0x80, 0);
+    assert_eq!(read_mouse_latch(&mut b), (0, 0, 0xe0));
 }
 
 #[test]
