@@ -386,6 +386,25 @@ fn host_mouse_polls_with_hc_high_keep_the_drag_held_until_all_motion_is_latched(
 }
 
 #[test]
+fn host_mouse_keeps_the_drag_held_through_a_delayed_first_latch_read() {
+    let mut b = Bus::new(Profile::Pc9821ApDos);
+    b.mouse.host_motion(300, 0, 1);
+    b.mouse.host_motion(0, 0, 0);
+    for _ in 0..2 {
+        assert_eq!(latch_mouse(&mut b), (127, 0, 0x60));
+    }
+
+    b.output(0x7fdd, 0);
+    b.output(0x7fdd, 0x80);
+    b.tick(16_000); // Wait 2 ms before reading the final chunk of the drag.
+    assert_eq!(read_mouse_latch(&mut b), (46, 0, 0x60));
+
+    b.tick(16_000);
+    assert_eq!(b.input(0x7fd9) & 0xe0, 0xe0); // The release is visible without relatching.
+    assert_eq!(latch_mouse(&mut b), (0, 0, 0xe0));
+}
+
+#[test]
 fn host_mouse_undrained_motion_expires_during_hc_high_button_polls() {
     let mut b = Bus::new(Profile::Pc9821ApDos);
     b.mouse.host_motion(300, 0, 1);

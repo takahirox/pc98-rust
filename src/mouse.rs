@@ -32,6 +32,7 @@ pub struct Mouse {
     host_clock: u64,
     last_sample_at: u64,
     latched_buttons: Option<ButtonState>,
+    latch_motion_unread: bool,
     reported_buttons: ButtonState,
     pub control: u8,
     pub rate: u8,
@@ -50,6 +51,7 @@ impl Default for Mouse {
             host_clock: 0,
             last_sample_at: 0,
             latched_buttons: None,
+            latch_motion_unread: false,
             reported_buttons: ButtonState::default(),
             control: 0x10,
             rate: 0,
@@ -79,11 +81,15 @@ impl Mouse {
     fn read_buttons(&mut self, latched: bool) -> ButtonState {
         // Keep button bits stable during a motion nibble read. A polling
         // driver can then see later edges with HC still high.
-        if let Some(buttons) = self
-            .latched_buttons
-            .filter(|_| latched && self.host_clock - self.last_sample_at < BUTTON_LATCH_WINDOW)
-        {
-            return buttons;
+        if let Some(buttons) = self.latched_buttons.filter(|_| latched) {
+            // A delayed first read still belongs to the latched motion.
+            if self.latch_motion_unread {
+                self.latch_motion_unread = false;
+                self.last_sample_at = self.host_clock;
+            }
+            if self.host_clock - self.last_sample_at < BUTTON_LATCH_WINDOW {
+                return buttons;
+            }
         }
         let buttons = if let Some(buttons) = self.unread_latch() {
             buttons
@@ -151,6 +157,7 @@ impl Mouse {
         self.pending.clear();
         self.latch = [0; 2];
         self.latched_buttons = None;
+        self.latch_motion_unread = false;
         self.reported_buttons = self.live_buttons;
     }
     pub fn tick(&mut self, cycles: u32) -> bool {
@@ -166,6 +173,7 @@ impl Mouse {
             // An inactive driver need not keep an old button snapshot.
             if self.host_clock - self.last_sample_at >= HOST_QUEUE_TIMEOUT {
                 self.latched_buttons = None;
+                self.latch_motion_unread = false;
             }
         }
         self.fraction += cycles as u64 * (120 >> (self.rate & 3));
@@ -237,6 +245,7 @@ impl Mouse {
                 }
                 self.pending.pop_front();
             }
+            self.latch_motion_unread = self.latch != [0; 2];
             self.last_sample_at = self.host_clock;
             self.latches += 1;
         }
