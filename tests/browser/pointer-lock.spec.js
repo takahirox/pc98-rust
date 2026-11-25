@@ -513,6 +513,20 @@ test('Escape dismisses Help while a cancelled legacy request awaits its outcome'
 
 test.describe('touch', () => {
   test.use({hasTouch:true, isMobile:true, viewport:{width:390,height:844}});
+
+  test('a stationary touch after mouse hover sends both button edges without movement', async ({page}) => {
+    const screen = await start(page, {manual:true});
+    await screen.evaluate(canvas => { canvas.requestPointerLock = undefined; });
+    await screen.focus();
+    const box = await screen.boundingBox();
+    const y = Math.round(box.y + box.height / 2);
+    await page.mouse.move(Math.round(box.x + box.width / 4), y);
+    expect(await guest(page, 100000)).toMatchObject({buttons:0, edges:0, x:0, y:0});
+
+    await page.touchscreen.tap(Math.round(box.x + box.width * 3 / 4), y);
+    expect(await guest(page, 100000)).toMatchObject({buttons:0, edges:2, x:0, y:0});
+  });
+
   test('a delayed mouse lock releases active touch capture and accepts locked clicks', async ({page}) => {
     const screen = await start(page, {manual:true});
     await screen.evaluate(canvas => {

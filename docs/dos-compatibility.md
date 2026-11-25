@@ -71,6 +71,7 @@ python3 tools/prepare_cpu_fixture.py
 python3 tools/prepare_hdd_fixture.py
 python3 tools/prepare_music_fixture.py
 python3 tools/prepare_device_fixture.py
+python3 tools/prepare_input_fixture.py
 python3 tools/build_font.py --check
 cargo test --locked
 cargo clippy --all-targets -- -D warnings
@@ -87,8 +88,9 @@ DOS sources beside the FreeDOS image. Source archives are read by exact member
 name, never unpacked onto the host by the preparation script. Download size is
 capped at 8 MiB per archive; inserted floppies retain the existing 4 MiB limit.
 
-In the browser select **PC-9821Ap DOS · experimental**, then insert one of
-`fixtures/dos-apps/{adv98,98videop,fm98}.hdm` in drive 1. These disks auto-run their
+In the browser select **PC-9821Ap**, then insert one of
+`fixtures/dos-apps/{adv98,98videop,fm98}.hdm` in **Floppy 1**. In **Settings**, set
+**Next boot** to **Floppy 1**, then press **Reset**. These disks auto-run their
 application through FreeCOM. In ADV98 press Return to start, Return to advance
 Japanese dialogue, and arrows/Return to choose Look, Talk or Move. Talk progresses
 the sample's branching story. Esc opens the system menu; Return selects Save and
@@ -97,9 +99,9 @@ the title screen. The source scenario is a small playable ADV sample, not a
 complete commercial-length game. The original `adv98.hdm` is silent without a
 driver. The new `music.hdm` includes
 a published guest PMD driver and original compiled score, started by the unchanged
-game; see [device instructions](ap-devices.md). Enable sound and insert
-`fm98.hdm` to hear its independent
-FM routines in the separate DOS test. These are distinct compatibility claims.
+game; see [device instructions](ap-devices.md). Enable sound and boot `fm98.hdm`
+from **Floppy 1** to hear its independent FM routines in the separate DOS test.
+These are distinct compatibility claims.
 
 Headless uses the same core, with an explicit profile:
 

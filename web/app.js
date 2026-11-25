@@ -936,6 +936,7 @@ screen.addEventListener('pointerdown', event => {
   touchPointer = event.pointerId;
   event.preventDefault(); // Suppress compatibility mouse events for this contact.
   screen.setPointerCapture(event.pointerId);
+  pointerPosition = undefined; // Start this contact independently of any mouse hover.
   boundedMovement(event);
   mouseButtons(event.buttons & 7);
 });
