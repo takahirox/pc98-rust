@@ -94,6 +94,47 @@ test('an HDD export that finishes while hidden resumes the guest on return', asy
   await expect.poll(async () => (await stats()).instructions).toBeGreaterThan(paused.instructions);
 });
 
+test('a failed HDD import that rolls back while hidden resumes the guest on return', async ({page}) => {
+  await page.goto('./');
+  await ready(page, 'FreeDOS-128MiB.hdi');
+  const stats = () => page.evaluate(() => pc98.stats());
+  await expect.poll(async () => (await stats()).instructions).toBeGreaterThan(0);
+  expect((await stats()).running).toBe(true);
+
+  await page.evaluate(() => {
+    const read = Blob.prototype.arrayBuffer;
+    let reads = 0;
+    Blob.prototype.arrayBuffer = function () {
+      // Let the header reach the Worker, then hold the first data chunk.
+      if (++reads !== 2) return read.call(this);
+      Blob.prototype.arrayBuffer = read;
+      return new Promise((_, reject) => {
+        window.failHddRead = () => reject(Error('Local HDD read failed during import'));
+      });
+    };
+  });
+  await uploadMedia(page, uploaded, '2');
+  await expect.poll(() => page.evaluate(() => typeof window.failHddRead)).toBe('function');
+  const paused = await stats();
+  expect(paused).toMatchObject({running:false, transaction:'import'});
+
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'hidden', {configurable:true, value:true});
+    document.dispatchEvent(new Event('visibilitychange'));
+    window.failHddRead();
+    delete window.failHddRead;
+  });
+  await expect(page.locator('#error')).toContainText('Local HDD read failed during import');
+  await ready(page, 'FreeDOS-128MiB.hdi');
+  expect(await stats()).toMatchObject({running:false, transaction:null, instructions:paused.instructions});
+
+  await page.evaluate(() => {
+    delete document.hidden;
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await expect.poll(async () => (await stats()).instructions).toBeGreaterThan(paused.instructions);
+});
+
 async function confirmAction(page, action, accept, message, ...additionalPrompts) {
   const prompts = [[accept, message], ...additionalPrompts];
   const seen = [];
