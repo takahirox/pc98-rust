@@ -43,7 +43,7 @@ Floppy insertion leaves the guest running. Switching profiles preserves mounted
 media. IDE is available on Ap.
 
 Insert `music.hdm` in **Floppy 1**, select **Floppy 1** in **Settings → Next boot**,
-and click **Reset**. Enable sound. FreeDOS runs MC on the original MIT
+and click **Reset**. FreeDOS runs MC on the original MIT
 `guest/play.mml`, installs the published PMD guest driver and starts ADV98.
 The title is silent. Starting the scenario executes its existing `#bgm PLAY.M`
 command, loads the compiled score through guest DOS, and calls the guest PMD API.

@@ -190,9 +190,12 @@ test('real lock releases on F12, host controls, visibility, fullscreen exit, res
   });
   await expect.poll(() => owner(page)).toBeNull();
   await expect(page.locator('#pause')).toHaveText('Resume');
-  await page.evaluate(() => { delete document.hidden; });
+  await page.evaluate(() => {
+    delete document.hidden;
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await expect(page.locator('#pause')).toHaveText('Pause');
   expect(await owner(page)).toBeNull();
-  await page.locator('#pause').click();
 
   await capture(page, screen);
   await page.locator('#reset').evaluate(button => button.click());

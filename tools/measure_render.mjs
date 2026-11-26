@@ -35,7 +35,7 @@ try {
       if(workload==='vm-input-probe') {
         await page.locator('#profile').selectOption('0');
         await waitFor(()=>page.locator('#profile').isEnabled());
-        await bootInputProbe(page, {sound:true});
+        await bootInputProbe(page);
         await waitFor(()=>page.evaluate(()=>pc98.text().then(s=>s.includes('INPUT PROBE READY'))));
       } else {
         const disk=workload==='ap-video'?'98videop':'music-scenes';
@@ -55,12 +55,10 @@ try {
             try {for(let n=0;n<90;n++){pc98.advance(100000);pc98.core.audio_clear();}}
             finally {pc98.endInspection();}
           });
-          await page.locator('#sound').click(); await page.locator('#pause').click();
+          await page.locator('#pause').click();
           await page.locator('#screen').focus(); await page.keyboard.press('Enter');
           await waitFor(()=>page.evaluate(()=>pc98.stats().then(s=>s.fmKeyEdges>16)));
           await sleep(1500);
-        } else {
-          await page.locator('#sound').click();
         }
       }
       await page.evaluate(()=>{

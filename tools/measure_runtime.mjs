@@ -73,6 +73,7 @@ try {
     const page=await browser.newPage();
     await page.goto(`http://127.0.0.1:8073/?diagnostics&renderer=${mode}${manual?'&manual':''}`);
     await waitFor(()=>page.locator('#profile').isEnabled());
+    if (manual) await page.locator('#sound').click();
     const name=`music-scenes.${medium==='hdd'?'hdi':'hdm'}`;
     const bytes=await readFile(path.join(options.media,name));
     mediaHashes[name]=createHash('sha256').update(bytes).digest('hex');
@@ -96,7 +97,7 @@ try {
   for(let run=0;run<repeat;run++)for(const medium of ['floppy','hdd']) {
     for(const mode of options.capacityOnly==='1'?[]:run%2?['worker','inline']:['inline','worker']) {
       const {page,worker}=await setup(medium,mode);
-      await page.locator('#sound').click();await page.locator('#pause').click();await enter(page);
+      await page.locator('#pause').click();await enter(page);
       await waitFor(async()=>(await stats(page)).fmKeyEdges>16);
       await sleep(1500);
       const hostStart=await hostUsage(browserServer.process().pid);

@@ -91,7 +91,8 @@ document.addEventListener('keydown', event => {
     event.preventDefault(); event.stopPropagation(); exitFullscreen().catch(fail);
   }
 }, true);
-let core, worker, running = false, audio, outputGain, audioNode, audioSetup, muted = true, loading = false;
+let core, worker, running = false, runningChange, resumeOnVisible = false, loading = false;
+let muted = false, audio, outputGain, audioConnecting = false, audioReady = false, audioError, soundUpdate;
 let activePlaybackButton;
 let contextLost = false;
 let renderWorker, videoEpoch = 0, presentedSequence = 0;
@@ -150,6 +151,7 @@ $('dismiss-error').onclick = event => {
 function acceptState(state) {
   if (!state || state.generation < generation) return;
   if (state.generation > generation) {
+    resumeOnVisible = false;
     bootSource = undefined;
     $('active-boot').textContent = 'Waiting to boot';
   }
@@ -173,9 +175,9 @@ function rpc(type, data, transfer = []) {
 function workerFault(error) {
   if (workerFailed) return;
   fail(`${error.message}. Reload to restart.`);
-  workerFailed = true; running = false; ++videoEpoch; pendingFrame = null;
+  workerFailed = true; running = resumeOnVisible = false; ++videoEpoch; pendingFrame = null;
   releaseKeys();
-  if (outputGain) outputGain.gain.value = 0;
+  soundState();
   worker?.terminate(); renderWorker?.terminate(); renderWorker = null;
   for (const waiter of pending.values()) waiter.reject(error);
   pending.clear(); syncControls(); status('Worker stopped');
@@ -274,41 +276,89 @@ function applyVolume() {
   const percent = Number($('volume').value);
   $('volume-level').value = `${percent}%`;
   $('volume').setAttribute('aria-valuetext', `${percent}%`);
-  if (outputGain) outputGain.gain.value = running && !muted && audio?.state === 'running' ? percent / 100 : 0;
+  if (outputGain) {
+    outputGain.gain.value = running && !runningChange && !muted && !audioError && soundUpdate?.applied &&
+      soundUpdate.state === 'running' && audio?.state === 'running' ? percent / 100 : 0;
+  }
 }
 $('volume').oninput = applyVolume;
 async function soundState() {
-  $('sound').setAttribute('aria-pressed', String(muted));
-  $('sound').title = muted ? (audio ? 'Unmute' : 'Enable sound') : 'Mute';
-  if (outputGain) outputGain.gain.value = 0;
-  await rpc('sound',{enabled:!muted, state:audio?.state});
+  const state = audio?.state;
+  const enabled = !muted && !audioError && audioReady;
+  const button = $('sound'), notice = $('audio-status');
+  button.setAttribute('aria-pressed', String(muted));
+  button.title = muted ? 'Unmute' : 'Mute';
+  const message = muted || workerFailed ? '' : audioError ||
+    (audio && state !== 'running' ? 'Click or tap for sound' : '');
+  notice.hidden = !message;
+  if (notice.textContent !== message) notice.textContent = notice.title = message;
+  if (audioReady && !workerFailed && (soundUpdate?.state !== state || soundUpdate?.enabled !== enabled)) {
+    const update = soundUpdate = {enabled, state, applied:false};
+    update.done = rpc('sound',{enabled, state}).then(() => {
+      update.applied = true;
+      applyVolume();
+    });
+  }
   applyVolume();
+  return workerFailed ? undefined : soundUpdate?.done;
 }
-async function enableAudio() {
-  if (!audio) {
-    audio = new AudioContext({sampleRate:48000});
-    outputGain = audio.createGain(); outputGain.gain.value = 0; outputGain.connect(audio.destination);
-    audioSetup = (async () => {
-      await audio.audioWorklet.addModule(new URL('audio-worklet.js',import.meta.url));
-      audioNode = new AudioWorkletNode(audio,'pc98-audio',{outputChannelCount:[2]});
-      audioNode.onprocessorerror = () => { muted = true; soundState().catch(fail); fail('AudioWorklet stopped. Reload to enable sound again.'); };
-      const channel = new MessageChannel();
-      audioNode.port.postMessage({type:'connect',port:channel.port1},[channel.port1]);
-      audioNode.connect(outputGain);
-      await rpc('audioPort',channel.port2,[channel.port2]);
-      audio.onstatechange = () => soundState().catch(fail);
-    })();
+async function connectAudio() {
+  // A context awaiting autoplay permission may leave resume pending. Keep
+  // the Worker independent of that context until it can run the worklet.
+  if (!core || workerFailed || muted || audioError || audioConnecting || audioReady || audio?.state !== 'running') return;
+  audioConnecting = true;
+  try {
+    await audio.audioWorklet.addModule(new URL('audio-worklet.js',import.meta.url));
+    if (workerFailed || muted || audio.state !== 'running') return;
+    const node = new AudioWorkletNode(audio,'pc98-audio',{outputChannelCount:[2]});
+    node.onprocessorerror = () => {
+      audioError = 'Sound stopped. Reload to restore it.';
+      soundState().catch(fail);
+    };
+    const channel = new MessageChannel();
+    node.port.postMessage({type:'connect',port:channel.port1},[channel.port1]);
+    node.connect(outputGain);
+    await rpc('audioPort',channel.port2,[channel.port2]);
+    audioReady = true;
+  } catch {
+    audioError = 'Sound unavailable. Toggle mute to retry.';
+    audio.onstatechange = null;
+    audio.close().catch(() => {});
+    audio = outputGain = undefined;
+  } finally {
+    audioConnecting = false;
+    soundState().catch(fail);
   }
-  // resume is invoked before awaiting module loading to retain gesture permission.
-  const resumed = audio.resume();
-  try { await Promise.all([audioSetup,resumed]); }
-  catch (error) {
-    muted = true; await audio.close(); audio = null;
-    applyVolume();
-    throw Error(`Cannot enable sound: ${error.message}. Try the sound button again.`);
-  }
-  muted = false; await soundState();
 }
+function audioChanged() {
+  connectAudio();
+  return soundState();
+}
+function enableAudio() {
+  if (!muted && !workerFailed && !audioError && !document.hidden) {
+    try {
+      if (!audio) {
+        audio = new AudioContext({sampleRate:48000});
+        outputGain = audio.createGain(); outputGain.gain.value = 0; outputGain.connect(audio.destination);
+        audio.onstatechange = () => audioChanged().catch(fail);
+      }
+      // Invoke resume during the gesture, before any asynchronous setup.
+      if (audio.state !== 'running') audio.resume().then(audioChanged, soundState).catch(fail);
+    } catch {
+      audioError = 'Sound unavailable. Toggle mute to retry.';
+    }
+  }
+  return audioChanged();
+}
+function activateAudio(event) {
+  if (!muted && !audioError && audio?.state !== 'running' && event.isTrusted && !event.repeat &&
+      !event.target.closest?.('#sound') && (navigator.userActivation?.isActive ?? true)) enableAudio().catch(fail);
+}
+// Mouse activation precedes the screen's mousedown Pointer Lock request.
+window.addEventListener('pointerdown', event => { if (event.pointerType === 'mouse') activateAudio(event); }, true);
+window.addEventListener('pointerup', event => { if (event.pointerType !== 'mouse') activateAudio(event); }, true);
+window.addEventListener('keydown', activateAudio, true);
+window.addEventListener('click', activateAudio, true);
 function releaseGuestKeys() {
   pendingShifts.clear();
   for (const scan of held) core?.key(scan, 0).catch(fail);
@@ -351,10 +401,21 @@ function refreshPausedMediaStatus() {
 }
 async function setRunning(value, label, mediaProgress = false) {
   running = value; $('pause').textContent = value ? 'Pause' : 'Resume';
+  if (!value) { nextPresentation = 0; releaseKeys(); }
+  // Keep output silent until the Worker acknowledges the latest transition.
+  const change = runningChange = rpc('running',value);
   applyVolume();
-  if (!value) releaseKeys();
-  await rpc('running',value);
-  status(label ?? (value ? 'Running' : pausedStatus()), mediaProgress);
+  try {
+    await change;
+    if (runningChange === change) status(label ?? (value ? 'Running' : pausedStatus()), mediaProgress);
+  } finally {
+    if (runningChange === change) { runningChange = undefined; applyVolume(); }
+  }
+}
+function resumeVisibleGuest() {
+  if (document.hidden || loading || !resumeOnVisible) return;
+  resumeOnVisible = false;
+  if (!running && !workerFailed && hasBootMedia()) setRunning(true).catch(fail);
 }
 function showPicker() {
   const name = driveNames[pickerDrive], disk = mounted[pickerDrive], hdd = pickerDrive === 2;
@@ -537,8 +598,12 @@ async function insert(bytes, name, drive) {
   await rpc('insert',{drive,format:/\.(d88|d98)$/i.test(name) ? 1 : 0});
   mounted[drive] = {name};
 }
-$('pause').onclick = event => exclusive(() => setRunning(!running), {playbackButton:event.currentTarget});
+$('pause').onclick = event => exclusive(() => {
+  resumeOnVisible = false;
+  return setRunning(!running && !document.hidden);
+}, {playbackButton:event.currentTarget});
 async function resetMachine({focusScreen = true, preserveHostFocus = false} = {}) {
+  resumeOnVisible = false;
   releaseKeys();
   if (outputGain) outputGain.gain.value = 0;
   if (pendingFrame) { recycleFrame(pendingFrame); pendingFrame = null; }
@@ -558,7 +623,7 @@ async function exclusive(operation, {playbackButton, recovery} = {}) {
   finally {
     playbackButton?.removeAttribute('aria-disabled');
     activePlaybackButton = undefined;
-    loading = false; syncControls();
+    loading = false; resumeVisibleGuest(); syncControls();
   }
 }
 $('reset').onclick = () => exclusive(resetMachine);
@@ -566,12 +631,14 @@ $('boot').onchange = ({currentTarget}) => {
   const source = Number(currentTarget.value);
   return withControlFocus(currentTarget, () => exclusive(() => core.set_boot_source(source)));
 };
-$('sound').onclick = event => exclusive(async () => {
-  clearError();
-  if (muted) await enableAudio();
-  else { muted = true; await soundState(); }
+$('sound').onclick = event => exclusive(() => {
+  muted = !muted;
+  if (muted) return soundState();
+  if (!audioReady) audioError = undefined;
+  return enableAudio();
 }, {playbackButton:event.currentTarget});
 async function selectProfile() {
+  resumeOnVisible = false;
   releaseKeys();
   const profile = $('profile').value;
   try {
@@ -1150,10 +1217,16 @@ screen.addEventListener('contextmenu', event => {
 });
 screen.addEventListener('blur',releaseKeys); window.addEventListener('blur',releaseKeys);
 document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    if (running) {
+      resumeOnVisible = true;
+      setRunning(false).catch(fail);
+    } else releaseKeys();
+  } else {
+    resumeVisibleGuest();
+    enableAudio().catch(fail);
+  }
   scheduleHddStatus();
-  if (!document.hidden) return;
-  if (core && running) setRunning(false).catch(fail);
-  else releaseKeys();
 });
 try {
   worker = new Worker(new URL('emulator-worker.js',import.meta.url),{type:'module'});
@@ -1173,6 +1246,7 @@ try {
     if (m.event === 'stopped') {
       if (m.state.generation < generation) return;
       acceptState(m.state);
+      resumeOnVisible = false;
       setRunning(false, 'Guest stopped').catch(fail); fail(m.error); return;
     }
     if (m.event === 'videoEpoch') {
@@ -1190,18 +1264,20 @@ try {
     pending.delete(m.id);
     if (m.error) waiter.reject(Error(m.error)); else waiter.resolve(m.value);
   };
+  enableAudio().catch(fail);
   const params = new URLSearchParams(location.search);
   await rpc('init',{diagnostics:params.has('diagnostics'),manual:params.has('manual'),jit:params.get('jit')!=='0'});
   if (!(params.has('diagnostics') && params.get('renderer') === 'inline')) await startRenderer();
   // This client posts commands and caches metrics; Wasm exports stay in the Worker.
   core = new Proxy({}, {get:(_,name) => name === 'metric' ? id => metrics.get(id) :
     (...args) => rpc('call',{name,args})});
+  connectAudio();
   await selectProfile();
   window.pc98 = {text:() => rpc('text'), read:addr => rpc('read',addr), stats:async () => ({...await rpc('stats'),rendererStartupMs,rendererFailure,renderStats:{...renderStats},presentationStats:{...presentationStats},presenterStats:presenter.diagnosticsState()}),
     exportBlob:async (drive=2) => {
       if (loading) throw Error('Media operation already in progress');
       loading = true; releaseKeys(); syncControls();
-      try { return await exportBlob(drive); } finally { loading = false; syncControls(); }
+      try { return await exportBlob(drive); } finally { loading = false; resumeVisibleGuest(); syncControls(); }
     },
   };
   if (params.has('diagnostics')) window.pc98.audio = {
