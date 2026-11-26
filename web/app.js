@@ -686,16 +686,23 @@ function hddProgress(label, at, bytes) {
   status(`${label} · ${Math.floor(at * 100 / bytes)}%`, true);
 }
 async function withHddSnapshot(label, operation) {
-  const resume = running;
-  await setRunning(false, `${label}…`, true);
+  const cancelResume = error => {
+    resumeOnVisible = false;
+    throw error;
+  };
+  // Carry the guest's intent through the snapshot pause and any tab switches.
+  resumeOnVisible ||= running;
+  await setRunning(false, `${label}…`, true).catch(cancelResume);
   try {
     const length = await rpc('snapshot',true);
     if (!length) throw Error('No hard disk image mounted.');
     return await operation(length, (at,n) => rpc('readChunk',[at,n]));
   } finally {
     if (!workerFailed) {
-      await rpc('snapshot',false);
-      await setRunning(resume && !document.hidden);
+      await rpc('snapshot',false).catch(cancelResume);
+      const resume = resumeOnVisible && !document.hidden;
+      if (resume) resumeOnVisible = false;
+      await setRunning(resume && hasBootMedia());
     }
   }
 }
