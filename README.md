@@ -825,7 +825,8 @@ copy/memory overhead and measured regressions. `?diagnostics=1&renderer=inline`
 retains the former architecture for reproducible comparisons. Every Wasm memory
 view is obtained after its exported call, including after memory growth.
 
-After **Enable sound**, a direct Worker-to-[AudioWorklet](web/audio-worklet.js)
+Sound is enabled at 100% by default. If autoplay is blocked, a click, tap, or key
+press can start audio. A direct Worker-to-[AudioWorklet](web/audio-worklet.js)
 MessagePort carries guest-generated 48 kHz stereo PCM. Ap FM respects guest
 left/right routing. The SSG, PCM86 and beeper contributions are centered.
 Ten reusable credits hold up to 1,024 stereo frames each. Normal slices produce

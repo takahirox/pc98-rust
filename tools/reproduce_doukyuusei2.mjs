@@ -104,7 +104,7 @@ try{
   const transfer=new DataTransfer();transfer.items.add(new File([await(await fetch('/private-test-media')).arrayBuffer()],'installed.hdi'));
   document.querySelector('#slot-2').dispatchEvent(new DragEvent('drop',{dataTransfer:transfer,bubbles:true,cancelable:true}));
   await wait(()=>!document.querySelector('#profile').disabled);document.querySelector('#reset').click();
-  await wait(()=>!document.querySelector('#reset').disabled);document.querySelector('#sound').click();
+  await wait(()=>!document.querySelector('#reset').disabled);
   await wait(async()=>(await pc98.stats()).audioState==='running');
   mark('audio-boot');await sample();timer=setInterval(()=>sample().catch(error=>{failure=error;}),250);
   await wait(async()=>(await pc98.stats()).guestSeconds>=12);

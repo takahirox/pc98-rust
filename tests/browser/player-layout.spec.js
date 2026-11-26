@@ -419,11 +419,11 @@ test('consecutive Space presses toggle playback and sound without moving focus',
   await page.keyboard.press('Tab');
   await expect(sound).toBeFocused();
   await page.keyboard.press('Space');
-  await expect(sound).toHaveAttribute('aria-pressed', 'false');
+  await expect(sound).toHaveAttribute('aria-pressed', 'true');
   await expect(sound).toBeEnabled();
   await expect(sound).toBeFocused();
   await page.keyboard.press('Space');
-  await expect(sound).toHaveAttribute('aria-pressed', 'true');
+  await expect(sound).toHaveAttribute('aria-pressed', 'false');
   await expect(sound).toBeEnabled();
   await expect(sound).toBeFocused();
 });
@@ -508,6 +508,7 @@ test('keyboard navigation, picker dismissal, cancellation and selection preserve
   await expect(screen).toBeFocused();
   await page.keyboard.press('Tab');
   await expect(page.getByRole('button', {name:'Pause'})).toBeFocused();
+  await expect.poll(async () => (await stats(page)).scheduledSamples).toBeGreaterThan(1000);
   const before = await stats(page);
 
   const floppy1 = page.getByRole('button', {name:'Insert Floppy 1'});
@@ -676,6 +677,14 @@ test('Settings keeps the failed boot source separate from the next reset', async
   await page.getByRole('button', {name:'Reset'}).click();
   await expect(page.getByRole('alert')).toContainText('Boot failed');
   expect((await stats(page)).error).toContain('no readable PC-98 floppy or IDE IPL');
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'hidden', {configurable:true, value:true});
+    document.dispatchEvent(new Event('visibilitychange'));
+    delete document.hidden;
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  expect((await stats(page)).running).toBe(false);
+  await expect(page.locator('#status')).toHaveText('Guest stopped');
   await page.getByRole('button', {name:'Dismiss error'}).click();
   await openSettings(page);
   const attempt = page.locator('#active-boot');

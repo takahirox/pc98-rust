@@ -93,7 +93,7 @@ the title screen. The source scenario is a small playable ADV sample, not a
 complete commercial-length game. The original `adv98.hdm` is silent without a
 driver. The new `music.hdm` includes
 a published guest PMD driver and original compiled score, started by the unchanged
-game; see [device instructions](ap-devices.md). Enable sound and boot `fm98.hdm`
+game; see [device instructions](ap-devices.md). Boot `fm98.hdm`
 from **Floppy 1** to hear its independent FM routines in the separate DOS test.
 These are distinct compatibility claims.
 

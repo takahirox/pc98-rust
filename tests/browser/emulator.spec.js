@@ -18,7 +18,7 @@ for (const profile of ['1', '0']) {
   test(`${profile === '1' ? 'Ap' : 'VM'}: Wasm guest boots, renders, plays PCM, handles keys and persists sector writes offline`, async ({ page }) => {
     const errors = await ready(page);
     if (profile === '0') await page.locator('#profile').selectOption(profile);
-    await bootInputProbe(page, {sound:true});
+    await bootInputProbe(page);
     await expect.poll(() => inspect(page, () => pc98.text())).toContain(inputReady);
     await value(page, 0, 1);
     await expect.poll(() => inspect(page, () => pc98.stats().audioEnergy)).toBeGreaterThan(1);

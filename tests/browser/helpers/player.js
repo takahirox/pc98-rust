@@ -34,9 +34,8 @@ export const inputDisk = () => readFile(new URL('../../../fixtures/input_probe/i
 export const inputReady = 'INPUT PROBE READY';
 export const inputState = 0x1ff00;
 
-export async function bootInputProbe(page, { touch = false, sound = false } = {}) {
+export async function bootInputProbe(page, { touch = false } = {}) {
   await uploadMedia(page, { name:'input.hdm', mimeType:'application/octet-stream', buffer:await inputDisk() }, '0');
   if (await page.locator('#profile').inputValue() === '1') await nextBoot(page, '0');
   await page.locator('#reset')[touch ? 'tap' : 'click']();
-  if (sound) await page.locator('#sound').click();
 }
