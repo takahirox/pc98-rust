@@ -54,6 +54,46 @@ async function exportImage(page) {
   return readFile(await download.path());
 }
 
+test('an HDD export that finishes while hidden resumes the guest on return', async ({page}) => {
+  await page.goto('./');
+  await ready(page, 'FreeDOS-128MiB.hdi');
+  const stats = () => page.evaluate(() => pc98.stats());
+  await expect.poll(async () => (await stats()).running).toBe(true);
+
+  const worker = page.workers().find(worker => worker.url().endsWith('/emulator-worker.js'));
+  await worker.evaluate(() => {
+    const handleMessage = self.onmessage;
+    // Hold the first chunk request so the real snapshot stays open until the tab is hidden.
+    self.onmessage = event => {
+      if (event.data.type !== 'readChunk') return handleMessage(event);
+      self.onmessage = handleMessage;
+      self.finishExport = () => handleMessage(event);
+    };
+  });
+  const downloading = page.waitForEvent('download');
+  await diskAction(page, '2', 'export');
+  await expect.poll(() => worker.evaluate(() => typeof self.finishExport)).toBe('function');
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'hidden', {configurable:true, value:true});
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  const paused = await stats();
+  expect(paused).toMatchObject({running:false, transaction:'export'});
+
+  await worker.evaluate(() => { self.finishExport(); delete self.finishExport; });
+  const download = await downloading;
+  expect(download.suggestedFilename()).toBe('FreeDOS-128MiB.hdi');
+  expect(await download.failure()).toBeNull();
+  await expect(page.locator('#profile')).toBeEnabled();
+  expect(await stats()).toMatchObject({running:false, transaction:null, instructions:paused.instructions});
+
+  await page.evaluate(() => {
+    delete document.hidden;
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await expect.poll(async () => (await stats()).instructions).toBeGreaterThan(paused.instructions);
+});
+
 async function confirmAction(page, action, accept, message, ...additionalPrompts) {
   const prompts = [[accept, message], ...additionalPrompts];
   const seen = [];
