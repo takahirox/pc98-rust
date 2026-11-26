@@ -99,7 +99,7 @@ canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; 
   color: var(--muted);
   font-size: 12px;
 }
-#status { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+#status, #audio-status { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .lamp { flex: 0 0 7px; height: 7px; border-radius: 50%; background: #748078; }
 .lamp.active { background: #367c5d; }
 

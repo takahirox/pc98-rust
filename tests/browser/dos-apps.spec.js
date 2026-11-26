@@ -3,13 +3,12 @@ import { test, expect, inspect } from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import { exportHdd } from './helpers/disk.js';
 
-async function boot(page, name, sound = false, extension = 'hdm') {
+async function boot(page, name, extension = 'hdm') {
   page.on('dialog', dialog => dialog.accept());
   await page.goto('./');
   await expect(page.locator('#profile')).toBeEnabled();
   expect(await inspect(page, () => pc98.core.memory instanceof WebAssembly.Memory)).toBe(true);
   await page.locator('#profile').selectOption('1');
-  if (sound) await page.locator('#sound').click();
   const buffer = await fs.readFile(new URL(`../../fixtures/dos-apps/${name}.${extension}`, import.meta.url));
   await uploadMedia(page, { name: `${name}.${extension}`, mimeType: 'application/octet-stream', buffer }, extension === 'hdi' ? '2' : '0');
   if (extension !== 'hdi') {
@@ -100,7 +99,7 @@ test('Ap DOS: independent Japanese ADV game choices and guest save survive expor
 
 test('Ap DOS: independently compiled FM routines reach Web Audio with the beeper off', async ({ page }) => {
   test.setTimeout(60000);
-  await boot(page, 'fm98', true);
+  await boot(page, 'fm98');
   await until(page, async () => (await inspect(page, () => pc98.text())).includes('INDEPENDENT FM ROUTINES OK'), 220, 100000, true);
   await expect.poll(() => inspect(page, () => pc98.stats().audioEnergy)).toBeGreaterThan(0.1);
   const stats = await inspect(page, () => pc98.stats());
@@ -179,7 +178,7 @@ function hdiFile(image, name) {
 
 test('Ap IDE HDD boots DOS and ADV98; mouse reaches IRQ driver and game; export preserves DOS saves', async ({ page }) => {
   test.setTimeout(120000);
-  await boot(page, 'adv98', false, 'hdi');
+  await boot(page, 'adv98', 'hdi');
   await waitTitle(page);
   const title = await hash(page);
   let stats = await inspect(page, () => pc98.stats());
@@ -233,7 +232,7 @@ test('Ap IDE HDD boots DOS and ADV98; mouse reaches IRQ driver and game; export 
 
 test('Ap DOS: unchanged ADV98 starts sequenced PMD FM music into actual Web Audio', async ({ page }) => {
   test.setTimeout(120000);
-  await boot(page, 'music', true); await waitTitle(page);
+  await boot(page, 'music'); await waitTitle(page);
   const before = await inspect(page, () => pc98.stats());
   expect(before.fmKeyEdges).toBe(0); expect(before.audioEnergy).toBe(0);
   await press(page, 'Enter');
@@ -246,7 +245,7 @@ test('Ap DOS: unchanged ADV98 starts sequenced PMD FM music into actual Web Audi
 });
 
 test('Ap DOS: independent 98VIDEOP uses 86 PCM FIFO and Web Audio', async ({ page }) => {
-  await boot(page, '98videop', true);
+  await boot(page, '98videop');
   await until(page, async () => (await inspect(page, () => pc98.text())).includes('VIDEO RETURNED'), 300, 100000, true);
   await expect.poll(() => inspect(page, () => pc98.stats().audioEnergy)).toBeGreaterThan(0.01);
   const stats = await inspect(page, () => pc98.stats());

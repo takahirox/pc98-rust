@@ -1,4 +1,4 @@
-import { nextBoot, uploadMedia } from './helpers/player.js';
+import { inputDisk, inputReady, nextBoot, uploadMedia } from './helpers/player.js';
 import {test, expect, inspect} from './helpers/runtime.js';
 import fs from 'node:fs/promises';
 import {workerProfile} from './helpers/worker-profile.js';
@@ -38,6 +38,85 @@ async function advancing(page) {
   await expect.poll(async()=> (await stats(page)).consumedSamples).toBeGreaterThan(before.consumedSamples+4800);
 }
 
+async function bootWithoutGesture(page) {
+  const disk = (await inputDisk()).toString('base64');
+  await page.goto('./');
+  await expect(page.locator('#profile')).toBeEnabled();
+  const session = await page.context().newCDPSession(page);
+  // CDP evaluations used by Playwright normally carry a user-gesture flag.
+  await session.send('Runtime.evaluate', {userGesture:false, expression:`
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([Uint8Array.from(atob('${disk}'), c => c.charCodeAt(0))], 'input.hdm'));
+    document.getElementById('slot-0').dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer}));
+  `});
+  await expect(page.locator('#media-name-0')).toHaveText('input.hdm');
+  await expect(page.locator('#profile')).toBeEnabled();
+  await session.send('Runtime.evaluate', {userGesture:false, expression:`
+    const boot = document.getElementById('boot');
+    boot.value = '0';
+    boot.dispatchEvent(new Event('change'));
+  `});
+  await expect(page.locator('#boot-source')).toContainText('Floppy 1');
+  await expect(page.locator('#reset')).toBeEnabled();
+  await session.send('Runtime.evaluate', {userGesture:false, expression:"document.getElementById('reset').click()"});
+  await session.detach();
+  await expect.poll(() => page.evaluate(() => pc98.text())).toContain(inputReady);
+}
+
+const allowAutoplay = test.extend({launchOptions:[{args:['--autoplay-policy=no-user-gesture-required']},{scope:'worker'}]});
+allowAutoplay('default sound plays guest PCM before any gesture', async ({page}) => {
+  await bootWithoutGesture(page);
+  await expect(page.locator('#sound')).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.locator('#volume')).toHaveValue('100');
+  await expect.poll(async () => (await stats(page)).audioEnergy).toBeGreaterThan(1);
+  await advancing(page);
+});
+
+const blockAutoplay = test.extend({launchOptions:[{args:['--autoplay-policy=document-user-activation-required']},{scope:'worker'}]});
+blockAutoplay('screen interaction starts guest audio and later gestures respect mute and zero volume', async ({page}) => {
+  await bootWithoutGesture(page);
+  await expect(page.locator('#audio-status')).toHaveText('Click or tap for sound');
+  await expect(page.locator('#sound')).toHaveAttribute('aria-pressed', 'false');
+  expect((await stats(page)).audioEnergy).toBe(0);
+  const screen = page.locator('#screen');
+  await page.bringToFront();
+  await screen.focus();
+  await screen.evaluate(canvas => {
+    const request = canvas.requestPointerLock.bind(canvas);
+    let requests = 0;
+    canvas.requestPointerLock = () => {
+      canvas.dataset.lockRequests = String(++requests);
+      return request();
+    };
+  });
+  await screen.click();
+  await expect(screen).toHaveAttribute('data-lock-requests', '1');
+  await expect(page.locator('#audio-status')).toBeHidden();
+  await expect.poll(async () => (await stats(page)).audioEnergy).toBeGreaterThan(1);
+  await advancing(page);
+
+  await page.evaluate(() => document.exitPointerLock());
+  await expect.poll(() => page.evaluate(() => document.pointerLockElement?.id)).toBeUndefined();
+  await page.locator('#volume').fill('0');
+  await page.locator('#sound').click();
+  await page.evaluate(() => pc98.audio.suspend());
+  await page.evaluate(() => {
+    Object.defineProperty(document,'hidden',{configurable:true,value:true});
+    document.dispatchEvent(new Event('visibilitychange'));
+    delete document.hidden;
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await screen.focus();
+  await page.keyboard.press('Enter');
+  await expect(screen).toHaveAttribute('data-lock-requests', '1');
+  await expect(page.locator('#sound')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#volume')).toHaveValue('0');
+  expect((await stats(page)).audioState).toBe('suspended');
+  await page.locator('#sound').click();
+  await expect.poll(async () => (await stats(page)).audioState).toBe('running');
+  await expect(page.locator('#volume')).toHaveValue('0');
+});
+
 test('volume changes playback gain and respects pause, resume and mute', async ({page}) => {
   await page.addInitScript(() => {
     const create = AudioContext.prototype.createGain;
@@ -48,9 +127,10 @@ test('volume changes playback gain and respects pause, resume and mute', async (
   await page.goto('./');
   await expect(page.locator('#sound')).toBeEnabled();
   const gain = () => page.evaluate(() => window.testOutputGain?.gain.value);
+  await page.keyboard.press('Tab');
+  await expect.poll(gain).toBe(1);
   await page.locator('#volume').fill('250');
   await expect(page.locator('#volume-level')).toHaveText('250%');
-  await page.locator('#sound').click();
   await expect.poll(gain).toBe(2.5);
   await page.locator('#pause').click();
   await expect.poll(gain).toBe(0);
@@ -58,6 +138,10 @@ test('volume changes playback gain and respects pause, resume and mute', async (
   expect(await gain()).toBe(0);
   await page.locator('#pause').click();
   await expect.poll(gain).toBe(2);
+  await page.locator('#volume').fill('0');
+  await expect.poll(gain).toBe(0);
+  await page.locator('#volume').fill('100');
+  await expect.poll(gain).toBe(1);
   await page.locator('#sound').click();
   await expect.poll(gain).toBe(0);
 });
@@ -88,7 +172,7 @@ test('ADV98 production playback remains continuous through scene changes', async
     const session=await page.context().newCDPSession(page);
     await session.send('Emulation.setCPUThrottlingRate',{rate:Number(process.env.PC98_PRESENTATION_CPU_RATE)});
   }
-  await page.locator('#sound').click(); await page.locator('#pause').click();
+  await page.locator('#pause').click();
   await enter(page);
   await expect.poll(async()=> (await stats(page)).fmKeyEdges).toBeGreaterThan(16);
   await page.waitForTimeout(1500); // Finish the first bitmap/sprite and dialogue.
@@ -187,9 +271,6 @@ test('ADV98 production playback remains continuous through scene changes', async
     expect(stopped.queuedSamples).toBe(0); expect(stopped.audioBuffers).toBe(10);
     await page.locator('#'+id).click(); await advancing(page);
   }
-  await page.evaluate(()=>pc98.audio.suspend());
-  expect((await stats(page)).queuedSamples).toBe(0);
-  await page.evaluate(()=>pc98.audio.resume()); await advancing(page);
   await page.evaluate(()=>{
     Object.defineProperty(document,'hidden',{configurable:true,value:true});
     document.dispatchEvent(new Event('visibilitychange'));
@@ -197,10 +278,15 @@ test('ADV98 production playback remains continuous through scene changes', async
   await expect(page.locator('#pause')).toHaveText('Resume');
   const hidden=await stats(page);
   expect(hidden.queuedSamples).toBe(0); expect(hidden.audioBuffers).toBe(10);
-  await page.evaluate(()=>{delete document.hidden;document.dispatchEvent(new Event('visibilitychange'));});
+  await page.evaluate(()=>pc98.audio.suspend());
   await page.waitForTimeout(100);
   expect((await stats(page)).cycles).toBe(hidden.cycles);
-  await page.locator('#pause').click(); await advancing(page);
+  await page.evaluate(()=>{delete document.hidden;document.dispatchEvent(new Event('visibilitychange'));});
+  await advancing(page);
+  const resumed=await stats(page);
+  expect(resumed.audioState).toBe('running');
+  expect(resumed.cycles).toBeGreaterThan(hidden.cycles);
+  expect(resumed.audioEnergy).toBeGreaterThan(hidden.audioEnergy);
   await page.locator('#reset').click(); await expect(page.locator('#profile')).toBeEnabled();
   const reset=await stats(page);
   expect(reset.audioEpoch).toBeGreaterThan(hidden.audioEpoch);

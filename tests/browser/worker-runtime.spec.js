@@ -15,7 +15,6 @@ test('Worker progresses through DOS graphics and PCM with rAF stopped and DOM ev
   await page.goto('./'); await expect(page.locator('#profile')).toBeEnabled();
   expect(page.workers()).toHaveLength(2);
   expect(await page.evaluate(() => 'core' in pc98)).toBe(false);
-  await page.locator('#sound').click();
   const buffer=await fs.readFile('fixtures/dos-apps/98videop.hdm');
   await uploadMedia(page, {name:'98videop.hdm',mimeType:'application/octet-stream',buffer});
   await expect(page.locator('#profile')).toBeEnabled();
@@ -59,7 +58,7 @@ test('Worker progresses through DOS graphics and PCM with rAF stopped and DOM ev
 
 test('audio mute, pause, resume, reset and interrupted AudioContext flush the sink',async({page}) => {
   await page.goto('./'); await expect(page.locator('#profile')).toBeEnabled();
-  await bootInputProbe(page, {sound:true});
+  await bootInputProbe(page);
   await expect.poll(()=>page.evaluate(()=>pc98.stats().then(s=>s.audioEnergy))).toBeGreaterThan(1);
   for (const id of ['sound','sound','pause','pause','reset']) {
     const before=await page.evaluate(()=>pc98.stats());
@@ -99,17 +98,25 @@ test('Worker and AudioWorklet load failures are visible and recoverable',async({
   await page.route('**/emulator-worker.js',r=>r.fulfill({status:404,body:'missing'}));
   await page.goto('./'); await expect(page.locator('#error')).toBeVisible();
   await expect(page.locator('#profile')).toBeDisabled();
-  await page.unrouteAll(); await page.reload(); await expect(page.locator('#profile')).toBeEnabled();
   // Chromium's AudioWorklet fetches bypass Playwright routing. Exercise the
   // real browser loader with a missing local asset, then restore its URL.
-  await page.evaluate(()=>{
+  await page.addInitScript(()=>{
     const load=AudioWorklet.prototype.addModule;
     AudioWorklet.prototype.addModule=function(url) { return load.call(this,new URL('missing-audio-worklet.js',url)); };
     window.restoreWorkletLoader=()=>{AudioWorklet.prototype.addModule=load;};
   });
-  await page.locator('#sound').click(); await expect(page.locator('#error')).toBeVisible();
+  await page.unrouteAll(); await page.reload(); await expect(page.locator('#profile')).toBeEnabled();
+  await page.keyboard.press('Tab');
+  await expect(page.locator('#audio-status')).toContainText('Sound unavailable');
+  await expect(page.locator('#sound')).toHaveAttribute('aria-pressed', 'false');
+  const before=(await page.evaluate(()=>pc98.stats())).instructions;
+  await expect.poll(() => page.evaluate(() => pc98.stats().then(s => s.instructions))).toBeGreaterThan(before);
+  await page.locator('#sound').click();
   await expect(page.locator('#sound')).toHaveAttribute('aria-pressed', 'true');
-  await page.evaluate(()=>window.restoreWorkletLoader()); await page.locator('#sound').click(); await expect(page.locator('#sound')).toHaveAttribute('aria-pressed', 'false');
+  await page.evaluate(()=>window.restoreWorkletLoader());
+  await page.locator('#sound').click();
+  await expect.poll(() => page.evaluate(() => pc98.stats().then(s => s.scheduledSamples))).toBeGreaterThan(1000);
+  await expect(page.locator('#audio-status')).toBeHidden();
 });
 
 test('a Worker crash during Reset keeps the reload instruction visible', async ({page}) => {
@@ -136,7 +143,7 @@ test('a Worker crash during Reset keeps the reload instruction visible', async (
 
 test('visibility, repeated reset/profile controls and runtime Worker failure cannot resurrect stale state',async({page}) => {
   await page.goto('./'); await expect(page.locator('#profile')).toBeEnabled();
-  await bootInputProbe(page, {sound:true});
+  await bootInputProbe(page);
   await expect.poll(()=>page.evaluate(()=>pc98.text())).toContain('INPUT PROBE READY');
   const before=await page.evaluate(()=>pc98.stats());
   await page.evaluate(()=>{const button=document.getElementById('reset');button.click();button.click();});
@@ -151,9 +158,18 @@ test('visibility, repeated reset/profile controls and runtime Worker failure can
   const paused=await page.evaluate(()=>pc98.stats());
   expect(paused.running).toBe(false); expect(paused.queuedBlocks).toBe(0);
   await page.evaluate(()=>{delete document.hidden;document.dispatchEvent(new Event('visibilitychange'));});
-  await page.waitForTimeout(40);
-  expect((await page.evaluate(()=>pc98.stats())).instructions).toBe(paused.instructions);
+  await expect.poll(() => page.evaluate(() => pc98.stats().then(s => s.instructions))).toBeGreaterThan(paused.instructions);
   await page.keyboard.up('ArrowRight');
+  await page.locator('#pause').click(); await expect(page.locator('#profile')).toBeEnabled();
+  const manualPause = await page.evaluate(() => pc98.stats());
+  await page.evaluate(() => {
+    Object.defineProperty(document,'hidden',{configurable:true,value:true});
+    document.dispatchEvent(new Event('visibilitychange'));
+    delete document.hidden;
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  expect((await page.evaluate(() => pc98.stats())).instructions).toBe(manualPause.instructions);
+  await expect(page.locator('#pause')).toHaveText('Resume');
   await page.locator('#pause').click(); await expect(page.locator('#profile')).toBeEnabled();
   await page.evaluate(()=>{
     const profile=document.getElementById('profile');
@@ -164,12 +180,42 @@ test('visibility, repeated reset/profile controls and runtime Worker failure can
   expect(await inspect(page,()=>pc98.core.metric(21))).toBe(0);
   await expect(page.locator('#profile')).toHaveValue('0');
   await page.locator('#profile').selectOption('1'); await expect(page.locator('#profile')).toBeEnabled();
+  await page.evaluate(() => {
+    Object.defineProperty(document,'hidden',{configurable:true,value:true});
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
   const worker=page.workers().find(w=>w.url().includes('emulator-worker.js'));
   await worker.evaluate(()=>{setTimeout(()=>{throw Error('Intentional runtime Worker failure');},0);});
   await expect(page.locator('#error')).toContainText('Intentional runtime Worker failure');
   await expect(page.locator('#error')).toContainText('Reload to restart.');
+  await page.evaluate(()=>{delete document.hidden;document.dispatchEvent(new Event('visibilitychange'));});
   await expect(page.locator('#status')).toHaveText('Worker stopped');
   for (const id of ['reset','file','profile']) await expect(page.locator('#'+id)).toBeDisabled();
   await page.reload(); await expect(page.locator('#profile')).toBeEnabled();
   await expect.poll(()=>page.evaluate(()=>pc98.text()),{timeout:20000}).toContain('A:\\>');
+});
+
+test('a visible tab waits for a pending media import before resuming', async ({page}) => {
+  await page.goto('./');
+  await expect(page.locator('#profile')).toBeEnabled();
+  await page.evaluate(() => {
+    const read = File.prototype.arrayBuffer;
+    const gate = new Promise(resolve => { window.finishImport = resolve; });
+    File.prototype.arrayBuffer = function () { return gate.then(() => read.call(this)); };
+  });
+  await uploadMedia(page, {name:'blank.hdm', mimeType:'application/octet-stream', buffer:Buffer.alloc(1261568)}, '1');
+  await expect(page.locator('#profile')).toBeDisabled();
+  await page.evaluate(() => {
+    Object.defineProperty(document,'hidden',{configurable:true,value:true});
+    document.dispatchEvent(new Event('visibilitychange'));
+    delete document.hidden;
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  const paused = await page.evaluate(() => pc98.stats());
+  expect(paused.running).toBe(false);
+  await expect(page.locator('#pause')).toHaveText('Resume');
+  await page.evaluate(() => window.finishImport());
+  await expect(page.locator('#media-name-1')).toHaveText('blank.hdm');
+  await expect(page.locator('#pause')).toHaveText('Pause');
+  await expect.poll(() => page.evaluate(() => pc98.stats().then(s => s.instructions))).toBeGreaterThan(paused.instructions);
 });

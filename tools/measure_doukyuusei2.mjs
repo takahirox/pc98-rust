@@ -132,7 +132,9 @@ try {
     const profile = options.profile === '1' ? workerProfile(browser,20000) : null;
     if (profile) await sleep(500);
     if (playback) {
-      await page.locator('#sound').click(); await page.locator('#pause').click();
+      const sound = page.locator('#sound');
+      if (await sound.getAttribute('aria-pressed') === 'true') await sound.click();
+      await page.locator('#pause').click();
       await sleep(1500);
       const a = await page.evaluate(() => pc98.stats()), began = performance.now();
       if (options.visuals === '1') await page.evaluate(() => {
