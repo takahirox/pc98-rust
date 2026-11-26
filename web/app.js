@@ -851,8 +851,12 @@ async function stageSavedHdd(checkpoint) {
   return {name:checkpoint.name, checkpoint, savedWrites:0};
 }
 async function replaceHdd(prepare, selection, confirmation, resetOptions) {
-  const resume = running;
-  await setRunning(false);
+  // Keep playback pending until rollback finishes and the tab is visible.
+  resumeOnVisible ||= running;
+  await setRunning(false).catch(error => {
+    resumeOnVisible = false;
+    throw error;
+  });
   let committed = false;
   try {
     if (confirmation && !await mayReplaceHdd(confirmation)) return;
@@ -880,8 +884,12 @@ async function replaceHdd(prepare, selection, confirmation, resetOptions) {
     await resetMachine(resetOptions);
   } finally {
     if (!committed && !workerFailed) {
-      await core.hdi_cancel().catch(() => {});
-      if (!workerFailed) await setRunning(resume && !document.hidden);
+      await core.hdi_cancel().catch(() => { resumeOnVisible = false; });
+      if (!workerFailed) {
+        const resume = resumeOnVisible && !document.hidden;
+        if (resume) resumeOnVisible = false;
+        await setRunning(resume && hasBootMedia());
+      }
     }
   }
 }
